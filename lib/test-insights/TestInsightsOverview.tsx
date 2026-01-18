@@ -10,7 +10,6 @@ import {
   Progress,
   SimpleGrid,
   Spinner,
-  Stack,
   Stat,
   Table,
   Text,
@@ -26,13 +25,7 @@ import {
   FaTrophy
 } from "react-icons/fa";
 import type { AssignmentTestStatistics, TestStatistics, SubmissionsToFullMarksResponse } from "./types";
-import {
-  getDifficultyLevel,
-  DIFFICULTY_COLORS,
-  DIFFICULTY_LABELS,
-  SCORE_BUCKETS,
-  SCORE_BUCKET_COLORS
-} from "./types";
+import { getDifficultyLevel, DIFFICULTY_COLORS, DIFFICULTY_LABELS, SCORE_BUCKETS, SCORE_BUCKET_COLORS } from "./types";
 
 interface TestInsightsOverviewProps {
   statistics: AssignmentTestStatistics | null;
@@ -57,19 +50,25 @@ export function TestInsightsOverview({
     const tests = statistics.tests;
     const avgPassRate = tests.length > 0 ? tests.reduce((sum, t) => sum + (t.pass_rate || 0), 0) / tests.length : 0;
 
-    const hardestTest = tests.reduce((hardest, test) => {
-      if (!hardest || (test.pass_rate || 100) < (hardest.pass_rate || 100)) {
-        return test;
-      }
-      return hardest;
-    }, null as TestStatistics | null);
+    const hardestTest = tests.reduce(
+      (hardest, test) => {
+        if (!hardest || (test.pass_rate || 100) < (hardest.pass_rate || 100)) {
+          return test;
+        }
+        return hardest;
+      },
+      null as TestStatistics | null
+    );
 
-    const easiestTest = tests.reduce((easiest, test) => {
-      if (!easiest || (test.pass_rate || 0) > (easiest.pass_rate || 0)) {
-        return test;
-      }
-      return easiest;
-    }, null as TestStatistics | null);
+    const easiestTest = tests.reduce(
+      (easiest, test) => {
+        if (!easiest || (test.pass_rate || 0) > (easiest.pass_rate || 0)) {
+          return test;
+        }
+        return easiest;
+      },
+      null as TestStatistics | null
+    );
 
     return {
       totalTests: tests.length,
@@ -242,11 +241,7 @@ export function TestInsightsOverview({
                               size="sm"
                               w="60px"
                               colorPalette={
-                                (test.pass_rate || 0) >= 80
-                                  ? "green"
-                                  : (test.pass_rate || 0) >= 50
-                                    ? "yellow"
-                                    : "red"
+                                (test.pass_rate || 0) >= 80 ? "green" : (test.pass_rate || 0) >= 50 ? "yellow" : "red"
                               }
                             >
                               <Progress.Track>

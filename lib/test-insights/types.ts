@@ -125,16 +125,7 @@ export interface ErrorExplorerFilters {
 }
 
 // Score distribution bucket labels
-export const SCORE_BUCKETS = [
-  "100",
-  "90-99",
-  "80-89",
-  "70-79",
-  "60-69",
-  "50-59",
-  "1-49",
-  "0"
-] as const;
+export const SCORE_BUCKETS = ["100", "90-99", "80-89", "70-79", "60-69", "50-59", "1-49", "0"] as const;
 
 export type ScoreBucket = (typeof SCORE_BUCKETS)[number];
 

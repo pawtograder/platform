@@ -3,22 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { useErrorPinsForPattern } from "@/hooks/useTestInsights";
 import { createClient } from "@/utils/supabase/client";
-import {
-  Badge,
-  Box,
-  Button,
-  Card,
-  Dialog,
-  Field,
-  HStack,
-  Icon,
-  Input,
-  NativeSelect,
-  Spinner,
-  Stack,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { Badge, Box, Button, Card, Dialog, Field, HStack, Icon, Input, Spinner, Text, VStack } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { FaComments, FaLink, FaPlus, FaSearch } from "react-icons/fa";
@@ -36,13 +21,7 @@ interface ErrorPinIntegrationProps {
  * Component for linking common errors to discussion posts via error pins.
  * Shows existing matching pins and allows creating new pins.
  */
-export function ErrorPinIntegration({
-  assignmentId,
-  courseId,
-  errorGroup,
-  onClose,
-  isOpen
-}: ErrorPinIntegrationProps) {
+export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClose, isOpen }: ErrorPinIntegrationProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [discussionThreads, setDiscussionThreads] = useState<
     Array<{ id: number; subject: string; created_at: string }>
@@ -111,9 +90,11 @@ export function ErrorPinIntegration({
     setIsCreating(true);
     try {
       const supabase = createClient();
-      
+
       // Get the current user's profile
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user }
+      } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
       const { data: profile } = await supabase
@@ -159,7 +140,7 @@ export function ErrorPinIntegration({
       if (error) throw error;
 
       const result = data as { success: boolean; error_pin_id: number; matches_populated: number } | null;
-      
+
       toaster.success({
         title: "Success",
         description: `Error pin created! ${result?.matches_populated || 0} submissions matched.`
@@ -233,11 +214,7 @@ export function ErrorPinIntegration({
                                 {pin.match_count} submissions linked
                               </Text>
                             </VStack>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              asChild
-                            >
+                            <Button size="sm" variant="outline" asChild>
                               <NextLink
                                 href={`/course/${courseId}/discussion/${pin.discussion_thread_id}`}
                                 target="_blank"
@@ -305,7 +282,7 @@ export function ErrorPinIntegration({
                   </Box>
                 ) : searchTerm.trim() ? (
                   <Text color="fg.muted" fontSize="sm" textAlign="center" p={4}>
-                    No threads found matching "{searchTerm}"
+                    No threads found matching &ldquo;{searchTerm}&rdquo;
                   </Text>
                 ) : (
                   <Text color="fg.muted" fontSize="sm" textAlign="center" p={4}>
@@ -330,12 +307,7 @@ export function ErrorPinIntegration({
               <Button variant="outline" onClick={onClose}>
                 Cancel
               </Button>
-              <Button
-                colorPalette="blue"
-                onClick={createErrorPin}
-                loading={isCreating}
-                disabled={!selectedThread}
-              >
+              <Button colorPalette="blue" onClick={createErrorPin} loading={isCreating} disabled={!selectedThread}>
                 <Icon as={FaLink} mr={2} />
                 Create Error Pin
               </Button>

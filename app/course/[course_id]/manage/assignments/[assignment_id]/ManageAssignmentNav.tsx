@@ -6,7 +6,18 @@ import { Select } from "chakra-react-select";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
-import { FaCalendar, FaChartBar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
+import {
+  FaCalendar,
+  FaChartBar,
+  FaCode,
+  FaEdit,
+  FaHome,
+  FaPen,
+  FaPlay,
+  FaPooStorm,
+  FaSearch,
+  FaUsers
+} from "react-icons/fa";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
 
 const LinkItems = (courseId: number, assignmentId: number) => [

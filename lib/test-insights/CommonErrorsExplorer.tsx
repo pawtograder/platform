@@ -1,20 +1,6 @@
 "use client";
 
-import {
-  Accordion,
-  Badge,
-  Box,
-  Button,
-  Card,
-  Code,
-  Collapsible,
-  HStack,
-  Icon,
-  Spinner,
-  Stack,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { Badge, Box, Button, Card, Code, Collapsible, HStack, Icon, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { FaBug, FaChevronDown, FaChevronRight, FaExclamationTriangle, FaLink, FaUsers } from "react-icons/fa";
 import { ErrorFilterPanel, DEFAULT_ERROR_FILTERS } from "./ErrorFilterPanel";
@@ -120,12 +106,13 @@ export function CommonErrorsExplorer({
         <Text fontSize="sm" color="fg.muted">
           {filteredErrors.length} common error pattern{filteredErrors.length !== 1 ? "s" : ""} found
           {data?.total_error_groups && data.total_error_groups > filteredErrors.length && (
-            <Text as="span"> (showing top {filteredErrors.length} of {data.total_error_groups})</Text>
+            <Text as="span">
+              {" "}
+              (showing top {filteredErrors.length} of {data.total_error_groups})
+            </Text>
           )}
         </Text>
-        {filters.testName && (
-          <Badge colorPalette="blue">Filtered by: {filters.testName}</Badge>
-        )}
+        {filters.testName && <Badge colorPalette="blue">Filtered by: {filters.testName}</Badge>}
       </HStack>
 
       {/* Error List */}
@@ -185,11 +172,7 @@ function ErrorGroupCard({
         >
           <HStack justify="space-between">
             <HStack gap={3} flex="1" overflow="hidden">
-              <Icon
-                as={isExpanded ? FaChevronDown : FaChevronRight}
-                color="fg.muted"
-                boxSize={3}
-              />
+              <Icon as={isExpanded ? FaChevronDown : FaChevronRight} color="fg.muted" boxSize={3} />
               <Icon as={FaBug} color={errorGroup.is_failing ? "red.500" : "orange.500"} />
               <VStack align="start" gap={0} flex="1" overflow="hidden">
                 <HStack gap={2} wrap="wrap">
@@ -263,11 +246,7 @@ function ErrorGroupCard({
                     </Button>
                   )}
                   {onCreateErrorPin && (
-                    <Button
-                      size="sm"
-                      colorPalette="blue"
-                      onClick={() => onCreateErrorPin(errorGroup)}
-                    >
+                    <Button size="sm" colorPalette="blue" onClick={() => onCreateErrorPin(errorGroup)}>
                       <Icon as={FaLink} mr={2} />
                       Create Error Pin
                     </Button>

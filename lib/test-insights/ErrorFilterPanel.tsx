@@ -16,11 +16,11 @@ interface ErrorFilterPanelProps {
  * Shared filter panel component for error exploration.
  * Can be used by both the test insights dashboard and error pin creation flow.
  */
-export function ErrorFilterPanel({ 
-  filters, 
-  onFiltersChange, 
+export function ErrorFilterPanel({
+  filters,
+  onFiltersChange,
   tests,
-  showMinOccurrences = true 
+  showMinOccurrences = true
 }: ErrorFilterPanelProps) {
   // Get unique test names and parts
   const testNames = useMemo(() => {

@@ -9,23 +9,13 @@ import {
   type ErrorExplorerFilters,
   type CommonErrorGroup
 } from "@/lib/test-insights";
-import {
-  Box,
-  Heading,
-  HStack,
-  Icon,
-  Tab,
-  Tabs,
-  Text,
-  VStack
-} from "@chakra-ui/react";
-import { useParams, useRouter } from "next/navigation";
+import { Box, Heading, HStack, Icon, Tabs, Text, VStack } from "@chakra-ui/react";
+import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
-import { FaBug, FaChartBar, FaLink } from "react-icons/fa";
+import { FaBug, FaChartBar } from "react-icons/fa";
 
 export default function TestInsightsPage() {
   const { course_id, assignment_id } = useParams();
-  const router = useRouter();
   const assignmentId = Number(assignment_id);
   const courseId = Number(course_id);
 
@@ -49,16 +39,13 @@ export default function TestInsightsPage() {
   }, []);
 
   // Handle viewing submissions for a common error
-  const handleViewSubmissions = useCallback(
-    (submissionIds: number[]) => {
-      // Navigate to the assignments table with a filter for these submissions
-      // For now, just log - we can enhance this to use query params
-      // eslint-disable-next-line no-console
-      console.log("View submissions:", submissionIds);
-      // Could navigate with query params to filter the assignments table
-    },
-    []
-  );
+  const handleViewSubmissions = useCallback((submissionIds: number[]) => {
+    // Navigate to the assignments table with a filter for these submissions
+    // For now, just log - we can enhance this to use query params
+    // eslint-disable-next-line no-console
+    console.log("View submissions:", submissionIds);
+    // Could navigate with query params to filter the assignments table
+  }, []);
 
   const handleCloseErrorPinModal = useCallback(() => {
     setSelectedErrorForPin(null);
@@ -80,11 +67,7 @@ export default function TestInsightsPage() {
       </Box>
 
       {/* Tab Navigation */}
-      <Tabs.Root
-        value={activeTab}
-        onValueChange={(details) => setActiveTab(details.value)}
-        variant="line"
-      >
+      <Tabs.Root value={activeTab} onValueChange={(details) => setActiveTab(details.value)} variant="line">
         <Tabs.List>
           <Tabs.Trigger value="overview">
             <HStack>

@@ -9,6 +9,10 @@ import type {
   ErrorPinsForPatternResponse
 } from "@/lib/test-insights/types";
 
+// Type helper for RPC calls - these functions are defined in migration but not yet in generated types
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyRpc = any;
+
 /**
  * Hook to fetch test statistics for an assignment
  */
@@ -28,7 +32,7 @@ export function useTestStatistics(assignment_id: number | null | undefined) {
 
     try {
       const supabase = createClient();
-      const { data: result, error: rpcError } = await supabase.rpc("get_test_statistics_for_assignment", {
+      const { data: result, error: rpcError } = await (supabase.rpc as AnyRpc)("get_test_statistics_for_assignment", {
         p_assignment_id: assignment_id
       });
 
@@ -78,13 +82,16 @@ export function useCommonErrors(
 
     try {
       const supabase = createClient();
-      const { data: result, error: rpcError } = await supabase.rpc("get_common_test_errors_for_assignment", {
-        p_assignment_id: assignment_id,
-        p_test_name: testName,
-        p_test_part: testPart,
-        p_min_occurrences: minOccurrences,
-        p_limit: limit
-      });
+      const { data: result, error: rpcError } = await (supabase.rpc as AnyRpc)(
+        "get_common_test_errors_for_assignment",
+        {
+          p_assignment_id: assignment_id,
+          p_test_name: testName,
+          p_test_part: testPart,
+          p_min_occurrences: minOccurrences,
+          p_limit: limit
+        }
+      );
 
       if (rpcError) throw rpcError;
       setData(result as CommonErrorsResponse);
@@ -126,7 +133,7 @@ export function useSubmissionsToFullMarks(assignment_id: number | null | undefin
 
     try {
       const supabase = createClient();
-      const { data: result, error: rpcError } = await supabase.rpc("get_submissions_to_full_marks", {
+      const { data: result, error: rpcError } = await (supabase.rpc as AnyRpc)("get_submissions_to_full_marks", {
         p_assignment_id: assignment_id
       });
 
@@ -174,7 +181,7 @@ export function useErrorPinsForPattern(
 
     try {
       const supabase = createClient();
-      const { data: result, error: rpcError } = await supabase.rpc("get_error_pins_for_error_pattern", {
+      const { data: result, error: rpcError } = await (supabase.rpc as AnyRpc)("get_error_pins_for_error_pattern", {
         p_assignment_id: assignment_id,
         p_test_name: testName,
         p_error_output: errorOutput
