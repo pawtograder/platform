@@ -1,6 +1,7 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { addDays, addMinutes } from "date-fns";
+import { createHash } from "crypto";
 import {
   createClass,
   insertAssignment,
@@ -20,6 +21,33 @@ let assignmentInPast: Assignment | undefined;
 let assignmentExtended: Assignment | undefined;
 let assignmentWithNotGraded: Assignment | undefined;
 let assignmentWithGradedAndNotGraded: Assignment | undefined;
+let assignmentEmptyAllowed: Assignment | undefined;
+let assignmentEmptyProhibited: Assignment | undefined;
+let assignmentProhibitedButNotEmpty: Assignment | undefined;
+
+function sha256Hex(buf: Buffer): string {
+  const h = createHash("sha256");
+  h.update(buf);
+  return h.digest("hex");
+}
+
+function computeCombinedHashFromSubmissionFiles(files: { name: string; contents: string }[]): {
+  file_hashes: Record<string, string>;
+  combined_hash: string;
+} {
+  const file_hashes: Record<string, string> = {};
+  for (const f of files) {
+    file_hashes[f.name] = sha256Hex(Buffer.from(f.contents, "utf-8"));
+  }
+  const combinedInput = Object.keys(file_hashes)
+    .sort()
+    .map((name) => `${name}\0${file_hashes[name]}\n`)
+    .join("");
+  return {
+    file_hashes,
+    combined_hash: sha256Hex(Buffer.from(combinedInput, "utf-8"))
+  };
+}
 
 test.beforeAll(async () => {
   course = await createClass();
@@ -51,6 +79,25 @@ test.beforeAll(async () => {
     allow_not_graded_submissions: true,
     class_id: course.id,
     name: "Create Submission Assignment Graded and Not Graded"
+  });
+
+  assignmentEmptyAllowed = await insertAssignment({
+    due_date: addMinutes(new Date(), 5).toUTCString(),
+    permit_empty_submissions: true,
+    class_id: course.id,
+    name: "Create Submission Assignment Empty Allowed"
+  });
+  assignmentEmptyProhibited = await insertAssignment({
+    due_date: addMinutes(new Date(), 5).toUTCString(),
+    permit_empty_submissions: false,
+    class_id: course.id,
+    name: "Create Submission Assignment Empty Prohibited"
+  });
+  assignmentProhibitedButNotEmpty = await insertAssignment({
+    due_date: addMinutes(new Date(), 5).toUTCString(),
+    permit_empty_submissions: false,
+    class_id: course.id,
+    name: "Create Submission Assignment Prohibited But Not Empty"
   });
   await supabase.from("assignment_due_date_exceptions").insert({
     assignment_id: assignmentExtended.id,
@@ -158,5 +205,94 @@ test.describe("Create submission", () => {
     await argosScreenshot(page, "Showing active and not-graded submissions");
     await page.getByRole("link", { name: "Not for grading" }).click();
     await expect(page.getByText("Viewing a not-for-grading submission")).toBeVisible();
+  });
+
+  test("Empty submission is accepted when permitted, and flagged", async () => {
+    // First submission: succeeds even if no handout hashes exist yet.
+    const first = await insertSubmissionViaAPI({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignmentEmptyAllowed!.id,
+      class_id: course.id
+    });
+
+    // Use the first submission's expected files as the "handout" fingerprint for this test run.
+    const { data: submissionFiles, error: submissionFilesError } = await supabase
+      .from("submission_files")
+      .select("name, contents")
+      .eq("submission_id", first.submission_id)
+      .limit(1000);
+    if (submissionFilesError || !submissionFiles) {
+      throw new Error(`Failed to load submission files: ${submissionFilesError?.message}`);
+    }
+    const { combined_hash, file_hashes } = computeCombinedHashFromSubmissionFiles(
+      submissionFiles.map((f) => ({ name: f.name, contents: f.contents }))
+    );
+
+    // Store as a handout version for multiple assignments.
+    await supabase.from("assignment_handout_file_hashes").insert([
+      {
+        assignment_id: assignmentEmptyAllowed!.id,
+        sha: "e2e-handout",
+        combined_hash,
+        file_hashes,
+        class_id: course.id
+      },
+      {
+        assignment_id: assignmentEmptyProhibited!.id,
+        sha: "e2e-handout",
+        combined_hash,
+        file_hashes,
+        class_id: course.id
+      }
+    ]);
+
+    // Second submission should now match the handout hash and be marked empty (but allowed).
+    const second = await insertSubmissionViaAPI({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignmentEmptyAllowed!.id,
+      class_id: course.id
+    });
+    const { data: submissionRow, error: submissionRowError } = await supabase
+      .from("submissions")
+      .select("is_empty_submission")
+      .eq("id", second.submission_id)
+      .single();
+    if (submissionRowError || !submissionRow) {
+      throw new Error(`Failed to load submission: ${submissionRowError?.message}`);
+    }
+    expect(submissionRow.is_empty_submission).toBe(true);
+  });
+
+  test("Empty submission is rejected when prohibited", async () => {
+    const submission = insertSubmissionViaAPI({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignmentEmptyProhibited!.id,
+      class_id: course.id
+    });
+    await expect(submission).rejects.toThrow("Empty submissions are not permitted for this assignment");
+  });
+
+  test("Submission is accepted when prohibited but not empty (no handout match)", async () => {
+    // Insert a non-matching handout hash so this submission is considered NOT empty.
+    await supabase.from("assignment_handout_file_hashes").insert({
+      assignment_id: assignmentProhibitedButNotEmpty!.id,
+      sha: "e2e-nonmatch",
+      combined_hash: "0000000000000000000000000000000000000000000000000000000000000000",
+      file_hashes: {},
+      class_id: course.id
+    });
+
+    const submission = await insertSubmissionViaAPI({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignmentProhibitedButNotEmpty!.id,
+      class_id: course.id
+    });
+    expect(submission).toBeDefined();
+    const { data: submissionRow } = await supabase
+      .from("submissions")
+      .select("is_empty_submission")
+      .eq("id", submission.submission_id)
+      .single();
+    expect(submissionRow?.is_empty_submission).toBe(false);
   });
 });

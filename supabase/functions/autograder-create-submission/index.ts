@@ -31,6 +31,48 @@ import { decode } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno";
 
+function sha256Hex(buf: Uint8Array): string {
+  const hash = createHash("sha256");
+  hash.update(buf);
+  return hash.digest("hex");
+}
+
+function computeCombinedFileHash(files: { name: string; contents: Buffer }[]): {
+  file_hashes: Record<string, string>;
+  combined_hash: string;
+} {
+  const file_hashes: Record<string, string> = {};
+  for (const f of files) {
+    file_hashes[f.name] = sha256Hex(f.contents);
+  }
+  const combinedInput = Object.keys(file_hashes)
+    .sort()
+    .map((name) => `${name}\0${file_hashes[name]}\n`)
+    .join("");
+  return {
+    file_hashes,
+    combined_hash: sha256Hex(Buffer.from(combinedInput, "utf-8"))
+  };
+}
+
+async function safeCleanupRejectedSubmission(params: {
+  adminSupabase: SupabaseClient<Database>;
+  submissionId: number;
+}) {
+  const { adminSupabase, submissionId } = params;
+  // Break circular-ish references: submissions.grading_review_id -> submission_reviews
+  await adminSupabase.from("submissions").update({ grading_review_id: null, is_active: false }).eq("id", submissionId);
+
+  // Delete any auto-created review row(s) for this submission.
+  await adminSupabase.from("submission_reviews").delete().eq("submission_id", submissionId);
+
+  // Remove files (these are the only child rows we definitely created in this path).
+  await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+
+  // Finally, remove the submission row itself.
+  await adminSupabase.from("submissions").delete().eq("id", submissionId);
+}
+
 // Retry helper with exponential backoff
 async function retryWithExponentialBackoff<T>(
   operation: () => Promise<T>,
@@ -463,7 +505,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
-    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
+    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*))")
     .eq("repository", repository)
     .maybeSingle();
   if (repoError) {
@@ -1264,6 +1306,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             return { name: stripTopDir(file.path), contents };
           })
         );
+        const { combined_hash: submissionCombinedHash } = computeCombinedFileHash(submittedFilesWithContents);
         // Add files to supabase
         const { error: fileError } = await adminSupabase.from("submission_files").insert(
           submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
@@ -1278,6 +1321,75 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         if (fileError) {
           throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
         }
+
+        // Empty submission detection:
+        // If the submitted expected files match ANY recorded handout version for the assignment,
+        // mark the submission as empty.
+        try {
+          const { data: match, error: matchError } = await adminSupabase
+            .from("assignment_handout_file_hashes")
+            .select("id")
+            .eq("assignment_id", repoData.assignment_id)
+            .eq("combined_hash", submissionCombinedHash)
+            .limit(1)
+            .maybeSingle();
+          if (matchError) {
+            Sentry.captureException(matchError, scope);
+          }
+          const isEmpty = !!match;
+          const { error: updateError } = await adminSupabase
+            .from("submissions")
+            .update({ is_empty_submission: isEmpty })
+            .eq("id", submission_id);
+          if (updateError) {
+            Sentry.captureException(updateError, scope);
+          }
+
+          // If the assignment prohibits empty submissions, reject after determining emptiness.
+          // (Allow graders/instructors to bypass to avoid breaking staff workflows.)
+          const isGraderOrInstructor =
+            checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
+          if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
+            if (!isE2ERun) {
+              await handleGitHubApiCall(
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "completed",
+                    conclusion: "failure",
+                    output: {
+                      title: "Empty submission rejected",
+                      summary: "This assignment does not permit empty submissions.",
+                      text: "Your submission appears to match the handout (starter) files exactly. Please make sure you have committed your changes before submitting."
+                    }
+                  }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
+            }
+            try {
+              await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+            } catch (cleanupErr) {
+              Sentry.captureException(cleanupErr, scope);
+            }
+            throw new UserVisibleError(
+              "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
+              400
+            );
+          }
+        } catch (e) {
+          // Do not fail submission creation over DB read/update issues,
+          // but DO preserve user-facing rejections we intentionally throw.
+          if (e instanceof UserVisibleError) {
+            throw e;
+          }
+          Sentry.captureException(e, scope);
+        }
+
         if (isE2ERun) {
           return {
             grader_url: "not-a-real-url",
