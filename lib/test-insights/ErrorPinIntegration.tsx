@@ -30,11 +30,15 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
   const [selectedThread, setSelectedThread] = useState<number | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
+  // Determine if we have sample outputs to match against
+  const hasSampleOutputs = errorGroup.sample_outputs && errorGroup.sample_outputs.length > 0;
+  const errorOutputForMatching = hasSampleOutputs ? errorGroup.sample_outputs[0] : errorGroup.normalized_output || "";
+
   // Check for existing error pins that match this error
   const { data: matchingPins, isLoading: isLoadingPins } = useErrorPinsForPattern(
     assignmentId,
     errorGroup.test_name,
-    errorGroup.sample_outputs[0] || ""
+    errorOutputForMatching
   );
 
   // Search discussion threads
@@ -185,6 +189,11 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
                     <Text fontSize="sm" color="fg.muted" fontFamily="mono" truncate maxW="100%">
                       {errorGroup.error_signature}
                     </Text>
+                    {!hasSampleOutputs && (
+                      <Text fontSize="xs" color="orange.600" _dark={{ color: "orange.300" }}>
+                        Note: No sample outputs available. Error pin matching will be based on test name only.
+                      </Text>
+                    )}
                   </VStack>
                 </Card.Body>
               </Card.Root>

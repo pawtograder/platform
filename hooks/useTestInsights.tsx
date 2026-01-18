@@ -1,7 +1,7 @@
 "use client";
 
 import { createClient } from "@/utils/supabase/client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AssignmentTestStatistics,
   CommonErrorsResponse,
@@ -14,19 +14,22 @@ import type {
 type AnyRpc = any;
 
 /**
- * Hook to fetch test statistics for an assignment
+ * Hook to fetch test statistics for an assignment.
+ * Includes request-id guard to prevent race conditions from rapid parameter changes.
  */
 export function useTestStatistics(assignment_id: number | null | undefined) {
   const [data, setData] = useState<AssignmentTestStatistics | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const requestIdRef = useRef(0);
 
   const fetchStatistics = useCallback(async () => {
-    if (!assignment_id) {
+    if (!assignment_id || !Number.isFinite(assignment_id)) {
       setData(null);
       return;
     }
 
+    const currentRequestId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
 
@@ -36,12 +39,18 @@ export function useTestStatistics(assignment_id: number | null | undefined) {
         p_assignment_id: assignment_id
       });
 
+      // Only update state if this is still the latest request
+      if (currentRequestId !== requestIdRef.current) return;
+
       if (rpcError) throw rpcError;
       setData(result as AssignmentTestStatistics);
     } catch (err) {
+      if (currentRequestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err : new Error("Failed to fetch test statistics"));
     } finally {
-      setIsLoading(false);
+      if (currentRequestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [assignment_id]);
 
@@ -58,7 +67,8 @@ export function useTestStatistics(assignment_id: number | null | undefined) {
 }
 
 /**
- * Hook to fetch common errors with optional filtering
+ * Hook to fetch common errors with optional filtering.
+ * Includes request-id guard to prevent race conditions from rapid parameter changes.
  */
 export function useCommonErrors(
   assignment_id: number | null | undefined,
@@ -70,13 +80,15 @@ export function useCommonErrors(
   const [data, setData] = useState<CommonErrorsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const requestIdRef = useRef(0);
 
   const fetchErrors = useCallback(async () => {
-    if (!assignment_id) {
+    if (!assignment_id || !Number.isFinite(assignment_id)) {
       setData(null);
       return;
     }
 
+    const currentRequestId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
 
@@ -93,12 +105,17 @@ export function useCommonErrors(
         }
       );
 
+      if (currentRequestId !== requestIdRef.current) return;
+
       if (rpcError) throw rpcError;
       setData(result as CommonErrorsResponse);
     } catch (err) {
+      if (currentRequestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err : new Error("Failed to fetch common errors"));
     } finally {
-      setIsLoading(false);
+      if (currentRequestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [assignment_id, testName, testPart, minOccurrences, limit]);
 
@@ -115,19 +132,22 @@ export function useCommonErrors(
 }
 
 /**
- * Hook to fetch submissions to full marks statistics
+ * Hook to fetch submissions to full marks statistics.
+ * Includes request-id guard to prevent race conditions from rapid parameter changes.
  */
 export function useSubmissionsToFullMarks(assignment_id: number | null | undefined) {
   const [data, setData] = useState<SubmissionsToFullMarksResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const requestIdRef = useRef(0);
 
   const fetchData = useCallback(async () => {
-    if (!assignment_id) {
+    if (!assignment_id || !Number.isFinite(assignment_id)) {
       setData(null);
       return;
     }
 
+    const currentRequestId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
 
@@ -137,12 +157,17 @@ export function useSubmissionsToFullMarks(assignment_id: number | null | undefin
         p_assignment_id: assignment_id
       });
 
+      if (currentRequestId !== requestIdRef.current) return;
+
       if (rpcError) throw rpcError;
       setData(result as SubmissionsToFullMarksResponse);
     } catch (err) {
+      if (currentRequestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err : new Error("Failed to fetch submissions to full marks data"));
     } finally {
-      setIsLoading(false);
+      if (currentRequestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [assignment_id]);
 
@@ -159,7 +184,9 @@ export function useSubmissionsToFullMarks(assignment_id: number | null | undefin
 }
 
 /**
- * Hook to find error pins that match a specific error pattern
+ * Hook to find error pins that match a specific error pattern.
+ * Includes request-id guard to prevent race conditions from rapid parameter changes.
+ * Note: If errorOutput is empty, it will still attempt to find pins based on test_name.
  */
 export function useErrorPinsForPattern(
   assignment_id: number | null | undefined,
@@ -169,13 +196,16 @@ export function useErrorPinsForPattern(
   const [data, setData] = useState<ErrorPinsForPatternResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const requestIdRef = useRef(0);
 
   const fetchData = useCallback(async () => {
-    if (!assignment_id || !testName || !errorOutput) {
+    // Require assignment_id and testName, but allow empty errorOutput (will match by test_name)
+    if (!assignment_id || !Number.isFinite(assignment_id) || !testName) {
       setData(null);
       return;
     }
 
+    const currentRequestId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
 
@@ -184,15 +214,20 @@ export function useErrorPinsForPattern(
       const { data: result, error: rpcError } = await (supabase.rpc as AnyRpc)("get_error_pins_for_error_pattern", {
         p_assignment_id: assignment_id,
         p_test_name: testName,
-        p_error_output: errorOutput
+        p_error_output: errorOutput || "" // Use empty string if null
       });
+
+      if (currentRequestId !== requestIdRef.current) return;
 
       if (rpcError) throw rpcError;
       setData(result as ErrorPinsForPatternResponse);
     } catch (err) {
+      if (currentRequestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err : new Error("Failed to fetch matching error pins"));
     } finally {
-      setIsLoading(false);
+      if (currentRequestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [assignment_id, testName, errorOutput]);
 

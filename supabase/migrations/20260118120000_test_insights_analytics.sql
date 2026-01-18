@@ -2,6 +2,25 @@
 -- Provides analytics functions for tracking student performance on auto-graded tests
 
 -- ============================================================================
+-- Helper function for safe regex matching (returns false on invalid patterns)
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION safe_regex_match(p_text text, p_pattern text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_text IS NULL OR p_pattern IS NULL THEN
+        RETURN false;
+    END IF;
+    RETURN p_text ~ p_pattern;
+EXCEPTION WHEN OTHERS THEN
+    RETURN false;
+END;
+$$;
+
+-- ============================================================================
 -- Step 1: RPC function to get test statistics for an assignment
 -- ============================================================================
 
@@ -132,6 +151,7 @@ $$;
 
 -- ============================================================================
 -- Step 2: RPC function to get common errors with deduplication
+-- Fixed: Removed error_signature from GROUP BY, using MIN() aggregate instead
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION get_common_test_errors_for_assignment(
@@ -165,6 +185,7 @@ BEGIN
     END IF;
     
     -- Get common errors grouped by normalized output
+    -- Note: error_signature is computed via MIN() aggregate rather than in GROUP BY
     SELECT jsonb_build_object(
         'assignment_id', p_assignment_id,
         'filter', jsonb_build_object(
@@ -210,12 +231,14 @@ BEGIN
                         (array_agg(DISTINCT grt.output ORDER BY grt.output))[1:3] AS sample_outputs,
                         ROUND(AVG(COALESCE(grt.score, 0))::numeric, 2) AS avg_score,
                         (AVG(COALESCE(grt.score, 0)) < AVG(grt.max_score)) AS is_failing,
-                        -- Create a short signature for UI display
-                        CASE 
-                            WHEN LENGTH(COALESCE(grt.output, '')) > 100 
-                            THEN LEFT(COALESCE(grt.output, ''), 100) || '...'
-                            ELSE COALESCE(grt.output, '(no output)')
-                        END AS error_signature
+                        -- Create a short signature for UI display using MIN() aggregate
+                        MIN(
+                            CASE 
+                                WHEN LENGTH(COALESCE(grt.output, '')) > 100 
+                                THEN LEFT(COALESCE(grt.output, ''), 100) || '...'
+                                ELSE COALESCE(grt.output, '(no output)')
+                            END
+                        ) AS error_signature
                     FROM grader_result_tests grt
                     INNER JOIN submissions s ON s.id = grt.submission_id
                     WHERE s.assignment_id = p_assignment_id
@@ -228,8 +251,7 @@ BEGIN
                     GROUP BY 
                         normalized_output,
                         grt.name,
-                        grt.part,
-                        error_signature
+                        grt.part
                     HAVING COUNT(*) >= p_min_occurrences
                     ORDER BY occurrence_count DESC
                     LIMIT p_limit
@@ -276,6 +298,7 @@ $$;
 
 -- ============================================================================
 -- Step 3: RPC function to get submissions to full marks statistics
+-- Fixed: Replaced LATERAL join with separate distribution CTE to avoid row multiplication
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION get_submissions_to_full_marks(p_assignment_id bigint)
@@ -306,82 +329,77 @@ BEGIN
     SELECT jsonb_build_object(
         'assignment_id', p_assignment_id,
         'per_test', (
-            SELECT COALESCE(jsonb_agg(test_stats ORDER BY test_stats->>'name'), '[]'::jsonb)
+            SELECT COALESCE(jsonb_agg(test_stats ORDER BY test_stats->>'test_name'), '[]'::jsonb)
             FROM (
-                SELECT jsonb_build_object(
-                    'test_name', test_name,
-                    'test_part', test_part,
-                    'students_with_full_marks', students_with_full_marks,
-                    'students_without_full_marks', students_without_full_marks,
-                    'avg_submissions_to_full_marks', avg_submissions_to_full_marks,
-                    'median_submissions_to_full_marks', median_submissions_to_full_marks,
-                    'max_submissions_to_full_marks', max_submissions_to_full_marks,
-                    'distribution', distribution
-                ) AS test_stats
-                FROM (
-                    WITH test_names AS (
-                        SELECT DISTINCT grt.name AS test_name, grt.part AS test_part
-                        FROM grader_result_tests grt
-                        INNER JOIN submissions s ON s.id = grt.submission_id
-                        WHERE s.assignment_id = p_assignment_id
-                    ),
-                    student_test_history AS (
-                        SELECT 
-                            tn.test_name,
-                            tn.test_part,
-                            s.profile_id,
-                            grt.score,
-                            grt.max_score,
-                            s.ordinal,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY tn.test_name, tn.test_part, s.profile_id 
-                                ORDER BY s.ordinal
-                            ) AS attempt_number,
-                            CASE WHEN grt.score = grt.max_score THEN true ELSE false END AS is_full_marks
-                        FROM test_names tn
-                        CROSS JOIN LATERAL (
-                            SELECT DISTINCT profile_id 
-                            FROM submissions 
-                            WHERE assignment_id = p_assignment_id
-                        ) AS students
-                        LEFT JOIN submissions s ON s.profile_id = students.profile_id 
-                            AND s.assignment_id = p_assignment_id
-                        LEFT JOIN grader_result_tests grt ON grt.submission_id = s.id 
-                            AND grt.name = tn.test_name 
-                            AND (grt.part = tn.test_part OR (grt.part IS NULL AND tn.test_part IS NULL))
-                        WHERE s.id IS NOT NULL
-                    ),
-                    first_full_marks AS (
-                        SELECT 
-                            test_name,
-                            test_part,
-                            profile_id,
-                            MIN(CASE WHEN is_full_marks THEN attempt_number END) AS first_full_marks_attempt
-                        FROM student_test_history
-                        GROUP BY test_name, test_part, profile_id
-                    )
+                WITH test_names AS (
+                    SELECT DISTINCT grt.name AS test_name, grt.part AS test_part
+                    FROM grader_result_tests grt
+                    INNER JOIN submissions s ON s.id = grt.submission_id
+                    WHERE s.assignment_id = p_assignment_id
+                ),
+                student_test_history AS (
                     SELECT 
-                        ffm.test_name,
-                        ffm.test_part,
-                        COUNT(*) FILTER (WHERE first_full_marks_attempt IS NOT NULL) AS students_with_full_marks,
-                        COUNT(*) FILTER (WHERE first_full_marks_attempt IS NULL) AS students_without_full_marks,
-                        ROUND(AVG(first_full_marks_attempt)::numeric, 2) AS avg_submissions_to_full_marks,
-                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY first_full_marks_attempt) AS median_submissions_to_full_marks,
-                        MAX(first_full_marks_attempt) AS max_submissions_to_full_marks,
+                        tn.test_name,
+                        tn.test_part,
+                        s.profile_id,
+                        grt.score,
+                        grt.max_score,
+                        s.ordinal,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY tn.test_name, tn.test_part, s.profile_id 
+                            ORDER BY s.ordinal
+                        ) AS attempt_number,
+                        CASE WHEN grt.score = grt.max_score THEN true ELSE false END AS is_full_marks
+                    FROM test_names tn
+                    INNER JOIN submissions s ON s.assignment_id = p_assignment_id
+                    INNER JOIN grader_result_tests grt ON grt.submission_id = s.id 
+                        AND grt.name = tn.test_name 
+                        AND (grt.part = tn.test_part OR (grt.part IS NULL AND tn.test_part IS NULL))
+                ),
+                first_full_marks AS (
+                    SELECT 
+                        test_name,
+                        test_part,
+                        profile_id,
+                        MIN(CASE WHEN is_full_marks THEN attempt_number END) AS first_full_marks_attempt
+                    FROM student_test_history
+                    GROUP BY test_name, test_part, profile_id
+                ),
+                -- Compute distribution separately to avoid row multiplication
+                distribution_by_test AS (
+                    SELECT 
+                        test_name,
+                        test_part,
                         jsonb_object_agg(
                             COALESCE(first_full_marks_attempt::text, 'never'),
                             student_count
                         ) AS distribution
-                    FROM first_full_marks ffm
-                    LEFT JOIN LATERAL (
-                        SELECT first_full_marks_attempt AS attempt, COUNT(*) AS student_count
-                        FROM first_full_marks ffm2
-                        WHERE ffm2.test_name = ffm.test_name 
-                          AND (ffm2.test_part = ffm.test_part OR (ffm2.test_part IS NULL AND ffm.test_part IS NULL))
-                        GROUP BY first_full_marks_attempt
-                    ) dist ON true
-                    GROUP BY ffm.test_name, ffm.test_part
-                ) AS per_test_stats
+                    FROM (
+                        SELECT 
+                            test_name,
+                            test_part,
+                            first_full_marks_attempt,
+                            COUNT(*) AS student_count
+                        FROM first_full_marks
+                        GROUP BY test_name, test_part, first_full_marks_attempt
+                    ) AS attempt_counts
+                    GROUP BY test_name, test_part
+                )
+                SELECT jsonb_build_object(
+                    'test_name', ffm.test_name,
+                    'test_part', ffm.test_part,
+                    'students_with_full_marks', COUNT(*) FILTER (WHERE first_full_marks_attempt IS NOT NULL),
+                    'students_without_full_marks', COUNT(*) FILTER (WHERE first_full_marks_attempt IS NULL),
+                    'avg_submissions_to_full_marks', ROUND(AVG(first_full_marks_attempt)::numeric, 2),
+                    'median_submissions_to_full_marks', PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY first_full_marks_attempt),
+                    'max_submissions_to_full_marks', MAX(first_full_marks_attempt),
+                    'distribution', dbt.distribution
+                ) AS test_stats
+                FROM first_full_marks ffm
+                LEFT JOIN distribution_by_test dbt 
+                    ON dbt.test_name = ffm.test_name 
+                    AND (dbt.test_part = ffm.test_part OR (dbt.test_part IS NULL AND ffm.test_part IS NULL))
+                GROUP BY ffm.test_name, ffm.test_part, dbt.distribution
             ) AS all_test_stats
         ),
         'overall', (
@@ -419,6 +437,7 @@ $$;
 
 -- ============================================================================
 -- Step 4: RPC function to get error pins that match a specific error pattern
+-- Fixed: Use safe_regex_match helper to handle invalid regex patterns gracefully
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION get_error_pins_for_error_pattern(
@@ -450,6 +469,7 @@ BEGIN
     END IF;
     
     -- Find error pins that would match this error pattern
+    -- Uses safe_regex_match to handle invalid regex patterns gracefully
     SELECT jsonb_build_object(
         'matching_pins', (
             SELECT COALESCE(jsonb_agg(
@@ -478,7 +498,7 @@ BEGIN
                       CASE epr.match_type 
                         WHEN 'contains' THEN p_test_name ILIKE '%' || epr.match_value || '%'
                         WHEN 'equals' THEN p_test_name = epr.match_value
-                        WHEN 'regex' THEN p_test_name ~ epr.match_value
+                        WHEN 'regex' THEN safe_regex_match(p_test_name, epr.match_value)
                         ELSE false
                       END
                     )
@@ -487,7 +507,7 @@ BEGIN
                       CASE epr.match_type 
                         WHEN 'contains' THEN p_error_output ILIKE '%' || epr.match_value || '%'
                         WHEN 'equals' THEN p_error_output = epr.match_value
-                        WHEN 'regex' THEN p_error_output ~ epr.match_value
+                        WHEN 'regex' THEN safe_regex_match(p_error_output, epr.match_value)
                         ELSE false
                       END
                     )
@@ -504,6 +524,7 @@ $$;
 -- Step 5: Grant permissions
 -- ============================================================================
 
+GRANT EXECUTE ON FUNCTION safe_regex_match(text, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_test_statistics_for_assignment(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_common_test_errors_for_assignment(bigint, text, text, int, int) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_submissions_to_full_marks(bigint) TO authenticated;

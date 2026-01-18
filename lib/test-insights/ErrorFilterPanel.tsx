@@ -96,11 +96,16 @@ export function ErrorFilterPanel({
       <Stack direction={{ base: "column", md: "row" }} gap={4}>
         {/* Test Name Filter */}
         <VStack align="stretch" flex="1">
-          <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+          <Text fontSize="xs" color="fg.muted" fontWeight="medium" id="test-name-label">
             Test Name
           </Text>
           <NativeSelect.Root size="sm">
-            <NativeSelect.Field value={filters.testName || ""} onChange={handleTestNameChange}>
+            <NativeSelect.Field
+              value={filters.testName || ""}
+              onChange={handleTestNameChange}
+              aria-label="Test Name"
+              aria-labelledby="test-name-label"
+            >
               <option value="">All Tests</option>
               {testNames.map((name) => (
                 <option key={name} value={name}>
@@ -114,11 +119,16 @@ export function ErrorFilterPanel({
         {/* Test Part Filter */}
         {testParts.length > 0 && (
           <VStack align="stretch" flex="1">
-            <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+            <Text fontSize="xs" color="fg.muted" fontWeight="medium" id="test-part-label">
               Test Part
             </Text>
             <NativeSelect.Root size="sm">
-              <NativeSelect.Field value={filters.testPart || ""} onChange={handleTestPartChange}>
+              <NativeSelect.Field
+                value={filters.testPart || ""}
+                onChange={handleTestPartChange}
+                aria-label="Test Part"
+                aria-labelledby="test-part-label"
+              >
                 <option value="">All Parts</option>
                 {testParts.map((part) => (
                   <option key={part} value={part}>
@@ -133,7 +143,7 @@ export function ErrorFilterPanel({
         {/* Min Occurrences Filter */}
         {showMinOccurrences && (
           <VStack align="stretch" w={{ base: "100%", md: "120px" }}>
-            <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+            <Text fontSize="xs" color="fg.muted" fontWeight="medium" id="min-occurrences-label">
               Min Occurrences
             </Text>
             <Input
@@ -142,22 +152,26 @@ export function ErrorFilterPanel({
               min={1}
               value={filters.minOccurrences}
               onChange={handleMinOccurrencesChange}
+              aria-label="Min Occurrences"
+              aria-labelledby="min-occurrences-label"
             />
           </VStack>
         )}
 
         {/* Search Filter */}
         <VStack align="stretch" flex="1">
-          <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+          <Text fontSize="xs" color="fg.muted" fontWeight="medium" id="search-output-label">
             Search Output
           </Text>
           <HStack>
-            <Icon as={FaSearch} color="fg.muted" />
+            <Icon as={FaSearch} color="fg.muted" aria-hidden="true" />
             <Input
               size="sm"
               placeholder="Search error output..."
               value={filters.searchTerm}
               onChange={handleSearchChange}
+              aria-label="Search Output"
+              aria-labelledby="search-output-label"
             />
           </HStack>
         </VStack>
@@ -165,13 +179,18 @@ export function ErrorFilterPanel({
 
       {/* Sort Options */}
       <HStack mt={4} gap={4}>
-        <Icon as={FaSort} color="fg.muted" />
+        <Icon as={FaSort} color="fg.muted" aria-hidden="true" />
         <VStack align="stretch" flex="1">
-          <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+          <Text fontSize="xs" color="fg.muted" fontWeight="medium" id="sort-by-label">
             Sort By
           </Text>
           <NativeSelect.Root size="sm">
-            <NativeSelect.Field value={filters.sortBy} onChange={handleSortByChange}>
+            <NativeSelect.Field
+              value={filters.sortBy}
+              onChange={handleSortByChange}
+              aria-label="Sort By"
+              aria-labelledby="sort-by-label"
+            >
               <option value="occurrence_count">Occurrence Count</option>
               <option value="avg_score">Average Score</option>
               <option value="test_name">Test Name</option>
@@ -180,11 +199,16 @@ export function ErrorFilterPanel({
         </VStack>
 
         <VStack align="stretch" w={{ base: "100%", md: "120px" }}>
-          <Text fontSize="xs" color="fg.muted" fontWeight="medium">
+          <Text fontSize="xs" color="fg.muted" fontWeight="medium" id="sort-direction-label">
             Direction
           </Text>
           <NativeSelect.Root size="sm">
-            <NativeSelect.Field value={filters.sortDirection} onChange={handleSortDirectionChange}>
+            <NativeSelect.Field
+              value={filters.sortDirection}
+              onChange={handleSortDirectionChange}
+              aria-label="Sort Direction"
+              aria-labelledby="sort-direction-label"
+            >
               <option value="desc">Descending</option>
               <option value="asc">Ascending</option>
             </NativeSelect.Field>
