@@ -6,7 +6,7 @@ import { Select } from "chakra-react-select";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
-import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
+import { FaCalendar, FaChartBar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
@@ -63,6 +63,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Manage Regrade Requests",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
     icon: FaPooStorm
+  },
+  {
+    label: "Test Insights",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/test-insights`,
+    icon: FaChartBar,
+    instructorsOnly: "graderOrInstructor"
   }
 ];
 
