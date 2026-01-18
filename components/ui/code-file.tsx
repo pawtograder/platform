@@ -1,6 +1,7 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   useGraderPseudonymousMode,
+  useReviewAssignmentRubricParts,
   useRubricCheck,
   useRubricChecksByRubric,
   useRubricCriteria,
@@ -14,7 +15,7 @@ import {
   useSubmissionFileComment,
   useSubmissionFileComments
 } from "@/hooks/useSubmission";
-import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
+import { useActiveReviewAssignmentId, useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   Json,
@@ -55,7 +56,6 @@ import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
-import { RubricMarkingMenu } from "./rubric-marking-menu";
 import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
@@ -107,7 +107,6 @@ export type LineActionPopupDynamicProps = {
   visible: boolean;
   onClose?: () => void;
   close: () => void;
-  mode: "marking" | "select";
 };
 
 type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
@@ -125,7 +124,6 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     top: 0,
     left: 0,
     visible: false,
-    mode: "select",
     close: () => {}
   }));
 
@@ -662,11 +660,17 @@ export function formatPoints(option: { check?: RubricCheck; criteria?: RubricCri
  *
  * Allows graders to select a rubric check (with optional sub-options), view criteria, and add an optional or required comment to the selected line. Enforces annotation limits per check and provides context-sensitive UI for marking or direct selection modes. Handles submission of new annotation comments, including points and visibility settings.
  */
-function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
+function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineActionPopupComponentProps) {
   const submissionController = useSubmissionController();
   const submission = useSubmission();
   const review = useActiveSubmissionReview();
   const rubric = useRubricWithParts(review?.rubric_id);
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const assignedPartIds = useMemo(
+    () => new Set(assignedRubricParts.map((part) => part.rubric_part_id)),
+    [assignedRubricParts]
+  );
   const [selectOpen, setSelectOpen] = useState(true);
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -679,7 +683,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
-  const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
 
   useEffect(() => {
     if (!selectedCheckOption) {
@@ -704,13 +707,22 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
         )
         .map((check: RubricCheck) => check.rubric_criteria_id);
       // Using the effective rubric (either manually selected or default)
-      criteriaWithAnnotationChecks = rubricCriteria
-        .filter((criteria: RubricCriteria) => annotationChecks.includes(criteria.id))
-        .sort((a, b) => a.ordinal - b.ordinal);
+      criteriaWithAnnotationChecks = rubricCriteria.filter((criteria: RubricCriteria) =>
+        annotationChecks.includes(criteria.id)
+      );
     }
 
+    const sortedCriteria = [...criteriaWithAnnotationChecks].sort((a, b) => {
+      const aAssigned = assignedPartIds.has(a.rubric_part_id ?? -1);
+      const bAssigned = assignedPartIds.has(b.rubric_part_id ?? -1);
+      if (aAssigned !== bAssigned) {
+        return aAssigned ? -1 : 1;
+      }
+      return a.ordinal - b.ordinal;
+    });
+
     const criteriaOptions: RubricCriteriaSelectGroupOption[] =
-      (criteriaWithAnnotationChecks?.map((criteria) => {
+      (sortedCriteria?.map((criteria) => {
         return {
           label: criteria.name,
           value: criteria.id.toString(),
@@ -768,7 +780,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
     });
 
     return criteriaOptions;
-  }, [existingComments, rubricCriteria, rubricChecks]);
+  }, [assignedPartIds, existingComments, rubricCriteria, rubricChecks]);
 
   useEffect(() => {
     if (!visible) {
@@ -819,37 +831,33 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
     }
   }, [selectedCheckOption, lineNumber]);
   useEffect(() => {
-    setCurrentMode(mode);
-  }, [mode]);
-  useEffect(() => {
     if (!visible) {
       // Reset transient popup state any time it is closed
-      setCurrentMode(mode);
       setSelectedCheckOption(null);
       setSelectedSubOption(null);
       setSelectOpen(true);
     }
-  }, [visible, mode]);
+  }, [visible]);
   if (!visible) {
     return null;
-  }
-  const numChecks = criteria.reduce((acc, curr) => acc + curr.options.length, 0);
-  if (currentMode === "marking" && numChecks > 1) {
-    return (
-      <RubricMarkingMenu
-        top={top}
-        left={left}
-        criteria={criteria}
-        setSelectedSubOption={setSelectedSubOption}
-        setSelectedCheckOption={setSelectedCheckOption}
-        setCurrentMode={setCurrentMode}
-      />
-    );
   }
   //Adjust top so that it is less likely to end up off of the screen
   if (top + 250 > window.innerHeight && window.innerHeight > 250) {
     top = top - 250;
   }
+
+  const filterOption = useCallback(
+    (option: { label: string; data: RubricCheckSelectOption }, rawInput: string) => {
+      const search = rawInput.trim().toLowerCase();
+      if (!search) {
+        return true;
+      }
+      const optionLabel = option.label.toLowerCase();
+      const criteriaLabel = option.data.criteria?.name?.toLowerCase() ?? "";
+      return optionLabel.includes(search) || criteriaLabel.includes(search);
+    },
+    []
+  );
 
   const components: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
     GroupHeading: (props) => {
@@ -931,6 +939,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
             }}
             escapeClearsValue={true}
             components={components}
+            filterOption={filterOption}
             value={selectedCheckOption}
             onChange={(e: RubricCheckSelectOption | null) => {
               if (e) {
@@ -1042,7 +1051,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 };
                 try {
                   await submissionController.submission_file_comments.create(values);
-                  setCurrentMode(mode);
                   close();
                 } catch (e) {
                   toaster.error({
@@ -1188,10 +1196,6 @@ function createLine(
   line: number,
   setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
 ): Element {
-  let mouseDownTime: number | null = null;
-  let hasMoved = false;
-  let popupShown = false;
-
   return {
     type: "element",
     tagName: "div",
@@ -1207,70 +1211,6 @@ function createLine(
           id: `L${line}`,
           onClick: (ev: MouseEvent) => {
             ev.stopPropagation();
-          },
-          onMouseDown: (ev: MouseEvent) => {
-            if (ev.button !== 0) {
-              return;
-            }
-            ev.preventDefault();
-            ev.stopPropagation();
-            mouseDownTime = Date.now();
-            hasMoved = false;
-            popupShown = false;
-
-            const checkShowPopup = () => {
-              if (!popupShown && mouseDownTime !== null) {
-                const timeHeld = Date.now() - mouseDownTime;
-                if (timeHeld >= 300 || hasMoved) {
-                  popupShown = true;
-                  setLineActionPopup((prev) => {
-                    if (line !== prev.lineNumber) {
-                      prev.onClose?.();
-                    }
-                    return {
-                      ...prev,
-                      lineNumber: line,
-                      top: ev.clientY,
-                      left: ev.clientX,
-                      visible: true,
-                      mode: "marking",
-                      close: () => {
-                        setLineActionPopup((prevClose) => ({
-                          ...prevClose,
-                          visible: false,
-                          onClose: prevClose.lineNumber === line && prevClose.visible ? undefined : prevClose.onClose
-                        }));
-                      },
-                      onClose: undefined
-                    };
-                  });
-                }
-              }
-            };
-
-            // Check immediately for movement
-            const handleMouseMove = () => {
-              if (!hasMoved && mouseDownTime !== null) {
-                hasMoved = true;
-                checkShowPopup();
-              }
-            };
-
-            // Set up movement listener
-            document.addEventListener("mousemove", handleMouseMove);
-
-            // Set up timer for 300ms check
-            const timer = setTimeout(checkShowPopup, 300);
-
-            // Clean up on mouse up
-            const handleMouseUp = () => {
-              mouseDownTime = null;
-              document.removeEventListener("mousemove", handleMouseMove);
-              clearTimeout(timer);
-              document.removeEventListener("mouseup", handleMouseUp);
-            };
-
-            document.addEventListener("mouseup", handleMouseUp);
           },
           onContextMenu: (ev: MouseEvent) => {
             ev.preventDefault();
@@ -1295,7 +1235,6 @@ function createLine(
                 top: ev.clientY,
                 left: ev.clientX,
                 visible: true,
-                mode: "select",
                 close: closeAndCleanup,
                 onClose: () => {
                   target.classList.remove("selected");
