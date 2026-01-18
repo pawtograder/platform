@@ -2,6 +2,7 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
+  SubmissionWithGraderResultsAndErrors,
   SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
@@ -52,7 +53,7 @@ import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
-import { formatRelative, isAfter } from "date-fns";
+import { format, formatRelative, isAfter } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -62,6 +63,7 @@ import {
   FaBell,
   FaCheckCircle,
   FaFile,
+  FaFileExport,
   FaHistory,
   FaInfo,
   FaQuestionCircle,
@@ -251,6 +253,290 @@ function SubmissionReviewScoreTweak() {
     </Box>
   );
 }
+// Select query for full submission data with grader results and test outputs
+const FULL_SUBMISSION_SELECT =
+  "*, grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message)";
+
+type FullSubmissionData = SubmissionWithGraderResultsAndErrors & {
+  submission_reviews: SubmissionWithGraderResultsAndReview["submission_reviews"];
+  repository_check_runs: { commit_message: string } | null;
+};
+
+function generateSubmissionMarkdown(
+  submissions: FullSubmissionData[],
+  assignmentTitle: string,
+  studentName: string,
+  groupName?: string
+): string {
+  const lines: string[] = [];
+
+  // Header
+  lines.push(`# Submission Export: ${assignmentTitle}`);
+  lines.push("");
+  lines.push(`**Student/Group:** ${groupName ? `${groupName} (Group)` : studentName}`);
+  lines.push(`**Export Date:** ${format(new Date(), "MMMM d, yyyy 'at' h:mm a")}`);
+  lines.push(`**Total Submissions:** ${submissions.length}`);
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+
+  // Sort submissions by ordinal (most recent first)
+  const sortedSubmissions = [...submissions].sort((a, b) => (b.ordinal ?? 0) - (a.ordinal ?? 0));
+
+  for (const sub of sortedSubmissions) {
+    lines.push(`## Submission #${sub.ordinal}${sub.is_active ? " (Active)" : ""}`);
+    lines.push("");
+
+    // Metadata
+    lines.push("### Metadata");
+    lines.push("");
+    lines.push(`- **Submitted:** ${sub.created_at ? format(new Date(sub.created_at), "MMMM d, yyyy 'at' h:mm:ss a") : "Unknown"}`);
+    lines.push(`- **Commit:** \`${sub.sha}\``);
+    lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
+    lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    lines.push(`- **Status:** ${sub.is_active ? "Active (will be graded)" : sub.is_not_graded ? "Not for grading" : "Historical"}`);
+    lines.push("");
+
+    // Grader Results
+    if (sub.grader_results) {
+      const gr = sub.grader_results;
+      lines.push("### Autograder Results");
+      lines.push("");
+      lines.push(`- **Score:** ${gr.score}/${gr.max_score}`);
+      lines.push(`- **Lint Passed:** ${gr.lint_passed ? "Yes" : "No"}`);
+      if (gr.execution_time) {
+        lines.push(`- **Execution Time:** ${gr.execution_time}ms`);
+      }
+      lines.push("");
+
+      // Lint Output
+      if (gr.lint_output && gr.lint_output !== "Gradle build failed") {
+        lines.push("#### Lint Output");
+        lines.push("");
+        lines.push("```");
+        lines.push(gr.lint_output);
+        lines.push("```");
+        lines.push("");
+      }
+
+      // Grader Output (visible and hidden)
+      if (gr.grader_result_output && gr.grader_result_output.length > 0) {
+        lines.push("#### Grader Output");
+        lines.push("");
+        for (const output of gr.grader_result_output) {
+          const visibility = output.visibility === "visible" ? "Student Visible" : "Instructor Only";
+          lines.push(`##### ${visibility} Output`);
+          lines.push("");
+          if (output.format === "markdown") {
+            lines.push(output.output || "No output");
+          } else {
+            lines.push("```");
+            lines.push(output.output || "No output");
+            lines.push("```");
+          }
+          lines.push("");
+        }
+      }
+
+      // Test Results
+      if (gr.grader_result_tests && gr.grader_result_tests.length > 0) {
+        lines.push("#### Test Results");
+        lines.push("");
+
+        // Summary table
+        lines.push("| Status | Test Name | Score |");
+        lines.push("|--------|-----------|-------|");
+        for (const test of gr.grader_result_tests) {
+          const status = test.score === test.max_score ? "✅" : "❌";
+          lines.push(`| ${status} | ${test.name} | ${test.score}/${test.max_score} |`);
+        }
+        lines.push("");
+
+        // Detailed test output
+        lines.push("#### Detailed Test Output");
+        lines.push("");
+        for (const test of gr.grader_result_tests) {
+          const status = test.score === test.max_score ? "✅ PASSED" : "❌ FAILED";
+          lines.push(`##### ${test.name} (${status})`);
+          lines.push("");
+          lines.push(`**Score:** ${test.score}/${test.max_score}`);
+          if (test.part) {
+            lines.push(`**Part:** ${test.part}`);
+          }
+          lines.push("");
+
+          // Student-visible output
+          if (test.output) {
+            lines.push("**Student Output:**");
+            lines.push("");
+            if (test.output_format === "markdown") {
+              lines.push(test.output);
+            } else {
+              lines.push("```");
+              lines.push(test.output);
+              lines.push("```");
+            }
+            lines.push("");
+          }
+
+          // Instructor-only test output
+          if (test.grader_result_test_output && test.grader_result_test_output.length > 0) {
+            for (const testOutput of test.grader_result_test_output) {
+              lines.push("**Instructor-Only Output:**");
+              lines.push("");
+              if (testOutput.output_format === "markdown") {
+                lines.push(testOutput.output || "No output");
+              } else {
+                lines.push("```");
+                lines.push(testOutput.output || "No output");
+                lines.push("```");
+              }
+              lines.push("");
+            }
+          }
+
+          // LLM hint data if present
+          const extraData = test.extra_data as GraderResultTestExtraData | null;
+          if (extraData?.llm?.result) {
+            lines.push("**Feedbot Response:**");
+            lines.push("");
+            lines.push(extraData.llm.result);
+            lines.push("");
+          }
+        }
+      }
+    } else {
+      lines.push("### Autograder Results");
+      lines.push("");
+      lines.push("*Autograder has not completed or no results available.*");
+      lines.push("");
+    }
+
+    // Submission Review (if exists)
+    if (sub.submission_reviews) {
+      const review = sub.submission_reviews;
+      lines.push("### Grading Review");
+      lines.push("");
+      lines.push(`- **Total Score:** ${review.total_score ?? "Not graded"}`);
+      lines.push(`- **Released:** ${review.released ? "Yes" : "No"}`);
+      if (review.completed_at) {
+        lines.push(`- **Completed:** ${format(new Date(review.completed_at), "MMMM d, yyyy 'at' h:mm a")}`);
+      }
+      if (review.tweak) {
+        lines.push(`- **Score Tweak:** ${review.tweak}`);
+      }
+      lines.push("");
+    }
+
+    lines.push("---");
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function ExportSubmissionMetadataButton({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  const [isExporting, setIsExporting] = useState(false);
+  const { assignment } = useAssignmentController();
+  const supabase = useMemo(() => createClient(), []);
+
+  // Get student/group info
+  const submitterProfile = useUserProfile(submission.profile_id);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id
+  });
+
+  const handleExport = useCallback(async () => {
+    if (!assignment) {
+      toaster.error({ title: "Error", description: "Assignment not loaded" });
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      // Fetch all submissions with full grader data
+      let query = supabase
+        .from("submissions")
+        .select(FULL_SUBMISSION_SELECT)
+        .eq("assignment_id", submission.assignment_id);
+
+      if (submission.assignment_group_id) {
+        query = query.eq("assignment_group_id", submission.assignment_group_id);
+      } else if (submission.profile_id) {
+        query = query.eq("profile_id", submission.profile_id);
+      } else {
+        toaster.error({ title: "Error", description: "No profile or group ID found for submission" });
+        return;
+      }
+
+      const { data: submissions, error } = await query.order("ordinal", { ascending: false });
+
+      if (error) {
+        throw new Error(`Failed to fetch submissions: ${error.message}`);
+      }
+
+      if (!submissions || submissions.length === 0) {
+        toaster.error({ title: "No submissions found", description: "Could not find any submissions to export" });
+        return;
+      }
+
+      // Generate student/group name
+      let studentName = submitterProfile?.name || "Unknown Student";
+      let groupName: string | undefined;
+
+      if (assignmentGroupWithMembers) {
+        groupName = assignmentGroupWithMembers.name || "Unnamed Group";
+        // Group member names are just profile IDs in assignmentGroupsWithMembers, use the group name
+        studentName = groupName;
+      }
+
+      // Generate the markdown
+      const markdown = generateSubmissionMarkdown(
+        submissions as FullSubmissionData[],
+        assignment.title || "Untitled Assignment",
+        studentName,
+        groupName
+      );
+
+      // Create and download the file
+      const blob = new Blob([markdown], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+
+      // Generate filename
+      const safeStudentName = (groupName || submitterProfile?.name || "student").replace(/[^a-zA-Z0-9]/g, "_");
+      const safeAssignmentName = (assignment.slug || assignment.title || "assignment").replace(/[^a-zA-Z0-9]/g, "_");
+      a.download = `submission_export_${safeAssignmentName}_${safeStudentName}_${format(new Date(), "yyyy-MM-dd")}.md`;
+
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toaster.success({
+        title: "Export complete",
+        description: `Exported ${submissions.length} submission(s) to markdown`
+      });
+    } catch (err) {
+      const errorId = Sentry.captureException(err);
+      toaster.error({
+        title: "Export failed",
+        description: `Failed to export submissions. Error ID: ${errorId}`
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  }, [assignment, submission, supabase, submitterProfile, assignmentGroupWithMembers]);
+
+  return (
+    <Button variant="outline" onClick={handleExport} loading={isExporting} data-testid="export-submission-metadata">
+      <Icon as={FaFileExport} />
+      Export All Metadata
+    </Button>
+  );
+}
+
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
@@ -978,6 +1264,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
+          {isGraderOrInstructor && <ExportSubmissionMetadataButton submission={submission} />}
         </HStack>
       </Flex>
 
