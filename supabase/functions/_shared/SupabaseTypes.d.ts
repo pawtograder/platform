@@ -6641,6 +6641,7 @@ export type Database = {
       rubrics: {
         Row: {
           assignment_id: number;
+          cap_score_to_assignment_points: boolean;
           class_id: number;
           created_at: string;
           description: string | null;
@@ -6651,6 +6652,7 @@ export type Database = {
         };
         Insert: {
           assignment_id: number;
+          cap_score_to_assignment_points?: boolean;
           class_id: number;
           created_at?: string;
           description?: string | null;
@@ -6661,6 +6663,7 @@ export type Database = {
         };
         Update: {
           assignment_id?: number;
+          cap_score_to_assignment_points?: boolean;
           class_id?: number;
           created_at?: string;
           description?: string | null;
