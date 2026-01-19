@@ -49,12 +49,13 @@ BEGIN
   ) INTO v_is_staff;
   
   -- Check if the caller is the author of the thread
+  -- Cast v_thread_author (text) to uuid for comparison with profile IDs
   SELECT EXISTS (
     SELECT 1
     FROM public.user_roles
     WHERE user_id = auth.uid()
       AND class_id = v_thread_class_id
-      AND (private_profile_id = v_thread_author OR public_profile_id = v_thread_author)
+      AND (private_profile_id = v_thread_author::uuid OR public_profile_id = v_thread_author::uuid)
   ) INTO v_is_author;
   
   -- Check that the caller is either staff or the author
