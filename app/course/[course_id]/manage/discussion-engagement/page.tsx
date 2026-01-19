@@ -1,0 +1,268 @@
+import { createClient } from "@/utils/supabase/server";
+import { redirect } from "next/navigation";
+import { headers } from "next/headers";
+import { getUserRolesForCourse } from "@/lib/ssrUtils";
+import { Box, Container, Heading, Stack, Text, Table, Badge, HStack, Icon, Flex, VStack } from "@chakra-ui/react";
+import { KarmaBadge } from "@/components/discussion/KarmaBadge";
+import { FaTrophy } from "react-icons/fa";
+import { ExportButton } from "./ExportButton";
+
+type StudentEngagement = {
+  profile_id: string;
+  name: string;
+  discussion_karma: number;
+  total_posts: number;
+  total_replies: number;
+  likes_received: number;
+  likes_given: number;
+};
+
+async function getStudentEngagement(course_id: number): Promise<StudentEngagement[]> {
+  const supabase = await createClient();
+
+  // Get all student profiles for this class
+  const { data: profiles, error: profilesError } = await supabase
+    .from("profiles")
+    .select("id, name, discussion_karma")
+    .eq("class_id", course_id)
+    .eq("is_private_profile", true)
+    .order("discussion_karma", { ascending: false });
+
+  if (profilesError || !profiles) {
+    return [];
+  }
+
+  // Get discussion thread counts (posts and replies) per student
+  const { data: threads, error: threadsError } = await supabase
+    .from("discussion_threads")
+    .select("id, author, parent, root")
+    .eq("class_id", course_id)
+    .eq("draft", false);
+
+  if (threadsError || !threads) {
+    return [];
+  }
+
+  // Get likes given and received per student
+  const { data: likes, error: likesError } = await supabase
+    .from("discussion_thread_likes")
+    .select("id, creator, discussion_thread, discussion_threads!inner(author)")
+    .eq("discussion_threads.class_id", course_id);
+
+  if (likesError) {
+    // Continue even if likes query fails
+  }
+
+  // Calculate metrics per student
+  const engagementMap = new Map<string, StudentEngagement>();
+
+  // Initialize all students
+  profiles.forEach((profile) => {
+    engagementMap.set(profile.id, {
+      profile_id: profile.id,
+      name: profile.name || "Unknown",
+      discussion_karma: profile.discussion_karma ?? 0,
+      total_posts: 0,
+      total_replies: 0,
+      likes_received: 0,
+      likes_given: 0
+    });
+  });
+
+  // Count posts (root threads) and replies (non-root threads)
+  threads.forEach((thread) => {
+    const engagement = engagementMap.get(thread.author);
+    if (engagement) {
+      if (thread.parent === null) {
+        // Root thread = post
+        engagement.total_posts += 1;
+      } else {
+        // Has parent = reply
+        engagement.total_replies += 1;
+      }
+    }
+  });
+
+  // Count likes given and received
+  if (likes) {
+    likes.forEach((like) => {
+      // Like given
+      const giver = engagementMap.get(like.creator);
+      if (giver) {
+        giver.likes_given += 1;
+      }
+
+      // Like received
+      const threadAuthor = (like.discussion_threads as { author: string })?.author;
+      if (threadAuthor) {
+        const receiver = engagementMap.get(threadAuthor);
+        if (receiver) {
+          receiver.likes_received += 1;
+        }
+      }
+    });
+  }
+
+  return Array.from(engagementMap.values()).sort((a, b) => b.discussion_karma - a.discussion_karma);
+}
+
+export default async function DiscussionEngagementPage({ params }: { params: { course_id: string } }) {
+  const course_id = Number.parseInt(params.course_id);
+  const headersList = await headers();
+  const user_id = headersList.get("X-User-ID");
+
+  if (!user_id) {
+    redirect("/");
+  }
+
+  const role = await getUserRolesForCourse(course_id, user_id);
+  if (!role || (role.role !== "instructor" && role.role !== "grader")) {
+    redirect("/");
+  }
+
+  const engagement = await getStudentEngagement(course_id);
+
+  // Calculate summary statistics
+  const totalStudents = engagement.length;
+  const totalKarma = engagement.reduce((sum, s) => sum + s.discussion_karma, 0);
+  const avgKarma = totalStudents > 0 ? Math.round((totalKarma / totalStudents) * 10) / 10 : 0;
+  const totalPosts = engagement.reduce((sum, s) => sum + s.total_posts, 0);
+  const totalReplies = engagement.reduce((sum, s) => sum + s.total_replies, 0);
+  const totalActivity = totalPosts + totalReplies;
+  const mostActive = engagement.length > 0 ? engagement[0] : null;
+
+  const handleExportCSV = () => {
+    const csv = generateCSV(engagement);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `discussion-engagement-${course_id}-${new Date().toISOString().split("T")[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Container maxW="container.xl" py={6}>
+      <Flex justify="space-between" align="center" mb={6}>
+        <Box>
+          <Heading size="lg">Discussion Engagement</Heading>
+          <Text color="fg.muted" mt={1}>
+            Track student participation and karma in discussion boards
+          </Text>
+        </Box>
+        <ExportButton engagement={engagement} course_id={course_id} />
+      </Flex>
+
+      {/* Summary Statistics */}
+      <Stack direction={{ base: "column", md: "row" }} gap={4} mb={6}>
+        <Box flex="1" p={4} borderWidth="1px" borderRadius="md" bg="bg.panel">
+          <VStack align="start" gap={2}>
+            <Text fontSize="sm" color="fg.muted">
+              Total Students
+            </Text>
+            <Text fontSize="2xl" fontWeight="bold">
+              {totalStudents}
+            </Text>
+          </VStack>
+        </Box>
+        <Box flex="1" p={4} borderWidth="1px" borderRadius="md" bg="bg.panel">
+          <VStack align="start" gap={2}>
+            <Text fontSize="sm" color="fg.muted">
+              Average Karma
+            </Text>
+            <Text fontSize="2xl" fontWeight="bold">
+              {avgKarma}
+            </Text>
+          </VStack>
+        </Box>
+        <Box flex="1" p={4} borderWidth="1px" borderRadius="md" bg="bg.panel">
+          <VStack align="start" gap={2}>
+            <Text fontSize="sm" color="fg.muted">
+              Total Activity
+            </Text>
+            <Text fontSize="2xl" fontWeight="bold">
+              {totalActivity}
+            </Text>
+            <Text fontSize="xs" color="fg.muted">
+              {totalPosts} posts, {totalReplies} replies
+            </Text>
+          </VStack>
+        </Box>
+        {mostActive && (
+          <Box flex="1" p={4} borderWidth="1px" borderRadius="md" bg="bg.panel">
+            <VStack align="start" gap={2}>
+              <Text fontSize="sm" color="fg.muted">
+                Most Active
+              </Text>
+              <HStack gap={2}>
+                <Icon as={FaTrophy} color="yellow.500" />
+                <Text fontSize="lg" fontWeight="bold" truncate>
+                  {mostActive.name}
+                </Text>
+              </HStack>
+              <Text fontSize="xs" color="fg.muted">
+                {mostActive.discussion_karma} karma
+              </Text>
+            </VStack>
+          </Box>
+        )}
+      </Stack>
+
+      {/* Engagement Table */}
+      <Box borderWidth="1px" borderRadius="md" overflow="hidden">
+        <Table.Root>
+          <Table.Header>
+            <Table.Row>
+              <Table.ColumnHeader>Rank</Table.ColumnHeader>
+              <Table.ColumnHeader>Student</Table.ColumnHeader>
+              <Table.ColumnHeader textAlign="center">Karma</Table.ColumnHeader>
+              <Table.ColumnHeader textAlign="center">Posts</Table.ColumnHeader>
+              <Table.ColumnHeader textAlign="center">Replies</Table.ColumnHeader>
+              <Table.ColumnHeader textAlign="center">Likes Received</Table.ColumnHeader>
+              <Table.ColumnHeader textAlign="center">Likes Given</Table.ColumnHeader>
+              <Table.ColumnHeader textAlign="center">Total Activity</Table.ColumnHeader>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {engagement.length === 0 ? (
+              <Table.Row>
+                <Table.Cell colSpan={8} textAlign="center" py={8}>
+                  <Text color="fg.muted">No student engagement data available</Text>
+                </Table.Cell>
+              </Table.Row>
+            ) : (
+              engagement.map((student, index) => (
+                <Table.Row key={student.profile_id}>
+                  <Table.Cell>
+                    <Badge variant="subtle" colorPalette={index < 3 ? "yellow" : "gray"}>
+                      #{index + 1}
+                    </Badge>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <HStack gap={2}>
+                      <Text fontWeight="medium">{student.name}</Text>
+                      <KarmaBadge karma={student.discussion_karma} />
+                    </HStack>
+                  </Table.Cell>
+                  <Table.Cell textAlign="center">
+                    <Text fontWeight="semibold">{student.discussion_karma}</Text>
+                  </Table.Cell>
+                  <Table.Cell textAlign="center">{student.total_posts}</Table.Cell>
+                  <Table.Cell textAlign="center">{student.total_replies}</Table.Cell>
+                  <Table.Cell textAlign="center">{student.likes_received}</Table.Cell>
+                  <Table.Cell textAlign="center">{student.likes_given}</Table.Cell>
+                  <Table.Cell textAlign="center">
+                    <Text fontWeight="medium">{student.total_posts + student.total_replies}</Text>
+                  </Table.Cell>
+                </Table.Row>
+              ))
+            )}
+          </Table.Body>
+        </Table.Root>
+      </Box>
+    </Container>
+  );
+}

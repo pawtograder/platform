@@ -967,39 +967,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260118: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260119: {
         Row: {
           class_id: number;
@@ -1199,6 +1166,39 @@ export type Database = {
         Relationships: [];
       };
       audit_20260125: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260126: {
         Row: {
           class_id: number;
           created_at: string;
@@ -5584,6 +5584,7 @@ export type Database = {
           avatar_url: string | null;
           class_id: number;
           created_at: string;
+          discussion_karma: number;
           flair: string | null;
           flair_color: string | null;
           id: string;
@@ -5598,6 +5599,7 @@ export type Database = {
           avatar_url?: string | null;
           class_id: number;
           created_at?: string;
+          discussion_karma?: number;
           flair?: string | null;
           flair_color?: string | null;
           id?: string;
@@ -5612,6 +5614,7 @@ export type Database = {
           avatar_url?: string | null;
           class_id?: number;
           created_at?: string;
+          discussion_karma?: number;
           flair?: string | null;
           flair_color?: string | null;
           id?: string;

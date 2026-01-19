@@ -2,6 +2,7 @@
 
 import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
 import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
+import { KarmaBadge } from "@/components/discussion/KarmaBadge";
 import { StaffThreadActions } from "@/components/discussion/StaffThreadActions";
 import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 import Markdown from "@/components/ui/markdown";
@@ -47,12 +48,15 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
           )}
           <VStack gap="1" alignSelf="flex-start" align="start">
             {thread.instructors_only && <Badge colorPalette="blue">Viewable by poster and staff only</Badge>}
-            <Flex wrap="wrap">
+            <Flex wrap="wrap" gap="1" align="center">
               {userProfile ? (
-                <Heading size="sm">
-                  {userProfile?.name}
-                  {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
-                </Heading>
+                <HStack gap="1">
+                  <Heading size="sm">
+                    {userProfile?.name}
+                    {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
+                  </Heading>
+                  {userProfile && <KarmaBadge karma={userProfile.discussion_karma ?? 0} />}
+                </HStack>
               ) : (
                 <Skeleton width="100px" />
               )}
