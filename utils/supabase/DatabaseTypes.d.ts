@@ -1018,3 +1018,6 @@ export type StudentDeadlineExtension = GetResult<
   Database["public"]["Tables"]["student_deadline_extensions"]["Relationships"],
   "*"
 >;
+
+// Assignment Leaderboard Types
+export type AssignmentLeaderboardEntry = Database["public"]["Tables"]["assignment_leaderboard"]["Row"];
