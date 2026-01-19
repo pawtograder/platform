@@ -240,14 +240,42 @@ function DiscussionPost({ root_id }: { root_id: number }) {
 
   const sendMessage = useCallback(
     async (message: string) => {
+      if (!rootThread) {
+        return;
+      }
+
+      const newInstructorsOnly = visibility === "instructors_only";
+      const visibilityChanged = rootThread.instructors_only !== newInstructorsOnly;
+
+      // If visibility is changing, use RPC function to update root and all descendants
+      if (visibilityChanged) {
+        try {
+          const { error: visibilityError } = await supabase.rpc("set_discussion_thread_visibility", {
+            p_thread_id: root_id,
+            p_instructors_only: newInstructorsOnly
+          });
+
+          if (visibilityError) {
+            throw visibilityError;
+          }
+        } catch (error) {
+          toaster.error({
+            title: "Error",
+            description: `Failed to update visibility: ${error instanceof Error ? error.message : String(error)}`
+          });
+          return;
+        }
+      }
+
+      // Update body and edited_at (and visibility if it didn't change, to ensure consistency)
       await discussionThreadTeasers.update(root_id, {
         body: message,
         edited_at: new Date().toISOString(),
-        instructors_only: visibility === "instructors_only"
+        instructors_only: newInstructorsOnly
       });
       setEditing(false);
     },
-    [root_id, discussionThreadTeasers, visibility]
+    [root_id, rootThread, discussionThreadTeasers, visibility, supabase]
   );
 
   const onClose = useCallback(() => {
