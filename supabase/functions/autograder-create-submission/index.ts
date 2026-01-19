@@ -742,6 +742,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
       const checkRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
       const timeZone = checkRun.classes.time_zone || "America/New_York";
+      const isRegressionRerun = Boolean(checkRun.is_regression_rerun && checkRun.target_submission_id);
+      const rerunTargetSubmissionId = checkRun.target_submission_id ?? null;
 
       // Check if this is a NOT-GRADED submission
       const isNotGradedSubmission =
@@ -750,11 +752,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       scope?.setTag("time_zone", timeZone);
       scope?.setTag("is_not_graded", isNotGradedSubmission.toString());
       scope?.setTag("user_role", checkRun.user_roles?.role || "unknown");
+      scope?.setTag("is_regression_rerun", isRegressionRerun.toString());
+      if (rerunTargetSubmissionId) {
+        scope?.setTag("rerun_target_submission_id", rerunTargetSubmissionId.toString());
+      }
 
       // Validate that the submission can be created
       if (
-        !checkRun.user_roles ||
-        (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader" && !isPawtograderTriggered)
+        !isRegressionRerun &&
+        (!checkRun.user_roles ||
+          (checkRun.user_roles.role !== "instructor" &&
+            checkRun.user_roles.role !== "grader" &&
+            !isPawtograderTriggered))
       ) {
         // Check if it's too late to submit using the lab-aware due date calculation
         console.log(`Timezone: ${timeZone}`);
@@ -983,114 +992,116 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
       }
 
-      // First check if there's an existing submission with this unique key
-      const { data: existingSubmission } = await adminSupabase
-        .from("submissions")
-        .select("id, created_at")
-        .eq("repository", repository)
-        .eq("sha", sha)
-        .eq("run_number", Number.parseInt(decoded.run_id))
-        .eq("run_attempt", Number.parseInt(decoded.run_attempt))
-        .maybeSingle();
-
-      if (existingSubmission) {
-        // Check if the existing submission was created less than 3 minutes ago
-        const createdAt = new Date(existingSubmission.created_at);
-        const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
-
-        if (createdAt < threeMinutesAgo) {
-          scope?.setTag("db_error", "duplicate_submission_too_old");
-          throw new UserVisibleError(
-            `A submission with the same run number and attempt already exists and was created more than 3 minutes ago. Cannot recreate this submission. Re-trigger the action to make a new submission.`,
-            409
-          );
-        }
-
-        // Clean up existing data for this submission
-        console.log(`Reusing existing submission ${existingSubmission.id}, cleaning up old data`);
-        scope?.addBreadcrumb({
-          category: "duplicate_submission",
-          level: "info",
-          message: `Reusing existing submission ${existingSubmission.id}, cleaning up old data`,
-          data: { submission_id: existingSubmission.id }
-        });
-
-        // Delete related data
-        const { error: deleteSubmissionFilesError } = await adminSupabase
-          .from("submission_files")
-          .delete()
-          .eq("submission_id", existingSubmission.id);
-        if (deleteSubmissionFilesError) {
-          console.error(deleteSubmissionFilesError);
-          Sentry.captureException(deleteSubmissionFilesError, scope);
-          throw new UserVisibleError(`Failed to delete submission files: ${deleteSubmissionFilesError.message}`);
-        }
-
-        const { error: deleteSubmissionArtifactsError } = await adminSupabase
-          .from("submission_artifacts")
-          .delete()
-          .eq("submission_id", existingSubmission.id);
-        if (deleteSubmissionArtifactsError) {
-          console.error(deleteSubmissionArtifactsError);
-          Sentry.captureException(deleteSubmissionArtifactsError, scope);
-          throw new UserVisibleError(
-            `Failed to delete submission artifacts: ${deleteSubmissionArtifactsError.message}`
-          );
-        }
-
-        const { error: deleteGraderResultsError } = await adminSupabase
-          .from("grader_results")
-          .delete()
-          .eq("submission_id", existingSubmission.id);
-        if (deleteGraderResultsError) {
-          console.error(deleteGraderResultsError);
-          Sentry.captureException(deleteGraderResultsError, scope);
-          throw new UserVisibleError(`Failed to delete grader results: ${deleteGraderResultsError.message}`);
-        }
-
-        const { error: deleteWorkflowRunErrorsError } = await adminSupabase
-          .from("workflow_run_error")
-          .delete()
-          .eq("submission_id", existingSubmission.id);
-        if (deleteWorkflowRunErrorsError) {
-          console.error(deleteWorkflowRunErrorsError);
-          Sentry.captureException(deleteWorkflowRunErrorsError, scope);
-          throw new UserVisibleError(`Failed to delete workflow run errors: ${deleteWorkflowRunErrorsError.message}`);
-        }
-      }
-
-      // Create or reuse submission
-      if (existingSubmission) {
-        // Reuse the existing submission ID
-        submission_id = existingSubmission.id;
-      } else {
-        // Insert a new submission
-        const { error, data: subID } = await adminSupabase
+      if (!isRegressionRerun) {
+        // First check if there's an existing submission with this unique key
+        const { data: existingSubmission } = await adminSupabase
           .from("submissions")
-          .insert({
-            profile_id: repoData?.profile_id,
-            assignment_group_id: repoData?.assignment_group_id,
-            assignment_id: repoData.assignment_id,
-            repository,
-            repository_id: repoData.id,
-            sha,
-            run_number: Number.parseInt(decoded.run_id),
-            run_attempt: Number.parseInt(decoded.run_attempt),
-            class_id: repoData.assignments.class_id!,
-            repository_check_run_id: checkRun?.id,
-            is_not_graded: isNotGradedSubmission
-          })
-          .select("id")
-          .single();
+          .select("id, created_at")
+          .eq("repository", repository)
+          .eq("sha", sha)
+          .eq("run_number", Number.parseInt(decoded.run_id))
+          .eq("run_attempt", Number.parseInt(decoded.run_attempt))
+          .maybeSingle();
 
-        if (error) {
-          scope?.setTag("db_error", "submission_creation_failed");
-          scope?.setTag("db_error_message", error.message);
-          Sentry.captureException(error, scope);
-          console.error(error);
-          throw new UserVisibleError(`Failed to create submission for repository ${repository}: ${error.message}`);
+        if (existingSubmission) {
+          // Check if the existing submission was created less than 3 minutes ago
+          const createdAt = new Date(existingSubmission.created_at);
+          const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
+
+          if (createdAt < threeMinutesAgo) {
+            scope?.setTag("db_error", "duplicate_submission_too_old");
+            throw new UserVisibleError(
+              `A submission with the same run number and attempt already exists and was created more than 3 minutes ago. Cannot recreate this submission. Re-trigger the action to make a new submission.`,
+              409
+            );
+          }
+
+          // Clean up existing data for this submission
+          console.log(`Reusing existing submission ${existingSubmission.id}, cleaning up old data`);
+          scope?.addBreadcrumb({
+            category: "duplicate_submission",
+            level: "info",
+            message: `Reusing existing submission ${existingSubmission.id}, cleaning up old data`,
+            data: { submission_id: existingSubmission.id }
+          });
+
+          // Delete related data
+          const { error: deleteSubmissionFilesError } = await adminSupabase
+            .from("submission_files")
+            .delete()
+            .eq("submission_id", existingSubmission.id);
+          if (deleteSubmissionFilesError) {
+            console.error(deleteSubmissionFilesError);
+            Sentry.captureException(deleteSubmissionFilesError, scope);
+            throw new UserVisibleError(`Failed to delete submission files: ${deleteSubmissionFilesError.message}`);
+          }
+
+          const { error: deleteSubmissionArtifactsError } = await adminSupabase
+            .from("submission_artifacts")
+            .delete()
+            .eq("submission_id", existingSubmission.id);
+          if (deleteSubmissionArtifactsError) {
+            console.error(deleteSubmissionArtifactsError);
+            Sentry.captureException(deleteSubmissionArtifactsError, scope);
+            throw new UserVisibleError(
+              `Failed to delete submission artifacts: ${deleteSubmissionArtifactsError.message}`
+            );
+          }
+
+          const { error: deleteGraderResultsError } = await adminSupabase
+            .from("grader_results")
+            .delete()
+            .eq("submission_id", existingSubmission.id);
+          if (deleteGraderResultsError) {
+            console.error(deleteGraderResultsError);
+            Sentry.captureException(deleteGraderResultsError, scope);
+            throw new UserVisibleError(`Failed to delete grader results: ${deleteGraderResultsError.message}`);
+          }
+
+          const { error: deleteWorkflowRunErrorsError } = await adminSupabase
+            .from("workflow_run_error")
+            .delete()
+            .eq("submission_id", existingSubmission.id);
+          if (deleteWorkflowRunErrorsError) {
+            console.error(deleteWorkflowRunErrorsError);
+            Sentry.captureException(deleteWorkflowRunErrorsError, scope);
+            throw new UserVisibleError(`Failed to delete workflow run errors: ${deleteWorkflowRunErrorsError.message}`);
+          }
         }
-        submission_id = subID?.id;
+
+        // Create or reuse submission
+        if (existingSubmission) {
+          // Reuse the existing submission ID
+          submission_id = existingSubmission.id;
+        } else {
+          // Insert a new submission
+          const { error, data: subID } = await adminSupabase
+            .from("submissions")
+            .insert({
+              profile_id: repoData?.profile_id,
+              assignment_group_id: repoData?.assignment_group_id,
+              assignment_id: repoData.assignment_id,
+              repository,
+              repository_id: repoData.id,
+              sha,
+              run_number: Number.parseInt(decoded.run_id),
+              run_attempt: Number.parseInt(decoded.run_attempt),
+              class_id: repoData.assignments.class_id!,
+              repository_check_run_id: checkRun?.id,
+              is_not_graded: isNotGradedSubmission
+            })
+            .select("id")
+            .single();
+
+          if (error) {
+            scope?.setTag("db_error", "submission_creation_failed");
+            scope?.setTag("db_error_message", error.message);
+            Sentry.captureException(error, scope);
+            console.error(error);
+            throw new UserVisibleError(`Failed to create submission for repository ${repository}: ${error.message}`);
+          }
+          submission_id = subID?.id;
+        }
       }
 
       if (submission_id) {
@@ -1098,7 +1109,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       console.log(`Created submission ${submission_id} for repository ${repository}`);
-      if (checkRun && !isE2ERun) {
+      if (checkRun && !isE2ERun && !isRegressionRerun) {
         await adminSupabase
           .from("repository_check_runs")
           .update({
@@ -1200,83 +1211,85 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           }
         }
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
-        if (!pawtograderConfig) {
-          throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`,
-            400
-          );
-        }
-        if (!pawtograderConfig.submissionFiles) {
-          throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
-            400
-          );
-        }
-        const expectedFiles = [
-          ...(pawtograderConfig.submissionFiles.files || []),
-          ...(pawtograderConfig.submissionFiles.testFiles || [])
-        ];
-
-        if (expectedFiles.length === 0) {
-          throw new UserVisibleError(
-            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
-            400
-          );
-        }
-        const submittedFiles = zip.files.filter(
-          (file: { path: string; type: string }) =>
-            file.type === "File" && // Do not submit directories
-            expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
-        );
-        // Make sure that all files that are NOT glob patterns are present
-        const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
-        const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
-          submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)
-        );
-        if (!allNonGlobFilesPresent) {
-          //Add a placeholder grader result so that this is not marked as a catastrophic failure
-          const { error: graderResultError } = await adminSupabase.from("grader_results").insert({
-            submission_id: submission_id,
-            errors: {
-              error: `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
-            },
-            score: 0,
-            ret_code: 101,
-            lint_output: "",
-            lint_output_format: "text",
-            lint_passed: false,
-            class_id: repoData.assignments.class_id!,
-            profile_id: repoData.profile_id,
-            assignment_group_id: repoData.assignment_group_id
-          });
-          if (graderResultError) {
-            Sentry.captureException(graderResultError, scope);
+        if (!isRegressionRerun) {
+          if (!pawtograderConfig) {
+            throw new UserVisibleError(
+              `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`,
+              400
+            );
           }
-          throw new UserVisibleError(
-            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`,
-            400
-          );
-        }
+          if (!pawtograderConfig.submissionFiles) {
+            throw new UserVisibleError(
+              `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
+              400
+            );
+          }
+          const expectedFiles = [
+            ...(pawtograderConfig.submissionFiles.files || []),
+            ...(pawtograderConfig.submissionFiles.testFiles || [])
+          ];
 
-        const submittedFilesWithContents = await Promise.all(
-          submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
-            const contents = await file.buffer();
-            return { name: stripTopDir(file.path), contents };
-          })
-        );
-        // Add files to supabase
-        const { error: fileError } = await adminSupabase.from("submission_files").insert(
-          submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
-            submission_id: submission_id,
-            name: file.name,
-            profile_id: repoData.profile_id,
-            assignment_group_id: repoData.assignment_group_id,
-            contents: file.contents.toString("utf-8"),
-            class_id: repoData.assignments.class_id!
-          }))
-        );
-        if (fileError) {
-          throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
+          if (expectedFiles.length === 0) {
+            throw new UserVisibleError(
+              `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`,
+              400
+            );
+          }
+          const submittedFiles = zip.files.filter(
+            (file: { path: string; type: string }) =>
+              file.type === "File" && // Do not submit directories
+              expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
+          );
+          // Make sure that all files that are NOT glob patterns are present
+          const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
+          const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
+            submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)
+          );
+          if (!allNonGlobFilesPresent) {
+            //Add a placeholder grader result so that this is not marked as a catastrophic failure
+            const { error: graderResultError } = await adminSupabase.from("grader_results").insert({
+              submission_id: submission_id,
+              errors: {
+                error: `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
+              },
+              score: 0,
+              ret_code: 101,
+              lint_output: "",
+              lint_output_format: "text",
+              lint_passed: false,
+              class_id: repoData.assignments.class_id!,
+              profile_id: repoData.profile_id,
+              assignment_group_id: repoData.assignment_group_id
+            });
+            if (graderResultError) {
+              Sentry.captureException(graderResultError, scope);
+            }
+            throw new UserVisibleError(
+              `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`,
+              400
+            );
+          }
+
+          const submittedFilesWithContents = await Promise.all(
+            submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
+              const contents = await file.buffer();
+              return { name: stripTopDir(file.path), contents };
+            })
+          );
+          // Add files to supabase
+          const { error: fileError } = await adminSupabase.from("submission_files").insert(
+            submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
+              submission_id: submission_id,
+              name: file.name,
+              profile_id: repoData.profile_id,
+              assignment_group_id: repoData.assignment_group_id,
+              contents: file.contents.toString("utf-8"),
+              class_id: repoData.assignments.class_id!
+            }))
+          );
+          if (fileError) {
+            throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
+          }
         }
         if (isE2ERun) {
           return {
@@ -1291,8 +1304,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             400
           );
         }
+        const requestedGraderSha = isRegressionRerun ? (checkRun.requested_grader_sha ?? undefined) : undefined;
         const { download_link: grader_url, sha: grader_sha } = await handleGitHubApiCall(
-          () => getRepoTarballURL(config.grader_repo!),
+          () => getRepoTarballURL(config.grader_repo!, requestedGraderSha),
           org,
           "getRepoTarballURL",
           adminSupabase,

@@ -215,6 +215,8 @@ export type AutograderTriggerGradingWorkflowRequest = {
 export type AutograderRerunGraderRequest = {
   submission_ids: number[];
   class_id: number;
+  grader_sha?: string;
+  auto_promote?: boolean;
 };
 
 export type CheckRunStatus = {

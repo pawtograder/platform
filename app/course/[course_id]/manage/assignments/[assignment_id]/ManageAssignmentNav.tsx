@@ -8,6 +8,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
 import {
   FaCalendar,
+  FaChartBar,
   FaCode,
   FaEdit,
   FaHome,
@@ -80,6 +81,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/security`,
     icon: FaShieldAlt,
     instructorsOnly: true
+  },
+  {
+    label: "Test Insights",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/test-insights`,
+    icon: FaChartBar,
+    instructorsOnly: "graderOrInstructor"
   }
 ];
 
