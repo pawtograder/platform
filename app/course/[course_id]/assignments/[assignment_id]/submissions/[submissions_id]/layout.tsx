@@ -19,6 +19,7 @@ import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubr
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   useAssignmentController,
   useReviewAssignment,
@@ -253,14 +254,68 @@ function SubmissionReviewScoreTweak() {
     </Box>
   );
 }
-// Select query for full submission data with grader results and test outputs
+// Select query for full submission data with grader results, test outputs, and files
 const FULL_SUBMISSION_SELECT =
-  "*, grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message)";
+  "*, grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)";
+
+type SubmissionFileBasic = { name: string; contents: string | null };
 
 type FullSubmissionData = SubmissionWithGraderResultsAndErrors & {
   submission_reviews: SubmissionWithGraderResultsAndReview["submission_reviews"];
   repository_check_runs: { commit_message: string } | null;
+  submission_files: SubmissionFileBasic[] | null;
 };
+
+// Simple diff generator that shows added/removed lines between two strings
+function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
+  if (!oldContent && !newContent) return "(both empty)";
+  if (!oldContent) return "(new file)";
+  if (!newContent) return "(file deleted)";
+
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+
+  // Simple line-by-line diff
+  const diffLines: string[] = [];
+  const maxLines = Math.max(oldLines.length, newLines.length);
+
+  let addedCount = 0;
+  let removedCount = 0;
+
+  for (let i = 0; i < maxLines; i++) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[i];
+
+    if (oldLine === undefined && newLine !== undefined) {
+      diffLines.push(`+ ${newLine}`);
+      addedCount++;
+    } else if (oldLine !== undefined && newLine === undefined) {
+      diffLines.push(`- ${oldLine}`);
+      removedCount++;
+    } else if (oldLine !== newLine) {
+      diffLines.push(`- ${oldLine}`);
+      diffLines.push(`+ ${newLine}`);
+      addedCount++;
+      removedCount++;
+    }
+    // Skip unchanged lines to keep diff compact
+  }
+
+  if (diffLines.length === 0) {
+    return "(no changes)";
+  }
+
+  // Truncate if too long
+  const maxDiffLines = 100;
+  if (diffLines.length > maxDiffLines) {
+    return (
+      diffLines.slice(0, maxDiffLines).join("\n") +
+      `\n... (${diffLines.length - maxDiffLines} more lines, +${addedCount}/-${removedCount} total)`
+    );
+  }
+
+  return diffLines.join("\n") + `\n(+${addedCount}/-${removedCount} lines)`;
+}
 
 function generateSubmissionMarkdown(
   submissions: FullSubmissionData[],
@@ -283,7 +338,21 @@ function generateSubmissionMarkdown(
   // Sort submissions by ordinal (most recent first)
   const sortedSubmissions = [...submissions].sort((a, b) => (b.ordinal ?? 0) - (a.ordinal ?? 0));
 
+  // Create a map of files by submission ordinal for diff generation
+  const filesByOrdinal = new Map<number, Map<string, string | null>>();
   for (const sub of sortedSubmissions) {
+    const fileMap = new Map<string, string | null>();
+    if (sub.submission_files) {
+      for (const file of sub.submission_files) {
+        fileMap.set(file.name, file.contents);
+      }
+    }
+    filesByOrdinal.set(sub.ordinal ?? 0, fileMap);
+  }
+
+  for (let i = 0; i < sortedSubmissions.length; i++) {
+    const sub = sortedSubmissions[i];
+    const prevSub = sortedSubmissions[i + 1]; // Previous submission (older)
     lines.push(`## Submission #${sub.ordinal}${sub.is_active ? " (Active)" : ""}`);
     lines.push("");
 
@@ -432,6 +501,53 @@ function generateSubmissionMarkdown(
       lines.push("");
     }
 
+    // Diff from previous submission
+    if (prevSub) {
+      const currentFiles = filesByOrdinal.get(sub.ordinal ?? 0) || new Map();
+      const prevFiles = filesByOrdinal.get(prevSub.ordinal ?? 0) || new Map();
+
+      // Collect all file names from both submissions
+      const allFileNames = new Set([...currentFiles.keys(), ...prevFiles.keys()]);
+
+      if (allFileNames.size > 0) {
+        lines.push(`### Changes from Submission #${prevSub.ordinal}`);
+        lines.push("");
+
+        for (const fileName of Array.from(allFileNames).sort()) {
+          const currentContent = currentFiles.get(fileName);
+          const prevContent = prevFiles.get(fileName);
+
+          // Skip if both are undefined (shouldn't happen, but safety check)
+          if (currentContent === undefined && prevContent === undefined) continue;
+
+          // Determine change type
+          let changeType = "";
+          if (prevContent === undefined) {
+            changeType = " (new file)";
+          } else if (currentContent === undefined) {
+            changeType = " (deleted)";
+          } else if (currentContent === prevContent) {
+            continue; // Skip unchanged files
+          }
+
+          lines.push(`#### \`${fileName}\`${changeType}`);
+          lines.push("");
+          lines.push("```diff");
+          lines.push(generateSimpleDiff(prevContent ?? null, currentContent ?? null));
+          lines.push("```");
+          lines.push("");
+        }
+      }
+    } else if (sub.submission_files && sub.submission_files.length > 0) {
+      // First submission - just list the files
+      lines.push("### Files (Initial Submission)");
+      lines.push("");
+      for (const file of sub.submission_files) {
+        lines.push(`- \`${file.name}\``);
+      }
+      lines.push("");
+    }
+
     lines.push("---");
     lines.push("");
   }
@@ -534,10 +650,18 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
   }, [assignment, submission, supabase, submitterProfile, assignmentGroupWithMembers]);
 
   return (
-    <Button variant="outline" onClick={handleExport} loading={isExporting} data-testid="export-submission-metadata">
-      <Icon as={FaFileExport} />
-      Export All Metadata
-    </Button>
+    <Tooltip content="Export all submission history, grader results, and diffs to markdown">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={handleExport}
+        loading={isExporting}
+        data-testid="export-submission-metadata"
+        aria-label="Export All Metadata"
+      >
+        <Icon as={FaFileExport} />
+      </Button>
+    </Tooltip>
   );
 }
 
