@@ -56,7 +56,9 @@ begin
   if is_grading_review then
     select sum(t.score) into calculated_autograde_score from grader_results r 
       inner join grader_result_tests t on t.grader_result_id=r.id
-      where r.submission_id=NEW.submission_id;
+      where r.submission_id=NEW.submission_id
+        and r.rerun_for_submission_id IS NULL
+        and r.autograder_regression_test IS NULL;
   end if;
 
 select sum(score) into calculated_score from (
@@ -170,7 +172,9 @@ begin
       INTO calculated_autograde_score 
       FROM grader_results r 
       INNER JOIN grader_result_tests t ON t.grader_result_id = r.id
-      WHERE r.submission_id = submission_rec.submission_id;
+      WHERE r.submission_id = submission_rec.submission_id
+        AND r.rerun_for_submission_id IS NULL
+        AND r.autograder_regression_test IS NULL;
     END IF;
 
     -- Calculate manual grading score from all comment types
@@ -628,6 +632,7 @@ CREATE VIEW "public"."submissions_with_grades_for_assignment_and_regression_test
             "grader_action_sha"
         FROM "public"."grader_results"
         WHERE "autograder_regression_test" IS NULL
+          AND "rerun_for_submission_id" IS NULL
         ORDER BY "submission_id", "id" DESC
     ) "ar" ON (("ar"."submission_id" = "s"."id")))
     LEFT JOIN "public"."autograder_regression_test" "rt" ON (("rt"."repository" = "s"."repository")))

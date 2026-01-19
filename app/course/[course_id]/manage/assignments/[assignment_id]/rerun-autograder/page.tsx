@@ -4,7 +4,7 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { repositoryListCommits, rerunGrader } from "@/lib/edgeFunctions";
+import { rerunGrader } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { ActiveSubmissionsWithRegressionTestResults, Assignment, Autograder } from "@/utils/supabase/DatabaseTypes";
@@ -20,6 +20,7 @@ import {
   Heading,
   HStack,
   Icon,
+  Input,
   List,
   Skeleton,
   Table,
@@ -52,9 +53,11 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   const timeZone = course.time_zone || "America/New_York";
   const [commitOptions, setCommitOptions] = useState<SelectOption[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<SelectOption | null>(null);
+  const [manualSha, setManualSha] = useState<string>("");
   const [commitsLoading, setCommitsLoading] = useState(false);
   const [commitsError, setCommitsError] = useState<string | null>(null);
   const [autoPromote, setAutoPromote] = useState(true);
+  const [showDevColumns, setShowDevColumns] = useState(false);
   const supabase = useMemo(() => createClient(), []);
   const { classRealTimeController } = useCourseController();
   const [tableController, setTableController] = useState<
@@ -225,38 +228,6 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         }
       },
       {
-        id: "rerun_queued_at",
-        accessorKey: "rerun_queued_at",
-        header: "Rerun Status",
-        enableColumnFilter: true,
-        cell: (props) => {
-          const queuedAt = props.getValue() as string | null;
-          if (!queuedAt) {
-            return <Text color="fg.muted">—</Text>;
-          }
-          return (
-            <VStack gap={0} align="start">
-              <Text color="orange.600" fontWeight="medium">
-                Requested
-              </Text>
-              <Text fontSize="xs" color="fg.muted">
-                {new TZDate(queuedAt, timeZone).toLocaleString()}
-              </Text>
-            </VStack>
-          );
-        },
-        filterFn: (row, id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const hasPending = row.original.rerun_queued_at !== null;
-          return filterArray.some((filter: string) => {
-            if (filter === "Pending") return hasPending;
-            if (filter === "None") return !hasPending;
-            return false;
-          });
-        }
-      },
-      {
         id: "grader_sha",
         accessorKey: "grader_sha",
         header: "Submission Autograder SHA",
@@ -420,20 +391,25 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   useEffect(() => {
     let cancelled = false;
     async function loadCommits() {
-      if (!autograder_repo) return;
+      if (!assignment_id) return;
       setCommitsLoading(true);
       setCommitsError(null);
       try {
-        const { commits } = await repositoryListCommits(
-          {
-            course_id: course.id,
-            repo_name: autograder_repo,
-            page: 1
-          },
-          supabase
-        );
-        const formatted = commits.map((commit) => {
-          const subject = commit.commit?.message?.split("\n")[0] || "No message";
+        // Query autograder_commits table for main branch commits
+        const { data: commits, error } = await supabase
+          .from("autograder_commits")
+          .select("sha, message, author, created_at")
+          .eq("autograder_id", Number.parseInt(assignment_id as string))
+          .eq("ref", "refs/heads/main")
+          .order("created_at", { ascending: false })
+          .limit(50);
+
+        if (error) {
+          throw error;
+        }
+
+        const formatted = (commits || []).map((commit) => {
+          const subject = commit.message?.split("\n")[0] || "No message";
           return {
             value: commit.sha,
             label: `${commit.sha.slice(0, 7)} - ${subject}`
@@ -457,7 +433,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
     return () => {
       cancelled = true;
     };
-  }, [autograder_repo, course.id, supabase]);
+  }, [assignment_id, supabase]);
 
   useEffect(() => {
     Sentry.addBreadcrumb({
@@ -496,6 +472,28 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       }
     }
   });
+
+  // Determine which columns to show based on data
+  const columnVisibility = useMemo(() => {
+    if (!data || data.length === 0) {
+      return {
+        name: true,
+        groupname: true,
+        rt_autograder_score: showDevColumns,
+        rt_grader_sha: showDevColumns
+      };
+    }
+
+    const hasName = data.some((row) => row.name !== null && row.name !== undefined);
+    const hasGroupname = data.some((row) => row.groupname !== null && row.groupname !== undefined);
+
+    return {
+      name: hasName,
+      groupname: hasGroupname,
+      rt_autograder_score: showDevColumns,
+      rt_grader_sha: showDevColumns
+    };
+  }, [data, showDevColumns]);
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
   const [regrading, setRegrading] = useState<boolean>(false);
 
@@ -507,17 +505,6 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
 
     columns.forEach((column) => {
       if (!column.enableColumnFilter) return;
-
-      if (column.id === "rerun_queued_at") {
-        // Special handling for rerun status - show Pending/None options
-        const hasPending = rows.some((row) => row.getValue(column.id as string) !== null);
-        const hasNone = rows.some((row) => row.getValue(column.id as string) === null);
-        const options: SelectOption[] = [];
-        if (hasPending) options.push({ label: "Pending", value: "Pending" });
-        if (hasNone) options.push({ label: "None", value: "None" });
-        uniqueValuesMap[column.id as string] = options;
-        return;
-      }
 
       const uniqueValues = new Set<string>();
       rows.forEach((row) => {
@@ -550,11 +537,11 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
     <VStack>
       <Toaster />
       <VStack paddingBottom="55px">
-        <Box width="100%" border="1px solid" borderColor="border.muted" borderRadius="md" p={4}>
+        <Box width="100%" maxWidth="1200px" border="1px solid" borderColor="border.muted" borderRadius="md" p={4}>
           <HStack alignItems="flex-end" gap={6} flexWrap="wrap">
-            <Box flex="1" minWidth="280px">
+            <Box width={{ base: "100%", md: "300px" }}>
               <Text fontSize="sm" color="fg.muted" mb={2}>
-                Grader commit to use
+                Grader commit to use (from main branch)
               </Text>
               <ReactSelect
                 name="grader_sha"
@@ -562,7 +549,12 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                 placeholder="Latest on main (default)"
                 isLoading={commitsLoading}
                 value={selectedCommit}
-                onChange={(selected) => setSelectedCommit(selected as SelectOption | null)}
+                onChange={(selected) => {
+                  setSelectedCommit(selected as SelectOption | null);
+                  if (selected) {
+                    setManualSha(""); // Clear manual input when selecting from dropdown
+                  }
+                }}
                 chakraStyles={{
                   container: (provided) => ({
                     ...provided,
@@ -586,6 +578,24 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                 </Text>
               )}
             </Box>
+            <Box width={{ base: "100%", md: "300px" }}>
+              <Text fontSize="sm" color="fg.muted" mb={2}>
+                Or enter a custom SHA
+              </Text>
+              <Input
+                placeholder="Enter any valid SHA (e.g., abc1234)"
+                value={manualSha}
+                onChange={(e) => {
+                  setManualSha(e.target.value);
+                  if (e.target.value) {
+                    setSelectedCommit(null); // Clear dropdown selection when typing manually
+                  }
+                }}
+              />
+              <Text fontSize="xs" color="fg.muted" mt={1}>
+                You can use any valid SHA from the solution repository
+              </Text>
+            </Box>
             <Checkbox.Root
               checked={autoPromote}
               onCheckedChange={(checked) => setAutoPromote(Boolean(checked.checked))}
@@ -596,6 +606,18 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                   <Checkbox.Indicator />
                 </Checkbox.Control>
                 <Checkbox.Label>Auto-promote new result to official</Checkbox.Label>
+              </HStack>
+            </Checkbox.Root>
+            <Checkbox.Root
+              checked={showDevColumns}
+              onCheckedChange={(checked) => setShowDevColumns(Boolean(checked.checked))}
+            >
+              <Checkbox.HiddenInput />
+              <HStack>
+                <Checkbox.Control>
+                  <Checkbox.Indicator />
+                </Checkbox.Control>
+                <Checkbox.Label>Show development autograder columns</Checkbox.Label>
               </HStack>
             </Checkbox.Root>
           </HStack>
@@ -630,7 +652,14 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                   </Checkbox.Root>
                 </Table.ColumnHeader>
                 {headerGroup.headers
-                  .filter((h) => h.id !== "assignment_id")
+                  .filter((h) => {
+                    if (h.id === "assignment_id") return false;
+                    if (h.id === "name" && !columnVisibility.name) return false;
+                    if (h.id === "groupname" && !columnVisibility.groupname) return false;
+                    if (h.id === "rt_autograder_score" && !columnVisibility.rt_autograder_score) return false;
+                    if (h.id === "rt_grader_sha" && !columnVisibility.rt_grader_sha) return false;
+                    return true;
+                  })
                   .map((header) => {
                     const canFilter = header.column.columnDef.enableColumnFilter;
                     const options = columnUniqueValues[header.id] || [];
@@ -679,7 +708,8 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                                 chakraStyles={{
                                   container: (provided) => ({
                                     ...provided,
-                                    width: "100%"
+                                    width: "100%",
+                                    maxWidth: "200px"
                                   }),
                                   dropdownIndicator: (provided) => ({
                                     ...provided,
@@ -750,7 +780,15 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                     </Table.Cell>
                     {row
                       .getVisibleCells()
-                      .filter((c) => c.column.id !== "assignment_id")
+                      .filter((c) => {
+                        if (c.column.id === "assignment_id") return false;
+                        if (c.column.id === "name" && !columnVisibility.name) return false;
+                        if (c.column.id === "groupname" && !columnVisibility.groupname) return false;
+                        if (c.column.id === "rt_autograder_score" && !columnVisibility.rt_autograder_score)
+                          return false;
+                        if (c.column.id === "rt_grader_sha" && !columnVisibility.rt_grader_sha) return false;
+                        return true;
+                      })
                       .map((cell) => {
                         return (
                           <Table.Cell key={cell.id}>
@@ -786,11 +824,12 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             onClick={async () => {
               setRegrading(true);
               try {
+                const graderSha = manualSha.trim() || selectedCommit?.value || undefined;
                 await rerunGrader(
                   {
                     submission_ids: selectedRows,
                     class_id: course.id,
-                    grader_sha: selectedCommit?.value ? selectedCommit.value : undefined,
+                    grader_sha: graderSha,
                     auto_promote: autoPromote
                   },
                   supabase
