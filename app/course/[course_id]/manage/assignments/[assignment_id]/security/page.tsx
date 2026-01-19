@@ -290,6 +290,7 @@ export default function SecurityAuditPage() {
   const labSections = useLabSections();
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [activeSearchTerm, setActiveSearchTerm] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [selectedResult, setSelectedResult] = useState<SecurityAuditResult | null>(null);
@@ -339,11 +340,14 @@ export default function SecurityAuditPage() {
 
   // Perform search by creating a new TableController
   const performSearch = useCallback(async () => {
-    if (!searchTerm.trim()) {
+    const trimmedSearchTerm = searchTerm.trim();
+    if (!trimmedSearchTerm) {
       toaster.error({ title: "Error", description: "Please enter a search term" });
       return;
     }
 
+    // Capture the executed search term to prevent mutations from affecting results
+    setActiveSearchTerm(trimmedSearchTerm);
     setHasSearched(true);
     setIsSearching(true);
 
@@ -353,7 +357,7 @@ export default function SecurityAuditPage() {
       .select(SUBMISSION_FILES_SELECT)
       .eq("submissions.assignment_id", Number(assignment_id))
       .eq("class_id", Number(course_id))
-      .like("contents", `%${searchTerm}%`);
+      .like("contents", `%${trimmedSearchTerm}%`);
 
     const tc = new TableController<"submission_files", typeof SUBMISSION_FILES_SELECT>({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -398,7 +402,7 @@ export default function SecurityAuditPage() {
         const classSectionName = userData?.class_section_id ? classSectionMap.get(userData.class_section_id) : null;
         const labSectionName = userData?.lab_section_id ? labSectionMap.get(userData.lab_section_id) : null;
 
-        const { snippet, lineNumber } = getMatchContext(file.contents, searchTerm);
+        const { snippet, lineNumber } = getMatchContext(file.contents, activeSearchTerm);
 
         // Extract grader results data - take first result since submissions typically have one
         const graderResultsArray = submission.grader_results;
@@ -436,7 +440,7 @@ export default function SecurityAuditPage() {
 
       return results;
     },
-    [searchTerm, profileToUserData, classSectionMap, labSectionMap]
+    [activeSearchTerm, profileToUserData, classSectionMap, labSectionMap]
   );
 
   // Define columns for the table
@@ -638,7 +642,7 @@ export default function SecurityAuditPage() {
       "Line Number": result.match_line_number,
       "GitHub Link": getGitHubFileLink(result.repository, result.sha, result.file_name),
       "Matched Content": result.matched_content,
-      "Search Term": searchTerm
+      "Search Term": activeSearchTerm
     }));
 
     const csv = Papa.unparse(csvData);
@@ -651,7 +655,7 @@ export default function SecurityAuditPage() {
     URL.revokeObjectURL(url);
 
     toaster.success({ title: "Export complete", description: "CSV file downloaded" });
-  }, [transformedData, searchTerm, assignment, assignment_id]);
+  }, [transformedData, activeSearchTerm, assignment, assignment_id]);
 
   if (!isInstructor) {
     return (
@@ -790,7 +794,7 @@ export default function SecurityAuditPage() {
               <Card.Body>
                 <VStack py={8}>
                   <Icon as={FaSearch} boxSize={8} color="gray.400" />
-                  <Text color="gray.500">No matches found for &quot;{searchTerm}&quot;</Text>
+                  <Text color="gray.500">No matches found for &quot;{activeSearchTerm}&quot;</Text>
                 </VStack>
               </Card.Body>
             </Card.Root>

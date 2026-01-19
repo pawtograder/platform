@@ -563,6 +563,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
   const [isExporting, setIsExporting] = useState(false);
   const { assignment } = useAssignmentController();
   const supabase = useMemo(() => createClient(), []);
+  const isInstructor = useIsInstructor();
 
   // Get student/group info
   const submitterProfile = useUserProfile(submission.profile_id);
@@ -571,6 +572,13 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
   });
 
   const handleExport = useCallback(async () => {
+    // Server-side security: RLS policies on submissions, grader_results, and submission_files
+    // enforce instructor-only access. This UI check provides defense-in-depth.
+    if (!isInstructor) {
+      toaster.error({ title: "Access denied", description: "Only instructors can export submission metadata" });
+      return;
+    }
+
     if (!assignment) {
       toaster.error({ title: "Error", description: "Assignment not loaded" });
       return;
@@ -579,6 +587,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
     setIsExporting(true);
     try {
       // Fetch all submissions with full grader data
+      // RLS policies ensure only instructors can SELECT from submissions, grader_results, and submission_files
       let query = supabase
         .from("submissions")
         .select(FULL_SUBMISSION_SELECT)
@@ -653,7 +662,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
     } finally {
       setIsExporting(false);
     }
-  }, [assignment, submission, supabase, submitterProfile, assignmentGroupWithMembers]);
+  }, [assignment, submission, supabase, submitterProfile, assignmentGroupWithMembers, isInstructor]);
 
   return (
     <Tooltip content="Export all submission history, grader results, and diffs to markdown">
@@ -1399,6 +1408,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
+          {/* ExportSubmissionMetadataButton is instructor-only: UI gate + RLS policies enforce instructor-only access */}
           {isInstructor && <ExportSubmissionMetadataButton submission={submission} />}
         </HStack>
       </Flex>
