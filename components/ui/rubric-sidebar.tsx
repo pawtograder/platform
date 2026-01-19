@@ -31,6 +31,7 @@ import {
 } from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
@@ -68,7 +69,7 @@ import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubric
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
-import { format, formatRelative } from "date-fns";
+import { formatRelative } from "date-fns";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1710,11 +1711,13 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
         {activeAssignmentReview && (
           <Box fontSize="sm" color="text.muted" mb={2}>
             {activeAssignmentReview.due_date && (
-              <Text>Due: {format(new Date(activeAssignmentReview.due_date), "MMM d, yyyy 'at' h:mm a")}</Text>
+              <Text>
+                Due: <TimeZoneAwareDate date={activeAssignmentReview.due_date} format="full" />
+              </Text>
             )}
             {activeAssignmentReview.release_date && (
               <Text>
-                Grades Release: {format(new Date(activeAssignmentReview.release_date), "MMM d, yyyy 'at' h:mm a")}
+                Grades Release: <TimeZoneAwareDate date={activeAssignmentReview.release_date} format="full" />
               </Text>
             )}
           </Box>

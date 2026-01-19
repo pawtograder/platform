@@ -1,5 +1,6 @@
 "use client";
 import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import {
   useAssignmentController,
   useMyReviewAssignments,
@@ -38,8 +39,8 @@ export default function SelfReviewDueDateInformation() {
         <HStack>
           <VStack justifyContent="start" alignItems="start" w="100%">
             <Text>
-              A self review will be due at {selfReviewDueDate.toLocaleString()} ({settings.deadline_offset} hours after
-              the coding assignment due date).
+              A self review will be due at <TimeZoneAwareDate date={selfReviewDueDate} format="full" /> (
+              {settings.deadline_offset} hours after the coding assignment due date).
             </Text>
             <Text fontSize="sm" color="fg.muted">
               If you are finished with the programming assignment, you can submit your self review early. However, once
@@ -58,8 +59,8 @@ export default function SelfReviewDueDateInformation() {
     }
     return (
       <Text>
-        A self-review will be due at {selfReviewDueDate.toLocaleString()} ({settings.deadline_offset} hours after the
-        coding assignment due date).
+        A self-review will be due at <TimeZoneAwareDate date={selfReviewDueDate} format="full" /> (
+        {settings.deadline_offset} hours after the coding assignment due date).
       </Text>
     );
   }

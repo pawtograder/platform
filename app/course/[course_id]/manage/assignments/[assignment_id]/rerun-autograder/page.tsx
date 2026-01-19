@@ -1,4 +1,5 @@
 "use client";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -135,7 +136,11 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
           if (props.getValue() === null) {
             return <Text></Text>;
           }
-          return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
+          return (
+            <Text>
+              <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
+            </Text>
+          );
         },
         filterFn: (row, id, filterValue) => {
           if (!row.original.created_at) return false;
@@ -163,7 +168,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                 Requested
               </Text>
               <Text fontSize="xs" color="fg.muted">
-                {new TZDate(queuedAt, timeZone).toLocaleString()}
+                <TimeZoneAwareDate date={queuedAt} format="compact" />
               </Text>
             </VStack>
           );
