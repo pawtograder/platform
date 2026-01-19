@@ -260,7 +260,8 @@ const FULL_SUBMISSION_SELECT =
 
 type SubmissionFileBasic = { name: string; contents: string | null };
 
-type FullSubmissionData = SubmissionWithGraderResultsAndErrors & {
+// Use Omit to avoid implying assignments/workflow_run_error are populated (they aren't in our query)
+type FullSubmissionData = Omit<SubmissionWithGraderResultsAndErrors, "assignments" | "workflow_run_error"> & {
   submission_reviews: SubmissionWithGraderResultsAndReview["submission_reviews"];
   repository_check_runs: { commit_message: string } | null;
   submission_files: SubmissionFileBasic[] | null;
@@ -268,9 +269,10 @@ type FullSubmissionData = SubmissionWithGraderResultsAndErrors & {
 
 // Simple diff generator that shows added/removed lines between two strings
 function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
-  if (!oldContent && !newContent) return "(both empty)";
-  if (!oldContent) return "(new file)";
-  if (!newContent) return "(file deleted)";
+  // Use == null to check for null/undefined only (not empty strings)
+  if (oldContent == null && newContent == null) return "(both empty)";
+  if (oldContent == null) return "(new file)";
+  if (newContent == null) return "(file deleted)";
 
   const oldLines = oldContent.split("\n");
   const newLines = newContent.split("\n");
@@ -420,7 +422,8 @@ function generateSubmissionMarkdown(
         lines.push("| Status | Test Name | Score |");
         lines.push("|--------|-----------|-------|");
         for (const test of gr.grader_result_tests) {
-          const status = test.score === test.max_score ? "✅" : "❌";
+          // 0/0 tests are informational, not passed/failed
+          const status = test.max_score === 0 ? "ℹ️" : test.score === test.max_score ? "✅" : "❌";
           lines.push(`| ${status} | ${test.name} | ${test.score}/${test.max_score} |`);
         }
         lines.push("");
@@ -429,7 +432,8 @@ function generateSubmissionMarkdown(
         lines.push("#### Detailed Test Output");
         lines.push("");
         for (const test of gr.grader_result_tests) {
-          const status = test.score === test.max_score ? "✅ PASSED" : "❌ FAILED";
+          // 0/0 tests are informational, not passed/failed
+          const status = test.max_score === 0 ? "ℹ️ INFO" : test.score === test.max_score ? "✅ PASSED" : "❌ FAILED";
           lines.push(`##### ${test.name} (${status})`);
           lines.push("");
           lines.push(`**Score:** ${test.score}/${test.max_score}`);
@@ -585,6 +589,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
       } else if (submission.profile_id) {
         query = query.eq("profile_id", submission.profile_id);
       } else {
+        setIsExporting(false);
         toaster.error({ title: "Error", description: "No profile or group ID found for submission" });
         return;
       }
@@ -596,6 +601,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
       }
 
       if (!submissions || submissions.length === 0) {
+        setIsExporting(false);
         toaster.error({ title: "No submissions found", description: "Could not find any submissions to export" });
         return;
       }
