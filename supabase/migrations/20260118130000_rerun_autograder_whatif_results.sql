@@ -8,6 +8,7 @@ AS $function$declare
   calculated_autograde_score numeric;
   the_submission submissions%ROWTYPE;
   existing_submission_review_id int8;
+  v_submission_id bigint;
   is_grading_review boolean;
   should_cap boolean;
   assignment_total_points numeric;
@@ -46,6 +47,16 @@ begin
     RETURN NEW;
   END IF;
   
+  -- Fetch reliable submission_id from submission_reviews table
+  SELECT submission_id INTO v_submission_id
+  FROM submission_reviews
+  WHERE id = existing_submission_review_id;
+  
+  -- If no row found, return early
+  IF v_submission_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  
   perform pg_advisory_xact_lock(existing_submission_review_id);
 
   -- Check if this is the grading review (connected to a grading review rubric)
@@ -56,7 +67,7 @@ begin
   if is_grading_review then
     select sum(t.score) into calculated_autograde_score from grader_results r 
       inner join grader_result_tests t on t.grader_result_id=r.id
-      where r.submission_id=NEW.submission_id
+      where r.submission_id=v_submission_id
         and r.rerun_for_submission_id IS NULL
         and r.autograder_regression_test IS NULL;
   end if;
@@ -108,7 +119,7 @@ select sum(score) into calculated_score from (
     SELECT a.total_points INTO assignment_total_points
     FROM public.assignments a
     INNER JOIN public.submissions s ON s.assignment_id = a.id
-    WHERE s.id = NEW.submission_id;
+    WHERE s.id = v_submission_id;
     
     IF assignment_total_points IS NOT NULL THEN
       calculated_score = LEAST(calculated_score, assignment_total_points);
