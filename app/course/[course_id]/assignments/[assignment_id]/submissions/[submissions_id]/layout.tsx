@@ -24,6 +24,7 @@ import {
   useAssignmentController,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
+  useRubric,
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
@@ -46,6 +47,8 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
+import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
@@ -697,7 +700,8 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
-      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+      select:
+        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)"
     },
     filters: [
       {
@@ -939,6 +943,63 @@ function TestResults() {
   const testResults = submission.grader_results?.grader_result_tests;
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
+  const { matches } = useErrorPinMatches(submission.id);
+  const hasBuildError = submission.grader_results?.lint_output === "Gradle build failed";
+
+  // Get all unique error pin matches for prominent display on build errors
+  const getAllMatches = () => {
+    const allMatches: import("@/hooks/useErrorPinMatches").ErrorPinMatch[] = [];
+    matches.forEach((matchList) => {
+      allMatches.push(...matchList);
+    });
+    // Deduplicate by error_pin_id
+    return allMatches.filter(
+      (match, index, self) => index === self.findIndex((m) => m.error_pin_id === match.error_pin_id)
+    );
+  };
+
+  // If there's a build error and we have error pins, show them very prominently
+  if (hasBuildError) {
+    const uniqueMatches = getAllMatches();
+    return (
+      <Box>
+        <Heading size="md" mt={2} color="fg.error">
+          Build Failed
+        </Heading>
+        <Box mt={2} p={2} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
+          <Text fontSize="sm" color="fg.error">
+            The autograder failed to build your code. Check the Results tab for details.
+          </Text>
+        </Box>
+        {/* Show error pins very prominently for build errors */}
+        {uniqueMatches.length > 0 && (
+          <Box
+            mt={3}
+            p={3}
+            bg="blue.50"
+            borderRadius="md"
+            border="2px solid"
+            borderColor="blue.400"
+            _dark={{ bg: "blue.900", borderColor: "blue.500" }}
+          >
+            <HStack gap={2} align="flex-start">
+              <Icon as={FaInfo} color="blue.500" mt={0.5} />
+              <Box flex="1">
+                <Text fontWeight="bold" fontSize="sm" color="blue.700" _dark={{ color: "blue.200" }} mb={1}>
+                  Troubleshooting Help
+                </Text>
+                <Text fontSize="xs" color="blue.600" _dark={{ color: "blue.300" }} mb={2}>
+                  Your error matches common issues:
+                </Text>
+                <ErrorPinCallout matches={uniqueMatches} linksOnly />
+              </Box>
+            </HStack>
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
   return (
     <Box>
       <Heading size="md" mt={2}>
@@ -959,6 +1020,7 @@ function TestResults() {
           icon = <Icon as={FaTimesCircle} color="fg.error" />;
         }
         const showScore = extraData?.hide_score !== "true" && test.max_score !== 0;
+        const testMatches = matches.get(test.id) || [];
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
@@ -967,9 +1029,16 @@ function TestResults() {
                 {test.name} {showScore ? test.score + "/" + test.max_score : ""}
               </Heading>
             </Link>
+            {testMatches.length > 0 && <ErrorPinCallout matches={testMatches} />}
           </Box>
         );
       })}
+      {/* Show matches for submission-level (no specific test) */}
+      {matches.has(null) && matches.get(null)!.length > 0 && (
+        <Box mt={2}>
+          <ErrorPinCallout matches={matches.get(null)!} />
+        </Box>
+      )}
     </Box>
   );
 }
@@ -1154,8 +1223,10 @@ function ReviewActions() {
 function UnGradedGradingSummary() {
   const submission = useSubmission();
   const { assignment } = useAssignmentController();
+  const gradingRubric = useRubric("grading-review");
   const graderResultsMaxScore = submission.grader_results?.max_score;
   const totalMaxScore = assignment.total_points;
+  const isCapped = gradingRubric?.cap_score_to_assignment_points ?? false;
 
   return (
     <Box>
@@ -1178,13 +1249,24 @@ function UnGradedGradingSummary() {
           </Text>{" "}
           {graderResultsMaxScore} points, results shown below.
         </List.Item>
-        {graderResultsMaxScore !== undefined && totalMaxScore !== null && graderResultsMaxScore > totalMaxScore && (
+        {!isCapped &&
+          graderResultsMaxScore !== undefined &&
+          totalMaxScore !== null &&
+          graderResultsMaxScore > totalMaxScore && (
+            <List.Item>
+              <Text as="span" fontWeight="bold">
+                Hidden Automated Checks:
+              </Text>{" "}
+              {graderResultsMaxScore - totalMaxScore} points will be awarded by automated tests that are not shown until
+              after grading is complete.
+            </List.Item>
+          )}
+        {isCapped && (
           <List.Item>
             <Text as="span" fontWeight="bold">
-              Hidden Automated Checks:
+              Score Capping:
             </Text>{" "}
-            {graderResultsMaxScore - totalMaxScore} points will be awarded by automated tests that are not shown until
-            after grading is complete.
+            The final score (manual + autograder) will be capped to {totalMaxScore} points maximum.
           </List.Item>
         )}
       </List.Root>

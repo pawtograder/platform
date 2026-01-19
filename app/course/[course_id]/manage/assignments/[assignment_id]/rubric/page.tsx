@@ -236,7 +236,8 @@ function HydratedRubricToYamlRubric(rubric: HydratedRubric): YmlRubricType {
   return {
     name: rubric.name,
     description: valOrUndefined(rubric.description),
-    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts)
+    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts),
+    cap_score_to_assignment_points: rubric.cap_score_to_assignment_points ?? undefined
   };
 }
 
@@ -352,7 +353,8 @@ function YamlRubricToHydratedRubric(
     description: valOrNull(yaml.description),
     rubric_parts: YamlPartsToHydratedParts(yaml.parts),
     is_private,
-    review_round
+    review_round,
+    cap_score_to_assignment_points: yaml.cap_score_to_assignment_points ?? false
   };
 }
 
@@ -514,7 +516,12 @@ function InnerRubricPage() {
     return total;
   }, [activeReviewRound, rubricForSidebar, gradingRubricFromDb, gradingRubricCriteria, gradingRubricChecks]);
 
-  const addsUp = gradingRubricPoints !== undefined && assignmentMaxPoints === autograderPoints + gradingRubricPoints;
+  const isCapped = gradingRubricFromDb?.cap_score_to_assignment_points ?? false;
+  const addsUp =
+    gradingRubricPoints !== undefined &&
+    (isCapped
+      ? Math.max(autograderPoints, gradingRubricPoints) <= assignmentMaxPoints
+      : assignmentMaxPoints === autograderPoints + gradingRubricPoints);
 
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
@@ -570,7 +577,8 @@ function InnerRubricPage() {
         is_private: false,
         review_round: reviewRound,
         rubric_parts: [],
-        created_at: "" // Will be set by DB
+        created_at: "", // Will be set by DB
+        cap_score_to_assignment_points: false
       };
     },
     [assignmentDetails?.title]
@@ -743,6 +751,7 @@ function InnerRubricPage() {
             is_private: hydratedFromYaml.is_private,
             review_round: activeReviewRound, // Always force to current tab's review round
             rubric_parts: hydratedFromYaml.rubric_parts,
+            cap_score_to_assignment_points: hydratedFromYaml.cap_score_to_assignment_points ?? false,
             // Preserve ID if editing an existing rubric, otherwise it's 0 or negative from template
             id: activeRubric && activeRubric.id > 0 ? activeRubric.id : 0,
             assignment_id: Number(assignment_id),
@@ -1018,7 +1027,8 @@ function InnerRubricPage() {
           assignment_id: Number(assignment_id),
           class_id: assignmentDetails.class_id,
           is_private: parsedRubricFromEditor.is_private,
-          review_round: activeReviewRound
+          review_round: activeReviewRound,
+          cap_score_to_assignment_points: parsedRubricFromEditor.cap_score_to_assignment_points ?? false
         };
         try {
           const createdTopLevelRubric = await createResource({
@@ -1043,6 +1053,11 @@ function InnerRubricPage() {
           topLevelRubricChanges.description = parsedRubricFromEditor.description;
         if (parsedRubricFromEditor.is_private !== actualBaselineForDiff.is_private)
           topLevelRubricChanges.is_private = parsedRubricFromEditor.is_private;
+        if (
+          parsedRubricFromEditor.cap_score_to_assignment_points !== actualBaselineForDiff.cap_score_to_assignment_points
+        )
+          topLevelRubricChanges.cap_score_to_assignment_points =
+            parsedRubricFromEditor.cap_score_to_assignment_points ?? false;
         if (Object.keys(topLevelRubricChanges).length > 0) {
           await updateResource({
             id: currentEffectiveRubricId,
@@ -1533,12 +1548,25 @@ function InnerRubricPage() {
                   configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
                   {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
                 </Text>
-                {!addsUp && gradingRubricPoints !== undefined && (
+                {isCapped && (
+                  <Text fontSize="sm" mt={1} color="fg.muted">
+                    Score capping is enabled. Manual grading can be used as a fallback when autograder fails, with the
+                    final score capped to {assignmentMaxPoints} points.
+                  </Text>
+                )}
+                {!addsUp && gradingRubricPoints !== undefined && !isCapped && (
                   <Text fontSize="sm" mt={1}>
                     These do not add up to the assignment max points.{" "}
                     {gradingRubricPoints < assignmentMaxPoints - autograderPoints
                       ? `Update the autograder to award +${assignmentMaxPoints - autograderPoints - gradingRubricPoints} points.`
                       : `Update the grading rubric to remove ${Math.abs(assignmentMaxPoints - autograderPoints - gradingRubricPoints)} points.`}
+                  </Text>
+                )}
+                {!addsUp && gradingRubricPoints !== undefined && isCapped && (
+                  <Text fontSize="sm" mt={1}>
+                    The maximum of autograder points ({autograderPoints}) and rubric points ({gradingRubricPoints})
+                    exceeds the assignment total ({assignmentMaxPoints}). Consider reducing one or both to fit within
+                    the cap.
                   </Text>
                 )}
               </Box>

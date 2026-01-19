@@ -920,7 +920,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             : `profile_id.eq.${repoData.profile_id}`;
           const { data: submissions, error: submissionsError } = await adminSupabase
             .from("submissions")
-            .select("*, grader_results(*)")
+            .select("*, grader_results!grader_results_submission_id_fkey(*)")
             .or(ownershipFilter)
             .eq("assignment_id", repoData.assignment_id)
             .gte(
