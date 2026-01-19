@@ -10275,6 +10275,7 @@ export type Database = {
           late_due_date: string | null;
           meta_grader: string | null;
           name: string | null;
+          ordinal: number | null;
           released: string | null;
           repository: string | null;
           sha: string | null;
