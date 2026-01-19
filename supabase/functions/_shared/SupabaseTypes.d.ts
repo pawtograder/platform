@@ -3684,6 +3684,13 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "grader_result_output_grader_result_id_fkey";
+            columns: ["grader_result_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["whatif_grader_result_id"];
+          },
+          {
             foreignKeyName: "grader_result_output_student_id_fkey";
             columns: ["student_id"];
             isOneToOne: false;
@@ -3820,6 +3827,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "grader_results";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_tests_grader_result_id_fkey";
+            columns: ["grader_result_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["whatif_grader_result_id"];
           },
           {
             foreignKeyName: "grader_result_tests_student_id_fkey";
@@ -3981,6 +3995,7 @@ export type Database = {
           lint_passed: boolean;
           max_score: number;
           profile_id: string | null;
+          rerun_for_submission_id: number | null;
           ret_code: number | null;
           score: number;
           submission_id: number | null;
@@ -4000,6 +4015,7 @@ export type Database = {
           lint_passed: boolean;
           max_score?: number;
           profile_id?: string | null;
+          rerun_for_submission_id?: number | null;
           ret_code?: number | null;
           score: number;
           submission_id?: number | null;
@@ -4019,6 +4035,7 @@ export type Database = {
           lint_passed?: boolean;
           max_score?: number;
           profile_id?: string | null;
+          rerun_for_submission_id?: number | null;
           ret_code?: number | null;
           score?: number;
           submission_id?: number | null;
@@ -4051,6 +4068,34 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_results_rerun_for_submission_id_fkey";
+            columns: ["rerun_for_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_results_rerun_for_submission_id_fkey";
+            columns: ["rerun_for_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_results_rerun_for_submission_id_fkey";
+            columns: ["rerun_for_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "grader_results_rerun_for_submission_id_fkey";
+            columns: ["rerun_for_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
           },
           {
             foreignKeyName: "grader_results_submission_id_fkey";
@@ -5920,41 +5965,53 @@ export type Database = {
       repository_check_runs: {
         Row: {
           assignment_group_id: number | null;
+          auto_promote_result: boolean | null;
           check_run_id: number;
           class_id: number;
           commit_message: string;
           created_at: string;
           id: number;
+          is_regression_rerun: boolean | null;
           profile_id: string | null;
           repository_id: number;
+          requested_grader_sha: string | null;
           sha: string;
           status: Json;
+          target_submission_id: number | null;
           triggered_by: string | null;
         };
         Insert: {
           assignment_group_id?: number | null;
+          auto_promote_result?: boolean | null;
           check_run_id: number;
           class_id: number;
           commit_message: string;
           created_at?: string;
           id?: number;
+          is_regression_rerun?: boolean | null;
           profile_id?: string | null;
           repository_id: number;
+          requested_grader_sha?: string | null;
           sha: string;
           status: Json;
+          target_submission_id?: number | null;
           triggered_by?: string | null;
         };
         Update: {
           assignment_group_id?: number | null;
+          auto_promote_result?: boolean | null;
           check_run_id?: number;
           class_id?: number;
           commit_message?: string;
           created_at?: string;
           id?: number;
+          is_regression_rerun?: boolean | null;
           profile_id?: string | null;
           repository_id?: number;
+          requested_grader_sha?: string | null;
           sha?: string;
           status?: Json;
+          target_submission_id?: number | null;
           triggered_by?: string | null;
         };
         Relationships: [
@@ -5992,6 +6049,34 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "repository_check_runs_target_submission_id_fkey";
+            columns: ["target_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_check_runs_target_submission_id_fkey";
+            columns: ["target_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_check_runs_target_submission_id_fkey";
+            columns: ["target_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "repository_check_runs_target_submission_id_fkey";
+            columns: ["target_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["activesubmissionid"];
           },
           {
             foreignKeyName: "repository_check_runs_triggered_by_fkey";
@@ -10134,6 +10219,10 @@ export type Database = {
           rt_grader_sha: string | null;
           sha: string | null;
           sortable_name: string | null;
+          whatif_autograder_score: number | null;
+          whatif_grader_action_sha: string | null;
+          whatif_grader_result_id: number | null;
+          whatif_grader_sha: string | null;
         };
         Relationships: [
           {
@@ -10866,7 +10955,12 @@ export type Database = {
         Returns: number;
       };
       enqueue_autograder_reruns: {
-        Args: { p_class_id: number; p_submission_ids: number[] };
+        Args: {
+          p_auto_promote?: boolean;
+          p_class_id: number;
+          p_grader_sha?: string;
+          p_submission_ids: number[];
+        };
         Returns: Json;
       };
       enqueue_discord_batch_role_sync: { Args: never; Returns: undefined };
@@ -11395,6 +11489,10 @@ export type Database = {
         Returns: Json;
       };
       process_calendar_announcements: { Args: never; Returns: Json };
+      promote_whatif_grader_result: {
+        Args: { p_class_id: number; p_grader_result_id: number };
+        Returns: Json;
+      };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;

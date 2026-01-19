@@ -224,7 +224,9 @@ export async function rerunGrader(
   // The function uses auth.uid() internally to get the current user
   const { data, error } = await supabase.rpc("enqueue_autograder_reruns", {
     p_submission_ids: params.submission_ids,
-    p_class_id: params.class_id
+    p_class_id: params.class_id,
+    p_grader_sha: params.grader_sha ?? undefined,
+    p_auto_promote: params.auto_promote ?? true
   });
 
   if (error) {
