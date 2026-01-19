@@ -17,16 +17,16 @@ type StudentEngagement = {
 function sanitizeCell(value: unknown): string {
   // Convert to string
   let str = String(value);
-  
+
   // Escape embedded double-quotes by doubling them
   str = str.replace(/"/g, '""');
-  
+
   // Neutralize leading dangerous characters (=, +, -, @, tab) by prefixing with single quote
   // This prevents formula injection attacks in spreadsheets
   if (/^[=+\-@\t]/.test(str)) {
     str = "'" + str;
   }
-  
+
   return str;
 }
 
@@ -45,7 +45,7 @@ function generateCSV(engagement: StudentEngagement[]): string {
   // Sanitize all headers and cells before wrapping with quotes and joining
   const sanitizedHeaders = headers.map(sanitizeCell);
   const sanitizedRows = rows.map((row) => row.map(sanitizeCell));
-  
+
   return [sanitizedHeaders, ...sanitizedRows].map((row) => row.map((cell) => `"${cell}"`).join(",")).join("\n");
 }
 

@@ -130,13 +130,14 @@ export default async function DiscussionEngagementPage({ params }: { params: { c
   const totalReplies = engagement.reduce((sum, s) => sum + s.total_replies, 0);
   const totalActivity = totalPosts + totalReplies;
   // Find the student with the highest total activity (posts + replies)
-  const mostActive = engagement.length > 0 
-    ? engagement.reduce((max, student) => {
-        const maxActivity = max.total_posts + max.total_replies;
-        const studentActivity = student.total_posts + student.total_replies;
-        return studentActivity > maxActivity ? student : max;
-      })
-    : null;
+  const mostActive =
+    engagement.length > 0
+      ? engagement.reduce((max, student) => {
+          const maxActivity = max.total_posts + max.total_replies;
+          const studentActivity = student.total_posts + student.total_replies;
+          return studentActivity > maxActivity ? student : max;
+        })
+      : null;
 
   return (
     <Container maxW="container.xl" py={6}>
