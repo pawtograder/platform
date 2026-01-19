@@ -355,6 +355,23 @@ export function useRegradeRequestsBySubmission(submission_id: number | null | un
   return useListTableControllerValues(controller.regradeRequests, findRegradeRequestsPredicate);
 }
 
+/**
+ * Returns all leaderboard entries for the current assignment, sorted by autograder score descending.
+ * Uses the TableController for real-time updates.
+ */
+export function useLeaderboard() {
+  const controller = useAssignmentController();
+  return useTableControllerTableValues(controller.leaderboard);
+}
+
+/**
+ * Returns a single leaderboard entry by its ID.
+ */
+export function useLeaderboardEntry(id: number | null | undefined) {
+  const controller = useAssignmentController();
+  return useTableControllerValueById(controller.leaderboard, id);
+}
+
 export class AssignmentController {
   private _assignment?: AssignmentWithRubricsAndReferences;
   private _client: SupabaseClient<Database>;
@@ -365,6 +382,7 @@ export class AssignmentController {
   readonly regradeRequests: TableController<"submission_regrade_requests">;
   readonly submissions: TableController<"submissions">;
   readonly assignmentGroups: TableController<"assignment_groups">;
+  readonly leaderboard: TableController<"assignment_leaderboard">;
 
   // Rubric table controllers
   readonly rubricsController: TableController<"rubrics">;
@@ -430,6 +448,19 @@ export class AssignmentController {
       table: "submission_regrade_requests",
       classRealTimeController,
       initialData: initialData?.regradeRequests,
+      realtimeFilter: { assignment_id }
+    });
+
+    // Initialize leaderboard controller - filtered by assignment_id, sorted by score descending
+    this.leaderboard = new TableController({
+      query: client
+        .from("assignment_leaderboard")
+        .select("*")
+        .eq("assignment_id", assignment_id)
+        .order("autograder_score", { ascending: false }),
+      client: client,
+      table: "assignment_leaderboard",
+      classRealTimeController,
       realtimeFilter: { assignment_id }
     });
 
@@ -507,6 +538,7 @@ export class AssignmentController {
     this.regradeRequests.close();
     this.submissions.close();
     this.assignmentGroups.close();
+    this.leaderboard.close();
 
     if (this._allReviewAssignments) {
       this._allReviewAssignments.close();
@@ -703,7 +735,8 @@ function AssignmentControllerCreator({
       controller.rubricChecksController.readyPromise,
       controller.rubricCheckReferencesController.readyPromise,
       controller.submissions.readyPromise,
-      controller.assignmentGroups.readyPromise
+      controller.assignmentGroups.readyPromise,
+      controller.leaderboard.readyPromise
     ];
     Promise.all(promises).then(() => {
       setTableControllersReady(true);

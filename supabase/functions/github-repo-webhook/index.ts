@@ -932,7 +932,7 @@ async function handleWorkflowCompletionErrors(
     const { data: submissions, error: submissionsError } = await adminSupabase
       .from("submissions")
       .select(
-        "id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs(check_run_id), profile_id, assignment_group_id, assignment_id"
+        "id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs!submissions_repository_check_run_id_fkey(check_run_id), profile_id, assignment_group_id, assignment_id"
       )
       .eq("repository_id", repositoryId)
       .eq("sha", workflowRun.head_sha)
