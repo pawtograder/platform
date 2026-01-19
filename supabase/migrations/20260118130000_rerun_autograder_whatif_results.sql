@@ -540,6 +540,9 @@ BEGIN
   FOR UPDATE;
 
   IF v_existing_official_id IS NOT NULL THEN
+    DELETE FROM public.grader_result_output
+    WHERE grader_result_id = v_existing_official_id;
+
     DELETE FROM public.grader_result_test_output
     WHERE grader_result_test_id IN (
       SELECT id FROM public.grader_result_tests
