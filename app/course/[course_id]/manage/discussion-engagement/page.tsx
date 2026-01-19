@@ -129,20 +129,14 @@ export default async function DiscussionEngagementPage({ params }: { params: { c
   const totalPosts = engagement.reduce((sum, s) => sum + s.total_posts, 0);
   const totalReplies = engagement.reduce((sum, s) => sum + s.total_replies, 0);
   const totalActivity = totalPosts + totalReplies;
-  const mostActive = engagement.length > 0 ? engagement[0] : null;
-
-  const handleExportCSV = () => {
-    const csv = generateCSV(engagement);
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `discussion-engagement-${course_id}-${new Date().toISOString().split("T")[0]}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+  // Find the student with the highest total activity (posts + replies)
+  const mostActive = engagement.length > 0 
+    ? engagement.reduce((max, student) => {
+        const maxActivity = max.total_posts + max.total_replies;
+        const studentActivity = student.total_posts + student.total_replies;
+        return studentActivity > maxActivity ? student : max;
+      })
+    : null;
 
   return (
     <Container maxW="container.xl" py={6}>
@@ -204,7 +198,7 @@ export default async function DiscussionEngagementPage({ params }: { params: { c
                 </Text>
               </HStack>
               <Text fontSize="xs" color="fg.muted">
-                {mostActive.discussion_karma} karma
+                {mostActive.total_posts + mostActive.total_replies} activities
               </Text>
             </VStack>
           </Box>

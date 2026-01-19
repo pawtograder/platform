@@ -13,7 +13,7 @@ type KarmaBadgeProps = {
  * KarmaBadge component displays a user's discussion karma
  * - 0 karma: Green sprout icon (like Discord's "new member")
  * - 1-10 karma: Heart with count
- * - 11-50 karma: Star with count (blue)
+ * - 11-49 karma: Star with count (blue)
  * - 50+ karma: Trophy with count (gold)
  */
 export function KarmaBadge({ karma, size = "sm" }: KarmaBadgeProps) {
