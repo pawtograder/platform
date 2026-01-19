@@ -241,7 +241,7 @@ function AdjustDueDateDialogContent({
       isSyncing.current = true;
       const targetDate = parseTargetDate(targetDueDate);
       if (targetDate) {
-        if (targetDate < finalDueDateMemo) {
+        if (targetDate <= finalDueDateMemo) {
           setTargetDateError("Target date must be after current due date");
           isSyncing.current = false;
           return;
