@@ -83,7 +83,6 @@ test.describe("Create submission", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
   });
@@ -106,7 +105,6 @@ test.describe("Create submission", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
   });
@@ -124,7 +122,6 @@ test.describe("Create submission", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentWithNotGraded!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
-    await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
   });
@@ -150,9 +147,6 @@ test.describe("Create submission", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const assignmentPage = `/course/${course.id}/assignments/${assignmentWithGradedAndNotGraded!.id}`;
     await page.goto(assignmentPage);
-
-    // Wait for the table to load with the submissions
-    await expect(page.getByRole("row").filter({ hasText: activeSHA })).toBeVisible();
 
     // Expect to see one active and one pending submission
     const activeRow = page.getByRole("row").filter({ hasText: activeSHA });

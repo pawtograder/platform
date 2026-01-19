@@ -47,12 +47,6 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
-      - name: Synchronize system time
-        run: |
-          echo "Current time before sync: $(date)"
-          sudo systemctl stop systemd-timesyncd || true
-          sudo ntpdate -s time.nist.gov || sudo chronyd -q 'server time.nist.gov iburst' || echo "Time sync failed but continuing"
-          echo "Current time after sync: $(date)"
       - name: Run Playwright tests
         env:
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}

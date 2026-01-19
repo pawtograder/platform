@@ -343,7 +343,7 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   return userSupabase;
 }
 
-async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 5) {
+async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
     const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({

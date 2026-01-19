@@ -275,8 +275,6 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
   });
   test("Edit Late Token Allocation works correctly", async ({ page }) => {
-    // Wait for the page content to load
-    await expect(page.getByRole("heading", { name: "Class Late Token Settings" })).toBeVisible();
     await expect(
       page.getByText(`Current Setting: Each student receives ${course.late_tokens_per_student} late tokens`).first()
     ).toBeVisible();
@@ -365,8 +363,6 @@ test.describe("Due Date Exceptions & Extensions", () => {
   });
   test("Student Due Date Extensions work correctly", async ({ page }) => {
     await page.getByText("Student Extensions").click();
-    // Wait for the Student Extensions page to load
-    await expect(page.getByRole("button", { name: "Add Extension" })).toBeVisible();
     await page.getByRole("button", { name: "Add Extension" }).click();
     const addExtensionModal = page.getByRole("dialog");
     await addExtensionModal

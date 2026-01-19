@@ -151,13 +151,10 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   });
 
   test("Instructors can grade the submission with pseudonymous mode enabled", async ({ page }) => {
-    test.setTimeout(120000); // 2 minutes for this complex test
-
     await loginAsUser(page, instructor!, course);
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
-    await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
 
     // Scroll grading rubric to top of its container
@@ -205,13 +202,10 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
     // Release All Submission Reviews
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
-    // Wait for the page to load and button to be enabled before clicking
-    await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
+
     await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
     await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
-    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`, {
-      timeout: 90000
-    });
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
 
@@ -245,7 +239,6 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
-    await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
@@ -365,16 +358,10 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
-    // Wait for the page content to load
-    await expect(page.getByText("public static void main(")).toBeVisible();
-
     const region = page.getByRole("region", { name: "Grading checks on line 4" });
-    await expect(region).toBeVisible();
 
     // Add final decision comment
-    const commentField = region.getByPlaceholder("Add a comment to continue the");
-    await expect(commentField).toBeVisible();
-    await commentField.click();
+    await region.getByPlaceholder("Add a comment to continue the").click();
     await region.getByPlaceholder("Add a comment to continue the").fill(INSTRUCTOR_FINAL_DECISION);
     await region.getByLabel("Add Comment", { exact: true }).click();
 

@@ -309,14 +309,12 @@ test.describe("Surveys Page", () => {
 
     // Draft title navigates to edit page
     await page.goto(`/course/${course.id}/manage/surveys`);
-    await expect(page.getByRole("link", { name: draftTitle })).toBeVisible();
     await page.getByRole("link", { name: draftTitle }).click();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${draftSurvey.id}/edit`));
     await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
 
     // Published title also navigates to edit page (new version flow)
     await page.goto(`/course/${course.id}/manage/surveys`);
-    await expect(page.getByRole("link", { name: publishedTitle })).toBeVisible();
     await page.getByRole("link", { name: publishedTitle }).click();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/manage/surveys/${publishedSurvey.id}/edit`));
     await expect(page.getByRole("heading", { name: "Edit Survey" })).toBeVisible();
