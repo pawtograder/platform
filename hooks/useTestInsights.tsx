@@ -25,6 +25,7 @@ export function useTestStatistics(assignment_id: number | null | undefined) {
 
   const fetchStatistics = useCallback(async () => {
     if (!assignment_id || !Number.isFinite(assignment_id)) {
+      ++requestIdRef.current; // Invalidate any pending requests
       setData(null);
       return;
     }
@@ -84,6 +85,7 @@ export function useCommonErrors(
 
   const fetchErrors = useCallback(async () => {
     if (!assignment_id || !Number.isFinite(assignment_id)) {
+      ++requestIdRef.current; // Invalidate any pending requests
       setData(null);
       return;
     }
@@ -143,6 +145,7 @@ export function useSubmissionsToFullMarks(assignment_id: number | null | undefin
 
   const fetchData = useCallback(async () => {
     if (!assignment_id || !Number.isFinite(assignment_id)) {
+      ++requestIdRef.current; // Invalidate any pending requests
       setData(null);
       return;
     }
@@ -201,6 +204,7 @@ export function useErrorPinsForPattern(
   const fetchData = useCallback(async () => {
     // Require assignment_id and testName, but allow empty errorOutput (will match by test_name)
     if (!assignment_id || !Number.isFinite(assignment_id) || !testName) {
+      ++requestIdRef.current; // Invalidate any pending requests
       setData(null);
       return;
     }

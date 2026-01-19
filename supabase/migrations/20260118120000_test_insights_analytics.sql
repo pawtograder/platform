@@ -336,6 +336,7 @@ BEGIN
                     FROM grader_result_tests grt
                     INNER JOIN submissions s ON s.id = grt.submission_id
                     WHERE s.assignment_id = p_assignment_id
+                      AND s.is_active = true
                 ),
                 student_test_history AS (
                     SELECT 
@@ -351,7 +352,7 @@ BEGIN
                         ) AS attempt_number,
                         CASE WHEN grt.score = grt.max_score THEN true ELSE false END AS is_full_marks
                     FROM test_names tn
-                    INNER JOIN submissions s ON s.assignment_id = p_assignment_id
+                    INNER JOIN submissions s ON s.assignment_id = p_assignment_id AND s.is_active = true
                     INNER JOIN grader_result_tests grt ON grt.submission_id = s.id 
                         AND grt.name = tn.test_name 
                         AND (grt.part = tn.test_part OR (grt.part IS NULL AND tn.test_part IS NULL))
@@ -413,6 +414,7 @@ BEGIN
                 FROM submissions s
                 INNER JOIN grader_results gr ON gr.submission_id = s.id
                 WHERE s.assignment_id = p_assignment_id
+                  AND s.is_active = true
             ),
             first_full_marks AS (
                 SELECT 
@@ -490,28 +492,54 @@ BEGIN
             INNER JOIN discussion_threads dt ON dt.id = ep.discussion_thread_id
             WHERE ep.assignment_id = p_assignment_id
               AND ep.enabled = true
-              AND EXISTS (
-                SELECT 1 FROM error_pin_rules epr
-                WHERE epr.error_pin_id = ep.id
-                  AND (
-                    (epr.target = 'test_name' AND 
-                      CASE epr.match_type 
-                        WHEN 'contains' THEN p_test_name ILIKE '%' || epr.match_value || '%'
-                        WHEN 'equals' THEN p_test_name = epr.match_value
-                        WHEN 'regex' THEN safe_regex_match(p_test_name, epr.match_value)
-                        ELSE false
-                      END
+              AND (
+                (ep.rule_logic = 'or' AND EXISTS (
+                  SELECT 1 FROM error_pin_rules epr
+                  WHERE epr.error_pin_id = ep.id
+                    AND (
+                      (epr.target = 'test_name' AND 
+                        CASE epr.match_type 
+                          WHEN 'contains' THEN p_test_name ILIKE '%' || epr.match_value || '%'
+                          WHEN 'equals' THEN p_test_name = epr.match_value
+                          WHEN 'regex' THEN safe_regex_match(p_test_name, epr.match_value)
+                          ELSE false
+                        END
+                      )
+                      OR
+                      (epr.target = 'test_output' AND 
+                        CASE epr.match_type 
+                          WHEN 'contains' THEN p_error_output ILIKE '%' || epr.match_value || '%'
+                          WHEN 'equals' THEN p_error_output = epr.match_value
+                          WHEN 'regex' THEN safe_regex_match(p_error_output, epr.match_value)
+                          ELSE false
+                        END
+                      )
                     )
-                    OR
-                    (epr.target = 'test_output' AND 
-                      CASE epr.match_type 
-                        WHEN 'contains' THEN p_error_output ILIKE '%' || epr.match_value || '%'
-                        WHEN 'equals' THEN p_error_output = epr.match_value
-                        WHEN 'regex' THEN safe_regex_match(p_error_output, epr.match_value)
-                        ELSE false
-                      END
+                ))
+                OR
+                (ep.rule_logic = 'and' AND NOT EXISTS (
+                  SELECT 1 FROM error_pin_rules epr
+                  WHERE epr.error_pin_id = ep.id
+                    AND NOT (
+                      (epr.target = 'test_name' AND 
+                        CASE epr.match_type 
+                          WHEN 'contains' THEN p_test_name ILIKE '%' || epr.match_value || '%'
+                          WHEN 'equals' THEN p_test_name = epr.match_value
+                          WHEN 'regex' THEN safe_regex_match(p_test_name, epr.match_value)
+                          ELSE false
+                        END
+                      )
+                      OR
+                      (epr.target = 'test_output' AND 
+                        CASE epr.match_type 
+                          WHEN 'contains' THEN p_error_output ILIKE '%' || epr.match_value || '%'
+                          WHEN 'equals' THEN p_error_output = epr.match_value
+                          WHEN 'regex' THEN safe_regex_match(p_error_output, epr.match_value)
+                          ELSE false
+                        END
+                      )
                     )
-                  )
+                ))
               )
         )
     ) INTO v_result;
