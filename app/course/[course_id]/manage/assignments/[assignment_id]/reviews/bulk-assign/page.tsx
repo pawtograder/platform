@@ -319,12 +319,15 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       }
     }
 
-    // Group leaders by lab_section_id
+    // Group leaders by lab_section_id, ensuring no duplicates per section
     for (const leader of labSectionLeaders) {
       const leaderUserRole = userRolesMap.get(leader.profile_id);
       if (leaderUserRole) {
         const existing = map.get(leader.lab_section_id) || [];
-        map.set(leader.lab_section_id, [...existing, leaderUserRole]);
+        // Only add if this leader is not already in the array for this section
+        if (!existing.some((l) => l.private_profile_id === leaderUserRole.private_profile_id)) {
+          map.set(leader.lab_section_id, [...existing, leaderUserRole]);
+        }
       }
     }
 
@@ -1053,6 +1056,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   } => {
     const draftAssignments: DraftReviewAssignment[] = [];
     const skippedSubmissions: SubmissionWithGrading[] = [];
+    // Track seen (submission_id, assignee_profile_id, rubric_part_id) combinations to prevent duplicates
+    const seenAssignments = new Set<string>();
 
     if (!submissionsToDo) {
       return { draftAssignments, skippedSubmissions };
@@ -1125,20 +1130,30 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
         // Create assignments for each selected rubric part (or whole rubric)
         if (isAllPartsSelected) {
-          draftAssignments.push({
-            assignee: leader,
-            submitters: submitters,
-            submission: submission,
-            part: undefined
-          });
-        } else {
-          for (const part of selectedRubricPartsForFilter) {
+          // Create unique key for this assignment (null part represented as 'null')
+          const assignmentKey = `${submission.id}:${leader.private_profile_id}:null`;
+          if (!seenAssignments.has(assignmentKey)) {
+            seenAssignments.add(assignmentKey);
             draftAssignments.push({
               assignee: leader,
               submitters: submitters,
               submission: submission,
-              part: part.value
+              part: undefined
             });
+          }
+        } else {
+          for (const part of selectedRubricPartsForFilter) {
+            // Create unique key for this assignment
+            const assignmentKey = `${submission.id}:${leader.private_profile_id}:${part.value.id}`;
+            if (!seenAssignments.has(assignmentKey)) {
+              seenAssignments.add(assignmentKey);
+              draftAssignments.push({
+                assignee: leader,
+                submitters: submitters,
+                submission: submission,
+                part: part.value
+              });
+            }
           }
         }
       }

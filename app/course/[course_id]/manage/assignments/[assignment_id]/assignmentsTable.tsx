@@ -1104,7 +1104,7 @@ async function exportGrades({
 
   const { data: autograder_test_results, error: autograder_test_results_error } = await supabase
     .from("grader_result_tests")
-    .select("*, submissions!inner(id, assignment_id, is_active)")
+    .select("*, submissions!grader_result_tests_submission_id_fkey!inner(id, assignment_id, is_active)")
     .eq("submissions.is_active", true)
     .eq("submissions.assignment_id", assignment_id);
   if (autograder_test_results_error) {
@@ -1339,11 +1339,54 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
   const [includeRepoMetadata, setIncludeRepoMetadata] = useState(false);
   const [includeSubmissionMetadata, setIncludeSubmissionMetadata] = useState(false);
   const [includeAutograderTestResults, setIncludeAutograderTestResults] = useState(true);
+  const [isExporting, setIsExporting] = useState<null | "csv" | "json">(null);
+
+  const handleExport = useCallback(
+    async (mode: "csv" | "json") => {
+      if (isExporting) return;
+      setIsExporting(mode);
+      try {
+        await exportGrades({
+          assignment_id,
+          class_id,
+          supabase,
+          include_score_breakdown: includeScoreBreakdown,
+          include_rubric_checks: includeRubricChecks,
+          include_repo_metadata: includeRepoMetadata,
+          include_submission_metadata: includeSubmissionMetadata,
+          include_autograder_test_results: includeAutograderTestResults,
+          mode
+        });
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("Error exporting grades:", error);
+        toaster.error({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Unknown error occurred while exporting grades"
+        });
+      } finally {
+        setIsExporting(null);
+      }
+    },
+    [
+      assignment_id,
+      class_id,
+      includeAutograderTestResults,
+      includeRepoMetadata,
+      includeRubricChecks,
+      includeScoreBreakdown,
+      includeSubmissionMetadata,
+      isExporting,
+      supabase
+    ]
+  );
 
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="subtle">Export Grades</Button>
+        <Button variant="subtle" loading={isExporting !== null} disabled={isExporting !== null}>
+          Export Grades
+        </Button>
       </Popover.Trigger>
       <Popover.Positioner>
         <Popover.Content>
@@ -1354,30 +1397,35 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
             <VStack align="start" gap={2}>
               <Checkbox
                 checked={includeScoreBreakdown}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeScoreBreakdown(details.checked === true)}
               >
                 Include Score Breakdown
               </Checkbox>
               <Checkbox
                 checked={includeRubricChecks}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeRubricChecks(details.checked === true)}
               >
                 Include Rubric Checks
               </Checkbox>
               <Checkbox
                 checked={includeAutograderTestResults}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeAutograderTestResults(details.checked === true)}
               >
                 Include Autograder Test Results
               </Checkbox>
               <Checkbox
                 checked={includeRepoMetadata}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeRepoMetadata(details.checked === true)}
               >
                 Include Repo Metadata
               </Checkbox>
               <Checkbox
                 checked={includeSubmissionMetadata}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeSubmissionMetadata(details.checked === true)}
               >
                 Include Submission Metadata
@@ -1387,19 +1435,9 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
                   size="sm"
                   variant="ghost"
                   colorPalette="green"
-                  onClick={() =>
-                    exportGrades({
-                      assignment_id,
-                      class_id,
-                      supabase,
-                      include_score_breakdown: includeScoreBreakdown,
-                      include_rubric_checks: includeRubricChecks,
-                      include_repo_metadata: includeRepoMetadata,
-                      include_submission_metadata: includeSubmissionMetadata,
-                      include_autograder_test_results: includeAutograderTestResults,
-                      mode: "csv"
-                    })
-                  }
+                  loading={isExporting === "csv"}
+                  disabled={isExporting !== null}
+                  onClick={() => handleExport("csv")}
                 >
                   CSV
                 </Button>
@@ -1407,19 +1445,9 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
                   size="sm"
                   variant="ghost"
                   colorPalette="green"
-                  onClick={() =>
-                    exportGrades({
-                      assignment_id,
-                      class_id,
-                      supabase,
-                      include_score_breakdown: includeScoreBreakdown,
-                      include_rubric_checks: includeRubricChecks,
-                      include_repo_metadata: includeRepoMetadata,
-                      include_submission_metadata: includeSubmissionMetadata,
-                      include_autograder_test_results: includeAutograderTestResults,
-                      mode: "json"
-                    })
-                  }
+                  loading={isExporting === "json"}
+                  disabled={isExporting !== null}
+                  onClick={() => handleExport("json")}
                 >
                   JSON
                 </Button>

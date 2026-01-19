@@ -374,6 +374,8 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const hours = 24;
     await addExtensionModal.locator('input[name="hours"]').fill(hours.toString());
     await addExtensionModal.getByRole("button", { name: "Add Extension" }).click();
+    // Wait for the modal to close, indicating the extension was saved
+    await expect(addExtensionModal).not.toBeVisible();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
@@ -398,7 +400,10 @@ test.describe("Due Date Exceptions & Extensions", () => {
       name: `${student2!.private_profile_name} ${hours} No`
     });
     await studentExtRow.getByLabel("Delete").click();
+    const confirmDialog = page.getByRole("alertdialog");
     await page.getByRole("button", { name: "Confirm action" }).click();
+    // Wait for the confirmation dialog to close, indicating the delete completed
+    await expect(confirmDialog).not.toBeVisible();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
