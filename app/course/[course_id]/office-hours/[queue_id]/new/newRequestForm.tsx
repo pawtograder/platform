@@ -862,7 +862,7 @@ export default function HelpRequestForm() {
                     .map(
                       (assignment) =>
                         ({
-                          label: `${assignment.title} (Due: ${assignment.due_date ? formatInTimeZone(new Date(assignment.due_date), timeZone, "MMM d, yyyy") : "No due date"})`,
+                          label: `${assignment.title} (Due: ${assignment.due_date ? formatInTimeZone(new Date(assignment.due_date), timeZone, "MMM d, yyyy (zzz)") : "No due date"})`,
                           value: assignment.id!.toString()
                         }) as SelectOption
                     ) ?? []
@@ -904,7 +904,7 @@ export default function HelpRequestForm() {
                         submissions?.data?.map(
                           (submission: Submission) =>
                             ({
-                              label: `${submission.repository} (${formatInTimeZone(new Date(submission.created_at), timeZone, "MMM d, yyyy")}) - Run #${submission.run_number}`,
+                              label: `${submission.repository} (${formatInTimeZone(new Date(submission.created_at), timeZone, "MMM d, yyyy (zzz)")}) - Run #${submission.run_number}`,
                               value: submission.id.toString()
                             }) as SelectOption
                         ) ?? []
@@ -1117,7 +1117,7 @@ export default function HelpRequestForm() {
                       options={userPreviousRequests.map(
                         (req) =>
                           ({
-                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${formatInTimeZone(new Date(req.resolved_at!), timeZone, "MMM d, yyyy")})`,
+                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${formatInTimeZone(new Date(req.resolved_at!), timeZone, "MMM d, yyyy (zzz)")})`,
                             value: req.id.toString()
                           }) as SelectOption
                       )}

@@ -15,6 +15,7 @@ import {
 } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
@@ -115,9 +116,9 @@ export default function AssignmentsTable({
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const assignmentGroups = useAssignmentGroups();
-  const course = classRole.classes;
+
   const { classRealTimeController } = useCourseController();
-  const timeZone = course.time_zone || "America/New_York";
+  const { timeZone } = useTimeZone();
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
@@ -246,7 +247,7 @@ export default function AssignmentsTable({
             return values.includes("Same as due date");
           }
 
-          const date = new TZDate(row.original.late_due_date);
+          const date = new TZDate(row.original.late_due_date, timeZone);
           const formattedDate = date.toLocaleString(undefined, {
             year: "numeric",
             month: "numeric",
@@ -818,7 +819,7 @@ export default function AssignmentsTable({
                                           ) {
                                             map.set("Same as due date", "Same as due date");
                                           } else {
-                                            const date = new TZDate(row.original.late_due_date);
+                                            const date = new TZDate(row.original.late_due_date, timeZone);
                                             const dateStr = date.toLocaleString(undefined, {
                                               year: "numeric",
                                               month: "numeric",
