@@ -1,4 +1,5 @@
 "use client";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
@@ -229,13 +230,7 @@ export default function AssignmentsTable({
 
           return (
             <Text>
-              {new TZDate(lateDueDate).toLocaleString(undefined, {
-                year: "numeric",
-                month: "numeric",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit"
-              })}
+              <TimeZoneAwareDate date={lateDueDate} format="Pp" />
             </Text>
           );
         },
@@ -330,11 +325,15 @@ export default function AssignmentsTable({
                 prefetch={false}
                 href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
               >
-                {new TZDate(props.getValue() as string, timeZone).toLocaleString()}
+                <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
               </Link>
             );
           }
-          return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
+          return (
+            <Text>
+              <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
+            </Text>
+          );
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;

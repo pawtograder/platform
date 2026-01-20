@@ -5,6 +5,8 @@ import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
+import { formatInTimeZone } from "date-fns-tz";
 import {
   useHelpRequests,
   useHelpRequestStudents,
@@ -47,6 +49,7 @@ export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { timeZone } = useTimeZone();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
@@ -859,7 +862,7 @@ export default function HelpRequestForm() {
                     .map(
                       (assignment) =>
                         ({
-                          label: `${assignment.title} (Due: ${assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"})`,
+                          label: `${assignment.title} (Due: ${assignment.due_date ? formatInTimeZone(new Date(assignment.due_date), timeZone, "MMM d, yyyy") : "No due date"})`,
                           value: assignment.id!.toString()
                         }) as SelectOption
                     ) ?? []
@@ -901,7 +904,7 @@ export default function HelpRequestForm() {
                         submissions?.data?.map(
                           (submission: Submission) =>
                             ({
-                              label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
+                              label: `${submission.repository} (${formatInTimeZone(new Date(submission.created_at), timeZone, "MMM d, yyyy")}) - Run #${submission.run_number}`,
                               value: submission.id.toString()
                             }) as SelectOption
                         ) ?? []
@@ -1114,7 +1117,7 @@ export default function HelpRequestForm() {
                       options={userPreviousRequests.map(
                         (req) =>
                           ({
-                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${new Date(req.resolved_at!).toLocaleDateString()})`,
+                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${formatInTimeZone(new Date(req.resolved_at!), timeZone, "MMM d, yyyy")})`,
                             value: req.id.toString()
                           }) as SelectOption
                       )}
