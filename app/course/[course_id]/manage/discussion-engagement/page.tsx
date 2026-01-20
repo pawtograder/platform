@@ -44,6 +44,18 @@ export default async function DiscussionEngagementPage({ params }: { params: { c
     redirect("/");
   }
 
+  // Check if discussion feature is enabled
+  const supabase = await createClient();
+  const { data: courseData } = await supabase.from("classes").select("features").eq("id", course_id).single();
+
+  if (courseData?.features && Array.isArray(courseData.features)) {
+    const features = courseData.features as { name: string; enabled: boolean }[];
+    const discussionFeature = features.find((f) => f.name === "discussion");
+    if (discussionFeature && !discussionFeature.enabled) {
+      redirect(`/course/${course_id}`);
+    }
+  }
+
   const engagement = await getStudentEngagement(course_id);
 
   // Calculate summary statistics

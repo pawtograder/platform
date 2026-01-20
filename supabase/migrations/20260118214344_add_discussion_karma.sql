@@ -19,11 +19,15 @@ AS $$
 DECLARE
     thread_author_id uuid;
 BEGIN
-    -- Get the author of the thread that was liked/unliked
+    -- Get the normalized author of the thread that was liked/unliked
+    -- Normalize anonymous/public authors to private profile using user_roles mapping
     IF TG_OP = 'INSERT' THEN
-        SELECT author INTO thread_author_id
-        FROM public.discussion_threads
-        WHERE id = NEW.discussion_thread;
+        SELECT COALESCE(ur.private_profile_id, dt.author) INTO thread_author_id
+        FROM public.discussion_threads dt
+        LEFT JOIN public.user_roles ur ON dt.author = ur.public_profile_id
+            AND dt.class_id = ur.class_id
+            AND ur.disabled = false
+        WHERE dt.id = NEW.discussion_thread;
         
         IF thread_author_id IS NOT NULL THEN
             UPDATE public.profiles
@@ -33,9 +37,12 @@ BEGIN
         
         RETURN NEW;
     ELSIF TG_OP = 'DELETE' THEN
-        SELECT author INTO thread_author_id
-        FROM public.discussion_threads
-        WHERE id = OLD.discussion_thread;
+        SELECT COALESCE(ur.private_profile_id, dt.author) INTO thread_author_id
+        FROM public.discussion_threads dt
+        LEFT JOIN public.user_roles ur ON dt.author = ur.public_profile_id
+            AND dt.class_id = ur.class_id
+            AND ur.disabled = false
+        WHERE dt.id = OLD.discussion_thread;
         
         IF thread_author_id IS NOT NULL THEN
             UPDATE public.profiles
@@ -65,13 +72,16 @@ COMMENT ON TRIGGER update_discussion_karma_trigger ON public.discussion_thread_l
 'Automatically updates the author''s discussion_karma when their posts are liked or unliked.';
 
 -- Backfill existing karma for all profiles
--- This calculates karma from existing likes
+-- This calculates karma from existing likes, normalizing anonymous/public authors to private profiles
 UPDATE public.profiles p
 SET discussion_karma = COALESCE((
     SELECT COUNT(*)
     FROM public.discussion_thread_likes dtl
     INNER JOIN public.discussion_threads dt ON dt.id = dtl.discussion_thread
-    WHERE dt.author = p.id
+    LEFT JOIN public.user_roles ur ON dt.author = ur.public_profile_id
+        AND dt.class_id = ur.class_id
+        AND ur.disabled = false
+    WHERE COALESCE(ur.private_profile_id, dt.author) = p.id
 ), 0);
 
 -- Create RPC function to get discussion engagement metrics for a class
@@ -90,7 +100,24 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO ''
 AS $$
+DECLARE
+  v_is_authorized boolean;
 BEGIN
+  -- Authorization guard: verify caller is instructor or grader for this class
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.user_roles ur
+    WHERE ur.class_id = p_class_id
+      AND ur.public_profile_id = auth.uid()
+      AND ur.role IN ('instructor', 'grader')
+      AND ur.disabled = false
+  ) INTO v_is_authorized;
+
+  IF NOT v_is_authorized THEN
+    RAISE EXCEPTION 'Access denied: Instructor or grader role required for this class'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   RETURN QUERY
   WITH profile_mapping AS (
     -- Map public profile IDs to private profile IDs
