@@ -69,6 +69,17 @@ export default function useDiscussionThreadChildren(threadId: number): Discussio
     }
 
     // We have a captured order - maintain it
+    // Deduplicate order array while preserving order (keep first occurrence)
+    const seenIds = new Set<number>();
+    const deduplicatedOrder: number[] = [];
+    sortOrderRef.current.order.forEach((id) => {
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        deduplicatedOrder.push(id);
+      }
+    });
+    sortOrderRef.current.order = deduplicatedOrder;
+
     const orderMap = new Map<number, number>();
     sortOrderRef.current.order.forEach((id, index) => {
       orderMap.set(id, index);
@@ -100,10 +111,20 @@ export default function useDiscussionThreadChildren(threadId: number): Discussio
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     });
 
-    // Append new children IDs to the sort order ref
+    // Append new children IDs to the sort order ref (only if not already present)
+    // This prevents duplicates if children array changes and recalculates
+    const orderSet = new Set(sortOrderRef.current!.order);
     newChildren.forEach((child) => {
-      sortOrderRef.current!.order.push(child.id);
+      if (!orderSet.has(child.id)) {
+        sortOrderRef.current!.order.push(child.id);
+        orderSet.add(child.id);
+      }
     });
+
+    // Clean up: remove IDs from order array that are no longer in children
+    // This prevents memory leaks from deleted/removed threads
+    const childrenIdsSet = new Set(children.map((c) => c.id));
+    sortOrderRef.current!.order = sortOrderRef.current!.order.filter((id) => childrenIdsSet.has(id));
 
     return [...knownChildren, ...newChildren];
   }, [children, threadId]);

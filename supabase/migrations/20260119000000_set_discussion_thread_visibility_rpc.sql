@@ -55,6 +55,7 @@ BEGIN
     FROM public.user_roles
     WHERE user_id = auth.uid()
       AND class_id = v_thread_class_id
+      AND disabled = false
       AND (private_profile_id = v_thread_author::uuid OR public_profile_id = v_thread_author::uuid)
   ) INTO v_is_author;
   

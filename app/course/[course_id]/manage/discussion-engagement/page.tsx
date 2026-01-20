@@ -32,6 +32,31 @@ async function getStudentEngagement(course_id: number): Promise<StudentEngagemen
     return [];
   }
 
+  // Get user_roles to build mapping from public_profile_id -> private_profile_id
+  const { data: userRoles, error: userRolesError } = await supabase
+    .from("user_roles")
+    .select("public_profile_id, private_profile_id")
+    .eq("class_id", course_id);
+
+  if (userRolesError) {
+    // Continue even if user_roles query fails, but mapping won't work
+  }
+
+  // Build mapping from public_profile_id -> private_profile_id
+  const publicToPrivateMap = new Map<string, string>();
+  if (userRoles) {
+    userRoles.forEach((role) => {
+      if (role.public_profile_id && role.private_profile_id) {
+        publicToPrivateMap.set(role.public_profile_id, role.private_profile_id);
+      }
+    });
+  }
+
+  // Helper function to normalize profile IDs (map public to private if available)
+  const normalizeProfileId = (profileId: string): string => {
+    return publicToPrivateMap.get(profileId) || profileId;
+  };
+
   // Get discussion thread counts (posts and replies) per student
   const { data: threads, error: threadsError } = await supabase
     .from("discussion_threads")
@@ -71,7 +96,8 @@ async function getStudentEngagement(course_id: number): Promise<StudentEngagemen
 
   // Count posts (root threads) and replies (non-root threads)
   threads.forEach((thread) => {
-    const engagement = engagementMap.get(thread.author);
+    const normalizedAuthorId = normalizeProfileId(thread.author);
+    const engagement = engagementMap.get(normalizedAuthorId);
     if (engagement) {
       if (thread.parent === null) {
         // Root thread = post
@@ -86,16 +112,18 @@ async function getStudentEngagement(course_id: number): Promise<StudentEngagemen
   // Count likes given and received
   if (likes) {
     likes.forEach((like) => {
-      // Like given
-      const giver = engagementMap.get(like.creator);
+      // Like given - normalize creator ID
+      const normalizedCreatorId = normalizeProfileId(like.creator);
+      const giver = engagementMap.get(normalizedCreatorId);
       if (giver) {
         giver.likes_given += 1;
       }
 
-      // Like received
+      // Like received - normalize thread author ID
       const threadAuthor = (like.discussion_threads as { author: string })?.author;
       if (threadAuthor) {
-        const receiver = engagementMap.get(threadAuthor);
+        const normalizedThreadAuthorId = normalizeProfileId(threadAuthor);
+        const receiver = engagementMap.get(normalizedThreadAuthorId);
         if (receiver) {
           receiver.likes_received += 1;
         }
