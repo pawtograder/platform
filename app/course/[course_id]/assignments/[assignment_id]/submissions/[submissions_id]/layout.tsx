@@ -2,10 +2,11 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
-  SubmissionWithGraderResultsAndErrors,
   SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
@@ -259,16 +260,19 @@ function SubmissionReviewScoreTweak() {
 }
 // Select query for full submission data with grader results, test outputs, and files
 const FULL_SUBMISSION_SELECT =
-  "*, grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)";
+  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)";
 
-type SubmissionFileBasic = { name: string; contents: string | null };
+// Type that matches the FULL_SUBMISSION_SELECT query result
+type FullSubmissionQueryResult = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["submissions"]["Row"],
+  "submissions",
+  Database["public"]["Tables"]["submissions"]["Relationships"],
+  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)"
+>;
 
 // Use Omit to avoid implying assignments/workflow_run_error are populated (they aren't in our query)
-type FullSubmissionData = Omit<SubmissionWithGraderResultsAndErrors, "assignments" | "workflow_run_error"> & {
-  submission_reviews: SubmissionWithGraderResultsAndReview["submission_reviews"];
-  repository_check_runs: { commit_message: string } | null;
-  submission_files: SubmissionFileBasic[] | null;
-};
+type FullSubmissionData = FullSubmissionQueryResult;
 
 // Simple diff generator that shows added/removed lines between two strings
 function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
