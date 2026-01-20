@@ -5,6 +5,7 @@ CREATE OR REPLACE FUNCTION public.submissionreviewrecompute_bulk_grader_tests()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_catalog
 AS $$
 declare
   submission_rec record;
