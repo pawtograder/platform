@@ -30,8 +30,8 @@ async function getStudentEngagement(course_id: number): Promise<StudentEngagemen
   return data;
 }
 
-export default async function DiscussionEngagementPage({ params }: { params: { course_id: string } }) {
-  const course_id = Number.parseInt(params.course_id);
+export default async function DiscussionEngagementPage({ params }: { params: Promise<{ course_id: string }> }) {
+  const course_id = Number.parseInt((await params).course_id);
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
 

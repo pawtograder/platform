@@ -58,7 +58,7 @@ const SUBMISSION_FILES_SELECT = `
     repository,
     profile_id,
     assignment_id,
-    grader_results(
+    grader_results!grader_results_submission_id_fkey(
       id,
       score,
       max_score,

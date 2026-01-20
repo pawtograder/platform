@@ -108,7 +108,7 @@ BEGIN
     SELECT 1
     FROM public.user_roles ur
     WHERE ur.class_id = p_class_id
-      AND ur.public_profile_id = auth.uid()
+      AND ur.user_id = auth.uid()
       AND ur.role IN ('instructor', 'grader')
       AND ur.disabled = false
   ) INTO v_is_authorized;
