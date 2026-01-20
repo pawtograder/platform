@@ -821,6 +821,26 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
+            <Field helperText="When enabled, students can see a leaderboard showing top autograder scores using pseudonyms.">
+              <Controller
+                name="show_leaderboard"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value || false}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Show autograder leaderboard to students</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
               Save
             </Button>

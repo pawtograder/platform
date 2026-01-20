@@ -41,8 +41,8 @@ export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLea
   }
 
   return (
-    <Box borderWidth={1} borderRadius="md" p={4} bg="bg.subtle" maxW="lg">
-      <VStack align="stretch" gap={3}>
+    <Box borderWidth={1} borderRadius="md" p={3} bg="bg.subtle">
+      <VStack align="stretch" gap={2}>
         <HStack justify="space-between">
           <Heading size="sm">🏆 Leaderboard</Heading>
           <Text fontSize="xs" color="fg.muted">

@@ -86,7 +86,8 @@ test.beforeAll(async () => {
   assignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
     class_id: course.id,
-    name: "Leaderboard Test Assignment"
+    name: "Leaderboard Test Assignment",
+    show_leaderboard: true
   });
 
   // Create submissions with different scores
