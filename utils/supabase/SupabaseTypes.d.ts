@@ -11236,6 +11236,18 @@ export type Database = {
         Args: { p_class_id: number };
         Returns: Json;
       };
+      get_grading_progress_for_assignment: {
+        Args: { p_assignment_id: number; p_class_id: number };
+        Returns: {
+          completed_count: number;
+          earliest_due_date: string;
+          email: string;
+          name: string;
+          pending_count: number;
+          profile_id: string;
+          submissions_with_comments: number;
+        }[];
+      };
       get_instructor_dashboard_metrics: {
         Args: { p_class_id: number; p_now?: string };
         Returns: {
