@@ -196,11 +196,62 @@ export default function MessageInput(props: MessageInputProps) {
     [mentionState.isActive, selectNext, selectPrevious, handleMentionSelect, dismissMentions]
   );
 
+  // Helper function to insert markdown at cursor position
+  const insertMarkdownAtCursor = useCallback(
+    (insertString: string) => {
+      if (singleLine && internalTextAreaRef.current) {
+        // For textarea mode
+        const textarea = internalTextAreaRef.current;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const currentValue = value || "";
+        const newValue = currentValue.slice(0, start) + insertString + currentValue.slice(end);
+        onChange(newValue);
+        // Set cursor position after insertion
+        setTimeout(() => {
+          if (internalTextAreaRef.current) {
+            const newCursorPos = start + insertString.length;
+            internalTextAreaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+            internalTextAreaRef.current.focus();
+            setCursorPosition(newCursorPos);
+          }
+        }, 0);
+      } else {
+        // For MDEditor mode
+        const textarea = containerRef.current?.querySelector("textarea");
+        if (textarea) {
+          const start = textarea.selectionStart;
+          const end = textarea.selectionEnd;
+          const currentValue = value || "";
+          const newValue = currentValue.slice(0, start) + insertString + currentValue.slice(end);
+          onChange(newValue);
+          // Set cursor position after insertion
+          setTimeout(() => {
+            const editorTextarea = containerRef.current?.querySelector("textarea");
+            if (editorTextarea) {
+              const newCursorPos = start + insertString.length;
+              editorTextarea.setSelectionRange(newCursorPos, newCursorPos);
+              editorTextarea.focus();
+              setCursorPosition(newCursorPos);
+            }
+          }, 0);
+        } else {
+          // Fallback: append to end
+          const currentValue = value || "";
+          onChange(currentValue + insertString);
+        }
+      }
+    },
+    [singleLine, value, onChange]
+  );
+
   const fileUpload = useCallback(
     async (file: File) => {
-      if (!sendMessage) {
-        return null;
-      }
+      // Upload file to storage
+      const supabase = createClient();
+      const uuid = crypto.randomUUID();
+      const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
+
       // Check if this is a text/code file
       if (isTextFile(file)) {
         try {
@@ -211,13 +262,19 @@ export default function MessageInput(props: MessageInputProps) {
           if (lineCount > maxCodeLines) {
             // Fall through to regular file upload logic below
           } else {
-            // File is small enough, send as code block
+            // File is small enough, insert as code block
             const language = getLanguageFromFile(file.name);
-            const codeBlock = `\`\`\`${language}\n${content}\n\`\`\``;
+            const codeBlock = `**${file.name}**\n\n\`\`\`${language}\n${content}\n\`\`\``;
 
-            // Send the file content as a code block message
-            await sendMessage(`**${file.name}**\n\n${codeBlock}`, profile_id, false);
-            return null; // No URL for text files
+            if (sendMessage) {
+              // Chat mode: send as separate message
+              await sendMessage(codeBlock, profile_id, false);
+              return null; // No URL for text files
+            } else {
+              // Inline mode: insert into current value
+              insertMarkdownAtCursor(codeBlock);
+              return null;
+            }
           }
         } catch (error) {
           toaster.error({
@@ -228,11 +285,7 @@ export default function MessageInput(props: MessageInputProps) {
         }
       }
 
-      // For non-text files, upload to storage as before
-      const supabase = createClient();
-      const uuid = crypto.randomUUID();
-      const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
-
+      // For non-text files, upload to storage
       const { error } = await supabase.storage
         .from("uploads")
         .upload(`${course_id}/${uploadFolder}/${uuid}/${fileName}`, file);
@@ -251,10 +304,16 @@ export default function MessageInput(props: MessageInputProps) {
       const isImage = file.type.startsWith("image/");
       const markdownLink = isImage ? `![${file.name}](${url})` : `[${file.name}](${url})`;
 
-      await sendMessage(`Attachment: ${markdownLink}`, profile_id, false);
+      if (sendMessage) {
+        // Chat mode: send as separate message
+        await sendMessage(`Attachment: ${markdownLink}`, profile_id, false);
+      } else {
+        // Inline mode: insert markdown into current value
+        insertMarkdownAtCursor(markdownLink);
+      }
       return url;
     },
-    [course_id, uploadFolder, profile_id, sendMessage, maxCodeLines]
+    [course_id, uploadFolder, profile_id, sendMessage, maxCodeLines, insertMarkdownAtCursor]
   );
 
   const attachFile = useCallback(
@@ -553,6 +612,42 @@ export default function MessageInput(props: MessageInputProps) {
       <MDEditor
         ref={mdEditorRef}
         value={value}
+        draggable={true}
+        onDragEnter={(e) => {
+          const target = e.target as HTMLElement;
+          target.style.border = "2px dashed #999";
+          target.style.backgroundColor = "rgba(0, 0, 0, 0.05)";
+          target.style.cursor = "move";
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDragLeave={(e) => {
+          const target = e.target as HTMLElement;
+          target.style.border = "none";
+          target.style.backgroundColor = "transparent";
+          target.style.cursor = "default";
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDrop={async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const target = e.target as HTMLElement;
+          target.style.border = "none";
+          target.style.backgroundColor = "transparent";
+          target.style.cursor = "default";
+          await onFileTransfer(e.dataTransfer);
+        }}
+        onPaste={async (event) => {
+          if (event.clipboardData && event.clipboardData.files.length > 0) {
+            event.preventDefault();
+            await onFileTransfer(event.clipboardData);
+          }
+        }}
         textareaProps={{
           disabled: isSending,
           onKeyDown: handleKeyDown,
