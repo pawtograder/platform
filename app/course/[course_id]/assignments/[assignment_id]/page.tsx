@@ -113,9 +113,7 @@ export default function AssignmentPage() {
       <LinkAccount />
       <ResendOrgInvitation />
       <Grid
-        templateColumns={
-          assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }
-        }
+        templateColumns={assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }}
         gap={4}
       >
         <GridItem>
