@@ -16,6 +16,7 @@ import {
   FaPlay,
   FaPooStorm,
   FaSearch,
+  FaShieldAlt,
   FaUsers
 } from "react-icons/fa";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
@@ -74,6 +75,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Manage Regrade Requests",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
     icon: FaPooStorm
+  },
+  {
+    label: "Security Audit",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/security`,
+    icon: FaShieldAlt,
+    instructorsOnly: true
   },
   {
     label: "Test Insights",
