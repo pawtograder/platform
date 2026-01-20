@@ -11148,6 +11148,16 @@ export type Database = {
           trip_count: number;
         }[];
       };
+      get_common_test_errors_for_assignment: {
+        Args: {
+          p_assignment_id: number;
+          p_limit?: number;
+          p_min_occurrences?: number;
+          p_test_name?: string;
+          p_test_part?: string;
+        };
+        Returns: Json;
+      };
       get_discussion_engagement: {
         Args: { p_class_id: number };
         Returns: {
@@ -11162,6 +11172,14 @@ export type Database = {
       };
       get_error_pin_matches_for_submission: {
         Args: { p_submission_id: number };
+        Returns: Json;
+      };
+      get_error_pins_for_error_pattern: {
+        Args: {
+          p_assignment_id: number;
+          p_error_output: string;
+          p_test_name: string;
+        };
         Returns: Json;
       };
       get_github_api_metrics_recent: {
@@ -11248,6 +11266,10 @@ export type Database = {
           submissions_used: number;
         }[];
       };
+      get_submissions_to_full_marks: {
+        Args: { p_assignment_id: number };
+        Returns: Json;
+      };
       get_system_notification_stats: {
         Args: { p_requested_by?: string };
         Returns: {
@@ -11257,6 +11279,10 @@ export type Database = {
           recent_campaigns: Json;
           total_notifications: number;
         }[];
+      };
+      get_test_statistics_for_assignment: {
+        Args: { p_assignment_id: number };
+        Returns: Json;
       };
       get_user_id_by_email: {
         Args: { email: string };
@@ -11559,6 +11585,10 @@ export type Database = {
           p_private: boolean;
         };
         Returns: undefined;
+      };
+      safe_regex_match: {
+        Args: { p_pattern: string; p_text: string };
+        Returns: boolean;
       };
       save_error_pin: {
         Args: { p_error_pin: Json; p_rules: Json };
