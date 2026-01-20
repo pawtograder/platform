@@ -1,26 +1,27 @@
 "use client";
 
+import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
+import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hours-discussion-browser";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useTimeZone } from "@/lib/TimeZoneProvider";
-import { formatInTimeZone } from "date-fns-tz";
 import {
+  useHelpQueueAssignments,
+  useHelpQueues,
   useHelpRequests,
   useHelpRequestStudents,
   useHelpRequestTemplates,
-  useHelpQueues,
-  useHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import {
   Assignment,
   HelpRequest,
   HelpRequestLocationType,
-  HelpRequestTemplate,
   HelpRequestMessage,
+  HelpRequestTemplate,
   HelpRequestWithStudentCount,
   Submission,
   SubmissionFile
@@ -29,12 +30,11 @@ import { Box, Button, Fieldset, Heading, IconButton, Input, Stack, Text, Textare
 import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
+import { formatInTimeZone } from "date-fns-tz";
 import { X } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
-import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
-import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hours-discussion-browser";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
