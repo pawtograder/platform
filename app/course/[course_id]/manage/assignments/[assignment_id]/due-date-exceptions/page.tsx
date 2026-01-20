@@ -27,9 +27,10 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import { addHours, addMinutes } from "date-fns";
+import { addHours, addMinutes, differenceInMinutes } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaSort, FaSortDown, FaSortUp, FaTrash } from "react-icons/fa";
 
@@ -64,6 +65,7 @@ function AdjustDueDateDialogContent({
     studentPrivateProfileId: student_id,
     assignmentGroupId: group?.id
   });
+  const { time_zone } = useCourse();
   const originalDueDate = new TZDate(assignment.due_date!);
   const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
   const { assignmentDueDateExceptions } = useCourseController();
@@ -91,6 +93,8 @@ function AdjustDueDateDialogContent({
     watch,
     reset,
     setError,
+    clearErrors,
+    setValue,
     formState: { errors, isSubmitting }
   } = useForm<AdjustDueDateInsert>({
     defaultValues: {
@@ -100,9 +104,16 @@ function AdjustDueDateDialogContent({
     }
   });
 
+  const [targetDueDate, setTargetDueDate] = useState<string>("");
+  const [targetDateError, setTargetDateError] = useState<string>("");
+
   useEffect(() => {
     if (!open) {
       reset();
+      setTargetDueDate("");
+      setTargetDateError("");
+      lastInputMethod.current = "hours";
+      isSyncing.current = false;
     }
   }, [open, reset]);
 
@@ -110,6 +121,14 @@ function AdjustDueDateDialogContent({
 
   const onSubmitCallback = useCallback(
     async (values: AdjustDueDateInsert) => {
+      if (targetDateError) {
+        toaster.error({
+          title: "Invalid target date",
+          description: targetDateError,
+          type: "error"
+        });
+        return;
+      }
       const totalMinutes = (Number(values.hours) || 0) * 60 + (Number(values.minutes) || 0);
       if (totalMinutes <= 0) {
         setError("hours", { type: "validate", message: "Enter hours or minutes greater than 0" });
@@ -159,7 +178,8 @@ function AdjustDueDateDialogContent({
       private_profile_id,
       reset,
       setError,
-      setOpen
+      setOpen,
+      targetDateError
     ]
   );
 
@@ -177,6 +197,127 @@ function AdjustDueDateDialogContent({
   const watchedMinutes = watch("minutes", 0) || 0;
   const newDueDate = addMinutes(addHours(finalDueDate, watchedHours), watchedMinutes);
   const sumIsInvalid = (watchedHours || 0) + (watchedMinutes || 0) <= 0;
+
+  // Memoize finalDueDate to prevent infinite loops
+  const finalDueDateMemo = useMemo(() => finalDueDate, [finalDueDate.getTime()]);
+
+  // Format finalDueDate for datetime-local input (min attribute) in course timezone
+  const minDateTimeLocal = useMemo(
+    () => formatInTimeZone(finalDueDateMemo, time_zone, "yyyy-MM-dd'T'HH:mm"),
+    [finalDueDateMemo, time_zone]
+  );
+
+  // Convert datetime-local string to Date in the course timezone
+  // datetime-local inputs work in browser local timezone, but we interpret the value as course timezone
+  const parseTargetDate = useCallback(
+    (dateTimeLocal: string): Date | null => {
+      if (!dateTimeLocal) return null;
+      // Parse the datetime-local string and interpret it as course timezone
+      const [datePart, timePart] = dateTimeLocal.split("T");
+      if (!datePart || !timePart) return null;
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hours, minutes] = timePart.split(":").map(Number);
+      return new TZDate(year, month - 1, day, hours, minutes, time_zone);
+    },
+    [time_zone]
+  );
+
+  // Convert Date to datetime-local string format in course timezone
+  const formatToDateTimeLocal = useCallback(
+    (date: Date): string => {
+      return formatInTimeZone(date, time_zone, "yyyy-MM-dd'T'HH:mm");
+    },
+    [time_zone]
+  );
+
+  // Track which input method was used last to avoid sync loops
+  const lastInputMethod = useRef<"date" | "hours">("hours");
+  const isSyncing = useRef(false);
+
+  // When target date changes, calculate hours/minutes
+  useEffect(() => {
+    if (isSyncing.current) return;
+
+    if (targetDueDate && lastInputMethod.current === "date") {
+      isSyncing.current = true;
+      const targetDate = parseTargetDate(targetDueDate);
+      if (targetDate) {
+        if (targetDate <= finalDueDateMemo) {
+          setTargetDateError("Target date must be after current due date");
+          isSyncing.current = false;
+          return;
+        }
+        // Clear errors if valid
+        setTargetDateError("");
+        clearErrors(["hours", "minutes"]);
+
+        const totalMinutes = differenceInMinutes(targetDate, finalDueDateMemo);
+        if (totalMinutes > 0) {
+          const hours = Math.floor(totalMinutes / 60);
+          const minutes = totalMinutes % 60;
+          // Use setTimeout to reset sync flag after React processes the update
+          setValue("hours", hours, { shouldValidate: true, shouldDirty: true });
+          setValue("minutes", minutes, { shouldValidate: true, shouldDirty: true });
+          setTimeout(() => {
+            isSyncing.current = false;
+          }, 0);
+        } else {
+          setValue("hours", 0, { shouldValidate: true, shouldDirty: true });
+          setValue("minutes", 0, { shouldValidate: true, shouldDirty: true });
+          setTimeout(() => {
+            isSyncing.current = false;
+          }, 0);
+        }
+      } else {
+        setTargetDateError("");
+        isSyncing.current = false;
+      }
+    } else if (!targetDueDate) {
+      setTargetDateError("");
+    }
+  }, [targetDueDate, finalDueDateMemo, setValue, clearErrors, parseTargetDate]);
+
+  // When hours/minutes change, update target date
+  useEffect(() => {
+    if (isSyncing.current) return;
+
+    if (lastInputMethod.current === "hours") {
+      isSyncing.current = true;
+      if (watchedHours > 0 || watchedMinutes > 0) {
+        const calculatedNewDate = addMinutes(addHours(finalDueDateMemo, watchedHours), watchedMinutes);
+        const formatted = formatToDateTimeLocal(calculatedNewDate);
+        if (formatted !== targetDueDate) {
+          setTargetDueDate(formatted);
+        }
+        setTargetDateError("");
+      } else {
+        if (targetDueDate) {
+          setTargetDueDate("");
+        }
+        setTargetDateError("");
+      }
+      // Use setTimeout to reset sync flag after React processes the update
+      setTimeout(() => {
+        isSyncing.current = false;
+      }, 0);
+    }
+  }, [watchedHours, watchedMinutes, finalDueDateMemo, formatToDateTimeLocal, targetDueDate]);
+
+  // Track when target date is manually changed
+  const handleTargetDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    lastInputMethod.current = "date";
+    setTargetDueDate(value);
+  };
+
+  // Track when hours/minutes inputs are focused (user is typing)
+  const handleHoursFocus = () => {
+    lastInputMethod.current = "hours";
+  };
+
+  const handleMinutesFocus = () => {
+    lastInputMethod.current = "hours";
+  };
 
   return (
     <Dialog.Content p={4}>
@@ -218,14 +359,33 @@ function AdjustDueDateDialogContent({
             {hoursExtended > 0 && ` (an extension of ${formattedDuration})`}.
           </Text>
         )}
-        You can manually adjust the due date for this {studentOrGroup} below, in increments of hours and minutes.
-        Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
+        You can manually adjust the due date for this {studentOrGroup} below, either by selecting a target date or by
+        entering hours and minutes. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"}{" "}
+        due date.
       </Dialog.Description>
       <Dialog.Body>
         <Heading size="md">Add an Exception</Heading>
         <form id="due-date-form" onSubmit={onSubmit}>
           <Fieldset.Root bg="surface" size="sm">
             <Fieldset.Content maxW="md" gap={2}>
+              <Field
+                orientation="horizontal"
+                label="Target Due Date"
+                errorText={targetDateError}
+                invalid={!!targetDateError}
+                helperText="Select a specific date and time for the new due date. Hours and minutes will be calculated automatically."
+              >
+                <Input
+                  size="sm"
+                  type="datetime-local"
+                  value={targetDueDate}
+                  onChange={handleTargetDateChange}
+                  min={minDateTimeLocal}
+                />
+              </Field>
+              <Text fontSize="sm" color="fg.muted" mb={2}>
+                Or enter hours and minutes manually:
+              </Text>
               <HStack align="start" gap={4}>
                 <Field
                   orientation="horizontal"
@@ -252,6 +412,7 @@ function AdjustDueDateDialogContent({
                         return h + m > 0 || "Enter hours or minutes greater than 0";
                       }
                     })}
+                    onFocus={handleHoursFocus}
                     defaultValue={0}
                   />
                 </Field>
@@ -282,6 +443,7 @@ function AdjustDueDateDialogContent({
                         return h + m > 0 || "Enter hours or minutes greater than 0";
                       }
                     })}
+                    onFocus={handleMinutesFocus}
                     defaultValue={0}
                   />
                 </Field>

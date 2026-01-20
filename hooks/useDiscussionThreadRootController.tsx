@@ -37,6 +37,7 @@ export function useDiscussionThreadRoot() {
 
 /**
  * Hook to get a discussion thread with its immediate children
+ * Children are sorted by likes_count descending (then created_at ascending) with stable ordering
  */
 export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
   const controller = useDiscussionThreadsController();
@@ -44,14 +45,98 @@ export default function useDiscussionThreadChildren(threadId: number): Discussio
   const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === thread?.id, [thread]);
   const children = useListTableControllerValues(controller.tableController, childrenPredicate);
 
+  // Stable sort order: capture initial order on first render, maintain it during session
+  // Reset when threadId changes (component remounts)
+  const sortOrderRef = useRef<{ threadId: number; order: number[] } | null>(null);
+
+  const sortedChildren = useMemo(() => {
+    if (!children || children.length === 0) return children;
+
+    // Reset sort order if threadId changed (remount)
+    if (sortOrderRef.current === null || sortOrderRef.current.threadId !== threadId) {
+      // Sort by likes_count descending, then created_at ascending
+      const sorted = [...children].sort((a, b) => {
+        const likesDiff = (b.likes_count ?? 0) - (a.likes_count ?? 0);
+        if (likesDiff !== 0) return likesDiff;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+      // Capture the thread IDs in this order
+      sortOrderRef.current = {
+        threadId,
+        order: sorted.map((c) => c.id)
+      };
+      return sorted;
+    }
+
+    // We have a captured order - maintain it
+    // Deduplicate order array while preserving order (keep first occurrence)
+    const seenIds = new Set<number>();
+    const deduplicatedOrder: number[] = [];
+    sortOrderRef.current.order.forEach((id) => {
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        deduplicatedOrder.push(id);
+      }
+    });
+    sortOrderRef.current.order = deduplicatedOrder;
+
+    const orderMap = new Map<number, number>();
+    sortOrderRef.current.order.forEach((id, index) => {
+      orderMap.set(id, index);
+    });
+
+    // Separate known children (in order) from new children (not in order)
+    const knownChildren: DiscussionThread[] = [];
+    const newChildren: DiscussionThread[] = [];
+
+    children.forEach((child) => {
+      if (orderMap.has(child.id)) {
+        knownChildren.push(child);
+      } else {
+        newChildren.push(child);
+      }
+    });
+
+    // Sort known children by captured order
+    knownChildren.sort((a, b) => {
+      const orderA = orderMap.get(a.id) ?? Infinity;
+      const orderB = orderMap.get(b.id) ?? Infinity;
+      return orderA - orderB;
+    });
+
+    // Sort new children by likes_count descending, then created_at ascending
+    newChildren.sort((a, b) => {
+      const likesDiff = (b.likes_count ?? 0) - (a.likes_count ?? 0);
+      if (likesDiff !== 0) return likesDiff;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+
+    // Append new children IDs to the sort order ref (only if not already present)
+    // This prevents duplicates if children array changes and recalculates
+    const orderSet = new Set(sortOrderRef.current!.order);
+    newChildren.forEach((child) => {
+      if (!orderSet.has(child.id)) {
+        sortOrderRef.current!.order.push(child.id);
+        orderSet.add(child.id);
+      }
+    });
+
+    // Clean up: remove IDs from order array that are no longer in children
+    // This prevents memory leaks from deleted/removed threads
+    const childrenIdsSet = new Set(children.map((c) => c.id));
+    sortOrderRef.current!.order = sortOrderRef.current!.order.filter((id) => childrenIdsSet.has(id));
+
+    return [...knownChildren, ...newChildren];
+  }, [children, threadId]);
+
   return useMemo(() => {
     if (!thread) return undefined;
 
     return {
       ...thread,
-      children
+      children: sortedChildren
     } as DiscussionThreadWithChildren;
-  }, [thread, children]);
+  }, [thread, sortedChildren]);
 }
 
 /**

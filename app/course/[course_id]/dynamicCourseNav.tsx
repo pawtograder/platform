@@ -24,6 +24,7 @@ import React, { Fragment, useEffect, useRef } from "react";
 import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
+  FiBarChart,
   FiBookOpen,
   FiCheckSquare,
   FiClipboard,
@@ -143,7 +144,15 @@ const LinkItems = (courseID: number) => [
         name: "Discussion Topics",
         icon: FiHash,
         instructors_only: true,
-        target: `/course/${courseID}/manage/discussion-topics`
+        target: `/course/${courseID}/manage/discussion-topics`,
+        feature_flag: "discussion"
+      },
+      {
+        name: "Discussion Engagement",
+        icon: FiBarChart,
+        instructors_or_graders_only: true,
+        target: `/course/${courseID}/manage/discussion-engagement`,
+        feature_flag: "discussion"
       },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
@@ -326,6 +335,11 @@ export default function DynamicCourseNav() {
                                     (!submenu.instructors_only || isInstructor) &&
                                     (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                                 )
+                                .filter((submenu) => {
+                                  if (!("feature_flag" in submenu)) return true;
+                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
+                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
+                                })
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
                                     <NextLink href={submenu.target || "#"}>
@@ -422,6 +436,11 @@ export default function DynamicCourseNav() {
                                     (!submenu.instructors_only || isInstructor) &&
                                     (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                                 )
+                                .filter((submenu) => {
+                                  if (!("feature_flag" in submenu)) return true;
+                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
+                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
+                                })
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
                                     <NextLink href={submenu.target || "#"}>

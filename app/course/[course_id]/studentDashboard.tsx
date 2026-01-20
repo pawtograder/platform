@@ -37,7 +37,9 @@ export default async function StudentDashboard({
   const supabase = await createClient();
   const { data: assignments } = await supabase
     .from("assignments_with_effective_due_dates")
-    .select("*, submissions!submissio_assignment_id_fkey(*, grader_results(*)), classes(time_zone)")
+    .select(
+      "*, submissions!submissio_assignment_id_fkey(*, grader_results!grader_results_submission_id_fkey(*)), classes(time_zone)"
+    )
     .eq("class_id", course_id)
     .eq("submissions.is_active", true)
     .eq("student_profile_id", private_profile_id)

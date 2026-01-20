@@ -1192,7 +1192,8 @@ export async function insertAssignment({
   name,
   regrade_deadline,
   release_date,
-  grader_pseudonymous_mode
+  grader_pseudonymous_mode,
+  show_leaderboard
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -1203,6 +1204,7 @@ export async function insertAssignment({
   regrade_deadline?: string | null;
   release_date?: string;
   grader_pseudonymous_mode?: boolean;
+  show_leaderboard?: boolean;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -1243,7 +1245,8 @@ export async function insertAssignment({
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       self_review_setting_id: self_review_setting_id,
       regrade_deadline: regrade_deadline,
-      grader_pseudonymous_mode: grader_pseudonymous_mode || false
+      grader_pseudonymous_mode: grader_pseudonymous_mode || false,
+      show_leaderboard: show_leaderboard || false
     })
     .select("id")
     .single();

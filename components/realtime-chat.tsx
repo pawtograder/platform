@@ -544,6 +544,7 @@ export const RealtimeChat = ({
               uploadFolder="office-hours"
               ariaLabel="Type your message"
               defaultSingleLine={true}
+              inlineFileUpload={false}
             />
           </Box>
         </Box>

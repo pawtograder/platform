@@ -30,20 +30,23 @@ export default function StudentSurveysPage() {
   const { surveys: publishedSurveys, isLoading: surveysLoading } = usePublishedSurveys();
 
   // Status badge configuration
-  const statusColors = {
-    not_started: {
-      colorPalette: "red",
-      text: "Not Started"
-    },
-    in_progress: {
-      colorPalette: "red",
-      text: "In Progress"
-    },
-    completed: {
-      colorPalette: "green",
-      text: "Completed"
-    }
-  };
+  const statusColors = useMemo(
+    () => ({
+      not_started: {
+        colorPalette: "red",
+        text: "Not Started"
+      },
+      in_progress: {
+        colorPalette: "red",
+        text: "In Progress"
+      },
+      completed: {
+        colorPalette: "green",
+        text: "Completed"
+      }
+    }),
+    []
+  );
 
   // Fetch student's responses for the surveys
   useEffect(() => {

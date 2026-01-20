@@ -55,68 +55,74 @@ export default function PollsTable({ courseId }: PollsTableProps) {
     );
   };
 
-  const handleToggleLive = useCallback(async (pollId: string, nextState: boolean) => {
-    const loadingToast = toaster.create({
-      title: nextState ? "Starting Poll" : "Closing Poll",
-      description: nextState ? "Making poll available to students..." : "Closing poll for students...",
-      type: "loading"
-    });
-
-    try {
-      // If making poll live, set deactivates_at to 1 hour from now
-      // If closing poll, clear deactivates_at
-      const updateData: { is_live: boolean; deactivates_at: string | null } = {
-        is_live: nextState,
-        deactivates_at: nextState
-          ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
-          : null
-      };
-
-      await livePolls.update(pollId, updateData);
-
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: nextState ? "Poll is Live" : "Poll Closed",
-        description: nextState ? "Students can now answer this poll." : "Students can no longer submit responses.",
-        type: "success"
+  const handleToggleLive = useCallback(
+    async (pollId: string, nextState: boolean) => {
+      const loadingToast = toaster.create({
+        title: nextState ? "Starting Poll" : "Closing Poll",
+        description: nextState ? "Making poll available to students..." : "Closing poll for students...",
+        type: "loading"
       });
-    } catch (err) {
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Unable to update poll",
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
-        type: "error"
-      });
-    }
-  }, []);
 
-  const handleDelete = useCallback(async (pollId: string) => {
-    const confirmed = confirm(`Are you sure you want to delete this poll? This action cannot be undone.`);
-    if (!confirmed) return;
+      try {
+        // If making poll live, set deactivates_at to 1 hour from now
+        // If closing poll, clear deactivates_at
+        const updateData: { is_live: boolean; deactivates_at: string | null } = {
+          is_live: nextState,
+          deactivates_at: nextState
+            ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
+            : null
+        };
 
-    const loadingToast = toaster.create({
-      title: "Deleting Poll",
-      description: "Removing poll and all responses...",
-      type: "loading"
-    });
-    try {
-      await livePolls.hardDelete(pollId);
+        await livePolls.update(pollId, updateData);
 
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Poll Deleted",
-        description: "The poll and all its responses have been deleted.",
-        type: "success"
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: nextState ? "Poll is Live" : "Poll Closed",
+          description: nextState ? "Students can now answer this poll." : "Students can no longer submit responses.",
+          type: "success"
+        });
+      } catch (err) {
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: "Unable to update poll",
+          description: err instanceof Error ? err.message : "An unexpected error occurred",
+          type: "error"
+        });
+      }
+    },
+    [livePolls]
+  );
+
+  const handleDelete = useCallback(
+    async (pollId: string) => {
+      const confirmed = confirm(`Are you sure you want to delete this poll? This action cannot be undone.`);
+      if (!confirmed) return;
+
+      const loadingToast = toaster.create({
+        title: "Deleting Poll",
+        description: "Removing poll and all responses...",
+        type: "loading"
       });
-    } catch (err) {
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Unable to delete poll",
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
-        type: "error"
-      });
-    }
-  }, []);
+      try {
+        await livePolls.hardDelete(pollId);
+
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: "Poll Deleted",
+          description: "The poll and all its responses have been deleted.",
+          type: "success"
+        });
+      } catch (err) {
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: "Unable to delete poll",
+          description: err instanceof Error ? err.message : "An unexpected error occurred",
+          type: "error"
+        });
+      }
+    },
+    [livePolls]
+  );
 
   return (
     <>

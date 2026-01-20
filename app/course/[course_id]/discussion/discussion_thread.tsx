@@ -1,24 +1,29 @@
 import { DiscussionThreadNotification } from "@/components/notifications/notification-teaser";
+import { KarmaBadge } from "@/components/discussion/KarmaBadge";
 import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
-  useUpdateThreadTeaser
+  useUpdateThreadTeaser,
+  useCourseController
 } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, { useDiscussionThreadsController } from "@/hooks/useDiscussionThreadRootController";
+import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
+import { Avatar, Badge, Box, Container, Flex, HStack, Icon, Link, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FaHeart, FaRegHeart } from "react-icons/fa";
 
 export function DiscussionThreadReply({
   thread,
@@ -172,11 +177,38 @@ const DiscussionThreadContent = memo(
     const isGraderOrInstructor = useIsGraderOrInstructor();
     const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
-    const { role } = useClassProfiles();
+    const { role, private_profile_id } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
     const canEdit = useMemo(() => {
       return authorProfile?.id === originalPoster || role.role === "instructor" || role.role === "grader";
     }, [authorProfile, originalPoster, role.role]);
+
+    // Like functionality
+    const likeStatus = useDiscussionThreadLikes(thread.id);
+    const { discussionThreadLikes, discussionThreadTeasers } = useCourseController();
+    const [likeLoading, setLikeLoading] = useState(false);
+
+    const toggleLike = useCallback(async () => {
+      if (!private_profile_id) return;
+      setLikeLoading(true);
+      try {
+        if (likeStatus) {
+          await discussionThreadLikes.hardDelete(likeStatus.id);
+        } else {
+          await discussionThreadLikes.create({
+            discussion_thread: thread.id,
+            creator: private_profile_id,
+            emoji: "👍"
+          });
+        }
+        await discussionThreadTeasers.refetchByIds([thread.id]);
+      } catch {
+        toaster.error({ title: "Error", description: "Could not update like. Please try again." });
+        await discussionThreadTeasers.refetchByIds([thread.id]);
+      } finally {
+        setLikeLoading(false);
+      }
+    }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers]);
 
     const outerBorders = useCallback(
       (present: string): JSX.Element => {
@@ -275,9 +307,12 @@ const DiscussionThreadContent = memo(
                       </Link>
                     </Text>
                     {authorProfile ? (
-                      <Text textStyle="sm" fontWeight="semibold">
-                        {authorProfile?.name}
-                        {authorProfile?.real_name && " (" + authorProfile?.real_name + " to self and instructors)"}
+                      <HStack gap="1">
+                        <Text textStyle="sm" fontWeight="semibold">
+                          {authorProfile?.name}
+                          {authorProfile?.real_name && " (" + authorProfile?.real_name + " to self and instructors)"}
+                        </Text>
+                        {authorProfile && <KarmaBadge karma={authorProfile.discussion_karma ?? 0} />}
                         {thread.author === originalPoster && (
                           <Badge ml="2" colorPalette="blue">
                             OP
@@ -288,7 +323,7 @@ const DiscussionThreadContent = memo(
                             {authorProfile?.flair}
                           </Badge>
                         )}
-                      </Text>
+                      </HStack>
                     ) : (
                       <Skeleton width="100px" height="20px" />
                     )}
@@ -334,6 +369,9 @@ const DiscussionThreadContent = memo(
                   <Link onClick={showReply} color="fg.muted">
                     Reply
                   </Link>
+                  <Button variant="ghost" size="xs" onClick={toggleLike} loading={likeLoading} color="fg.muted">
+                    {thread.likes_count ?? 0} <Icon as={likeStatus ? FaHeart : FaRegHeart} />
+                  </Button>
                   {canEdit && (
                     <Link onClick={() => setIsEditing(true)} color="fg.muted">
                       Edit

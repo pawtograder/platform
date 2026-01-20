@@ -5,9 +5,12 @@ import {
   SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
+import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Alert } from "@/components/ui/alert";
@@ -19,10 +22,12 @@ import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubr
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   useAssignmentController,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
+  useRubric,
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
@@ -34,6 +39,7 @@ import {
   useCourseController,
   useIsDroppedStudent
 } from "@/hooks/useCourseController";
+import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import {
   SubmissionProvider,
   useRubricCriteriaInstances,
@@ -52,7 +58,7 @@ import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
-import { formatRelative, isAfter } from "date-fns";
+import { format, formatRelative, isAfter } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -61,6 +67,7 @@ import {
   FaBell,
   FaCheckCircle,
   FaFile,
+  FaFileExport,
   FaHistory,
   FaInfo,
   FaQuestionCircle,
@@ -250,6 +257,435 @@ function SubmissionReviewScoreTweak() {
     </Box>
   );
 }
+// Select query for full submission data with grader results, test outputs, and files
+const FULL_SUBMISSION_SELECT =
+  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)";
+
+// Type that matches the FULL_SUBMISSION_SELECT query result
+type FullSubmissionQueryResult = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["submissions"]["Row"],
+  "submissions",
+  Database["public"]["Tables"]["submissions"]["Relationships"],
+  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)"
+>;
+
+// Use Omit to avoid implying assignments/workflow_run_error are populated (they aren't in our query)
+type FullSubmissionData = FullSubmissionQueryResult;
+
+// Simple diff generator that shows added/removed lines between two strings
+function generateSimpleDiff(oldContent: string | null, newContent: string | null): string {
+  // Use == null to check for null/undefined only (not empty strings)
+  if (oldContent == null && newContent == null) return "(both empty)";
+  if (oldContent == null) return "(new file)";
+  if (newContent == null) return "(file deleted)";
+
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+
+  // Simple line-by-line diff
+  const diffLines: string[] = [];
+  const maxLines = Math.max(oldLines.length, newLines.length);
+
+  let addedCount = 0;
+  let removedCount = 0;
+
+  for (let i = 0; i < maxLines; i++) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[i];
+
+    if (oldLine === undefined && newLine !== undefined) {
+      diffLines.push(`+ ${newLine}`);
+      addedCount++;
+    } else if (oldLine !== undefined && newLine === undefined) {
+      diffLines.push(`- ${oldLine}`);
+      removedCount++;
+    } else if (oldLine !== newLine) {
+      diffLines.push(`- ${oldLine}`);
+      diffLines.push(`+ ${newLine}`);
+      addedCount++;
+      removedCount++;
+    }
+    // Skip unchanged lines to keep diff compact
+  }
+
+  if (diffLines.length === 0) {
+    return "(no changes)";
+  }
+
+  // Truncate if too long
+  const maxDiffLines = 100;
+  if (diffLines.length > maxDiffLines) {
+    return (
+      diffLines.slice(0, maxDiffLines).join("\n") +
+      `\n... (${diffLines.length - maxDiffLines} more lines, +${addedCount}/-${removedCount} total)`
+    );
+  }
+
+  return diffLines.join("\n") + `\n(+${addedCount}/-${removedCount} lines)`;
+}
+
+function generateSubmissionMarkdown(
+  submissions: FullSubmissionData[],
+  assignmentTitle: string,
+  studentName: string,
+  groupName?: string
+): string {
+  const lines: string[] = [];
+
+  // Header
+  lines.push(`# Submission Export: ${assignmentTitle}`);
+  lines.push("");
+  lines.push(`**Student/Group:** ${groupName ? `${groupName} (Group)` : studentName}`);
+  lines.push(`**Export Date:** ${format(new Date(), "MMMM d, yyyy 'at' h:mm a")}`);
+  lines.push(`**Total Submissions:** ${submissions.length}`);
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+
+  // Sort submissions by ordinal (most recent first)
+  const sortedSubmissions = [...submissions].sort((a, b) => (b.ordinal ?? 0) - (a.ordinal ?? 0));
+
+  // Create a map of files by submission ordinal for diff generation
+  const filesByOrdinal = new Map<number, Map<string, string | null>>();
+  for (const sub of sortedSubmissions) {
+    const fileMap = new Map<string, string | null>();
+    if (sub.submission_files) {
+      for (const file of sub.submission_files) {
+        fileMap.set(file.name, file.contents);
+      }
+    }
+    filesByOrdinal.set(sub.ordinal ?? 0, fileMap);
+  }
+
+  for (let i = 0; i < sortedSubmissions.length; i++) {
+    const sub = sortedSubmissions[i];
+    const prevSub = sortedSubmissions[i + 1]; // Previous submission (older)
+    lines.push(`## Submission #${sub.ordinal}${sub.is_active ? " (Active)" : ""}`);
+    lines.push("");
+
+    // Metadata
+    lines.push("### Metadata");
+    lines.push("");
+    lines.push(
+      `- **Submitted:** ${sub.created_at ? format(new Date(sub.created_at), "MMMM d, yyyy 'at' h:mm:ss a") : "Unknown"}`
+    );
+    lines.push(`- **Commit:** \`${sub.sha}\``);
+    lines.push(`- **Commit Message:** ${sub.repository_check_runs?.commit_message || "No message"}`);
+    lines.push(`- **GitHub Link:** [View Commit](https://github.com/${sub.repository}/commit/${sub.sha})`);
+    lines.push(
+      `- **Status:** ${sub.is_active ? "Active (will be graded)" : sub.is_not_graded ? "Not for grading" : "Historical"}`
+    );
+    lines.push("");
+
+    // Grader Results
+    if (sub.grader_results) {
+      const gr = sub.grader_results;
+      lines.push("### Autograder Results");
+      lines.push("");
+      lines.push(`- **Score:** ${gr.score}/${gr.max_score}`);
+      lines.push(`- **Lint Passed:** ${gr.lint_passed ? "Yes" : "No"}`);
+      if (gr.execution_time) {
+        lines.push(`- **Execution Time:** ${gr.execution_time}ms`);
+      }
+      lines.push("");
+
+      // Lint Output
+      if (gr.lint_output && gr.lint_output !== "Gradle build failed") {
+        lines.push("#### Lint Output");
+        lines.push("");
+        lines.push("```");
+        lines.push(gr.lint_output);
+        lines.push("```");
+        lines.push("");
+      }
+
+      // Grader Output (visible and hidden)
+      if (gr.grader_result_output && gr.grader_result_output.length > 0) {
+        lines.push("#### Grader Output");
+        lines.push("");
+        for (const output of gr.grader_result_output) {
+          const visibility = output.visibility === "visible" ? "Student Visible" : "Instructor Only";
+          lines.push(`##### ${visibility} Output`);
+          lines.push("");
+          if (output.format === "markdown") {
+            lines.push(output.output || "No output");
+          } else {
+            lines.push("```");
+            lines.push(output.output || "No output");
+            lines.push("```");
+          }
+          lines.push("");
+        }
+      }
+
+      // Test Results
+      if (gr.grader_result_tests && gr.grader_result_tests.length > 0) {
+        lines.push("#### Test Results");
+        lines.push("");
+
+        // Summary table
+        lines.push("| Status | Test Name | Score |");
+        lines.push("|--------|-----------|-------|");
+        for (const test of gr.grader_result_tests) {
+          // 0/0 tests are informational, not passed/failed
+          const status = test.max_score === 0 ? "ℹ️" : test.score === test.max_score ? "✅" : "❌";
+          lines.push(`| ${status} | ${test.name} | ${test.score}/${test.max_score} |`);
+        }
+        lines.push("");
+
+        // Detailed test output
+        lines.push("#### Detailed Test Output");
+        lines.push("");
+        for (const test of gr.grader_result_tests) {
+          // 0/0 tests are informational, not passed/failed
+          const status = test.max_score === 0 ? "ℹ️ INFO" : test.score === test.max_score ? "✅ PASSED" : "❌ FAILED";
+          lines.push(`##### ${test.name} (${status})`);
+          lines.push("");
+          lines.push(`**Score:** ${test.score}/${test.max_score}`);
+          if (test.part) {
+            lines.push(`**Part:** ${test.part}`);
+          }
+          lines.push("");
+
+          // Student-visible output
+          if (test.output) {
+            lines.push("**Student Output:**");
+            lines.push("");
+            if (test.output_format === "markdown") {
+              lines.push(test.output);
+            } else {
+              lines.push("```");
+              lines.push(test.output);
+              lines.push("```");
+            }
+            lines.push("");
+          }
+
+          // Instructor-only test output
+          if (test.grader_result_test_output && test.grader_result_test_output.length > 0) {
+            for (const testOutput of test.grader_result_test_output) {
+              lines.push("**Instructor-Only Output:**");
+              lines.push("");
+              if (testOutput.output_format === "markdown") {
+                lines.push(testOutput.output || "No output");
+              } else {
+                lines.push("```");
+                lines.push(testOutput.output || "No output");
+                lines.push("```");
+              }
+              lines.push("");
+            }
+          }
+
+          // LLM hint data if present
+          const extraData = test.extra_data as GraderResultTestExtraData | null;
+          if (extraData?.llm?.result) {
+            lines.push("**Feedbot Response:**");
+            lines.push("");
+            lines.push(extraData.llm.result);
+            lines.push("");
+          }
+        }
+      }
+    } else {
+      lines.push("### Autograder Results");
+      lines.push("");
+      lines.push("*Autograder has not completed or no results available.*");
+      lines.push("");
+    }
+
+    // Submission Review (if exists)
+    if (sub.submission_reviews) {
+      const review = sub.submission_reviews;
+      lines.push("### Grading Review");
+      lines.push("");
+      lines.push(`- **Total Score:** ${review.total_score ?? "Not graded"}`);
+      lines.push(`- **Released:** ${review.released ? "Yes" : "No"}`);
+      if (review.completed_at) {
+        lines.push(`- **Completed:** ${format(new Date(review.completed_at), "MMMM d, yyyy 'at' h:mm a")}`);
+      }
+      if (review.tweak != null) {
+        lines.push(`- **Score Tweak:** ${review.tweak}`);
+      }
+      lines.push("");
+    }
+
+    // Diff from previous submission
+    if (prevSub) {
+      const currentFiles = filesByOrdinal.get(sub.ordinal ?? 0) || new Map();
+      const prevFiles = filesByOrdinal.get(prevSub.ordinal ?? 0) || new Map();
+
+      // Collect all file names from both submissions
+      const allFileNames = new Set([...currentFiles.keys(), ...prevFiles.keys()]);
+
+      if (allFileNames.size > 0) {
+        lines.push(`### Changes from Submission #${prevSub.ordinal}`);
+        lines.push("");
+
+        for (const fileName of Array.from(allFileNames).sort()) {
+          const currentContent = currentFiles.get(fileName);
+          const prevContent = prevFiles.get(fileName);
+
+          // Skip if both are undefined (shouldn't happen, but safety check)
+          if (currentContent === undefined && prevContent === undefined) continue;
+
+          // Determine change type
+          let changeType = "";
+          if (prevContent === undefined) {
+            changeType = " (new file)";
+          } else if (currentContent === undefined) {
+            changeType = " (deleted)";
+          } else if (currentContent === prevContent) {
+            continue; // Skip unchanged files
+          }
+
+          lines.push(`#### \`${fileName}\`${changeType}`);
+          lines.push("");
+          lines.push("```diff");
+          lines.push(generateSimpleDiff(prevContent ?? null, currentContent ?? null));
+          lines.push("```");
+          lines.push("");
+        }
+      }
+    } else if (sub.submission_files && sub.submission_files.length > 0) {
+      // First submission - just list the files
+      lines.push("### Files (Initial Submission)");
+      lines.push("");
+      for (const file of sub.submission_files) {
+        lines.push(`- \`${file.name}\``);
+      }
+      lines.push("");
+    }
+
+    lines.push("---");
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function ExportSubmissionMetadataButton({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  const [isExporting, setIsExporting] = useState(false);
+  const { assignment } = useAssignmentController();
+  const supabase = useMemo(() => createClient(), []);
+  const isInstructor = useIsInstructor();
+
+  // Get student/group info
+  const submitterProfile = useUserProfile(submission.profile_id);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id
+  });
+
+  const handleExport = useCallback(async () => {
+    // Server-side security: RLS policies on submissions, grader_results, and submission_files
+    // enforce instructor-only access. This UI check provides defense-in-depth.
+    if (!isInstructor) {
+      toaster.error({ title: "Access denied", description: "Only instructors can export submission metadata" });
+      return;
+    }
+
+    if (!assignment) {
+      toaster.error({ title: "Error", description: "Assignment not loaded" });
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      // Fetch all submissions with full grader data
+      // RLS policies ensure only instructors can SELECT from submissions, grader_results, and submission_files
+      let query = supabase
+        .from("submissions")
+        .select(FULL_SUBMISSION_SELECT)
+        .eq("assignment_id", submission.assignment_id);
+
+      if (submission.assignment_group_id) {
+        query = query.eq("assignment_group_id", submission.assignment_group_id);
+      } else if (submission.profile_id) {
+        query = query.eq("profile_id", submission.profile_id);
+      } else {
+        setIsExporting(false);
+        toaster.error({ title: "Error", description: "No profile or group ID found for submission" });
+        return;
+      }
+
+      const { data: submissions, error } = await query.order("ordinal", { ascending: false });
+
+      if (error) {
+        throw new Error(`Failed to fetch submissions: ${error.message}`);
+      }
+
+      if (!submissions || submissions.length === 0) {
+        setIsExporting(false);
+        toaster.error({ title: "No submissions found", description: "Could not find any submissions to export" });
+        return;
+      }
+
+      // Generate student/group name
+      let studentName = submitterProfile?.name || "Unknown Student";
+      let groupName: string | undefined;
+
+      if (assignmentGroupWithMembers) {
+        groupName = assignmentGroupWithMembers.name || "Unnamed Group";
+        // Group member names are just profile IDs in assignmentGroupsWithMembers, use the group name
+        studentName = groupName;
+      }
+
+      // Generate the markdown
+      const markdown = generateSubmissionMarkdown(
+        submissions as FullSubmissionData[],
+        assignment.title || "Untitled Assignment",
+        studentName,
+        groupName
+      );
+
+      // Create and download the file
+      const blob = new Blob([markdown], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+
+      // Generate filename
+      const safeStudentName = (groupName || submitterProfile?.name || "student").replace(/[^a-zA-Z0-9]/g, "_");
+      const safeAssignmentName = (assignment.slug || assignment.title || "assignment").replace(/[^a-zA-Z0-9]/g, "_");
+      a.download = `submission_export_${safeAssignmentName}_${safeStudentName}_${format(new Date(), "yyyy-MM-dd")}.md`;
+
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toaster.success({
+        title: "Export complete",
+        description: `Exported ${submissions.length} submission(s) to markdown`
+      });
+    } catch (err) {
+      const errorId = Sentry.captureException(err);
+      toaster.error({
+        title: "Export failed",
+        description: `Failed to export submissions. Error ID: ${errorId}`
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  }, [assignment, submission, supabase, submitterProfile, assignmentGroupWithMembers, isInstructor]);
+
+  return (
+    <Tooltip content="Export all submission history, grader results, and diffs to markdown">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={handleExport}
+        loading={isExporting}
+        data-testid="export-submission-metadata"
+        aria-label="Export All Metadata"
+      >
+        <Icon as={FaFileExport} />
+      </Button>
+    </Tooltip>
+  );
+}
+
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
@@ -267,7 +703,8 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
-      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+      select:
+        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)"
     },
     filters: [
       {
@@ -509,6 +946,63 @@ function TestResults() {
   const testResults = submission.grader_results?.grader_result_tests;
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
+  const { matches } = useErrorPinMatches(submission.id);
+  const hasBuildError = submission.grader_results?.lint_output === "Gradle build failed";
+
+  // Get all unique error pin matches for prominent display on build errors
+  const getAllMatches = () => {
+    const allMatches: import("@/hooks/useErrorPinMatches").ErrorPinMatch[] = [];
+    matches.forEach((matchList) => {
+      allMatches.push(...matchList);
+    });
+    // Deduplicate by error_pin_id
+    return allMatches.filter(
+      (match, index, self) => index === self.findIndex((m) => m.error_pin_id === match.error_pin_id)
+    );
+  };
+
+  // If there's a build error and we have error pins, show them very prominently
+  if (hasBuildError) {
+    const uniqueMatches = getAllMatches();
+    return (
+      <Box>
+        <Heading size="md" mt={2} color="fg.error">
+          Build Failed
+        </Heading>
+        <Box mt={2} p={2} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
+          <Text fontSize="sm" color="fg.error">
+            The autograder failed to build your code. Check the Results tab for details.
+          </Text>
+        </Box>
+        {/* Show error pins very prominently for build errors */}
+        {uniqueMatches.length > 0 && (
+          <Box
+            mt={3}
+            p={3}
+            bg="blue.50"
+            borderRadius="md"
+            border="2px solid"
+            borderColor="blue.400"
+            _dark={{ bg: "blue.900", borderColor: "blue.500" }}
+          >
+            <HStack gap={2} align="flex-start">
+              <Icon as={FaInfo} color="blue.500" mt={0.5} />
+              <Box flex="1">
+                <Text fontWeight="bold" fontSize="sm" color="blue.700" _dark={{ color: "blue.200" }} mb={1}>
+                  Troubleshooting Help
+                </Text>
+                <Text fontSize="xs" color="blue.600" _dark={{ color: "blue.300" }} mb={2}>
+                  Your error matches common issues:
+                </Text>
+                <ErrorPinCallout matches={uniqueMatches} linksOnly />
+              </Box>
+            </HStack>
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
   return (
     <Box>
       <Heading size="md" mt={2}>
@@ -529,6 +1023,7 @@ function TestResults() {
           icon = <Icon as={FaTimesCircle} color="fg.error" />;
         }
         const showScore = extraData?.hide_score !== "true" && test.max_score !== 0;
+        const testMatches = matches.get(test.id) || [];
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
@@ -537,9 +1032,16 @@ function TestResults() {
                 {test.name} {showScore ? test.score + "/" + test.max_score : ""}
               </Heading>
             </Link>
+            {testMatches.length > 0 && <ErrorPinCallout matches={testMatches} />}
           </Box>
         );
       })}
+      {/* Show matches for submission-level (no specific test) */}
+      {matches.has(null) && matches.get(null)!.length > 0 && (
+        <Box mt={2}>
+          <ErrorPinCallout matches={matches.get(null)!} />
+        </Box>
+      )}
     </Box>
   );
 }
@@ -724,8 +1226,10 @@ function ReviewActions() {
 function UnGradedGradingSummary() {
   const submission = useSubmission();
   const { assignment } = useAssignmentController();
+  const gradingRubric = useRubric("grading-review");
   const graderResultsMaxScore = submission.grader_results?.max_score;
   const totalMaxScore = assignment.total_points;
+  const isCapped = gradingRubric?.cap_score_to_assignment_points ?? false;
 
   return (
     <Box>
@@ -748,13 +1252,24 @@ function UnGradedGradingSummary() {
           </Text>{" "}
           {graderResultsMaxScore} points, results shown below.
         </List.Item>
-        {graderResultsMaxScore !== undefined && totalMaxScore !== null && graderResultsMaxScore > totalMaxScore && (
+        {!isCapped &&
+          graderResultsMaxScore !== undefined &&
+          totalMaxScore !== null &&
+          graderResultsMaxScore > totalMaxScore && (
+            <List.Item>
+              <Text as="span" fontWeight="bold">
+                Hidden Automated Checks:
+              </Text>{" "}
+              {graderResultsMaxScore - totalMaxScore} points will be awarded by automated tests that are not shown until
+              after grading is complete.
+            </List.Item>
+          )}
+        {isCapped && (
           <List.Item>
             <Text as="span" fontWeight="bold">
-              Hidden Automated Checks:
+              Score Capping:
             </Text>{" "}
-            {graderResultsMaxScore - totalMaxScore} points will be awarded by automated tests that are not shown until
-            after grading is complete.
+            The final score (manual + autograder) will be capped to {totalMaxScore} points maximum.
           </List.Item>
         )}
       </List.Root>
@@ -867,6 +1382,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     assignment_group_id: submission.assignment_group_id
   });
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: submission.profile_id || undefined,
@@ -968,6 +1484,8 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
+          {/* ExportSubmissionMetadataButton is instructor-only: UI gate + RLS policies enforce instructor-only access */}
+          {isInstructor && <ExportSubmissionMetadataButton submission={submission} />}
         </HStack>
       </Flex>
 

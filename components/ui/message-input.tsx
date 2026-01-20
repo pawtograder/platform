@@ -49,6 +49,12 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
    * @default 300
    */
   maxCodeLines?: number;
+  /**
+   * When true, dropped/pasted files are inserted inline at cursor position.
+   * When false (and sendMessage is provided), files are sent as separate messages.
+   * @default true (files are inserted inline by default)
+   */
+  inlineFileUpload?: boolean;
 };
 
 export default function MessageInput(props: MessageInputProps) {
@@ -71,6 +77,7 @@ export default function MessageInput(props: MessageInputProps) {
     ariaLabel,
     uploadFolder = "discussion",
     maxCodeLines = 300,
+    inlineFileUpload = true, // Default to inline mode
     ...editorProps
   } = props;
   const { course_id } = useParams();
@@ -196,11 +203,70 @@ export default function MessageInput(props: MessageInputProps) {
     [mentionState.isActive, selectNext, selectPrevious, handleMentionSelect, dismissMentions]
   );
 
+  // Helper function to get current textarea state (cursor position and value)
+  const getTextareaState = useCallback(() => {
+    if (singleLine && internalTextAreaRef.current) {
+      const textarea = internalTextAreaRef.current;
+      return {
+        start: textarea.selectionStart,
+        end: textarea.selectionEnd,
+        value: textarea.value
+      };
+    } else {
+      const textarea = containerRef.current?.querySelector("textarea");
+      if (textarea) {
+        return {
+          start: textarea.selectionStart,
+          end: textarea.selectionEnd,
+          value: textarea.value
+        };
+      }
+    }
+    // Fallback
+    return { start: (value || "").length, end: (value || "").length, value: value || "" };
+  }, [singleLine, value]);
+
+  // Helper function to insert markdown at a specific position
+  const insertMarkdownAtPosition = useCallback(
+    (insertString: string, capturedState: { start: number; end: number; value: string }) => {
+      const { start, end, value: currentValue } = capturedState;
+      const newValue = currentValue.slice(0, start) + insertString + currentValue.slice(end);
+      onChange(newValue);
+      // Set cursor position after insertion
+      const newCursorPos = start + insertString.length;
+      setTimeout(() => {
+        if (singleLine && internalTextAreaRef.current) {
+          internalTextAreaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+          internalTextAreaRef.current.focus();
+          setCursorPosition(newCursorPos);
+        } else {
+          const editorTextarea = containerRef.current?.querySelector("textarea");
+          if (editorTextarea) {
+            editorTextarea.setSelectionRange(newCursorPos, newCursorPos);
+            editorTextarea.focus();
+            setCursorPosition(newCursorPos);
+          }
+        }
+      }, 0);
+    },
+    [singleLine, onChange]
+  );
+
   const fileUpload = useCallback(
     async (file: File) => {
-      if (!sendMessage) {
-        return null;
-      }
+      // IMPORTANT: Capture textarea state BEFORE any async operations
+      // This ensures we insert at the correct cursor position even after upload completes
+      const capturedState = getTextareaState();
+
+      // Determine if we should insert inline or send as message
+      // Insert inline if: inlineFileUpload is true, OR sendMessage is not provided
+      const shouldInsertInline = inlineFileUpload || !sendMessage;
+
+      // Upload file to storage
+      const supabase = createClient();
+      const uuid = crypto.randomUUID();
+      const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
+
       // Check if this is a text/code file
       if (isTextFile(file)) {
         try {
@@ -211,13 +277,19 @@ export default function MessageInput(props: MessageInputProps) {
           if (lineCount > maxCodeLines) {
             // Fall through to regular file upload logic below
           } else {
-            // File is small enough, send as code block
+            // File is small enough, insert as code block
             const language = getLanguageFromFile(file.name);
-            const codeBlock = `\`\`\`${language}\n${content}\n\`\`\``;
+            const codeBlock = `**${file.name}**\n\n\`\`\`${language}\n${content}\n\`\`\``;
 
-            // Send the file content as a code block message
-            await sendMessage(`**${file.name}**\n\n${codeBlock}`, profile_id, false);
-            return null; // No URL for text files
+            if (shouldInsertInline) {
+              // Inline mode: insert into current value using captured state
+              insertMarkdownAtPosition(codeBlock, capturedState);
+              return null;
+            } else {
+              // Chat mode: send as separate message
+              await sendMessage!(codeBlock, profile_id, false);
+              return null; // No URL for text files
+            }
           }
         } catch (error) {
           toaster.error({
@@ -228,11 +300,7 @@ export default function MessageInput(props: MessageInputProps) {
         }
       }
 
-      // For non-text files, upload to storage as before
-      const supabase = createClient();
-      const uuid = crypto.randomUUID();
-      const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
-
+      // For non-text files, upload to storage
       const { error } = await supabase.storage
         .from("uploads")
         .upload(`${course_id}/${uploadFolder}/${uuid}/${fileName}`, file);
@@ -251,10 +319,25 @@ export default function MessageInput(props: MessageInputProps) {
       const isImage = file.type.startsWith("image/");
       const markdownLink = isImage ? `![${file.name}](${url})` : `[${file.name}](${url})`;
 
-      await sendMessage(`Attachment: ${markdownLink}`, profile_id, false);
+      if (shouldInsertInline) {
+        // Inline mode: insert markdown using captured state from before upload
+        insertMarkdownAtPosition(markdownLink, capturedState);
+      } else {
+        // Chat mode: send as separate message
+        await sendMessage!(`Attachment: ${markdownLink}`, profile_id, false);
+      }
       return url;
     },
-    [course_id, uploadFolder, profile_id, sendMessage, maxCodeLines]
+    [
+      course_id,
+      uploadFolder,
+      profile_id,
+      sendMessage,
+      maxCodeLines,
+      inlineFileUpload,
+      getTextareaState,
+      insertMarkdownAtPosition
+    ]
   );
 
   const attachFile = useCallback(
@@ -553,6 +636,41 @@ export default function MessageInput(props: MessageInputProps) {
       <MDEditor
         ref={mdEditorRef}
         value={value}
+        onDragEnter={(e) => {
+          const target = e.target as HTMLElement;
+          target.style.border = "2px dashed #999";
+          target.style.backgroundColor = "rgba(0, 0, 0, 0.05)";
+          target.style.cursor = "move";
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDragLeave={(e) => {
+          const target = e.target as HTMLElement;
+          target.style.border = "none";
+          target.style.backgroundColor = "transparent";
+          target.style.cursor = "default";
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDrop={async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const target = e.target as HTMLElement;
+          target.style.border = "none";
+          target.style.backgroundColor = "transparent";
+          target.style.cursor = "default";
+          await onFileTransfer(e.dataTransfer);
+        }}
+        onPaste={async (event) => {
+          if (event.clipboardData && event.clipboardData.files.length > 0) {
+            event.preventDefault();
+            await onFileTransfer(event.clipboardData);
+          }
+        }}
         textareaProps={{
           disabled: isSending,
           onKeyDown: handleKeyDown,
