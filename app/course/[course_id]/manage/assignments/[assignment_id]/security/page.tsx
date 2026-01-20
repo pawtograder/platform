@@ -357,7 +357,7 @@ export default function SecurityAuditPage() {
       .select(SUBMISSION_FILES_SELECT)
       .eq("submissions.assignment_id", Number(assignment_id))
       .eq("class_id", Number(course_id))
-      .like("contents", `%${trimmedSearchTerm}%`);
+      .ilike("contents", `%${trimmedSearchTerm}%`);
 
     const tc = new TableController<"submission_files", typeof SUBMISSION_FILES_SELECT>({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
