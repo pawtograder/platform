@@ -112,7 +112,12 @@ export default function AssignmentPage() {
     <Box p={4}>
       <LinkAccount />
       <ResendOrgInvitation />
-      <Grid templateColumns={{ base: "1fr", lg: "1fr 320px" }} gap={4}>
+      <Grid
+        templateColumns={
+          assignment.show_leaderboard ? { base: "1fr", lg: "1fr 320px" } : { base: "1fr", lg: "1fr" }
+        }
+        gap={4}
+      >
         <GridItem>
           <Flex width="100%" alignItems={"center"}>
             <Box>
