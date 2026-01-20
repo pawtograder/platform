@@ -193,15 +193,27 @@ test.describe("Assignment Leaderboard", () => {
     // Wait for the leaderboard to be visible
     await expect(page.getByText("🏆 Leaderboard")).toBeVisible({ timeout: 10000 });
 
-    // Verify scores are displayed
-    await expect(page.getByText("95/100")).toBeVisible();
-    await expect(page.getByText("80/100")).toBeVisible();
-    await expect(page.getByText("70/100")).toBeVisible();
+    // Get the leaderboard table body rows (excluding header)
+    const leaderboardTable = page.locator("table").filter({ hasText: "Rank" });
+    const tableRows = leaderboardTable.locator("tbody tr");
 
-    // Verify medal rankings
-    await expect(page.getByText("🥇")).toBeVisible();
-    await expect(page.getByText("🥈")).toBeVisible();
-    await expect(page.getByText("🥉")).toBeVisible();
+    // Verify we have 3 rows (one per student)
+    await expect(tableRows).toHaveCount(3);
+
+    // Verify 1st place: gold medal with highest score (95/100)
+    const firstRow = tableRows.nth(0);
+    await expect(firstRow.getByText("🥇")).toBeVisible();
+    await expect(firstRow.getByText("95/100")).toBeVisible();
+
+    // Verify 2nd place: silver medal with middle score (80/100)
+    const secondRow = tableRows.nth(1);
+    await expect(secondRow.getByText("🥈")).toBeVisible();
+    await expect(secondRow.getByText("80/100")).toBeVisible();
+
+    // Verify 3rd place: bronze medal with lowest score (70/100)
+    const thirdRow = tableRows.nth(2);
+    await expect(thirdRow.getByText("🥉")).toBeVisible();
+    await expect(thirdRow.getByText("70/100")).toBeVisible();
   });
 
   test("Leaderboard updates when new submission is created", async ({ page }) => {
@@ -215,9 +227,12 @@ test.describe("Assignment Leaderboard", () => {
     const leaderboardTable = page.locator("table").filter({ hasText: "Rank" });
     await expect(leaderboardTable).toBeVisible();
 
-    // Student 3 currently has lowest score (70)
-    // The "You" badge should be visible for student 3
-    await expect(leaderboardTable.getByText("You")).toBeVisible();
+    // Student 3 currently has lowest score (70) - verify they're in 3rd place
+    const tableRows = leaderboardTable.locator("tbody tr");
+    const thirdRow = tableRows.nth(2);
+    await expect(thirdRow.getByText("You")).toBeVisible();
+    await expect(thirdRow.getByText("🥉")).toBeVisible();
+    await expect(thirdRow.getByText("70/100")).toBeVisible();
 
     // Create a new submission with a higher score for student 3
     await insertSubmissionWithScore(student3!.private_profile_id, assignment!.id, course.id, 99, 100);
@@ -227,13 +242,12 @@ test.describe("Assignment Leaderboard", () => {
 
     // Wait for the leaderboard to be visible again and loaded
     await expect(page.getByText("🏆 Leaderboard")).toBeVisible({ timeout: 10000 });
-    await expect(leaderboardTable).toBeVisible();
 
-    // Now student 3 should have the highest score (99/100)
-    await expect(page.getByText("99/100")).toBeVisible();
-
-    // Student 3 should now be in first place (with gold medal)
-    // The "You" badge should still be visible and now next to gold medal
-    await expect(page.getByText("🥇")).toBeVisible();
+    // Verify student 3 is now in 1st place with gold medal, "You" badge, and new score
+    const updatedTableRows = leaderboardTable.locator("tbody tr");
+    const firstRow = updatedTableRows.nth(0);
+    await expect(firstRow.getByText("🥇")).toBeVisible();
+    await expect(firstRow.getByText("You")).toBeVisible();
+    await expect(firstRow.getByText("99/100")).toBeVisible();
   });
 });
