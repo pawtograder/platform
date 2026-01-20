@@ -2,10 +2,10 @@ import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
-import { Box, Container, Heading, Stack, Text, Table, Badge, HStack, Icon, Flex, VStack } from "@chakra-ui/react";
+import { Box, Container, Heading, Stack, Text, Table, Badge, HStack, Flex, VStack } from "@chakra-ui/react";
 import { KarmaBadge } from "@/components/discussion/KarmaBadge";
-import { FaTrophy } from "react-icons/fa";
 import { ExportButton } from "./ExportButton";
+import { TrophyIcon } from "./TrophyIcon";
 
 type StudentEngagement = {
   profile_id: string;
@@ -19,119 +19,15 @@ type StudentEngagement = {
 
 async function getStudentEngagement(course_id: number): Promise<StudentEngagement[]> {
   const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_discussion_engagement", {
+    p_class_id: course_id
+  });
 
-  // Get all student profiles for this class
-  const { data: profiles, error: profilesError } = await supabase
-    .from("profiles")
-    .select("id, name, discussion_karma")
-    .eq("class_id", course_id)
-    .eq("is_private_profile", true)
-    .order("discussion_karma", { ascending: false });
-
-  if (profilesError || !profiles) {
+  if (error || !data) {
     return [];
   }
 
-  // Get user_roles to build mapping from public_profile_id -> private_profile_id
-  const { data: userRoles, error: userRolesError } = await supabase
-    .from("user_roles")
-    .select("public_profile_id, private_profile_id")
-    .eq("class_id", course_id);
-
-  if (userRolesError) {
-    // Continue even if user_roles query fails, but mapping won't work
-  }
-
-  // Build mapping from public_profile_id -> private_profile_id
-  const publicToPrivateMap = new Map<string, string>();
-  if (userRoles) {
-    userRoles.forEach((role) => {
-      if (role.public_profile_id && role.private_profile_id) {
-        publicToPrivateMap.set(role.public_profile_id, role.private_profile_id);
-      }
-    });
-  }
-
-  // Helper function to normalize profile IDs (map public to private if available)
-  const normalizeProfileId = (profileId: string): string => {
-    return publicToPrivateMap.get(profileId) || profileId;
-  };
-
-  // Get discussion thread counts (posts and replies) per student
-  const { data: threads, error: threadsError } = await supabase
-    .from("discussion_threads")
-    .select("id, author, parent, root")
-    .eq("class_id", course_id)
-    .eq("draft", false);
-
-  if (threadsError || !threads) {
-    return [];
-  }
-
-  // Get likes given and received per student
-  const { data: likes, error: likesError } = await supabase
-    .from("discussion_thread_likes")
-    .select("id, creator, discussion_thread, discussion_threads!inner(author)")
-    .eq("discussion_threads.class_id", course_id);
-
-  if (likesError) {
-    // Continue even if likes query fails
-  }
-
-  // Calculate metrics per student
-  const engagementMap = new Map<string, StudentEngagement>();
-
-  // Initialize all students
-  profiles.forEach((profile) => {
-    engagementMap.set(profile.id, {
-      profile_id: profile.id,
-      name: profile.name || "Unknown",
-      discussion_karma: profile.discussion_karma ?? 0,
-      total_posts: 0,
-      total_replies: 0,
-      likes_received: 0,
-      likes_given: 0
-    });
-  });
-
-  // Count posts (root threads) and replies (non-root threads)
-  threads.forEach((thread) => {
-    const normalizedAuthorId = normalizeProfileId(thread.author);
-    const engagement = engagementMap.get(normalizedAuthorId);
-    if (engagement) {
-      if (thread.parent === null) {
-        // Root thread = post
-        engagement.total_posts += 1;
-      } else {
-        // Has parent = reply
-        engagement.total_replies += 1;
-      }
-    }
-  });
-
-  // Count likes given and received
-  if (likes) {
-    likes.forEach((like) => {
-      // Like given - normalize creator ID
-      const normalizedCreatorId = normalizeProfileId(like.creator);
-      const giver = engagementMap.get(normalizedCreatorId);
-      if (giver) {
-        giver.likes_given += 1;
-      }
-
-      // Like received - normalize thread author ID
-      const threadAuthor = (like.discussion_threads as { author: string })?.author;
-      if (threadAuthor) {
-        const normalizedThreadAuthorId = normalizeProfileId(threadAuthor);
-        const receiver = engagementMap.get(normalizedThreadAuthorId);
-        if (receiver) {
-          receiver.likes_received += 1;
-        }
-      }
-    });
-  }
-
-  return Array.from(engagementMap.values()).sort((a, b) => b.discussion_karma - a.discussion_karma);
+  return data;
 }
 
 export default async function DiscussionEngagementPage({ params }: { params: { course_id: string } }) {
@@ -221,7 +117,7 @@ export default async function DiscussionEngagementPage({ params }: { params: { c
                 Most Active
               </Text>
               <HStack gap={2}>
-                <Icon as={FaTrophy} color="yellow.500" />
+                <TrophyIcon />
                 <Text fontSize="lg" fontWeight="bold" truncate>
                   {mostActive.name}
                 </Text>

@@ -24,6 +24,7 @@ import React, { Fragment, useEffect, useRef, useState } from "react";
 import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
+  FiBarChart,
   FiBookOpen,
   FiCheckSquare,
   FiClipboard,
@@ -144,6 +145,12 @@ const LinkItems = (courseID: number) => [
         icon: FiHash,
         instructors_only: true,
         target: `/course/${courseID}/manage/discussion-topics`
+      },
+      {
+        name: "Discussion Engagement",
+        icon: FiBarChart,
+        instructors_or_graders_only: true,
+        target: `/course/${courseID}/manage/discussion-engagement`
       },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {

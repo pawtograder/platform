@@ -1088,39 +1088,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260119: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260120: {
         Row: {
           class_id: number;
@@ -1320,6 +1287,39 @@ export type Database = {
         Relationships: [];
       };
       audit_20260126: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260127: {
         Row: {
           class_id: number;
           created_at: string;
@@ -11146,6 +11146,18 @@ export type Database = {
           scope: string;
           state: string;
           trip_count: number;
+        }[];
+      };
+      get_discussion_engagement: {
+        Args: { p_class_id: number };
+        Returns: {
+          discussion_karma: number;
+          likes_given: number;
+          likes_received: number;
+          name: string;
+          profile_id: string;
+          total_posts: number;
+          total_replies: number;
         }[];
       };
       get_error_pin_matches_for_submission: {

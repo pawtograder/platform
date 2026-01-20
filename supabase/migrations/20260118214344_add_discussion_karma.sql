@@ -73,3 +73,68 @@ SET discussion_karma = COALESCE((
     INNER JOIN public.discussion_threads dt ON dt.id = dtl.discussion_thread
     WHERE dt.author = p.id
 ), 0);
+
+-- Create RPC function to get discussion engagement metrics for a class
+-- This computes all engagement data server-side for scalability
+CREATE OR REPLACE FUNCTION public.get_discussion_engagement(p_class_id bigint)
+RETURNS TABLE (
+  profile_id uuid,
+  name text,
+  discussion_karma bigint,
+  total_posts bigint,
+  total_replies bigint,
+  likes_received bigint,
+  likes_given bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $$
+BEGIN
+  RETURN QUERY
+  WITH profile_mapping AS (
+    -- Map public profile IDs to private profile IDs
+    SELECT ur.public_profile_id, ur.private_profile_id
+    FROM public.user_roles ur
+    WHERE ur.class_id = p_class_id AND ur.disabled = false
+  ),
+  thread_counts AS (
+    -- Count posts and replies per normalized author
+    SELECT 
+      COALESCE(pm.private_profile_id, dt.author) AS author_id,
+      COUNT(*) FILTER (WHERE dt.parent IS NULL) AS posts,
+      COUNT(*) FILTER (WHERE dt.parent IS NOT NULL) AS replies
+    FROM public.discussion_threads dt
+    LEFT JOIN profile_mapping pm ON pm.public_profile_id = dt.author
+    WHERE dt.class_id = p_class_id AND dt.draft = false
+    GROUP BY COALESCE(pm.private_profile_id, dt.author)
+  ),
+  likes_given_counts AS (
+    -- Count likes given per normalized creator
+    SELECT 
+      COALESCE(pm.private_profile_id, dtl.creator) AS giver_id,
+      COUNT(*) AS given_count
+    FROM public.discussion_thread_likes dtl
+    INNER JOIN public.discussion_threads dt ON dt.id = dtl.discussion_thread
+    LEFT JOIN profile_mapping pm ON pm.public_profile_id = dtl.creator
+    WHERE dt.class_id = p_class_id
+    GROUP BY COALESCE(pm.private_profile_id, dtl.creator)
+  )
+  SELECT 
+    p.id AS profile_id,
+    p.name,
+    p.discussion_karma,
+    COALESCE(tc.posts, 0)::bigint AS total_posts,
+    COALESCE(tc.replies, 0)::bigint AS total_replies,
+    p.discussion_karma AS likes_received,
+    COALESCE(lg.given_count, 0)::bigint AS likes_given
+  FROM public.profiles p
+  LEFT JOIN thread_counts tc ON tc.author_id = p.id
+  LEFT JOIN likes_given_counts lg ON lg.giver_id = p.id
+  WHERE p.class_id = p_class_id AND p.is_private_profile = true
+  ORDER BY p.discussion_karma DESC;
+END;
+$$;
+
+COMMENT ON FUNCTION public.get_discussion_engagement(bigint) IS 
+'Returns discussion engagement metrics (posts, replies, likes) for all students in a class. Computes all aggregation server-side for scalability.';
