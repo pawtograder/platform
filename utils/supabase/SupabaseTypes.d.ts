@@ -1088,39 +1088,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260119: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260120: {
         Row: {
           class_id: number;
@@ -1320,6 +1287,39 @@ export type Database = {
         Relationships: [];
       };
       audit_20260126: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260127: {
         Row: {
           class_id: number;
           created_at: string;
@@ -5750,6 +5750,7 @@ export type Database = {
           avatar_url: string | null;
           class_id: number;
           created_at: string;
+          discussion_karma: number;
           flair: string | null;
           flair_color: string | null;
           id: string;
@@ -5764,6 +5765,7 @@ export type Database = {
           avatar_url?: string | null;
           class_id: number;
           created_at?: string;
+          discussion_karma?: number;
           flair?: string | null;
           flair_color?: string | null;
           id?: string;
@@ -5778,6 +5780,7 @@ export type Database = {
           avatar_url?: string | null;
           class_id?: number;
           created_at?: string;
+          discussion_karma?: number;
           flair?: string | null;
           flair_color?: string | null;
           id?: string;
@@ -11156,6 +11159,18 @@ export type Database = {
         };
         Returns: Json;
       };
+      get_discussion_engagement: {
+        Args: { p_class_id: number };
+        Returns: {
+          discussion_karma: number;
+          likes_given: number;
+          likes_received: number;
+          name: string;
+          profile_id: string;
+          total_posts: number;
+          total_replies: number;
+        }[];
+      };
       get_error_pin_matches_for_submission: {
         Args: { p_submission_id: number };
         Returns: Json;
@@ -11586,6 +11601,10 @@ export type Database = {
       };
       set_discussion_thread_topic: {
         Args: { p_thread_id: number; p_topic_id: number };
+        Returns: undefined;
+      };
+      set_discussion_thread_visibility: {
+        Args: { p_instructors_only: boolean; p_thread_id: number };
         Returns: undefined;
       };
       sis_sync_enrollment: {

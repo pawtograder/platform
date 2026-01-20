@@ -2,6 +2,7 @@
 
 import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
 import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
+import { KarmaBadge } from "@/components/discussion/KarmaBadge";
 import { StaffThreadActions } from "@/components/discussion/StaffThreadActions";
 import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 import Markdown from "@/components/ui/markdown";
@@ -47,12 +48,15 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
           )}
           <VStack gap="1" alignSelf="flex-start" align="start">
             {thread.instructors_only && <Badge colorPalette="blue">Viewable by poster and staff only</Badge>}
-            <Flex wrap="wrap">
+            <Flex wrap="wrap" gap="1" align="center">
               {userProfile ? (
-                <Heading size="sm">
-                  {userProfile?.name}
-                  {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
-                </Heading>
+                <HStack gap="1">
+                  <Heading size="sm">
+                    {userProfile?.name}
+                    {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
+                  </Heading>
+                  {userProfile && <KarmaBadge karma={userProfile.discussion_karma ?? 0} />}
+                </HStack>
               ) : (
                 <Skeleton width="100px" />
               )}
@@ -236,14 +240,42 @@ function DiscussionPost({ root_id }: { root_id: number }) {
 
   const sendMessage = useCallback(
     async (message: string) => {
+      if (!rootThread) {
+        return;
+      }
+
+      const newInstructorsOnly = visibility === "instructors_only";
+      const visibilityChanged = rootThread.instructors_only !== newInstructorsOnly;
+
+      // If visibility is changing, use RPC function to update root and all descendants
+      if (visibilityChanged) {
+        try {
+          const { error: visibilityError } = await supabase.rpc("set_discussion_thread_visibility", {
+            p_thread_id: root_id,
+            p_instructors_only: newInstructorsOnly
+          });
+
+          if (visibilityError) {
+            throw visibilityError;
+          }
+        } catch (error) {
+          toaster.error({
+            title: "Error",
+            description: `Failed to update visibility: ${error instanceof Error ? error.message : String(error)}`
+          });
+          return;
+        }
+      }
+
+      // Update body and edited_at (and visibility if it didn't change, to ensure consistency)
       await discussionThreadTeasers.update(root_id, {
         body: message,
         edited_at: new Date().toISOString(),
-        instructors_only: visibility === "instructors_only"
+        instructors_only: newInstructorsOnly
       });
       setEditing(false);
     },
-    [root_id, discussionThreadTeasers, visibility]
+    [root_id, rootThread, discussionThreadTeasers, visibility, supabase]
   );
 
   const onClose = useCallback(() => {
