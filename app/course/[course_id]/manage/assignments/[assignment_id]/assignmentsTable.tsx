@@ -42,6 +42,7 @@ import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
+import { formatInTimeZone } from "date-fns-tz";
 import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -248,13 +249,7 @@ export default function AssignmentsTable({
           }
 
           const date = new TZDate(row.original.late_due_date, timeZone);
-          const formattedDate = date.toLocaleString(undefined, {
-            year: "numeric",
-            month: "numeric",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit"
-          });
+          const formattedDate = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
           return values.some((val) => formattedDate.toLowerCase().includes(val.toLowerCase()));
         }
       },
@@ -341,7 +336,8 @@ export default function AssignmentsTable({
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           if (!row.original.created_at) return values.includes("No submission");
           const date = new TZDate(row.original.created_at, timeZone);
-          return values.some((val) => date.toLocaleString().toLowerCase().includes(val.toLowerCase()));
+          const formatted = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
+          return values.some((val) => formatted.toLowerCase().includes(val.toLowerCase()));
         }
       },
       {
@@ -785,7 +781,7 @@ export default function AssignmentsTable({
                                       .rows.reduce((map, row) => {
                                         if (row.original.created_at) {
                                           const date = new TZDate(row.original.created_at, timeZone);
-                                          const dateStr = date.toLocaleDateString();
+                                          const dateStr = formatInTimeZone(date, timeZone, "MM/dd/yyyy");
                                           if (!map.has(dateStr)) {
                                             map.set(dateStr, dateStr);
                                           }
@@ -820,13 +816,7 @@ export default function AssignmentsTable({
                                             map.set("Same as due date", "Same as due date");
                                           } else {
                                             const date = new TZDate(row.original.late_due_date, timeZone);
-                                            const dateStr = date.toLocaleString(undefined, {
-                                              year: "numeric",
-                                              month: "numeric",
-                                              day: "numeric",
-                                              hour: "numeric",
-                                              minute: "2-digit"
-                                            });
+                                            const dateStr = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
                                             if (!map.has(dateStr)) {
                                               map.set(dateStr, dateStr);
                                             }
