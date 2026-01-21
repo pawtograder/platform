@@ -747,7 +747,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
       // Check if this is a NOT-GRADED submission
       const isNotGradedSubmission =
-        (checkRun.commit_message && checkRun.commit_message.includes("#NOT-GRADED")) || false;
+        (checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) || false;
 
       scope?.setTag("time_zone", timeZone);
       scope?.setTag("is_not_graded", isNotGradedSubmission.toString());

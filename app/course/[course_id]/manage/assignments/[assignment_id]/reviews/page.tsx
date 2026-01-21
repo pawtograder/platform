@@ -26,7 +26,7 @@ import {
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Container, Field, Heading, HStack, List, Separator, Text, VStack } from "@chakra-ui/react";
+import { Box, Container, Field, Heading, HStack, List, Separator, Tabs, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate, useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
@@ -36,6 +36,7 @@ import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-co
 import AssignReviewModal from "./assignReviewModal";
 import EditReviewAssignmentModal from "./EditReviewAssignmentModal";
 import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
+import GradingProgressDashboard from "./GradingProgressDashboard";
 
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
 
@@ -344,13 +345,26 @@ export default function ReviewAssignmentsPage() {
         </HStack>
       </VStack>
 
-      <Heading size="md">Current Assignments</Heading>
-      <Separator w="100%" mb={2} />
-      <ReviewsTable
-        assignmentId={assignment_id as string}
-        openAssignModal={openAssignModal}
-        onReviewAssignmentDeleted={handleReviewAssignmentChange}
-      />
+      <Tabs.Root defaultValue="grading-progress" variant="enclosed" lazyMount unmountOnExit>
+        <Tabs.List>
+          <Tabs.Trigger value="grading-progress">Grading Progress Dashboard</Tabs.Trigger>
+          <Tabs.Trigger value="all-assignments">All Assignments</Tabs.Trigger>
+        </Tabs.List>
+        <Tabs.Content value="grading-progress">
+          <GradingProgressDashboard />
+        </Tabs.Content>
+        <Tabs.Content value="all-assignments">
+          <VStack align="stretch" gap={4}>
+            <Heading size="md">Current Assignments</Heading>
+            <Separator w="100%" mb={2} />
+            <ReviewsTable
+              assignmentId={assignment_id as string}
+              openAssignModal={openAssignModal}
+              onReviewAssignmentDeleted={handleReviewAssignmentChange}
+            />
+          </VStack>
+        </Tabs.Content>
+      </Tabs.Root>
       {isAssignModalOpen &&
         (assignModalData ? (
           <EditReviewAssignmentModal
