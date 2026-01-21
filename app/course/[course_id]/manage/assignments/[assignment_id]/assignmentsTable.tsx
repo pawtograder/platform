@@ -1,4 +1,5 @@
 "use client";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
@@ -14,6 +15,7 @@ import {
 } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
@@ -40,6 +42,7 @@ import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
+import { formatInTimeZone } from "date-fns-tz";
 import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -114,9 +117,9 @@ export default function AssignmentsTable({
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const assignmentGroups = useAssignmentGroups();
-  const course = classRole.classes;
+
   const { classRealTimeController } = useCourseController();
-  const timeZone = course.time_zone || "America/New_York";
+  const { timeZone } = useTimeZone();
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
@@ -229,13 +232,7 @@ export default function AssignmentsTable({
 
           return (
             <Text>
-              {new TZDate(lateDueDate).toLocaleString(undefined, {
-                year: "numeric",
-                month: "numeric",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit"
-              })}
+              <TimeZoneAwareDate date={lateDueDate} format="Pp" />
             </Text>
           );
         },
@@ -251,14 +248,8 @@ export default function AssignmentsTable({
             return values.includes("Same as due date");
           }
 
-          const date = new TZDate(row.original.late_due_date);
-          const formattedDate = date.toLocaleString(undefined, {
-            year: "numeric",
-            month: "numeric",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit"
-          });
+          const date = new TZDate(row.original.late_due_date, timeZone);
+          const formattedDate = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
           return values.some((val) => formattedDate.toLowerCase().includes(val.toLowerCase()));
         }
       },
@@ -330,18 +321,23 @@ export default function AssignmentsTable({
                 prefetch={false}
                 href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
               >
-                {new TZDate(props.getValue() as string, timeZone).toLocaleString()}
+                <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
               </Link>
             );
           }
-          return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
+          return (
+            <Text>
+              <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
+            </Text>
+          );
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           if (!row.original.created_at) return values.includes("No submission");
           const date = new TZDate(row.original.created_at, timeZone);
-          return values.some((val) => date.toLocaleString().toLowerCase().includes(val.toLowerCase()));
+          const formatted = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
+          return values.some((val) => formatted.toLowerCase().includes(val.toLowerCase()));
         }
       },
       {
@@ -785,7 +781,7 @@ export default function AssignmentsTable({
                                       .rows.reduce((map, row) => {
                                         if (row.original.created_at) {
                                           const date = new TZDate(row.original.created_at, timeZone);
-                                          const dateStr = date.toLocaleDateString();
+                                          const dateStr = formatInTimeZone(date, timeZone, "MM/dd/yyyy");
                                           if (!map.has(dateStr)) {
                                             map.set(dateStr, dateStr);
                                           }
@@ -819,14 +815,8 @@ export default function AssignmentsTable({
                                           ) {
                                             map.set("Same as due date", "Same as due date");
                                           } else {
-                                            const date = new TZDate(row.original.late_due_date);
-                                            const dateStr = date.toLocaleString(undefined, {
-                                              year: "numeric",
-                                              month: "numeric",
-                                              day: "numeric",
-                                              hour: "numeric",
-                                              minute: "2-digit"
-                                            });
+                                            const date = new TZDate(row.original.late_due_date, timeZone);
+                                            const dateStr = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
                                             if (!map.has(dateStr)) {
                                               map.set(dateStr, dateStr);
                                             }

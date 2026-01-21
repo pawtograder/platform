@@ -1,4 +1,5 @@
 "use client";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -31,10 +32,10 @@ import { TZDate } from "@date-fns/tz";
 import { useOne } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
+import { Select as ReactSelect } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
-import { Select as ReactSelect } from "chakra-react-select";
 
 interface SelectOption {
   label: string;
@@ -215,7 +216,11 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
           if (props.getValue() === null) {
             return <Text></Text>;
           }
-          return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
+          return (
+            <Text>
+              <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
+            </Text>
+          );
         },
         filterFn: (row, id, filterValue) => {
           if (!row.original.created_at) return false;
@@ -225,6 +230,38 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
           return filterArray.some((filter: string) =>
             date.toLocaleString().toLowerCase().includes(filter.toLowerCase())
           );
+        }
+      },
+      {
+        id: "rerun_queued_at",
+        accessorKey: "rerun_queued_at",
+        header: "Rerun Status",
+        enableColumnFilter: true,
+        cell: (props) => {
+          const queuedAt = props.getValue() as string | null;
+          if (!queuedAt) {
+            return <Text color="fg.muted">—</Text>;
+          }
+          return (
+            <VStack gap={0} align="start">
+              <Text color="orange.600" fontWeight="medium">
+                Requested
+              </Text>
+              <Text fontSize="xs" color="fg.muted">
+                <TimeZoneAwareDate date={queuedAt} format="compact" />
+              </Text>
+            </VStack>
+          );
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const hasPending = row.original.rerun_queued_at !== null;
+          return filterArray.some((filter: string) => {
+            if (filter === "Pending") return hasPending;
+            if (filter === "None") return !hasPending;
+            return false;
+          });
         }
       },
       {

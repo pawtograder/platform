@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
@@ -145,7 +146,7 @@ export default function HelpQueueManagement() {
                         <Text as="span" fontWeight="medium">
                           Closes:
                         </Text>{" "}
-                        {new Date(queue.closing_at).toLocaleString()}
+                        <TimeZoneAwareDate date={queue.closing_at} format="compact" />
                       </Text>
                     )}
                     <Text>

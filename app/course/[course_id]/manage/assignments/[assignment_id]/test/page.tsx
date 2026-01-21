@@ -2,13 +2,14 @@
 
 import { CommitHistoryDialog } from "@/app/course/[course_id]/assignments/[assignment_id]/commitHistory";
 import CreateStudentReposButton from "@/app/course/[course_id]/assignments/createStudentReposButton";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
-import { format } from "date-fns";
 import { useParams } from "next/navigation";
+
 export default function TestAssignmentPage() {
   const { course_id, assignment_id } = useParams();
   const { data: assignment } = useOne<Assignment>({
@@ -95,7 +96,7 @@ export default function TestAssignmentPage() {
                 </Table.Cell>
                 <Table.Cell>
                   <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {format(new Date(submission.created_at), "MMM d h:mm aaa")}
+                    <TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />
                   </Link>
                 </Table.Cell>
                 <Table.Cell>

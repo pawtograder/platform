@@ -6,10 +6,12 @@ import {
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
+import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Alert } from "@/components/ui/alert";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
@@ -37,6 +39,7 @@ import {
   useCourseController,
   useIsDroppedStudent
 } from "@/hooks/useCourseController";
+import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import {
   SubmissionProvider,
   useRubricCriteriaInstances,
@@ -48,10 +51,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
-import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { activateSubmission } from "@/lib/edgeFunctions";
-import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
@@ -59,7 +59,6 @@ import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import { format, formatRelative, isAfter } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1283,7 +1282,6 @@ function RubricView() {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const scrollRootRef = useRef<HTMLDivElement>(null);
-  const course = useCourse();
 
   const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const rubric = useRubricById(reviewAssignment?.rubric_id);
@@ -1324,24 +1322,16 @@ function RubricView() {
             <Text fontSize="sm">Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}</Text>
             <Text fontSize="sm" data-visual-test="blackout">
               Due:{" "}
-              {reviewAssignment.due_date
-                ? formatDueDateInTimezone(
-                    reviewAssignment.due_date,
-                    course.time_zone ?? "America/New_York",
-                    false,
-                    false
-                  )
-                : "N/A"}
+              {reviewAssignment.due_date ? (
+                <TimeZoneAwareDate date={reviewAssignment.due_date} format="MMM d, h:mm a" />
+              ) : (
+                "N/A"
+              )}
             </Text>
             {reviewAssignment.release_date && (
               <Text fontSize="sm">
                 Grading visible to student after:{" "}
-                {formatDueDateInTimezone(
-                  reviewAssignment.release_date,
-                  course.time_zone ?? "America/New_York",
-                  false,
-                  false
-                )}
+                <TimeZoneAwareDate date={reviewAssignment.release_date} format="MMM d, h:mm a" />
               </Text>
             )}
           </Box>
@@ -1413,7 +1403,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     <Flex direction="column" minW="0px">
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
-          Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
+          Student&apos;s Due Date: <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" />
           <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={assignment} />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (

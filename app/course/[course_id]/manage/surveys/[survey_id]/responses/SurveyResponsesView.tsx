@@ -1,15 +1,16 @@
 "use client";
 
-import { Box, Container, Heading, Text, VStack, HStack, Table, Button, Input, Badge, Icon } from "@chakra-ui/react";
-import { formatInTimeZone } from "date-fns-tz";
-import { TZDate } from "@date-fns/tz";
-import { isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
-import { useRouter } from "next/navigation";
-import { Model } from "survey-core";
-import { useMemo, useCallback, useState, useEffect } from "react";
-import { FiX, FiFilter } from "react-icons/fi";
-import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useSurveyResponses } from "@/hooks/useCourseController";
+import type { Survey, SurveyResponseWithProfile } from "@/types/survey";
+import { Badge, Box, Button, Container, Heading, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
+import { differenceInDays, differenceInHours, isPast, isWithinInterval, parseISO } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FiFilter, FiX } from "react-icons/fi";
+import { Model } from "survey-core";
 
 type SurveyResponsesViewProps = {
   courseId: string;
@@ -571,9 +572,11 @@ export default function SurveyResponsesView({
                         </Table.Cell>
                         <Table.Cell py={4}>
                           <Text color="fg">
-                            {response.submitted_at
-                              ? formatInTimeZone(new TZDate(response.submitted_at), timezone, "MMM d, yyyy, h:mm a")
-                              : "—"}
+                            {response.submitted_at ? (
+                              <TimeZoneAwareDate date={response.submitted_at} format="full" />
+                            ) : (
+                              "—"
+                            )}
                           </Text>
                         </Table.Cell>
                       </>

@@ -1,7 +1,8 @@
-import { createClient } from "@/utils/supabase/server";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
-import { Plus, Users, GraduationCap, Settings, FileText, MessageSquare } from "lucide-react";
-import { Card, Text, Flex, Grid, HStack, VStack, Heading, Icon } from "@chakra-ui/react";
+import { createClient } from "@/utils/supabase/server";
+import { Card, Flex, Grid, Heading, HStack, Icon, Text, VStack } from "@chakra-ui/react";
+import { FileText, GraduationCap, MessageSquare, Plus, Settings, Users } from "lucide-react";
 import Link from "next/link";
 
 /**
@@ -140,7 +141,7 @@ export default async function AdminPage() {
                       {course.name}
                     </Text>
                     <Text fontSize="sm" color="fg.subtle">
-                      {formatDate(course.created_at)}
+                      <TimeZoneAwareDate date={course.created_at} format="dateOnly" />
                     </Text>
                   </VStack>
                   <Button variant="ghost" size="sm" asChild>
@@ -225,12 +226,4 @@ export default async function AdminPage() {
       </Grid>
     </VStack>
   );
-}
-
-function formatDate(dateString: string) {
-  return new Date(dateString).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric"
-  });
 }

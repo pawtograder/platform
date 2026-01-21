@@ -1,18 +1,17 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
-import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
-import { formatInTimeZone } from "date-fns-tz";
-import AssignmentsTable from "./assignmentsTable";
-import ReviewAssignmentsTable from "./reviewAssignmentsTable";
-import AssignmentDashboard from "./assignmentDashboard";
 import { useCourseController } from "@/hooks/useCourseController";
+import TableController from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
+import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
+import * as Sentry from "@sentry/nextjs";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-import TableController from "@/lib/TableController";
-import * as Sentry from "@sentry/nextjs";
+import AssignmentDashboard from "./assignmentDashboard";
+import AssignmentsTable from "./assignmentsTable";
+import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
 export default function AssignmentHome() {
   const controller = useAssignmentController();
@@ -58,9 +57,6 @@ export default function AssignmentHome() {
     return <div>Assignment not found</div>;
   }
 
-  // Get the time zone - need to safely access the classes property
-  const timeZone = course.time_zone;
-
   return (
     <Box>
       <Box>
@@ -70,17 +66,13 @@ export default function AssignmentHome() {
               <DataList.Item>
                 <DataList.ItemLabel>Released</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  {assignment.release_date
-                    ? formatInTimeZone(new TZDate(assignment.release_date), timeZone || "America/New_York", "Pp")
-                    : "N/A"}
+                  {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>
                 <DataList.ItemLabel>Due</DataList.ItemLabel>
                 <DataList.ItemValue>
-                  {assignment.due_date
-                    ? formatInTimeZone(new TZDate(assignment.due_date), timeZone || "America/New_York", "Pp")
-                    : "N/A"}
+                  {assignment.due_date ? <TimeZoneAwareDate date={assignment.due_date} format="Pp" /> : "N/A"}
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>

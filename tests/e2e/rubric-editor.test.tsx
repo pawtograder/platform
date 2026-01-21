@@ -1,6 +1,9 @@
-import { Course } from "@/utils/supabase/DatabaseTypes";
-import { test, expect } from "../global-setup";
+import { createAdminClient } from "@/utils/supabase/client";
+import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { addDays } from "date-fns";
 import dotenv from "dotenv";
+import { expect, test } from "../global-setup";
 import {
   createClass,
   createUsersInClass,
@@ -9,10 +12,6 @@ import {
   loginAsUser,
   TestingUser
 } from "./TestingUtils";
-import { addDays } from "date-fns";
-import { Assignment, RubricCheck } from "@/utils/supabase/DatabaseTypes";
-import { createAdminClient, createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
@@ -76,8 +75,7 @@ test.beforeAll(async () => {
 
 test.describe("Rubric editor", () => {
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {
-    await loginAsUser(page, instructor!);
-    await page.waitForURL(`/course`);
+    await loginAsUser(page, instructor!, course);
 
     await page.goto(`/course/${course!.id}/manage/assignments/${assignment!.id}/rubric`);
 

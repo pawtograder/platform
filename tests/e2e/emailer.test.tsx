@@ -1,7 +1,7 @@
 import { EmailNotification } from "@/components/notifications/notification-teaser";
 import { ClassSection, Course, LabSection } from "@/utils/supabase/DatabaseTypes";
-import { test, expect } from "../global-setup";
 import { type Page } from "@playwright/test";
+import { expect, test } from "../global-setup";
 import {
   createClass,
   createClassSection,
@@ -236,6 +236,10 @@ async function expectStudentsReceivedExactlyTheseEmails({
 }
 test.describe("Emailer", () => {
   test("Emailing students in a class section or lab section", async ({ page }) => {
+    // Delete old emails for this course
+    await supabase.from("emails").delete().eq("class_id", course.id);
+    await supabase.from("notifications").delete().eq("class_id", course.id).eq("style", "email");
+
     await loginAsUser(page, instructor, course);
     await page.waitForLoadState("networkidle");
     await page.goto(`/course/${course.id}/manage/course/emails`);
