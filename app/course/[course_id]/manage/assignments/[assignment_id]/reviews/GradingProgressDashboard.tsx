@@ -15,7 +15,6 @@ import { toaster } from "@/components/ui/toaster";
 import PersonName from "@/components/ui/person-name";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAssignmentController } from "@/hooks/useAssignment";
-import { useCourseController } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import * as Sentry from "@sentry/nextjs";
 import {
@@ -47,12 +46,15 @@ type GradingProgressRow = {
   earliest_due_date: string | null;
 };
 
-export default function GradingProgressDashboard() {
+type GradingProgressDashboardProps = {
+  showHeading?: boolean;
+};
+
+export default function GradingProgressDashboard({ showHeading = true }: GradingProgressDashboardProps) {
   const { course_id, assignment_id } = useParams();
   const supabase = createClient();
   const controller = useAssignmentController();
   const assignment = controller.assignment;
-  const { course } = useCourseController();
   const [progressData, setProgressData] = useState<GradingProgressRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,8 +62,6 @@ export default function GradingProgressDashboard() {
   const [deadlineDate, setDeadlineDate] = useState<string>("");
   const [emailContent, setEmailContent] = useState<string>("");
   const [showTAsWithNoAssignments, setShowTAsWithNoAssignments] = useState(false);
-
-  const timeZone = course.time_zone ?? "America/New_York";
 
   // Filter data based on filters
   const filteredProgressData = useMemo(() => {
@@ -173,7 +173,8 @@ export default function GradingProgressDashboard() {
         : "\nNOTE: All TAs have completed their grading assignments.\n";
 
     const doneTAsNames = doneTAs.map((ta) => ta.name).join(", ");
-    const doneTAsThanks = doneTAs.length > 0 ? `\nThank you to ${doneTAsNames} for completing all your grading assignments!` : "";
+    const doneTAsThanks =
+      doneTAs.length > 0 ? `\nThank you to ${doneTAsNames} for completing all your grading assignments!` : "";
 
     const email = `Subject: Grading Reminder: ${assignment.title} - Due ${deadlineFormatted}${emailRecipientsNote}
 Hi TAs,
@@ -273,8 +274,8 @@ Course Staff`;
 
   return (
     <VStack align="stretch" gap={4}>
-      <HStack justify="space-between" align="center">
-        <Heading size="md">Grading Progress Dashboard</Heading>
+      <HStack justify={showHeading ? "space-between" : "flex-end"} align="center">
+        {showHeading && <Heading size="md">Grading Progress Dashboard</Heading>}
         <DialogRoot open={isEmailDialogOpen} onOpenChange={(e) => setIsEmailDialogOpen(e.open)}>
           <DialogTrigger asChild>
             <Button variant="outline" colorPalette="blue">
@@ -305,7 +306,7 @@ Course Staff`;
                     fontSize="sm"
                   />
                   <Field.HelperText>
-                    Review and edit the email content as needed, then click "Copy to Clipboard" to copy it.
+                    Review and edit the email content as needed, then click &quot;Copy to Clipboard&quot; to copy it.
                   </Field.HelperText>
                 </Field.Root>
               </VStack>
@@ -323,7 +324,7 @@ Course Staff`;
         </DialogRoot>
       </HStack>
 
-      <Separator />
+      {showHeading && <Separator />}
 
       {assignment && (
         <Box>
@@ -339,7 +340,7 @@ Course Staff`;
       <HStack gap={4} mb={2}>
         <Checkbox
           checked={showTAsWithNoAssignments}
-          onCheckedChange={(e) => setShowTAsWithNoAssignments(e.checked ?? false)}
+          onCheckedChange={(e) => setShowTAsWithNoAssignments(e.checked === true)}
         >
           Show TAs with no assignments
         </Checkbox>
@@ -390,9 +391,7 @@ Course Staff`;
                     </Badge>
                   </Table.Cell>
                   <Table.Cell textAlign="center">
-                    <Badge colorPalette={row.completed_count === 0 ? "red" : "green"}>
-                      {row.completed_count}
-                    </Badge>
+                    <Badge colorPalette={row.completed_count === 0 ? "red" : "green"}>{row.completed_count}</Badge>
                   </Table.Cell>
                   <Table.Cell textAlign="center">{row.submissions_with_comments}</Table.Cell>
                   <Table.Cell textAlign="center">

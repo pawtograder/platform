@@ -25,6 +25,7 @@
     "seed:course-assignments": "npx tsx scripts/SeedCourseAssignments.ts",
     "audit:student-repos": "npx tsx scripts/AuditStudentRepos.ts",
     "grade:reflections": "npx tsx scripts/GradeReflections.ts",
+    "export:empty-reflections": "npx tsx scripts/ExportEmptyReflections.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
     "lint": "next lint && prettier --check .",
     "format": "prettier --write ."

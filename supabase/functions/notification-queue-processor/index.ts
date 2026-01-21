@@ -406,7 +406,10 @@ function classifyNotification(
   body: NotificationEnvelope,
   userId: string,
   classId: number,
-  notificationPreferences?: Map<string, { discussion_notification?: string }>
+  notificationPreferences?: Map<
+    string,
+    { discussion_notification?: string; help_request_creation_notification?: string }
+  >
 ): "help_request_created" | "discussion_digest" | "skip" | "standard" {
   // Skip system notifications - they should not generate emails
   if (body.type === "system") {
@@ -415,7 +418,15 @@ function classifyNotification(
 
   if (body.type === "help_request") {
     const action = (body as unknown as { action?: string }).action;
-    if (action === "created") return "help_request_created";
+    if (action === "created") {
+      // Check if user has disabled help request notifications
+      const prefs = notificationPreferences?.get(`${userId}|${classId}`);
+      const helpPref = prefs?.help_request_creation_notification || "all";
+      if (helpPref === "none") {
+        return "skip";
+      }
+      return "help_request_created";
+    }
     return "skip";
   }
 
@@ -782,11 +793,11 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         return Array.from(allClassIds).some((classId) => activeUserClassSet.has(`${email.user_id}|${classId}`));
       }) || [];
 
-    // Fetch notification preferences for discussion digest mode
+    // Fetch notification preferences for discussion digest mode and help request filtering
     const { data: notificationPrefs, error: notificationPrefsError } = await adminSupabase
       .schema("public")
       .from("notification_preferences")
-      .select("user_id, class_id, discussion_notification")
+      .select("user_id, class_id, discussion_notification, help_request_creation_notification")
       .in(
         "user_id",
         Array.from(allUserIds).filter((email) => email)
@@ -808,10 +819,16 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     }
 
     // Build map of notification preferences for quick lookup
-    const notificationPrefsMap = new Map<string, { discussion_notification?: string }>();
+    const notificationPrefsMap = new Map<
+      string,
+      { discussion_notification?: string; help_request_creation_notification?: string }
+    >();
     for (const pref of notificationPrefs || []) {
       const key = `${pref.user_id}|${pref.class_id}`;
-      notificationPrefsMap.set(key, { discussion_notification: pref.discussion_notification });
+      notificationPrefsMap.set(key, {
+        discussion_notification: pref.discussion_notification,
+        help_request_creation_notification: pref.help_request_creation_notification
+      });
     }
 
     if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
@@ -856,6 +873,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     // Build batched digests for help request creation per user and class
     type DigestItem = {
       help_request_id: number;
+      help_queue_id: number;
       help_queue_name: string;
       creator_name: string;
       request_subject?: string;
@@ -867,6 +885,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       const body = n.message.body as unknown as NotificationEnvelope & {
         action: string;
         help_request_id: number;
+        help_queue_id?: number;
         help_queue_name?: string;
         creator_name?: string;
         request_subject?: string;
@@ -886,6 +905,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         const urls = buildEmailUrls(body, n.message.class_id);
         entry.items.push({
           help_request_id: body.help_request_id,
+          help_queue_id: body.help_queue_id || 0,
           help_queue_name: body.help_queue_name || "",
           creator_name: body.creator_name || "",
           request_subject: body.request_subject,
@@ -905,6 +925,89 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       }
       return filteredEmails?.find((e) => e.user_id === userId) || null;
     };
+
+    // For users with "only_active_queue" preference, fetch their active queue assignments
+    // to filter digest items to only queues they're currently working
+    const usersNeedingQueueCheck = new Set<string>();
+    const queueIdsToCheck = new Set<number>();
+    for (const { user_id, class_id, items } of digests.values()) {
+      const prefs = notificationPrefsMap.get(`${user_id}|${class_id}`);
+      if (prefs?.help_request_creation_notification === "only_active_queue") {
+        usersNeedingQueueCheck.add(user_id);
+        for (const item of items) {
+          if (item.help_queue_id) queueIdsToCheck.add(item.help_queue_id);
+        }
+      }
+    }
+
+    // Fetch active queue assignments for users with "only_active_queue" preference
+    // help_queue_assignments uses ta_profile_id (profile ID), so we need to map to user_id via user_roles
+    let activeQueueAssignments: { user_id: string; help_queue_id: number }[] = [];
+    if (usersNeedingQueueCheck.size > 0 && queueIdsToCheck.size > 0) {
+      // First get the profile_id -> user_id mapping for users we care about
+      const { data: userProfileMappings, error: mappingError } = await adminSupabase
+        .schema("public")
+        .from("user_roles")
+        .select("user_id, private_profile_id")
+        .in("user_id", Array.from(usersNeedingQueueCheck))
+        .not("private_profile_id", "is", null)
+        .limit(1000);
+
+      if (mappingError) {
+        scope.setContext("user_profile_mapping_error", {
+          error: mappingError.message,
+          users_count: usersNeedingQueueCheck.size
+        });
+        Sentry.captureException(mappingError, scope);
+        console.error(`Error fetching user profile mappings: ${mappingError.message}`);
+        // Continue without filtering - will send all notifications
+      } else if (userProfileMappings && userProfileMappings.length > 0) {
+        // Build profile_id -> user_id map
+        const profileToUserMap = new Map<string, string>();
+        for (const mapping of userProfileMappings) {
+          if (mapping.private_profile_id) {
+            profileToUserMap.set(mapping.private_profile_id, mapping.user_id);
+          }
+        }
+        const profileIds = Array.from(profileToUserMap.keys());
+
+        // Now fetch active queue assignments for these profiles
+        const { data: assignments, error: assignmentsError } = await adminSupabase
+          .schema("public")
+          .from("help_queue_assignments")
+          .select("ta_profile_id, help_queue_id")
+          .in("help_queue_id", Array.from(queueIdsToCheck))
+          .in("ta_profile_id", profileIds)
+          .eq("is_active", true)
+          .is("ended_at", null)
+          .limit(1000);
+
+        if (assignmentsError) {
+          scope.setContext("queue_assignments_fetch_error", {
+            error: assignmentsError.message,
+            profiles_count: profileIds.length,
+            queues_count: queueIdsToCheck.size
+          });
+          Sentry.captureException(assignmentsError, scope);
+          console.error(`Error fetching queue assignments: ${assignmentsError.message}`);
+          // Continue without filtering - will send all notifications
+        } else if (assignments) {
+          // Map profile_id back to user_id
+          activeQueueAssignments = assignments
+            .filter((a) => profileToUserMap.has(a.ta_profile_id))
+            .map((a) => ({
+              user_id: profileToUserMap.get(a.ta_profile_id)!,
+              help_queue_id: a.help_queue_id
+            }));
+        }
+      }
+    }
+
+    // Build a set of active user+queue combinations for quick lookup
+    const activeUserQueueSet = new Set<string>();
+    for (const assignment of activeQueueAssignments) {
+      activeUserQueueSet.add(`${assignment.user_id}|${assignment.help_queue_id}`);
+    }
 
     // Send digests
     for (const { user_id, class_id, items, msg_ids } of digests.values()) {
@@ -926,11 +1029,30 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         continue;
       }
 
-      const subject = `${course?.name || "Course"} - Help requests digest (${items.length})`;
+      // For users with "only_active_queue" preference, filter items to only queues they're currently working
+      const prefs = notificationPrefsMap.get(`${user_id}|${class_id}`);
+      let filteredItems = items;
+      if (prefs?.help_request_creation_notification === "only_active_queue") {
+        filteredItems = items.filter((item) => {
+          if (!item.help_queue_id) return false;
+          return activeUserQueueSet.has(`${user_id}|${item.help_queue_id}`);
+        });
+        // If no items remain after filtering, archive and skip
+        if (filteredItems.length === 0) {
+          emailScope.setContext("skip_reason", {
+            reason: "only_active_queue_no_active_items",
+            original_count: items.length
+          });
+          await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+          continue;
+        }
+      }
+
+      const subject = `${course?.name || "Course"} - Help requests digest (${filteredItems.length})`;
       const lines: string[] = [];
-      lines.push(`You have ${items.length} new help request(s).`);
+      lines.push(`You have ${filteredItems.length} new help request(s).`);
       lines.push("");
-      for (const it of items) {
+      for (const it of filteredItems) {
         const title = `${it.creator_name || "Student"}: ${it.request_subject || "General"}`;
         const queue = it.help_queue_name ? ` [${it.help_queue_name}]` : "";
         const urlLine = it.help_request_url ? `\n  ${it.help_request_url}` : "";
@@ -948,7 +1070,12 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         emailScope
       );
       if (!sent) {
-        emailScope.setContext("email_not_sent", { reason: "smtp_send_failed", user_id, class_id, count: items.length });
+        emailScope.setContext("email_not_sent", {
+          reason: "smtp_send_failed",
+          user_id,
+          class_id,
+          count: filteredItems.length
+        });
         Sentry.captureMessage("Digest email not sent", emailScope);
         // do not archive on failed send; allow retry via queue visibility timeout
         continue;
