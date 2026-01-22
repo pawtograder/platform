@@ -15,7 +15,7 @@ import { redirect, useParams, useRouter, useSearchParams } from "next/navigation
 import { useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
-import { format, parseISO, isAfter, isWithinInterval } from "date-fns";
+import { format, parseISO, isAfter, isSameDay, isWithinInterval } from "date-fns";
 import { BsCalendar, BsClock } from "react-icons/bs";
 import QueueWeeklySchedule from "@/components/calendar/queue-weekly-schedule";
 import { isEventCurrentlyHappening } from "@/components/calendar/calendar-utils";

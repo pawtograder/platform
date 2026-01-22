@@ -110,7 +110,10 @@ export function OfficeHoursStatusCard() {
 
   // Determine button text and tooltip
   const buttonText = useMemo(() => {
-    if (isDefaultQueueStaffed && openRequestCount === 0) {
+    if (!isDefaultQueueStaffed) {
+      return "Office hours are currently closed";
+    }
+    if (openRequestCount === 0) {
       return "Help queue is empty, staff are ready to help you right now";
     } else if (openRequestCount > 0 && openRequestCount < 5) {
       return "Queue is short, join it";
@@ -118,7 +121,12 @@ export function OfficeHoursStatusCard() {
     return "Get Help";
   }, [isDefaultQueueStaffed, openRequestCount]);
 
-  const tooltipText = "Text chat or video chat with a TA right now!";
+  const tooltipText = useMemo(() => {
+    if (!isDefaultQueueStaffed) {
+      return "Office hours are currently closed. No staff are working on any queues right now.";
+    }
+    return "Text chat or video chat with a TA right now!";
+  }, [isDefaultQueueStaffed]);
 
   // Only show for students when feature is enabled
   if (role.role !== "student" || !featureEnabled) {
