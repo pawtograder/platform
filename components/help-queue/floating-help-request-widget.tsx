@@ -4,15 +4,20 @@ import { RealtimeChat } from "@/components/realtime-chat";
 import { useActiveHelpRequest } from "@/hooks/useActiveHelpRequest";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
 import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
-import { Badge, Box, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
+import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
+import { HelpDrawer } from "@/components/help-queue/help-drawer";
+import { Badge, Box, Button, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
-import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp } from "react-icons/bs";
+import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
 export function FloatingHelpRequestWidget() {
   const activeRequest = useActiveHelpRequest();
   const router = useRouter();
   const { course_id } = useParams();
+  const { role } = useClassProfiles();
+  const featureEnabled = useFeatureEnabled("office-hours");
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const unreadCount = useHelpRequestUnreadCount(activeRequest?.request.id);
   const allHelpRequestStudents = useHelpRequestStudents();
 
@@ -46,8 +51,31 @@ export function FloatingHelpRequestWidget() {
     [handleToggleExpand]
   );
 
-  if (!activeRequest) {
+  // Only show for students when feature is enabled
+  if (role.role !== "student" || !featureEnabled) {
     return null;
+  }
+
+  // Show "Get Help" button when no active request
+  if (!activeRequest) {
+    return (
+      <>
+        <Box position="fixed" bottom={4} right={4} zIndex={1000}>
+          <Button
+            size="lg"
+            colorPalette="green"
+            onClick={() => setIsDrawerOpen(true)}
+            boxShadow="lg"
+            _hover={{ transform: "scale(1.05)" }}
+            transition="all 0.2s"
+          >
+            <Icon as={BsQuestionCircle} boxSize={5} mr={2} />
+            Get Help
+          </Button>
+        </Box>
+        <HelpDrawer isOpen={isDrawerOpen} onClose={() => setIsDrawerOpen(false)} />
+      </>
+    );
   }
 
   const statusColor =
