@@ -314,7 +314,7 @@ export default function HelpRequestForm() {
   useEffect(() => {
     if (selectedHelpQueue) {
       const selectedQueue = helpQueues.find((q) => q.id === selectedHelpQueue);
-      
+
       // Check if queue exists in available queues list
       if (!selectedQueue) {
         // Queue is not available (available === false) or doesn't exist
