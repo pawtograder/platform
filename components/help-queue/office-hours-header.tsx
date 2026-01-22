@@ -8,7 +8,7 @@ import NextLink from "next/link";
 import { FaPlus } from "react-icons/fa";
 import { FiChevronRight, FiChevronDown } from "react-icons/fi";
 import { useMemo } from "react";
-import { useHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useActiveHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useParams, useRouter, usePathname } from "next/navigation";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
@@ -62,7 +62,9 @@ export function OfficeHoursHeader({
   const pathname = usePathname();
   const { private_profile_id } = useClassProfiles();
   const isInstructor = useIsInstructor();
-  const allQueueAssignments = useHelpQueueAssignments();
+  // Use the specialized hook that subscribes to individual item changes
+  // This ensures the header updates when staff starts/stops working
+  const activeQueueAssignments = useActiveHelpQueueAssignments();
   const helpQueues = useHelpQueues();
   const controller = useOfficeHoursController();
   const { helpQueueAssignments } = controller;
@@ -78,26 +80,26 @@ export function OfficeHoursHeader({
   }, [currentRequest?.queueId, queue_id]);
 
   // Get queues with active staff assignments (for student mode)
+  // Uses activeQueueAssignments which properly subscribes to is_active changes
   const queuesWithActiveStaff = useMemo(() => {
     if (isManageMode) return [];
-    const activeAssignments = allQueueAssignments.filter((assignment) => assignment.is_active);
-    const queueIdsWithActiveStaff = new Set(activeAssignments.map((a) => a.help_queue_id));
+    const queueIdsWithActiveStaff = new Set(activeQueueAssignments.map((a) => a.help_queue_id));
     return helpQueues
       .filter((queue) => queue.available && queueIdsWithActiveStaff.has(queue.id))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [allQueueAssignments, helpQueues, isManageMode]);
+  }, [activeQueueAssignments, helpQueues, isManageMode]);
 
   // Get queues the TA is currently working
   const workingQueues = useMemo(() => {
     if (!isManageMode || !private_profile_id) return [];
-    return allQueueAssignments
-      .filter((assignment) => assignment.ta_profile_id === private_profile_id && assignment.is_active)
+    return activeQueueAssignments
+      .filter((assignment) => assignment.ta_profile_id === private_profile_id)
       .map((assignment) => {
         const queue = helpQueues.find((q) => q.id === assignment.help_queue_id);
         return queue;
       })
       .filter(Boolean);
-  }, [allQueueAssignments, helpQueues, private_profile_id, isManageMode]);
+  }, [activeQueueAssignments, helpQueues, private_profile_id, isManageMode]);
 
   const handleStartStopWorking = async (queueId: number, isWorking: boolean, assignmentId?: number) => {
     // Guard: check if private_profile_id is present before proceeding
@@ -315,8 +317,9 @@ export function OfficeHoursHeader({
                   // Stop all working queues
                   for (const queue of workingQueues) {
                     if (!queue) continue;
-                    const assignment = allQueueAssignments.find(
-                      (a) => a.ta_profile_id === private_profile_id && a.is_active && a.help_queue_id === queue.id
+                    // activeQueueAssignments already filtered for is_active === true
+                    const assignment = activeQueueAssignments.find(
+                      (a) => a.ta_profile_id === private_profile_id && a.help_queue_id === queue.id
                     );
                     if (assignment) {
                       await handleStartStopWorking(queue.id, true, assignment.id);

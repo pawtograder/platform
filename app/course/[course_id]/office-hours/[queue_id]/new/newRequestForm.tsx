@@ -10,7 +10,7 @@ import {
   useHelpRequestStudents,
   useHelpRequestTemplates,
   useHelpQueues,
-  useHelpQueueAssignments,
+  useActiveHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import {
@@ -119,12 +119,13 @@ export default function HelpRequestForm() {
   const isLoadingQueues = false; // Individual hooks don't expose loading state
   const connectionError = null; // Will be handled by connection status if needed
 
-  // Get help queue assignments to check for active staff
-  const allHelpQueueAssignments = useHelpQueueAssignments();
+  // Get active help queue assignments to check for active staff
+  // Uses useActiveHelpQueueAssignments which subscribes to individual item changes
+  // for proper reactivity when staff starts/stops working
+  const activeHelpQueueAssignments = useActiveHelpQueueAssignments();
   const queueIdsWithActiveStaff = useMemo(() => {
-    const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
-    return new Set(activeAssignments.map((a) => a.help_queue_id));
-  }, [allHelpQueueAssignments]);
+    return new Set(activeHelpQueueAssignments.map((a) => a.help_queue_id));
+  }, [activeHelpQueueAssignments]);
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -654,6 +655,9 @@ export default function HelpRequestForm() {
       )
   );
 
+  console.log(
+    `Debvugging inactive queue: isSubmitting=${isSubmitting}, isSubmittingGuard=${isSubmittingGuard}, wouldConflict=${wouldConflict}, selectedStudents.length=${selectedStudents.length}, templates.length=${templates.length}, watch("template_id")=${watch("template_id")}`
+  );
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
       <Toaster />
