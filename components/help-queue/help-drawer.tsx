@@ -116,8 +116,7 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
       );
 
       // Group overlapping assignments - all active assignments are currently overlapping
-      const groupedAssignments: (typeof activeAssignments)[] =
-        queueAssignments.length > 0 ? [queueAssignments] : [];
+      const groupedAssignments: (typeof activeAssignments)[] = queueAssignments.length > 0 ? [queueAssignments] : [];
 
       // Find when current staffing will end
       // Only show end time if there's a calendar event currently happening
@@ -134,11 +133,14 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
         if (currentEvents.length > 0) {
           // Use the latest end time from current events
           currentStaffUntil = parseISO(
-            currentEvents.reduce((latest, event) => {
-              const eventEnd = parseISO(event.end_time);
-              const latestEnd = latest ? parseISO(latest) : null;
-              return !latestEnd || eventEnd > latestEnd ? event.end_time : latest;
-            }, null as string | null) || currentEvents[0].end_time
+            currentEvents.reduce(
+              (latest, event) => {
+                const eventEnd = parseISO(event.end_time);
+                const latestEnd = latest ? parseISO(latest) : null;
+                return !latestEnd || eventEnd > latestEnd ? event.end_time : latest;
+              },
+              null as string | null
+            ) || currentEvents[0].end_time
           );
         }
         // If no current event, don't set currentStaffUntil - we don't know when it ends
@@ -204,9 +206,7 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
   // Auto-select first queue with active staff if none selected, or update selection if current queue loses active staff
   useEffect(() => {
     // Get all queues with active staff
-    const queuesWithActiveStaff = sortedQueues.filter(
-      (queue) => (activeAssignmentsByQueue[queue.id]?.length ?? 0) > 0
-    );
+    const queuesWithActiveStaff = sortedQueues.filter((queue) => (activeAssignmentsByQueue[queue.id]?.length ?? 0) > 0);
 
     if (!selectedQueueId) {
       // No selection: select first queue with active staff
@@ -215,9 +215,7 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
       }
     } else {
       // Check if current selection still has active staff
-      const currentQueueHasActiveStaff = queuesWithActiveStaff.some(
-        (queue) => queue.id === selectedQueueId
-      );
+      const currentQueueHasActiveStaff = queuesWithActiveStaff.some((queue) => queue.id === selectedQueueId);
       if (!currentQueueHasActiveStaff) {
         // Current selection lost active staff: update to first available or null
         setSelectedQueueId(queuesWithActiveStaff.length > 0 ? queuesWithActiveStaff[0].id : null);
@@ -240,16 +238,6 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
     }
     router.push(`/course/${course_id}/office-hours?view=browse&queue=${queueId}`);
     onClose();
-  };
-
-  const handleViewQueueOrBrowse = () => {
-    if (helpQueues.length > 0 && helpQueues[0]) {
-      handleViewQueue(helpQueues[0].id);
-    } else {
-      // Navigate to browse view when no queues are available
-      router.push(`/course/${course_id}/office-hours?view=browse`);
-      onClose();
-    }
   };
 
   const handleViewRequest = (queueId: number, requestId: number) => {
@@ -348,7 +336,7 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
             {/* Queue Status */}
             <Box>
               <Heading size="md" mb={3}>
-                 Chat with course staff live!
+                Chat with course staff live!
               </Heading>
               {sortedQueues.length === 0 ? (
                 <Box p={4} borderWidth="1px" borderColor="border.muted" rounded="md" bg="bg.panel">
@@ -486,7 +474,12 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
                                       borderColor="border.muted"
                                       rounded="md"
                                     >
-                                      <RequestRow request={request} href={requestHref} queue={queue} students={students} />
+                                      <RequestRow
+                                        request={request}
+                                        href={requestHref}
+                                        queue={queue}
+                                        students={students}
+                                      />
                                     </Box>
                                   );
                                 })}

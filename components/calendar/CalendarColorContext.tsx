@@ -63,9 +63,7 @@ function buildColorMap(
     .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   for (const event of sortedEvents) {
-    const queueName = calendarType === "office_hours" 
-      ? getResolvedQueueName(event, helpQueues)
-      : event.queue_name;
+    const queueName = calendarType === "office_hours" ? getResolvedQueueName(event, helpQueues) : event.queue_name;
     if (queueName && !colorMap.has(queueName)) {
       // Assign next color in order (cycle if we run out)
       colorMap.set(queueName, colorPalette[colorIndex % colorPalette.length]);
@@ -82,7 +80,7 @@ function buildColorMap(
  */
 export function CalendarColorProvider({ children, events }: CalendarColorProviderProps) {
   const helpQueues = useHelpQueues();
-  
+
   // Build color maps for both calendar types
   const officeHoursColorMap = useMemo(
     () => buildColorMap(events, "office_hours", OFFICE_HOURS_COLORS, helpQueues),
@@ -146,7 +144,7 @@ export function useCalendarColors() {
  */
 export function useCalendarColorsFromEvents(events: CalendarEvent[]) {
   const helpQueues = useHelpQueues();
-  
+
   // Build color maps for both calendar types
   const officeHoursColorMap = useMemo(
     () => buildColorMap(events, "office_hours", OFFICE_HOURS_COLORS, helpQueues),

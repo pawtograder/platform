@@ -281,15 +281,15 @@ function TimelineEventBlock({
       borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="4px"
       borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
-      boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 4px 6px -1px rgba(0, 0, 0, 0.1)" : undefined}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 4px 6px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
-      _hover={{ 
-        opacity: 0.95, 
-        boxShadow: isCurrentlyHappening 
-          ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 4px 6px -1px rgba(0, 0, 0, 0.15)"
-          : "sm"
+      _hover={{
+        opacity: 0.95,
+        boxShadow: isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 4px 6px -1px rgba(0, 0, 0, 0.15)" : "sm"
       }}
       zIndex={isCurrentlyHappening ? 2 : 1}
       display="flex"
@@ -555,13 +555,15 @@ function CompactTimelineEventBlock({
       borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="3px"
       borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
-      boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1)" : undefined}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
-      _hover={{ 
+      _hover={{
         opacity: 0.95,
-        boxShadow: isCurrentlyHappening 
+        boxShadow: isCurrentlyHappening
           ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.15)"
           : undefined
       }}

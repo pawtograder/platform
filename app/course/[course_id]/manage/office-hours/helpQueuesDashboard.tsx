@@ -101,7 +101,7 @@ export default function HelpQueuesDashboard() {
 
     sortedQueues.forEach((queue) => {
       const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
-      
+
       // Find calendar events for this queue
       const queueEvents = officeHoursEvents.filter(
         (event) =>
@@ -119,7 +119,7 @@ export default function HelpQueuesDashboard() {
       // Find when current staffing will end
       // Only show end time if there's a calendar event currently happening
       let currentStaffUntil: Date | null = null;
-      
+
       if (queueAssignments.length > 0) {
         // Find calendar events that are currently happening
         const currentEvents = queueEvents.filter((event) => {
@@ -131,11 +131,14 @@ export default function HelpQueuesDashboard() {
         if (currentEvents.length > 0) {
           // Use the latest end time from current events
           currentStaffUntil = parseISO(
-            currentEvents.reduce((latest, event) => {
-              const eventEnd = parseISO(event.end_time);
-              const latestEnd = latest ? parseISO(latest) : null;
-              return !latestEnd || eventEnd > latestEnd ? event.end_time : latest;
-            }, null as string | null) || currentEvents[0].end_time
+            currentEvents.reduce(
+              (latest, event) => {
+                const eventEnd = parseISO(event.end_time);
+                const latestEnd = latest ? parseISO(latest) : null;
+                return !latestEnd || eventEnd > latestEnd ? event.end_time : latest;
+              },
+              null as string | null
+            ) || currentEvents[0].end_time
           );
         }
         // If no current event, don't set currentStaffUntil - we don't know when it ends

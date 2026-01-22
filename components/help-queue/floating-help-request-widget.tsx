@@ -45,9 +45,7 @@ export function FloatingHelpRequestWidget() {
 
   // Count open help requests
   const openRequestCount = useMemo(() => {
-    return allHelpRequests.filter(
-      (request) => request.status === "open" || request.status === "in_progress"
-    ).length;
+    return allHelpRequests.filter((request) => request.status === "open" || request.status === "in_progress").length;
   }, [allHelpRequests]);
 
   // Determine button text and tooltip

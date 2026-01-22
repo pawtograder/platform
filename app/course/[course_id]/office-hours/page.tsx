@@ -261,15 +261,15 @@ export default function OfficeHoursPage() {
                         <DialogCloseTrigger />
                       </DialogHeader>
                       <DialogBody>
-                        <QueueWeeklySchedule queueId={selectedQueue.id} queueName={selectedQueue.name} showTitle={false} />
+                        <QueueWeeklySchedule
+                          queueId={selectedQueue.id}
+                          queueName={selectedQueue.name}
+                          showTitle={false}
+                        />
                       </DialogBody>
                     </DialogContent>
                   </DialogRoot>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setScheduleDialogOpen(true)}
-                  >
+                  <Button size="sm" variant="outline" onClick={() => setScheduleDialogOpen(true)}>
                     <Icon as={BsCalendar} mr={2} />
                     View Full Schedule
                   </Button>

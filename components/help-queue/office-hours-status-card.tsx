@@ -3,7 +3,19 @@
 import { useHelpQueueAssignments, useHelpQueues, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
-import { Badge, Box, Button, CardBody, CardHeader, CardRoot, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
+import {
+  Badge,
+  Box,
+  Button,
+  CardBody,
+  CardHeader,
+  CardRoot,
+  Heading,
+  HStack,
+  Icon,
+  Stack,
+  Text
+} from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { useParams, useRouter } from "next/navigation";
@@ -161,11 +173,7 @@ export function OfficeHoursStatusCard() {
                   <Text>{buttonText}</Text>
                 </Button>
               </Tooltip>
-              <Button
-                size="md"
-                colorPalette="green"
-                onClick={() => handleNewRequest(queuesWithActiveStaff[0].id)}
-              >
+              <Button size="md" colorPalette="green" onClick={() => handleNewRequest(queuesWithActiveStaff[0].id)}>
                 <FaPlus />
                 New Request
               </Button>
@@ -197,11 +205,7 @@ export function OfficeHoursStatusCard() {
                 </MenuTrigger>
                 <MenuContent>
                   {queuesWithActiveStaff.map((queue) => (
-                    <MenuItem
-                      key={queue.id}
-                      value={queue.id.toString()}
-                      onClick={() => handleNewRequest(queue.id)}
-                    >
+                    <MenuItem key={queue.id} value={queue.id.toString()} onClick={() => handleNewRequest(queue.id)}>
                       {queue.name}
                     </MenuItem>
                   ))}

@@ -50,11 +50,7 @@ export function isUrl(str: string | null | undefined): boolean {
  * @param now - Optional current time (defaults to Date.now())
  * @returns true if the event is currently active
  */
-export function isEventCurrentlyHappening(
-  startTime: string,
-  endTime: string,
-  now: Date = new Date()
-): boolean {
+export function isEventCurrentlyHappening(startTime: string, endTime: string, now: Date = new Date()): boolean {
   const start = new Date(startTime).getTime();
   const end = new Date(endTime).getTime();
   const current = now.getTime();

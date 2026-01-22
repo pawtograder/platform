@@ -1,14 +1,14 @@
 "use client";
 
-import { Box, Button, Card, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
-import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
-import { useMemo, useState, useEffect, useRef } from "react";
-import { useDaySchedule, useAllCalendarEvents, CalendarEvent } from "@/hooks/useCalendarEvents";
-import { format, isSameDay, parseISO } from "date-fns";
-import { isUrl, CalendarColorPalette, isEventCurrentlyHappening } from "./calendar-utils";
-import { useCalendarColorsFromEvents, getResolvedQueueName } from "./CalendarColorContext";
-import { calculateEventLayouts, formatTime, EventLayout } from "./calendar-layout-utils";
+import { CalendarEvent, useAllCalendarEvents, useDaySchedule } from "@/hooks/useCalendarEvents";
 import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { Box, Button, Card, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
+import { format, isSameDay } from "date-fns";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BsCalendar, BsCameraVideo, BsChevronLeft, BsChevronRight } from "react-icons/bs";
+import { calculateEventLayouts, EventLayout, formatTime } from "./calendar-layout-utils";
+import { CalendarColorPalette, isEventCurrentlyHappening, isUrl } from "./calendar-utils";
+import { getResolvedQueueName, useCalendarColorsFromEvents } from "./CalendarColorContext";
 
 const HOUR_HEIGHT = 60; // pixels per hour
 const START_HOUR = 8; // 8 AM
@@ -47,10 +47,8 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
   // Very short events (< 35px): Single line with name only, minimal padding
   // Short events (35-50px): Name and time stacked tightly
   // Normal events (50-75px): Name, time
-  // Tall events (> 75px): Full details including location
   const isVeryShort = height < 35;
   const isShort = height >= 35 && height < 50;
-  const isTall = height >= 75;
 
   // Adaptive padding: less padding for shorter events
   const padding = isVeryShort ? 1 : isShort ? 1.5 : 2;
@@ -73,15 +71,15 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
       borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="4px"
       borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
-      boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 4px 6px -1px rgba(0, 0, 0, 0.1)" : undefined}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 4px 6px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
       _hover={{
         opacity: 0.95,
-        boxShadow: isCurrentlyHappening 
-          ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 4px 6px -1px rgba(0, 0, 0, 0.15)"
-          : "sm"
+        boxShadow: isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 4px 6px -1px rgba(0, 0, 0, 0.15)" : "sm"
       }}
       zIndex={isCurrentlyHappening ? 2 : 1}
       display="flex"
