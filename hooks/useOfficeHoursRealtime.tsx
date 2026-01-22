@@ -348,6 +348,7 @@ export class OfficeHoursController {
     }
 
     // Create new TableController for this specific help request
+    // Use minimal debounce settings for chat messages to ensure real-time responsiveness
     const controller = new TableController({
       client: this._client,
       table: "help_request_messages",
@@ -360,7 +361,10 @@ export class OfficeHoursController {
       realtimeFilter: {
         class_id: this.classId,
         help_request_id: helpRequestId
-      }
+      },
+      // Chat messages need real-time responsiveness - use minimal debounce and no jitter
+      debounceInterval: 50, // Small debounce to batch rapid messages
+      debounceJitter: 0 // No jitter - messages should appear immediately
     });
 
     this._helpRequestMessageControllers.set(helpRequestId, controller);
