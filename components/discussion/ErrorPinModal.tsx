@@ -48,6 +48,7 @@ interface ErrorPinRule {
 
 interface ErrorPinFormData {
   assignment_id: number | null;
+  is_class_level: boolean;
   rule_logic: "and" | "or";
   enabled: boolean;
   rules: ErrorPinRule[];
@@ -112,6 +113,7 @@ export function ErrorPinModal({
   } = useForm<ErrorPinFormData>({
     defaultValues: {
       assignment_id: defaultAssignmentId ?? null,
+      is_class_level: false,
       rule_logic: "and",
       enabled: true,
       rules: []
@@ -131,6 +133,7 @@ export function ErrorPinModal({
   });
 
   const assignmentId = watch("assignment_id");
+  const isClassLevel = watch("is_class_level");
   const rules = watch("rules");
 
   // Load existing pin data if editing
@@ -186,6 +189,7 @@ export function ErrorPinModal({
     if (existingPin && existingRules) {
       reset({
         assignment_id: existingPin.assignment_id,
+        is_class_level: existingPin.assignment_id === null,
         rule_logic: existingPin.rule_logic as "and" | "or",
         enabled: existingPin.enabled,
         rules: existingRules.map((r) => ({
@@ -221,10 +225,20 @@ export function ErrorPinModal({
   };
 
   const handlePreview = async () => {
-    if (!assignmentId || rules.length === 0) {
+    // For class-level pins, we don't need an assignment_id
+    // For assignment-level pins, we need an assignment_id
+    if (!isClassLevel && !assignmentId) {
       toaster.error({
         title: "Error",
-        description: "Please select an assignment and add at least one rule"
+        description: "Please select an assignment or choose 'All Assignments (Class-Level)'"
+      });
+      return;
+    }
+    
+    if (rules.length === 0) {
+      toaster.error({
+        title: "Error",
+        description: "Please add at least one rule"
       });
       return;
     }
@@ -239,9 +253,10 @@ export function ErrorPinModal({
         match_value_max: r.match_value_max?.trim() || null
       }));
       const { data, error } = await supabase.rpc("preview_error_pin_matches", {
-        p_assignment_id: assignmentId,
+        p_assignment_id: isClassLevel ? null : assignmentId,
         p_rules: sanitizedRules as unknown as Json,
-        p_rule_logic: watch("rule_logic")
+        p_rule_logic: watch("rule_logic"),
+        p_class_id: isClassLevel ? Number(course_id) : null
       });
 
       if (error) throw error;
@@ -264,10 +279,20 @@ export function ErrorPinModal({
   };
 
   const onSubmit = async (data: ErrorPinFormData) => {
-    if (!data.assignment_id || data.rules.length === 0) {
+    // For class-level pins, assignment_id should be null
+    // For assignment-level pins, we need a valid assignment_id
+    if (!data.is_class_level && !data.assignment_id) {
       toaster.error({
         title: "Error",
-        description: "Please select an assignment and add at least one rule"
+        description: "Please select an assignment or choose 'All Assignments (Class-Level)'"
+      });
+      return;
+    }
+    
+    if (data.rules.length === 0) {
+      toaster.error({
+        title: "Error",
+        description: "Please add at least one rule"
       });
       return;
     }
@@ -285,7 +310,7 @@ export function ErrorPinModal({
       const pinData = {
         id: existingPinId || undefined,
         discussion_thread_id,
-        assignment_id: data.assignment_id,
+        assignment_id: data.is_class_level ? null : data.assignment_id,
         class_id: Number(course_id),
         created_by: private_profile_id,
         rule_logic: data.rule_logic,
@@ -337,25 +362,55 @@ export function ErrorPinModal({
           <Dialog.Body>
             <form onSubmit={handleSubmit(onSubmit)}>
               <Stack spaceY={4}>
-                <Field.Root invalid={!!errors.assignment_id}>
-                  <Field.Label>Assignment</Field.Label>
-                  <NativeSelect.Root>
-                    <NativeSelect.Field
-                      {...register("assignment_id", {
-                        required: "Assignment is required",
-                        valueAsNumber: true
-                      })}
-                    >
-                      <option value="">Select an assignment</option>
-                      {assignments.map((assignment) => (
-                        <option key={assignment.id} value={assignment.id}>
-                          {assignment.title}
-                        </option>
-                      ))}
-                    </NativeSelect.Field>
-                  </NativeSelect.Root>
-                  <Field.ErrorText>{errors.assignment_id?.message}</Field.ErrorText>
-                </Field.Root>
+                <Controller
+                  control={control}
+                  name="is_class_level"
+                  render={({ field }) => (
+                    <Field.Root>
+                      <ChakraButton
+                        variant={field.value ? "solid" : "outline"}
+                        colorPalette={field.value ? "purple" : "gray"}
+                        onClick={() => {
+                          field.onChange(!field.value);
+                          // Clear assignment selection when switching to class-level
+                          if (!field.value) {
+                            setValue("assignment_id", null);
+                          }
+                        }}
+                        size="sm"
+                      >
+                        {field.value ? "Class-Level Pin (All Assignments)" : "Assignment-Specific Pin"}
+                      </ChakraButton>
+                      <Field.HelperText>
+                        {field.value
+                          ? "This pin will match against all submissions in the class, regardless of assignment"
+                          : "This pin will only match against submissions for a specific assignment"}
+                      </Field.HelperText>
+                    </Field.Root>
+                  )}
+                />
+
+                {!isClassLevel && (
+                  <Field.Root invalid={!!errors.assignment_id}>
+                    <Field.Label>Assignment</Field.Label>
+                    <NativeSelect.Root>
+                      <NativeSelect.Field
+                        {...register("assignment_id", {
+                          required: !isClassLevel ? "Assignment is required" : false,
+                          valueAsNumber: true
+                        })}
+                      >
+                        <option value="">Select an assignment</option>
+                        {assignments.map((assignment) => (
+                          <option key={assignment.id} value={assignment.id}>
+                            {assignment.title}
+                          </option>
+                        ))}
+                      </NativeSelect.Field>
+                    </NativeSelect.Root>
+                    <Field.ErrorText>{errors.assignment_id?.message}</Field.ErrorText>
+                  </Field.Root>
+                )}
 
                 <Controller
                   control={control}
@@ -602,7 +657,7 @@ export function ErrorPinModal({
                 variant="outline"
                 onClick={handlePreview}
                 loading={isPreviewing}
-                disabled={!assignmentId || rules.length === 0}
+                disabled={(!isClassLevel && !assignmentId) || rules.length === 0}
               >
                 Preview Matches
               </ChakraButton>
@@ -614,7 +669,7 @@ export function ErrorPinModal({
                   colorPalette="green"
                   onClick={handleSubmit(onSubmit)}
                   loading={isSubmitting}
-                  disabled={!assignmentId || rules.length === 0}
+                  disabled={(!isClassLevel && !assignmentId) || rules.length === 0}
                 >
                   {existingPinId ? "Update Pin" : "Create Pin"}
                 </ChakraButton>

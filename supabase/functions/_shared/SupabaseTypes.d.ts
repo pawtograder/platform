@@ -2950,7 +2950,7 @@ export type Database = {
       };
       error_pins: {
         Row: {
-          assignment_id: number;
+          assignment_id: number | null;
           class_id: number;
           created_at: string;
           created_by: string;
@@ -2960,7 +2960,7 @@ export type Database = {
           rule_logic: string;
         };
         Insert: {
-          assignment_id: number;
+          assignment_id?: number | null;
           class_id: number;
           created_at?: string;
           created_by: string;
@@ -2970,7 +2970,7 @@ export type Database = {
           rule_logic?: string;
         };
         Update: {
-          assignment_id?: number;
+          assignment_id?: number | null;
           class_id?: number;
           created_at?: string;
           created_by?: string;

@@ -145,7 +145,7 @@ export function ErrorPinManageModal({
   }, [fetchPins]);
 
   const getAssignmentTitle = (assignmentId: number | null) => {
-    if (!assignmentId) return "Unknown Assignment";
+    if (assignmentId === null) return "All Assignments (Class-Level)";
     const assignment = assignments.find((a) => a.id === assignmentId);
     return assignment?.title || `Assignment #${assignmentId}`;
   };
@@ -198,8 +198,11 @@ export function ErrorPinManageModal({
                   {pins.map((pin) => (
                     <Box key={pin.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={4}>
                       <HStack justify="space-between" mb={2}>
-                        <HStack gap={2}>
+                        <HStack gap={2} flexWrap="wrap">
                           <Text fontWeight="semibold">{getAssignmentTitle(pin.assignment_id)}</Text>
+                          {pin.assignment_id === null && (
+                            <Badge colorPalette="purple">Class-Level</Badge>
+                          )}
                           {pin.enabled ? (
                             <Badge colorPalette="green">Enabled</Badge>
                           ) : (
@@ -208,7 +211,7 @@ export function ErrorPinManageModal({
                           <Badge colorPalette="blue">
                             {pin.rule_count} Rule{pin.rule_count !== 1 ? "s" : ""}
                           </Badge>
-                          <Badge colorPalette="purple">
+                          <Badge colorPalette="cyan">
                             {pin.match_count} Match{pin.match_count !== 1 ? "es" : ""}
                           </Badge>
                           <Text fontSize="sm" color="fg.muted">
