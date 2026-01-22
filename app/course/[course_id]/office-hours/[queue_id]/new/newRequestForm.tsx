@@ -10,7 +10,7 @@ import {
   useHelpRequestStudents,
   useHelpRequestTemplates,
   useHelpQueues,
-  useHelpQueueAssignments,
+  useActiveHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import {
@@ -119,12 +119,13 @@ export default function HelpRequestForm() {
   const isLoadingQueues = false; // Individual hooks don't expose loading state
   const connectionError = null; // Will be handled by connection status if needed
 
-  // Get help queue assignments to check for active staff
-  const allHelpQueueAssignments = useHelpQueueAssignments();
+  // Get active help queue assignments to check for active staff
+  // Uses useActiveHelpQueueAssignments which subscribes to individual item changes
+  // for proper reactivity when staff starts/stops working
+  const activeHelpQueueAssignments = useActiveHelpQueueAssignments();
   const queueIdsWithActiveStaff = useMemo(() => {
-    const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
-    return new Set(activeAssignments.map((a) => a.help_queue_id));
-  }, [allHelpQueueAssignments]);
+    return new Set(activeHelpQueueAssignments.map((a) => a.help_queue_id));
+  }, [activeHelpQueueAssignments]);
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -310,28 +311,39 @@ export default function HelpRequestForm() {
     ).length;
   }, [selectedHelpQueue, allHelpRequests]);
 
-  // Validate that selected queue has active staff
+  // Validate that selected queue is available and has active staff
   useEffect(() => {
     if (selectedHelpQueue) {
       const selectedQueue = helpQueues.find((q) => q.id === selectedHelpQueue);
-      if (selectedQueue && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
+
+      // Check if queue exists in available queues list
+      if (!selectedQueue) {
+        // Queue is not available (available === false) or doesn't exist
+        const queueFromAll = allHelpQueues.find((q) => q.id === selectedHelpQueue);
+        if (queueFromAll) {
+          setError("help_queue", {
+            type: "manual",
+            message: "This queue is not currently accepting new requests. Please select a different queue."
+          });
+        }
+      } else if (!queueIdsWithActiveStaff.has(selectedHelpQueue)) {
         setError("help_queue", {
           type: "manual",
           message: "This queue is not currently staffed. Please select a queue with active staff members."
         });
       } else {
-        // Clear the error if queue has active staff
+        // Clear any manual queue errors if queue is available and staffed
         const errorMessage = errors.help_queue?.message;
         if (
           errors.help_queue?.type === "manual" &&
           typeof errorMessage === "string" &&
-          errorMessage.includes("not currently staffed")
+          (errorMessage.includes("not currently staffed") || errorMessage.includes("not currently accepting"))
         ) {
           clearErrors("help_queue");
         }
       }
     }
-  }, [selectedHelpQueue, helpQueues, queueIdsWithActiveStaff, setError, clearErrors, errors.help_queue]);
+  }, [selectedHelpQueue, helpQueues, allHelpQueues, queueIdsWithActiveStaff, setError, clearErrors, errors.help_queue]);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {

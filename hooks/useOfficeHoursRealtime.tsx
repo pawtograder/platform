@@ -1,7 +1,11 @@
 "use client";
 
 import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
-import TableController, { useTableControllerTableValues, useTableControllerValueById } from "@/lib/TableController";
+import TableController, {
+  useTableControllerTableValues,
+  useTableControllerValueById,
+  useListTableControllerValues
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HelpRequestMessage,
@@ -11,7 +15,7 @@ import {
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 
@@ -617,6 +621,18 @@ export function useHelpRequestStudents() {
 export function useHelpQueueAssignments() {
   const controller = useOfficeHoursController();
   return useTableControllerTableValues(controller.helpQueueAssignments);
+}
+
+/**
+ * Returns only active help queue assignments (is_active === true).
+ * Uses useListTableControllerValues which subscribes to individual item changes,
+ * ensuring the data stays fresh when assignments are activated/deactivated.
+ */
+export function useActiveHelpQueueAssignments() {
+  const controller = useOfficeHoursController();
+  // Memoize predicate to avoid re-subscribing on every render
+  const isActivePredicate = useCallback((assignment: { is_active: boolean }) => assignment.is_active === true, []);
+  return useListTableControllerValues(controller.helpQueueAssignments, isActivePredicate);
 }
 
 export function useStudentKarmaNotes() {
