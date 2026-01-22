@@ -13,7 +13,7 @@ export default function NewRequestPage() {
   const helpQueue = useHelpQueue(Number(queue_id));
   const allHelpQueueAssignments = useHelpQueueAssignments();
 
-  // Check if queue has an active assignment
+  // Check if queue has an active assignment (staff is working)
   const hasActiveAssignment = useMemo(() => {
     if (!allHelpQueueAssignments) return false;
     return allHelpQueueAssignments.some(
@@ -21,15 +21,22 @@ export default function NewRequestPage() {
     );
   }, [allHelpQueueAssignments, queue_id]);
 
+  // Check if queue is available for new requests (both available flag AND has active staff)
+  const isQueueOpen = helpQueue?.available && hasActiveAssignment;
+
   useEffect(() => {
-    if (helpQueue && !hasActiveAssignment) {
-      // Redirect back to queue page if queue has no active assignment
+    if (helpQueue && !isQueueOpen) {
+      // Redirect back to queue page if queue is not open for new requests
       router.replace(`/course/${course_id}/office-hours/${queue_id}`);
     }
-  }, [helpQueue, hasActiveAssignment, router, course_id, queue_id]);
+  }, [helpQueue, isQueueOpen, router, course_id, queue_id]);
 
-  // Show error message if queue has no active assignment
-  if (helpQueue && !hasActiveAssignment) {
+  // Show error message if queue is not open for new requests
+  if (helpQueue && !isQueueOpen) {
+    const reason = !helpQueue.available
+      ? "This queue is not currently accepting new requests."
+      : "This queue is not currently staffed.";
+
     return (
       <Container>
         <Box py={8}>
@@ -39,7 +46,7 @@ export default function NewRequestPage() {
                 Queue Closed for New Requests
               </Text>
               <Text color="fg.muted" mb={4}>
-                This queue is currently closed for new requests. You can still view existing requests and queue status.
+                {reason} You can still view existing requests and queue status.
               </Text>
               <Button onClick={() => router.push(`/course/${course_id}/office-hours/${queue_id}`)} variant="outline">
                 Back to Queue
