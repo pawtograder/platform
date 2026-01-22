@@ -77,9 +77,11 @@ export default function HelpQueuesDashboard() {
   // Sort queues always by ordinal
   const sortedQueues = useMemo(() => {
     return [...queues].sort((a, b) => {
-      // Primary sort: by ordinal
-      if (a.ordinal !== b.ordinal) {
-        return a.ordinal - b.ordinal;
+      // Primary sort: by ordinal (queues without ordinal sort to the end)
+      const aOrd = a.ordinal ?? Number.POSITIVE_INFINITY;
+      const bOrd = b.ordinal ?? Number.POSITIVE_INFINITY;
+      if (aOrd !== bOrd) {
+        return aOrd - bOrd;
       }
       // Secondary sort: alphabetically by name
       return a.name.localeCompare(b.name);
@@ -309,8 +311,7 @@ export default function HelpQueuesDashboard() {
                               Until {format(groupEnd, "h:mm a")}
                               {minutesRemaining > 0 && (
                                 <Text as="span" ml={1}>
-                                  ({Math.floor(minutesRemaining / 60)}h{" "}
-                                  {minutesRemaining % 60}m remaining)
+                                  ({Math.floor(minutesRemaining / 60)}h {minutesRemaining % 60}m remaining)
                                 </Text>
                               )}
                             </Text>

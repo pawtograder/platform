@@ -39,8 +39,8 @@ export function OfficeHoursStatusCard() {
   const allHelpQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
 
-  // Filter to available queues
-  const helpQueues = allHelpQueues.filter((queue) => queue.available);
+  // Filter to available and active queues
+  const helpQueues = allHelpQueues.filter((queue) => queue.available && queue.is_active);
 
   // Filter to active assignments
   const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);

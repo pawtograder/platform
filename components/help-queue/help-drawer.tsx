@@ -81,9 +81,11 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
   // Sort all queues by ordinal (always)
   const sortedQueues = useMemo(() => {
     return [...helpQueues].sort((a, b) => {
-      // Primary sort: by ordinal
-      if (a.ordinal !== b.ordinal) {
-        return a.ordinal - b.ordinal;
+      // Primary sort: by ordinal (queues without ordinal sort to the end)
+      const ao = a.ordinal ?? Number.MAX_SAFE_INTEGER;
+      const bo = b.ordinal ?? Number.MAX_SAFE_INTEGER;
+      if (ao !== bo) {
+        return ao - bo;
       }
       // Secondary sort: alphabetically by name
       return a.name.localeCompare(b.name);

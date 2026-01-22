@@ -118,20 +118,31 @@ BEGIN
          AND id != NEW.id;
 
     -- Within same class: reposition if changed
-    ELSIF NEW.ordinal IS DISTINCT FROM OLD.ordinal THEN
-      -- Shift everything at the target position and beyond
-      UPDATE public.help_queues
-         SET ordinal = ordinal + 1
-       WHERE class_id = NEW.class_id
-         AND ordinal >= NEW.ordinal
-         AND id != NEW.id;
-      
-      -- Close the gap where this queue used to be
+    ELSIF NEW.ordinal IS DISTINCT FROM OLD.ordinal AND NEW.class_id = OLD.class_id THEN
       IF OLD.ordinal IS NOT NULL THEN
+        -- Moving up: increment rows in the range [NEW.ordinal, OLD.ordinal)
+        IF NEW.ordinal < OLD.ordinal THEN
+          UPDATE public.help_queues
+             SET ordinal = ordinal + 1
+           WHERE class_id = NEW.class_id
+             AND ordinal >= NEW.ordinal
+             AND ordinal < OLD.ordinal
+             AND id != NEW.id;
+        -- Moving down: decrement rows in the range (OLD.ordinal, NEW.ordinal]
+        ELSIF NEW.ordinal > OLD.ordinal THEN
+          UPDATE public.help_queues
+             SET ordinal = ordinal - 1
+           WHERE class_id = NEW.class_id
+             AND ordinal <= NEW.ordinal
+             AND ordinal > OLD.ordinal
+             AND id != NEW.id;
+        END IF;
+      -- OLD.ordinal IS NULL: make room at new position
+      ELSE
         UPDATE public.help_queues
-           SET ordinal = ordinal - 1
+           SET ordinal = ordinal + 1
          WHERE class_id = NEW.class_id
-           AND ordinal > OLD.ordinal
+           AND ordinal >= NEW.ordinal
            AND id != NEW.id;
       END IF;
     END IF;
@@ -413,6 +424,7 @@ BEGIN
             LOWER(name) ILIKE '%' || LOWER(TRIM(v_extracted_queue_name)) || '%'
             OR LOWER(TRIM(v_extracted_queue_name)) ILIKE '%' || LOWER(name) || '%'
           )
+        ORDER BY length(name) ASC, name ASC
         LIMIT 1;
       END IF;
     END IF;
