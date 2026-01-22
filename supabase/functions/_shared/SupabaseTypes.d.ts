@@ -11539,7 +11539,7 @@ export type Database = {
         Returns: number;
       };
       preview_error_pin_matches: {
-        Args: { p_assignment_id: number; p_rule_logic?: string; p_rules: Json };
+        Args: { p_assignment_id: number | null; p_class_id?: number | null; p_rule_logic?: string; p_rules: Json };
         Returns: Json;
       };
       process_calendar_announcements: { Args: never; Returns: Json };
