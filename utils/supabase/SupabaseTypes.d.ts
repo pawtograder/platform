@@ -1091,72 +1091,6 @@ export type Database = {
           }
         ];
       };
-      audit_20260120: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260121: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
       audit_20260122: {
         Row: {
           class_id: number;
@@ -1323,6 +1257,72 @@ export type Database = {
         Relationships: [];
       };
       audit_20260127: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260128: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          ip_addr: string | null;
+          new: Json | null;
+          old: Json | null;
+          table: string;
+          user_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table: string;
+          user_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          ip_addr?: string | null;
+          new?: Json | null;
+          old?: Json | null;
+          table?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
+      audit_20260129: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1909,6 +1909,7 @@ export type Database = {
           is_demo: boolean;
           late_tokens_per_student: number;
           name: string | null;
+          office_hours_description: string | null;
           office_hours_ics_url: string | null;
           slug: string | null;
           start_date: string | null;
@@ -1931,6 +1932,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_description?: string | null;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
@@ -1953,6 +1955,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_description?: string | null;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
@@ -4300,8 +4303,10 @@ export type Database = {
           description: string;
           id: number;
           is_active: boolean;
+          is_demo: boolean;
           max_concurrent_requests: number | null;
           name: string;
+          ordinal: number;
           queue_type: Database["public"]["Enums"]["help_queue_type"];
           updated_at: string;
         };
@@ -4315,8 +4320,10 @@ export type Database = {
           description: string;
           id?: number;
           is_active?: boolean;
+          is_demo?: boolean;
           max_concurrent_requests?: number | null;
           name: string;
+          ordinal?: number;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
           updated_at?: string;
         };
@@ -4330,8 +4337,10 @@ export type Database = {
           description?: string;
           id?: number;
           is_active?: boolean;
+          is_demo?: boolean;
           max_concurrent_requests?: number | null;
           name?: string;
+          ordinal?: number;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
           updated_at?: string;
         };

@@ -15,6 +15,8 @@ type HelpQueueFormData = {
   queue_type: "text" | "video" | "in_person";
   available: boolean;
   is_active: boolean;
+  is_demo: boolean;
+  ordinal: number;
   max_concurrent_requests: number | null;
   color: string | null;
   closing_at: string | null;
@@ -50,6 +52,8 @@ export default function EditHelpQueueModal({ isOpen, onClose, onSuccess, queue }
         queue_type: queue.queue_type,
         available: queue.available,
         is_active: queue.is_active,
+        is_demo: queue.is_demo || false,
+        ordinal: queue.ordinal ?? 0,
         max_concurrent_requests: queue.max_concurrent_requests,
         color: queue.color,
         closing_at: queue.closing_at ? new Date(queue.closing_at).toISOString().slice(0, 16) : null
@@ -75,6 +79,8 @@ export default function EditHelpQueueModal({ isOpen, onClose, onSuccess, queue }
           queue_type: data.queue_type,
           available: data.available,
           is_active: data.is_active,
+          is_demo: data.is_demo,
+          ordinal: data.ordinal,
           max_concurrent_requests: data.max_concurrent_requests || null,
           color: data.color || null,
           closing_at: data.closing_at || null
@@ -165,6 +171,24 @@ export default function EditHelpQueueModal({ isOpen, onClose, onSuccess, queue }
                 </Field.Root>
 
                 <Field.Root>
+                  <Field.Label>Ordinal</Field.Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    {...register("ordinal", {
+                      valueAsNumber: true,
+                      min: { value: 0, message: "Must be 0 or greater" }
+                    })}
+                    placeholder="0"
+                  />
+                  <Field.ErrorText>{errors.ordinal?.message}</Field.ErrorText>
+                  <Field.HelperText>
+                    Order in which this queue appears in lists. Lower numbers appear first. The system will
+                    automatically adjust other queues when you change this value.
+                  </Field.HelperText>
+                </Field.Root>
+
+                <Field.Root>
                   <Field.Label>Color</Field.Label>
                   <Input type="color" {...register("color")} placeholder="#3182CE" />
                   <Field.HelperText>Optional color to help distinguish this queue</Field.HelperText>
@@ -193,6 +217,19 @@ export default function EditHelpQueueModal({ isOpen, onClose, onSuccess, queue }
                       Queue is active
                     </Field.Label>
                     <Field.HelperText>Inactive queues are hidden from students</Field.HelperText>
+                  </Field.Root>
+                </Box>
+
+                <Box>
+                  <Field.Root>
+                    <Field.Label>
+                      <input type="checkbox" {...register("is_demo")} style={{ marginRight: "8px" }} />
+                      Demo queue (no notifications, no staff requirement)
+                    </Field.Label>
+                    <Field.HelperText>
+                      Demo queues are clearly marked as NOT A REAL QUEUE and are used for testing. They do not send
+                      notifications and do not require active staff to accept requests.
+                    </Field.HelperText>
                   </Field.Root>
                 </Box>
               </Stack>

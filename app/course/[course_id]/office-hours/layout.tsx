@@ -5,9 +5,10 @@ import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
-import { Box } from "@chakra-ui/react";
+import { Box, Text } from "@chakra-ui/react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
+import Markdown from "react-markdown";
 
 const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>) => {
   const { course_id, queue_id, request_id } = useParams();
@@ -60,6 +61,18 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
             currentRequest={currentRequest}
             isManageMode={false}
           />
+          {courseController?.course?.office_hours_description && (
+            <Box px={{ base: 3, md: 6 }} pt={{ base: 3, md: 4 }} pb={0}>
+              <Box p={4} borderWidth="1px" borderColor="border.muted" bg="bg.subtle" rounded="md" mb={4}>
+                <Text fontSize="sm" fontWeight="medium" mb={2} color="fg.muted">
+                  About Office Hours
+                </Text>
+                <Box fontSize="sm" color="fg.muted">
+                  <Markdown>{courseController.course.office_hours_description}</Markdown>
+                </Box>
+              </Box>
+            </Box>
+          )}
           <Box flex="1" minH="0" overflow="auto" px={{ base: 3, md: 6 }} py={{ base: 3, md: 6 }}>
             {children}
           </Box>

@@ -39,10 +39,17 @@ export default function OfficeHoursPage() {
   const helpQueues = allHelpQueues
     .filter((queue) => queue.available)
     .sort((a, b) => {
+      // Primary sort: by ordinal
+      if (a.ordinal !== b.ordinal) {
+        return a.ordinal - b.ordinal;
+      }
+      // Secondary sort: queues with active staff first
       const aHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === a.id);
       const bHasActive = helpQueueAssignments.some((assignment) => assignment.help_queue_id === b.id);
-      if (aHasActive === bHasActive) return 0;
-      return aHasActive ? -1 : 1;
+      if (aHasActive !== bHasActive) {
+        return aHasActive ? -1 : 1;
+      }
+      return 0;
     });
 
   const activeHelpRequests = allHelpRequests.filter(

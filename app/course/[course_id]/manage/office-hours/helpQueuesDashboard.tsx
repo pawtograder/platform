@@ -73,7 +73,11 @@ export default function HelpQueuesDashboard() {
 
   const sortedQueues = useMemo(() => {
     return [...queues].sort((a, b) => {
-      // Sort queues with active assignments first
+      // Primary sort: by ordinal
+      if (a.ordinal !== b.ordinal) {
+        return a.ordinal - b.ordinal;
+      }
+      // Secondary sort: queues with active assignments first
       const aHasActive = (activeAssignmentsByQueue[a.id]?.length ?? 0) > 0;
       const bHasActive = (activeAssignmentsByQueue[b.id]?.length ?? 0) > 0;
 
@@ -81,7 +85,7 @@ export default function HelpQueuesDashboard() {
         return aHasActive ? -1 : 1;
       }
 
-      // Within each group, sort alphabetically by name
+      // Tertiary sort: alphabetically by name
       return a.name.localeCompare(b.name);
     });
   }, [queues, activeAssignmentsByQueue]);

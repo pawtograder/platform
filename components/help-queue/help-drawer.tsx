@@ -28,7 +28,7 @@ interface HelpDrawerProps {
   onClose: () => void;
 }
 
-export function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
+function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
   const { course_id } = useParams();
   const router = useRouter();
   const activeRequest = useActiveHelpRequest();
@@ -71,7 +71,14 @@ export function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
     const queueIdsWithActiveStaff = new Set(activeAssignments.map((a) => a.help_queue_id));
     return helpQueues
       .filter((queue) => queueIdsWithActiveStaff.has(queue.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        // Primary sort: by ordinal
+        if (a.ordinal !== b.ordinal) {
+          return a.ordinal - b.ordinal;
+        }
+        // Secondary sort: alphabetically by name
+        return a.name.localeCompare(b.name);
+      });
   }, [helpQueues, activeAssignments]);
 
   // Get requests for selected queue
@@ -239,3 +246,6 @@ export function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
     </DrawerRoot>
   );
 }
+
+export default HelpDrawer;
+export { HelpDrawer };

@@ -404,9 +404,24 @@ export default async function StudentDashboard({
         )}
       </Box>
 
-      <Suspense fallback={<Box>Loading office hours...</Box>}>
-        <OfficeHoursStatusCard />
-      </Suspense>
+      <Box>
+        <Suspense
+          fallback={
+            <Box>
+              <Heading size="lg" mb={4}>
+                Office Hours
+              </Heading>
+              <CardRoot>
+                <CardBody>
+                  <Text color="fg.muted">Loading office hours...</Text>
+                </CardBody>
+              </CardRoot>
+            </Box>
+          }
+        >
+          <OfficeHoursStatusCard />
+        </Suspense>
+      </Box>
     </VStack>
   );
 }

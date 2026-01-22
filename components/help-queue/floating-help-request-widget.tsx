@@ -5,19 +5,24 @@ import { useActiveHelpRequest } from "@/hooks/useActiveHelpRequest";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
 import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
-import { HelpDrawer } from "@/components/help-queue/help-drawer";
+import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import { Badge, Box, Button, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
+
+const HelpDrawer = dynamic(() => import("@/components/help-queue/help-drawer"), {
+  ssr: false
+});
 export function FloatingHelpRequestWidget() {
   const activeRequest = useActiveHelpRequest();
   const router = useRouter();
   const { course_id } = useParams();
   const { role } = useClassProfiles();
   const featureEnabled = useFeatureEnabled("office-hours");
+  const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const [isExpanded, setIsExpanded] = useState(false);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const unreadCount = useHelpRequestUnreadCount(activeRequest?.request.id);
   const allHelpRequestStudents = useHelpRequestStudents();
 
@@ -60,20 +65,23 @@ export function FloatingHelpRequestWidget() {
   if (!activeRequest) {
     return (
       <>
-        <Box position="fixed" bottom={4} right={4} zIndex={1000}>
+        <Box position="fixed" bottom={4} right={4} zIndex={1000} display={{ base: "block", md: "block" }}>
           <Button
             size="lg"
             colorPalette="green"
-            onClick={() => setIsDrawerOpen(true)}
-            boxShadow="lg"
-            _hover={{ transform: "scale(1.05)" }}
+            onClick={openDrawer}
+            boxShadow="xl"
+            _hover={{ transform: "scale(1.05)", boxShadow: "2xl" }}
             transition="all 0.2s"
+            fontWeight="semibold"
+            px={6}
+            py={6}
           >
-            <Icon as={BsQuestionCircle} boxSize={5} mr={2} />
+            <Icon as={BsQuestionCircle} boxSize={6} mr={2} />
             Get Help
           </Button>
         </Box>
-        <HelpDrawer isOpen={isDrawerOpen} onClose={() => setIsDrawerOpen(false)} />
+        {isDrawerOpen && <HelpDrawer isOpen={isDrawerOpen} onClose={closeDrawer} />}
       </>
     );
   }

@@ -2,17 +2,36 @@
 
 import { useHelpQueueAssignments, useHelpQueues, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
-import { Badge, Box, Button, CardBody, CardHeader, CardRoot, Heading, HStack, Stack, Text } from "@chakra-ui/react";
+import { useHelpDrawer } from "@/hooks/useHelpDrawer";
+import {
+  Badge,
+  Box,
+  Button,
+  CardBody,
+  CardHeader,
+  CardRoot,
+  Heading,
+  HStack,
+  Icon,
+  Stack,
+  Text
+} from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useMemo } from "react";
-import { FaPlus } from "react-icons/fa";
+import { FaPlus, FaQuestionCircle } from "react-icons/fa";
 import PersonAvatar from "@/components/ui/person-avatar";
+import dynamic from "next/dynamic";
+
+const HelpDrawer = dynamic(() => import("@/components/help-queue/help-drawer"), {
+  ssr: false
+});
 
 export function OfficeHoursStatusCard() {
   const { course_id } = useParams();
   const router = useRouter();
   const { role } = useClassProfiles();
   const featureEnabled = useFeatureEnabled("office-hours");
+  const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
@@ -48,7 +67,14 @@ export function OfficeHoursStatusCard() {
     const queueIdsWithActiveStaff = new Set(activeAssignments.map((a) => a.help_queue_id));
     return helpQueues
       .filter((queue) => queueIdsWithActiveStaff.has(queue.id))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        // Primary sort: by ordinal
+        if (a.ordinal !== b.ordinal) {
+          return a.ordinal - b.ordinal;
+        }
+        // Secondary sort: alphabetically by name
+        return a.name.localeCompare(b.name);
+      });
   }, [helpQueues, activeAssignments]);
 
   // Calculate request counts per queue
@@ -63,7 +89,7 @@ export function OfficeHoursStatusCard() {
     );
   }, [activeHelpRequests]);
 
-  // Only show for students
+  // Only show for students when feature is enabled
   if (role.role !== "student" || !featureEnabled) {
     return null;
   }
@@ -82,18 +108,29 @@ export function OfficeHoursStatusCard() {
 
   return (
     <Box>
-      <Heading size="lg" mb={4}>
-        Office Hours
-      </Heading>
+      <HStack justify="space-between" align="center" mb={4} flexWrap="wrap" gap={2}>
+        <Heading size="lg">Office Hours</Heading>
+        <Button size="md" colorPalette="green" onClick={openDrawer} fontWeight="semibold">
+          <Icon as={FaQuestionCircle} mr={2} boxSize={4} />
+          Get Help
+        </Button>
+      </HStack>
+      {isDrawerOpen && <HelpDrawer isOpen={isDrawerOpen} onClose={closeDrawer} />}
       {queuesWithActiveStaff.length === 0 ? (
         <CardRoot>
           <CardBody>
-            <Text color="fg.muted">
+            <Text color="fg.muted" mb={4}>
               Office hours are currently closed. No staff are working on any queues right now.
             </Text>
-            <Button mt={4} onClick={handleViewAllRequests} variant="outline">
-              View All Queues
-            </Button>
+            <HStack gap={2}>
+              <Button onClick={openDrawer} colorPalette="green" size="sm">
+                <Icon as={FaQuestionCircle} mr={2} />
+                Get Help
+              </Button>
+              <Button onClick={handleViewAllRequests} variant="outline" size="sm">
+                View All Queues
+              </Button>
+            </HStack>
           </CardBody>
         </CardRoot>
       ) : (

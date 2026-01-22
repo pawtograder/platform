@@ -123,8 +123,15 @@ export default function HelpRequestForm() {
   const allHelpQueueAssignments = useHelpQueueAssignments();
   const queueIdsWithActiveStaff = useMemo(() => {
     const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
-    return new Set(activeAssignments.map((a) => a.help_queue_id));
-  }, [allHelpQueueAssignments]);
+    const activeStaffSet = new Set(activeAssignments.map((a) => a.help_queue_id));
+    // Demo queues don't require active staff - add all demo queues to the set
+    allHelpQueues.forEach((queue) => {
+      if (queue.is_demo) {
+        activeStaffSet.add(queue.id);
+      }
+    });
+    return activeStaffSet;
+  }, [allHelpQueueAssignments, allHelpQueues]);
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -310,17 +317,18 @@ export default function HelpRequestForm() {
     ).length;
   }, [selectedHelpQueue, allHelpRequests]);
 
-  // Validate that selected queue has active staff
+  // Validate that selected queue has active staff (skip for demo queues)
   useEffect(() => {
     if (selectedHelpQueue) {
       const selectedQueue = helpQueues.find((q) => q.id === selectedHelpQueue);
-      if (selectedQueue && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
+      // Demo queues don't require active staff
+      if (selectedQueue && !selectedQueue.is_demo && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
         setError("help_queue", {
           type: "manual",
           message: "This queue is not currently staffed. Please select a queue with active staff members."
         });
       } else {
-        // Clear the error if queue has active staff
+        // Clear the error if queue has active staff or is demo
         const errorMessage = errors.help_queue?.message;
         if (
           errors.help_queue?.type === "manual" &&
@@ -375,9 +383,10 @@ export default function HelpRequestForm() {
           }
         }
 
-        // Check if selected queue has active staff
+        // Check if selected queue has active staff (skip for demo queues)
         const selectedQueueId = getValues("help_queue");
-        if (selectedQueueId && !queueIdsWithActiveStaff.has(selectedQueueId)) {
+        const selectedQueue = helpQueues.find((q) => q.id === selectedQueueId);
+        if (selectedQueueId && !selectedQueue?.is_demo && !queueIdsWithActiveStaff.has(selectedQueueId)) {
           toaster.error({
             title: "Error",
             description: "This queue is not currently staffed. Please select a queue with active staff members."
@@ -706,15 +715,16 @@ export default function HelpRequestForm() {
                       const queueId = val === "" ? undefined : Number.parseInt(val);
                       field.onChange(queueId);
 
-                      // Immediately validate if selected queue has active staff
-                      if (queueId && !queueIdsWithActiveStaff.has(queueId)) {
+                      // Immediately validate if selected queue has active staff (skip for demo queues)
+                      const selectedQueue = helpQueues.find((q) => q.id === queueId);
+                      if (queueId && !selectedQueue?.is_demo && !queueIdsWithActiveStaff.has(queueId)) {
                         setError("help_queue", {
                           type: "manual",
                           message:
                             "This queue is not currently staffed. Please select a queue with active staff members."
                         });
-                      } else if (queueId && queueIdsWithActiveStaff.has(queueId)) {
-                        // Clear any existing error if queue has active staff
+                      } else if (queueId && (selectedQueue?.is_demo || queueIdsWithActiveStaff.has(queueId))) {
+                        // Clear any existing error if queue has active staff or is demo
                         const errorMessage = errors.help_queue?.message;
                         if (
                           errors.help_queue?.type === "manual" &&

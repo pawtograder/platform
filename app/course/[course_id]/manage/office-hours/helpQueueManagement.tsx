@@ -97,94 +97,108 @@ export default function HelpQueueManagement() {
         </Box>
       ) : (
         <Stack spaceY={4}>
-          {queues.map((queue) => (
-            <Box key={queue.id} p={4} borderWidth="1px" borderRadius="md">
-              <Flex justify="space-between" align="flex-start">
-                <Box flex="1">
-                  <Flex align="center" gap={3} mb={2}>
-                    <Text fontWeight="semibold" fontSize="lg">
-                      {queue.name}
-                    </Text>
-                    <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="solid">
-                      {getQueueTypeLabel(queue.queue_type)}
-                    </Badge>
-                    {!queue.is_active && (
-                      <Box
-                        px={2}
-                        py={1}
-                        borderRadius="md"
-                        bg="red.100"
-                        color="red.700"
-                        fontSize="sm"
-                        fontWeight="medium"
-                      >
-                        Inactive
-                      </Box>
-                    )}
-                  </Flex>
+          {queues
+            .sort((a, b) => {
+              // Primary sort: by ordinal
+              if (a.ordinal !== b.ordinal) {
+                return a.ordinal - b.ordinal;
+              }
+              // Secondary sort: alphabetically by name
+              return a.name.localeCompare(b.name);
+            })
+            .map((queue) => (
+              <Box key={queue.id} p={4} borderWidth="1px" borderRadius="md">
+                <Flex justify="space-between" align="flex-start">
+                  <Box flex="1">
+                    <Flex align="center" gap={3} mb={2}>
+                      <Text fontWeight="semibold" fontSize="lg">
+                        {queue.name}
+                      </Text>
+                      <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="solid">
+                        {getQueueTypeLabel(queue.queue_type)}
+                      </Badge>
+                      {queue.is_demo && (
+                        <Badge colorPalette="orange" variant="solid">
+                          DEMO - NOT A REAL QUEUE
+                        </Badge>
+                      )}
+                      {!queue.is_active && (
+                        <Box
+                          px={2}
+                          py={1}
+                          borderRadius="md"
+                          bg="red.100"
+                          color="red.700"
+                          fontSize="sm"
+                          fontWeight="medium"
+                        >
+                          Inactive
+                        </Box>
+                      )}
+                    </Flex>
 
-                  {queue.description && <Text mb={3}>{queue.description}</Text>}
+                    {queue.description && <Text mb={3}>{queue.description}</Text>}
 
-                  <HStack spaceX={4} fontSize="sm">
-                    <Text>
-                      <Text as="span" fontWeight="medium">
-                        Status:
-                      </Text>{" "}
-                      {queue.available ? "Available" : "Unavailable"}
-                    </Text>
-                    {queue.max_concurrent_requests && (
+                    <HStack spaceX={4} fontSize="sm">
                       <Text>
                         <Text as="span" fontWeight="medium">
-                          Max Requests:
+                          Status:
                         </Text>{" "}
-                        {queue.max_concurrent_requests}
+                        {queue.available ? "Available" : "Unavailable"}
                       </Text>
-                    )}
-                    {queue.closing_at && (
+                      {queue.max_concurrent_requests && (
+                        <Text>
+                          <Text as="span" fontWeight="medium">
+                            Max Requests:
+                          </Text>{" "}
+                          {queue.max_concurrent_requests}
+                        </Text>
+                      )}
+                      {queue.closing_at && (
+                        <Text>
+                          <Text as="span" fontWeight="medium">
+                            Closes:
+                          </Text>{" "}
+                          {new Date(queue.closing_at).toLocaleString()}
+                        </Text>
+                      )}
                       <Text>
                         <Text as="span" fontWeight="medium">
-                          Closes:
+                          Queue Depth:
                         </Text>{" "}
-                        {new Date(queue.closing_at).toLocaleString()}
+                        {queue.depth}
                       </Text>
-                    )}
-                    <Text>
-                      <Text as="span" fontWeight="medium">
-                        Queue Depth:
-                      </Text>{" "}
-                      {queue.depth}
-                    </Text>
+                    </HStack>
+                  </Box>
+
+                  <HStack spaceX={2}>
+                    <DiscordChannelLink
+                      channelType="office_hours"
+                      resourceId={queue.id}
+                      size="sm"
+                      variant="outline"
+                      tooltipText="Open Discord Channel"
+                    />
+                    <Button size="sm" variant="outline" onClick={() => editModal.openModal(queue)}>
+                      <Icon as={BsPencil} />
+                      Edit
+                    </Button>
+                    <PopConfirm
+                      triggerLabel="Delete queue"
+                      trigger={
+                        <Button size="sm" variant="outline" colorPalette="red">
+                          <Icon as={BsTrash} />
+                          Delete
+                        </Button>
+                      }
+                      confirmHeader="Delete Queue"
+                      confirmText={`Are you sure you want to delete the queue "${queue.name}"? This action cannot be undone.`}
+                      onConfirm={async () => await handleDeleteQueue(queue.id)}
+                    />
                   </HStack>
-                </Box>
-
-                <HStack spaceX={2}>
-                  <DiscordChannelLink
-                    channelType="office_hours"
-                    resourceId={queue.id}
-                    size="sm"
-                    variant="outline"
-                    tooltipText="Open Discord Channel"
-                  />
-                  <Button size="sm" variant="outline" onClick={() => editModal.openModal(queue)}>
-                    <Icon as={BsPencil} />
-                    Edit
-                  </Button>
-                  <PopConfirm
-                    triggerLabel="Delete queue"
-                    trigger={
-                      <Button size="sm" variant="outline" colorPalette="red">
-                        <Icon as={BsTrash} />
-                        Delete
-                      </Button>
-                    }
-                    confirmHeader="Delete Queue"
-                    confirmText={`Are you sure you want to delete the queue "${queue.name}"? This action cannot be undone.`}
-                    onConfirm={async () => await handleDeleteQueue(queue.id)}
-                  />
-                </HStack>
-              </Flex>
-            </Box>
-          ))}
+                </Flex>
+              </Box>
+            ))}
         </Stack>
       )}
 
