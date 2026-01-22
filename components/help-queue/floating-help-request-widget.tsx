@@ -11,6 +11,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
+import { useHelpQueues, useHelpQueueAssignments, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { Tooltip } from "@/components/ui/tooltip";
 
 const HelpDrawer = dynamic(() => import("@/components/help-queue/help-drawer"), {
   ssr: false
@@ -25,6 +27,40 @@ export function FloatingHelpRequestWidget() {
   const [isExpanded, setIsExpanded] = useState(false);
   const unreadCount = useHelpRequestUnreadCount(activeRequest?.request.id);
   const allHelpRequestStudents = useHelpRequestStudents();
+  const allHelpQueues = useHelpQueues();
+  const allHelpQueueAssignments = useHelpQueueAssignments();
+  const allHelpRequests = useHelpRequests();
+
+  // Get queue with ordinal 0 (default queue)
+  const defaultQueue = useMemo(() => {
+    return allHelpQueues.find((queue) => queue.ordinal === 0);
+  }, [allHelpQueues]);
+
+  // Check if default queue is staffed
+  const isDefaultQueueStaffed = useMemo(() => {
+    if (!defaultQueue) return false;
+    const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
+    return activeAssignments.some((assignment) => assignment.help_queue_id === defaultQueue.id);
+  }, [defaultQueue, allHelpQueueAssignments]);
+
+  // Count open help requests
+  const openRequestCount = useMemo(() => {
+    return allHelpRequests.filter(
+      (request) => request.status === "open" || request.status === "in_progress"
+    ).length;
+  }, [allHelpRequests]);
+
+  // Determine button text and tooltip
+  const buttonText = useMemo(() => {
+    if (isDefaultQueueStaffed && openRequestCount === 0) {
+      return "Help queue is empty, staff are ready to help you right now";
+    } else if (openRequestCount > 0 && openRequestCount < 5) {
+      return "Queue is short, join it";
+    }
+    return "Get Help";
+  }, [isDefaultQueueStaffed, openRequestCount]);
+
+  const tooltipText = "Text chat or video chat with a TA right now!";
 
   // Compute student IDs for the active request
   const helpRequestStudentIds = useMemo(() => {
@@ -65,21 +101,35 @@ export function FloatingHelpRequestWidget() {
   if (!activeRequest) {
     return (
       <>
-        <Box position="fixed" bottom={4} right={4} zIndex={1000} display={{ base: "block", md: "block" }}>
-          <Button
-            size="lg"
-            colorPalette="green"
-            onClick={openDrawer}
-            boxShadow="xl"
-            _hover={{ transform: "scale(1.05)", boxShadow: "2xl" }}
-            transition="all 0.2s"
-            fontWeight="semibold"
-            px={6}
-            py={6}
-          >
-            <Icon as={BsQuestionCircle} boxSize={6} mr={2} />
-            Get Help
-          </Button>
+        <Box
+          position="fixed"
+          bottom={4}
+          right={4}
+          zIndex={1000}
+          display={{ base: "block", md: "block" }}
+          maxW={{ base: "calc(100vw - 2rem)", md: "300px" }}
+        >
+          <Tooltip content={tooltipText} positioning={{ placement: "left" }}>
+            <Button
+              size="lg"
+              colorPalette="green"
+              onClick={openDrawer}
+              boxShadow="xl"
+              _hover={{ transform: "scale(1.05)", boxShadow: "2xl" }}
+              transition="all 0.2s"
+              fontWeight="semibold"
+              px={6}
+              py={6}
+              whiteSpace="normal"
+              textAlign="left"
+              h="auto"
+              minH="fit-content"
+              w="100%"
+            >
+              <Icon as={BsQuestionCircle} boxSize={6} mr={2} flexShrink={0} />
+              <Text>{buttonText}</Text>
+            </Button>
+          </Tooltip>
         </Box>
         {isDrawerOpen && <HelpDrawer isOpen={isDrawerOpen} onClose={closeDrawer} />}
       </>

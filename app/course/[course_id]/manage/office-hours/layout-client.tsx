@@ -95,7 +95,7 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
             />
           </Box>
         )}
-        <Box flex="1" minW={0} overflow="hidden">
+        <Box flex="1" minW={0} overflowY="auto" overflowX="hidden">
           {children}
         </Box>
       </Flex>

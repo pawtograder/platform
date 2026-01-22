@@ -42,3 +42,21 @@ export function isUrl(str: string | null | undefined): boolean {
     return false;
   }
 }
+
+/**
+ * Check if an event is currently happening (current time is between start and end)
+ * @param startTime - ISO string of event start time
+ * @param endTime - ISO string of event end time
+ * @param now - Optional current time (defaults to Date.now())
+ * @returns true if the event is currently active
+ */
+export function isEventCurrentlyHappening(
+  startTime: string,
+  endTime: string,
+  now: Date = new Date()
+): boolean {
+  const start = new Date(startTime).getTime();
+  const end = new Date(endTime).getTime();
+  const current = now.getTime();
+  return current >= start && current <= end;
+}

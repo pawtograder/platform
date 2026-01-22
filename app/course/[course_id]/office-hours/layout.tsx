@@ -55,12 +55,6 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
     <ClassProfileProvider>
       <ModerationBanNotice classId={Number(course_id)}>
         <Box height="100dvh" overflow="hidden" display="flex" flexDirection="column">
-          <OfficeHoursHeader
-            mode={mode}
-            officeHoursBaseHref={officeHoursBaseHref}
-            currentRequest={currentRequest}
-            isManageMode={false}
-          />
           {courseController?.course?.office_hours_description && (
             <Box px={{ base: 3, md: 6 }} pt={{ base: 3, md: 4 }} pb={0}>
               <Box p={4} borderWidth="1px" borderColor="border.muted" bg="bg.subtle" rounded="md" mb={4}>
@@ -73,6 +67,12 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
               </Box>
             </Box>
           )}
+          <OfficeHoursHeader
+            mode={mode}
+            officeHoursBaseHref={officeHoursBaseHref}
+            currentRequest={currentRequest}
+            isManageMode={false}
+          />
           <Box flex="1" minH="0" overflow="auto" px={{ base: 3, md: 6 }} py={{ base: 3, md: 6 }}>
             {children}
           </Box>

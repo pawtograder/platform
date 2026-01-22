@@ -3,22 +3,13 @@
 import { useHelpQueueAssignments, useHelpQueues, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
-import {
-  Badge,
-  Box,
-  Button,
-  CardBody,
-  CardHeader,
-  CardRoot,
-  Heading,
-  HStack,
-  Icon,
-  Stack,
-  Text
-} from "@chakra-ui/react";
+import { Badge, Box, Button, CardBody, CardHeader, CardRoot, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
+import { Tooltip } from "@/components/ui/tooltip";
+import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { useParams, useRouter } from "next/navigation";
 import { useMemo } from "react";
 import { FaPlus, FaQuestionCircle } from "react-icons/fa";
+import { FiChevronDown } from "react-icons/fi";
 import PersonAvatar from "@/components/ui/person-avatar";
 import dynamic from "next/dynamic";
 
@@ -89,6 +80,32 @@ export function OfficeHoursStatusCard() {
     );
   }, [activeHelpRequests]);
 
+  // Get queue with ordinal 0 (default queue)
+  const defaultQueue = useMemo(() => {
+    return helpQueues.find((queue) => queue.ordinal === 0);
+  }, [helpQueues]);
+
+  // Check if default queue is staffed
+  const isDefaultQueueStaffed = useMemo(() => {
+    if (!defaultQueue) return false;
+    return (activeAssignmentsByQueue[defaultQueue.id]?.length ?? 0) > 0;
+  }, [defaultQueue, activeAssignmentsByQueue]);
+
+  // Count open help requests
+  const openRequestCount = activeHelpRequests.length;
+
+  // Determine button text and tooltip
+  const buttonText = useMemo(() => {
+    if (isDefaultQueueStaffed && openRequestCount === 0) {
+      return "Help queue is empty, staff are ready to help you right now";
+    } else if (openRequestCount > 0 && openRequestCount < 5) {
+      return "Queue is short, join it";
+    }
+    return "Get Help";
+  }, [isDefaultQueueStaffed, openRequestCount]);
+
+  const tooltipText = "Text chat or video chat with a TA right now!";
+
   // Only show for students when feature is enabled
   if (role.role !== "student" || !featureEnabled) {
     return null;
@@ -110,10 +127,89 @@ export function OfficeHoursStatusCard() {
     <Box>
       <HStack justify="space-between" align="center" mb={4} flexWrap="wrap" gap={2}>
         <Heading size="lg">Office Hours</Heading>
-        <Button size="md" colorPalette="green" onClick={openDrawer} fontWeight="semibold">
-          <Icon as={FaQuestionCircle} mr={2} boxSize={4} />
-          Get Help
-        </Button>
+        <HStack gap={2} flexWrap="wrap">
+          {queuesWithActiveStaff.length === 0 ? (
+            <Tooltip content={tooltipText} positioning={{ placement: "bottom" }}>
+              <Button
+                size="md"
+                colorPalette="green"
+                onClick={openDrawer}
+                fontWeight="semibold"
+                whiteSpace="normal"
+                textAlign="left"
+                h="auto"
+                minH="fit-content"
+              >
+                <Icon as={FaQuestionCircle} mr={2} boxSize={4} flexShrink={0} />
+                <Text>{buttonText}</Text>
+              </Button>
+            </Tooltip>
+          ) : queuesWithActiveStaff.length === 1 ? (
+            <>
+              <Tooltip content={tooltipText} positioning={{ placement: "bottom" }}>
+                <Button
+                  size="md"
+                  colorPalette="green"
+                  onClick={openDrawer}
+                  fontWeight="semibold"
+                  whiteSpace="normal"
+                  textAlign="left"
+                  h="auto"
+                  minH="fit-content"
+                >
+                  <Icon as={FaQuestionCircle} mr={2} boxSize={4} flexShrink={0} />
+                  <Text>{buttonText}</Text>
+                </Button>
+              </Tooltip>
+              <Button
+                size="md"
+                colorPalette="green"
+                onClick={() => handleNewRequest(queuesWithActiveStaff[0].id)}
+              >
+                <FaPlus />
+                New Request
+              </Button>
+            </>
+          ) : (
+            <>
+              <Tooltip content={tooltipText} positioning={{ placement: "bottom" }}>
+                <Button
+                  size="md"
+                  colorPalette="green"
+                  onClick={openDrawer}
+                  fontWeight="semibold"
+                  whiteSpace="normal"
+                  textAlign="left"
+                  h="auto"
+                  minH="fit-content"
+                >
+                  <Icon as={FaQuestionCircle} mr={2} boxSize={4} flexShrink={0} />
+                  <Text>{buttonText}</Text>
+                </Button>
+              </Tooltip>
+              <MenuRoot>
+                <MenuTrigger asChild>
+                  <Button size="md" colorPalette="green">
+                    <FaPlus />
+                    New Request
+                    <FiChevronDown />
+                  </Button>
+                </MenuTrigger>
+                <MenuContent>
+                  {queuesWithActiveStaff.map((queue) => (
+                    <MenuItem
+                      key={queue.id}
+                      value={queue.id.toString()}
+                      onClick={() => handleNewRequest(queue.id)}
+                    >
+                      {queue.name}
+                    </MenuItem>
+                  ))}
+                </MenuContent>
+              </MenuRoot>
+            </>
+          )}
+        </HStack>
       </HStack>
       {isDrawerOpen && <HelpDrawer isOpen={isDrawerOpen} onClose={closeDrawer} />}
       {queuesWithActiveStaff.length === 0 ? (
@@ -123,10 +219,12 @@ export function OfficeHoursStatusCard() {
               Office hours are currently closed. No staff are working on any queues right now.
             </Text>
             <HStack gap={2}>
-              <Button onClick={openDrawer} colorPalette="green" size="sm">
-                <Icon as={FaQuestionCircle} mr={2} />
-                Get Help
-              </Button>
+              <Tooltip content={tooltipText} positioning={{ placement: "bottom" }}>
+                <Button onClick={openDrawer} colorPalette="green" size="sm" whiteSpace="normal" textAlign="left">
+                  <Icon as={FaQuestionCircle} mr={2} />
+                  <Text>{buttonText}</Text>
+                </Button>
+              </Tooltip>
               <Button onClick={handleViewAllRequests} variant="outline" size="sm">
                 View All Queues
               </Button>
@@ -181,10 +279,6 @@ export function OfficeHoursStatusCard() {
                     <HStack gap={2} flexShrink={0}>
                       <Button size="sm" variant="outline" onClick={() => handleViewQueue(queue.id)}>
                         View Queue
-                      </Button>
-                      <Button size="sm" colorPalette="green" onClick={() => handleNewRequest(queue.id)}>
-                        <FaPlus />
-                        New Request
                       </Button>
                     </HStack>
                   </HStack>

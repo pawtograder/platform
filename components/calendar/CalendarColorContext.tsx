@@ -3,6 +3,7 @@
 import { createContext, useContext, useMemo, ReactNode } from "react";
 import { CalendarEvent } from "@/hooks/useCalendarEvents";
 import { CalendarColorPalette, OFFICE_HOURS_COLORS, EVENTS_COLORS } from "./calendar-utils";
+import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 
 interface CalendarColorContextValue {
   /** Get the color for an event based on its queue name and type */
@@ -23,13 +24,35 @@ interface CalendarColorProviderProps {
 }
 
 /**
+ * Helper function to get the resolved queue name from an event.
+ * Uses resolved_help_queue_id if available, otherwise falls back to queue_name.
+ * Exported for use in display components.
+ */
+export function getResolvedQueueName(
+  event: CalendarEvent,
+  helpQueues: Array<{ id: number; name: string }> | undefined
+): string | null {
+  // If we have a resolved queue ID, look up the queue name
+  if (event.resolved_help_queue_id && helpQueues) {
+    const queue = helpQueues.find((q) => q.id === event.resolved_help_queue_id);
+    if (queue) {
+      return queue.name;
+    }
+  }
+  // Fallback to queue_name if no resolved ID or queue not found
+  return event.queue_name;
+}
+
+/**
  * Assigns colors to queue names in order of first appearance.
  * Returns a map of queue name -> color palette.
+ * For office hours, uses resolved_help_queue_id to get accurate queue names.
  */
 function buildColorMap(
   events: CalendarEvent[],
   calendarType: "office_hours" | "events",
-  colorPalette: CalendarColorPalette[]
+  colorPalette: CalendarColorPalette[],
+  helpQueues?: Array<{ id: number; name: string }>
 ): Map<string, CalendarColorPalette> {
   const colorMap = new Map<string, CalendarColorPalette>();
   let colorIndex = 0;
@@ -40,7 +63,9 @@ function buildColorMap(
     .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   for (const event of sortedEvents) {
-    const queueName = event.queue_name;
+    const queueName = calendarType === "office_hours" 
+      ? getResolvedQueueName(event, helpQueues)
+      : event.queue_name;
     if (queueName && !colorMap.has(queueName)) {
       // Assign next color in order (cycle if we run out)
       colorMap.set(queueName, colorPalette[colorIndex % colorPalette.length]);
@@ -56,8 +81,13 @@ function buildColorMap(
  * No hashing - colors are assigned based on order of first appearance.
  */
 export function CalendarColorProvider({ children, events }: CalendarColorProviderProps) {
+  const helpQueues = useHelpQueues();
+  
   // Build color maps for both calendar types
-  const officeHoursColorMap = useMemo(() => buildColorMap(events, "office_hours", OFFICE_HOURS_COLORS), [events]);
+  const officeHoursColorMap = useMemo(
+    () => buildColorMap(events, "office_hours", OFFICE_HOURS_COLORS, helpQueues),
+    [events, helpQueues]
+  );
 
   const eventsColorMap = useMemo(() => buildColorMap(events, "events", EVENTS_COLORS), [events]);
 
@@ -115,8 +145,13 @@ export function useCalendarColors() {
  * Use this to wrap calendar components that need color support.
  */
 export function useCalendarColorsFromEvents(events: CalendarEvent[]) {
+  const helpQueues = useHelpQueues();
+  
   // Build color maps for both calendar types
-  const officeHoursColorMap = useMemo(() => buildColorMap(events, "office_hours", OFFICE_HOURS_COLORS), [events]);
+  const officeHoursColorMap = useMemo(
+    () => buildColorMap(events, "office_hours", OFFICE_HOURS_COLORS, helpQueues),
+    [events, helpQueues]
+  );
 
   const eventsColorMap = useMemo(() => buildColorMap(events, "events", EVENTS_COLORS), [events]);
 

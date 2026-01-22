@@ -404,24 +404,27 @@ export default async function StudentDashboard({
         )}
       </Box>
 
-      <Box>
-        <Suspense
-          fallback={
-            <Box>
-              <Heading size="lg" mb={4}>
-                Office Hours
-              </Heading>
-              <CardRoot>
-                <CardBody>
-                  <Text color="fg.muted">Loading office hours...</Text>
-                </CardBody>
-              </CardRoot>
-            </Box>
-          }
-        >
-          <OfficeHoursStatusCard />
-        </Suspense>
-      </Box>
+      {/* Only show OfficeHoursStatusCard when no calendar is configured - serves as fallback */}
+      {!hasCalendar && (
+        <Box>
+          <Suspense
+            fallback={
+              <Box>
+                <Heading size="lg" mb={4}>
+                  Office Hours
+                </Heading>
+                <CardRoot>
+                  <CardBody>
+                    <Text color="fg.muted">Loading office hours...</Text>
+                  </CardBody>
+                </CardRoot>
+              </Box>
+            }
+          >
+            <OfficeHoursStatusCard />
+          </Suspense>
+        </Box>
+      )}
     </VStack>
   );
 }
