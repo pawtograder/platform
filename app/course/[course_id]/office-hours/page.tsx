@@ -15,7 +15,7 @@ import { redirect, useParams, useRouter, useSearchParams } from "next/navigation
 import { useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
-import { format, parseISO, isAfter, isSameDay } from "date-fns";
+import { format, parseISO, isAfter, isWithinInterval } from "date-fns";
 import { BsCalendar, BsClock } from "react-icons/bs";
 import QueueWeeklySchedule from "@/components/calendar/queue-weekly-schedule";
 import { isEventCurrentlyHappening } from "@/components/calendar/calendar-utils";
@@ -164,12 +164,13 @@ export default function OfficeHoursPage() {
           event.queue_name.toLowerCase() === selectedQueue.name.toLowerCase())
     );
 
-    // Get upcoming events (starting from now or later today)
+    // Get upcoming events (ongoing or ending in the future)
     const upcoming = queueEvents
       .filter((event) => {
         const eventStart = parseISO(event.start_time);
-        // Include events starting today or in the future
-        return isAfter(eventStart, now) || isSameDay(eventStart, now);
+        const eventEnd = parseISO(event.end_time);
+        // Include events that are ongoing or end in the future
+        return isAfter(eventEnd, now) || isWithinInterval(now, { start: eventStart, end: eventEnd });
       })
       .sort((a, b) => {
         const aStart = parseISO(a.start_time).getTime();

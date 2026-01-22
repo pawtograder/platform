@@ -27,9 +27,14 @@ export default function QueuesSettingsPage() {
   // Reset form when course data loads
   useEffect(() => {
     if (course) {
-      reset({
-        office_hours_description: course.office_hours_description || ""
-      });
+      reset(
+        {
+          office_hours_description: course.office_hours_description || ""
+        },
+        {
+          keepDirtyValues: true
+        }
+      );
     }
   }, [course, reset]);
 

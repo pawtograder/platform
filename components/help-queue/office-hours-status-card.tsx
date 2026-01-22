@@ -71,9 +71,11 @@ export function OfficeHoursStatusCard() {
     return helpQueues
       .filter((queue) => queueIdsWithActiveStaff.has(queue.id))
       .sort((a, b) => {
-        // Primary sort: by ordinal
-        if (a.ordinal !== b.ordinal) {
-          return a.ordinal - b.ordinal;
+        // Primary sort: by ordinal (queues without ordinal sort to the end)
+        const oa = a.ordinal ?? Number.POSITIVE_INFINITY;
+        const ob = b.ordinal ?? Number.POSITIVE_INFINITY;
+        if (oa !== ob) {
+          return oa - ob;
         }
         // Secondary sort: alphabetically by name
         return a.name.localeCompare(b.name);
