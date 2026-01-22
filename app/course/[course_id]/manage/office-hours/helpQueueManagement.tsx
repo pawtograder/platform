@@ -97,7 +97,7 @@ export default function HelpQueueManagement() {
         </Box>
       ) : (
         <Stack spaceY={4}>
-          {queues
+          {[...queues]
             .sort((a, b) => {
               // Primary sort: by ordinal
               if (a.ordinal !== b.ordinal) {

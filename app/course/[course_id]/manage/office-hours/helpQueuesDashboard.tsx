@@ -289,6 +289,7 @@ export default function HelpQueuesDashboard() {
                     {staffingInfo.groupedAssignments.map((group, groupIndex) => {
                       const groupStaffIds = group.map((a) => a.ta_profile_id);
                       const groupEnd = staffingInfo.currentStaffUntil;
+                      const minutesRemaining = groupEnd ? differenceInMinutes(groupEnd, new Date()) : 0;
 
                       return (
                         <Box key={`group-${groupIndex}`}>
@@ -306,10 +307,10 @@ export default function HelpQueuesDashboard() {
                           {groupEnd && (
                             <Text fontSize="xs" color="gray.600">
                               Until {format(groupEnd, "h:mm a")}
-                              {differenceInMinutes(groupEnd, new Date()) > 0 && (
+                              {minutesRemaining > 0 && (
                                 <Text as="span" ml={1}>
-                                  ({Math.floor(differenceInMinutes(groupEnd, new Date()) / 60)}h{" "}
-                                  {differenceInMinutes(groupEnd, new Date()) % 60}m remaining)
+                                  ({Math.floor(minutesRemaining / 60)}h{" "}
+                                  {minutesRemaining % 60}m remaining)
                                 </Text>
                               )}
                             </Text>

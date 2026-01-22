@@ -6,7 +6,6 @@ import { useCourseController } from "@/hooks/useCourseController";
 import { useUpdate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useEffect } from "react";
-import { toaster } from "@/components/ui/toaster";
 
 type OfficeHoursDescriptionFormData = {
   office_hours_description: string;
@@ -37,28 +36,21 @@ export default function QueuesSettingsPage() {
   const onSubmit = async (data: OfficeHoursDescriptionFormData) => {
     if (!course) return;
 
-    try {
-      await updateCourse({
-        resource: "classes",
-        id: course.id,
-        values: {
-          office_hours_description: data.office_hours_description || null
-        },
-        successNotification: {
-          message: "Office hours description updated successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to update office hours description",
-          type: "error"
-        }
-      });
-    } catch (error) {
-      toaster.error({
-        title: "Error",
-        description: `Failed to update office hours description: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
+    await updateCourse({
+      resource: "classes",
+      id: course.id,
+      values: {
+        office_hours_description: data.office_hours_description || null
+      },
+      successNotification: {
+        message: "Office hours description updated successfully",
+        type: "success"
+      },
+      errorNotification: {
+        message: "Failed to update office hours description",
+        type: "error"
+      }
+    });
   };
 
   return (

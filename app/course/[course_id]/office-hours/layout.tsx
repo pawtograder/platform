@@ -8,7 +8,7 @@ import { useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { Box, Text } from "@chakra-ui/react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 
 const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>) => {
   const { course_id, queue_id, request_id } = useParams();

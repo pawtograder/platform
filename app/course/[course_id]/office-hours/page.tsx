@@ -156,7 +156,6 @@ export default function OfficeHoursPage() {
   const upcomingSchedule = useMemo(() => {
     if (!selectedQueueId || !selectedQueue) return [];
 
-    const now = new Date();
     const queueEvents = officeHoursEvents.filter(
       (event) =>
         event.resolved_help_queue_id === selectedQueueId ||
@@ -180,7 +179,7 @@ export default function OfficeHoursPage() {
       .slice(0, 5); // Show next 5 upcoming events
 
     return upcoming;
-  }, [selectedQueueId, selectedQueue, officeHoursEvents]);
+  }, [selectedQueueId, selectedQueue, officeHoursEvents, now]);
 
   // Auto-select first queue if none selected
   useEffect(() => {
