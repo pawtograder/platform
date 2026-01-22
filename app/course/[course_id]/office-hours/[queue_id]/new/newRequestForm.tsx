@@ -655,9 +655,6 @@ export default function HelpRequestForm() {
       )
   );
 
-  console.log(
-    `Debvugging inactive queue: isSubmitting=${isSubmitting}, isSubmittingGuard=${isSubmittingGuard}, wouldConflict=${wouldConflict}, selectedStudents.length=${selectedStudents.length}, templates.length=${templates.length}, watch("template_id")=${watch("template_id")}`
-  );
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
       <Toaster />
