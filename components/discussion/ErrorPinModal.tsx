@@ -234,7 +234,7 @@ export function ErrorPinModal({
       });
       return;
     }
-    
+
     if (rules.length === 0) {
       toaster.error({
         title: "Error",
@@ -288,7 +288,7 @@ export function ErrorPinModal({
       });
       return;
     }
-    
+
     if (data.rules.length === 0) {
       toaster.error({
         title: "Error",

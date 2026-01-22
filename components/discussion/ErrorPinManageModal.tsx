@@ -200,9 +200,7 @@ export function ErrorPinManageModal({
                       <HStack justify="space-between" mb={2}>
                         <HStack gap={2} flexWrap="wrap">
                           <Text fontWeight="semibold">{getAssignmentTitle(pin.assignment_id)}</Text>
-                          {pin.assignment_id === null && (
-                            <Badge colorPalette="purple">Class-Level</Badge>
-                          )}
+                          {pin.assignment_id === null && <Badge colorPalette="purple">Class-Level</Badge>}
                           {pin.enabled ? (
                             <Badge colorPalette="green">Enabled</Badge>
                           ) : (
