@@ -706,9 +706,20 @@ export async function isRepoAlreadyInSync(
             level: "debug"
           });
           return false;
-        } catch {
-          // File doesn't exist - good, it was supposed to be removed
-          continue;
+        } catch (error: unknown) {
+          // Only treat 404 as "file doesn't exist" - other errors (rate limit, auth, network) should fail the check
+          const status = error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
+          if (status === 404) {
+            // File doesn't exist - good, it was supposed to be removed
+            continue;
+          }
+          // Other error (rate limit, auth, network, etc.) - can't reliably determine sync status
+          scope?.addBreadcrumb({
+            message: `Error checking if removed file ${file.path} exists: status=${status}, error=${error}`,
+            category: "sync",
+            level: "warning"
+          });
+          return false;
         }
       }
 
@@ -727,13 +738,23 @@ export async function isRepoAlreadyInSync(
           // Can't get content - assume not in sync
           return false;
         }
-      } catch {
-        // File doesn't exist in student repo but should (added/modified file)
-        scope?.addBreadcrumb({
-          message: `File ${file.path} doesn't exist in student repo but should`,
-          category: "sync",
-          level: "debug"
-        });
+      } catch (error: unknown) {
+        const status = error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
+        if (status === 404) {
+          // File doesn't exist in student repo but should (added/modified file) - not in sync
+          scope?.addBreadcrumb({
+            message: `File ${file.path} doesn't exist in student repo but should`,
+            category: "sync",
+            level: "debug"
+          });
+        } else {
+          // Other error (rate limit, auth, network, etc.) - can't reliably determine sync status
+          scope?.addBreadcrumb({
+            message: `Error fetching file ${file.path} from student repo: status=${status}, error=${error}`,
+            category: "sync",
+            level: "warning"
+          });
+        }
         return false;
       }
 
