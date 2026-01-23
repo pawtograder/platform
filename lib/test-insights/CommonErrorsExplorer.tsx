@@ -1,8 +1,10 @@
 "use client";
 
-import { Badge, Box, Button, Card, Code, Collapsible, HStack, Icon, Spinner, Text, VStack } from "@chakra-ui/react";
-import { useCallback, useMemo, useState } from "react";
-import { FaBug, FaChevronDown, FaChevronRight, FaExclamationTriangle, FaLink, FaUsers } from "react-icons/fa";
+import { toaster } from "@/components/ui/toaster";
+import { createClient } from "@/utils/supabase/client";
+import { Badge, Box, Button, Card, Code, Collapsible, HStack, Icon, Spinner, Text, Textarea, VStack } from "@chakra-ui/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FaBug, FaChevronDown, FaChevronRight, FaCopy, FaEnvelope, FaExclamationTriangle, FaLink, FaPlay, FaUsers } from "react-icons/fa";
 import { ErrorFilterPanel, DEFAULT_ERROR_FILTERS } from "./ErrorFilterPanel";
 import type { CommonErrorGroup, CommonErrorsResponse, ErrorExplorerFilters, TestStatistics } from "./types";
 
@@ -15,6 +17,7 @@ interface CommonErrorsExplorerProps {
   onFiltersChange: (filters: ErrorExplorerFilters) => void;
   onCreateErrorPin?: (errorGroup: CommonErrorGroup) => void;
   onViewSubmissions?: (submissionIds: number[]) => void;
+  onRegradeSubmissions?: (errorGroup: CommonErrorGroup) => void;
 }
 
 /**
@@ -28,7 +31,8 @@ export function CommonErrorsExplorer({
   filters,
   onFiltersChange,
   onCreateErrorPin,
-  onViewSubmissions
+  onViewSubmissions,
+  onRegradeSubmissions
 }: CommonErrorsExplorerProps) {
   const [expandedError, setExpandedError] = useState<string | null>(null);
 
@@ -132,6 +136,7 @@ export function CommonErrorsExplorer({
               onToggle={() => handleToggleExpand(`${errorGroup.test_name}-${idx}`)}
               onCreateErrorPin={onCreateErrorPin}
               onViewSubmissions={onViewSubmissions}
+              onRegradeSubmissions={onRegradeSubmissions}
             />
           ))}
         </VStack>
@@ -146,6 +151,7 @@ interface ErrorGroupCardProps {
   onToggle: () => void;
   onCreateErrorPin?: (errorGroup: CommonErrorGroup) => void;
   onViewSubmissions?: (submissionIds: number[]) => void;
+  onRegradeSubmissions?: (errorGroup: CommonErrorGroup) => void;
 }
 
 function ErrorGroupCard({
@@ -153,7 +159,8 @@ function ErrorGroupCard({
   isExpanded,
   onToggle,
   onCreateErrorPin,
-  onViewSubmissions
+  onViewSubmissions,
+  onRegradeSubmissions
 }: ErrorGroupCardProps) {
   return (
     <Card.Root
@@ -195,7 +202,7 @@ function ErrorGroupCard({
               <HStack gap={1}>
                 <Icon as={FaUsers} color="fg.muted" boxSize={3} />
                 <Badge colorPalette="purple" size="sm">
-                  {errorGroup.occurrence_count} students
+                  {errorGroup.affected_submission_ids.length} submission{errorGroup.affected_submission_ids.length !== 1 ? "s" : ""}
                 </Badge>
               </HStack>
               <Badge colorPalette={errorGroup.is_failing ? "red" : "yellow"} size="sm">
@@ -233,8 +240,11 @@ function ErrorGroupCard({
                   </VStack>
                 </Box>
 
+                {/* Affected Student Emails */}
+                <AffectedStudentsEmails submissionIds={errorGroup.affected_submission_ids} />
+
                 {/* Actions */}
-                <HStack justify="flex-end" gap={2}>
+                <HStack justify="flex-end" gap={2} flexWrap="wrap">
                   {onViewSubmissions && (
                     <Button
                       size="sm"
@@ -243,6 +253,16 @@ function ErrorGroupCard({
                     >
                       <Icon as={FaUsers} mr={2} />
                       View {errorGroup.affected_submission_ids.length} Submissions
+                    </Button>
+                  )}
+                  {onRegradeSubmissions && (
+                    <Button
+                      size="sm"
+                      colorPalette="green"
+                      onClick={() => onRegradeSubmissions(errorGroup)}
+                    >
+                      <Icon as={FaPlay} mr={2} />
+                      Regrade Submissions
                     </Button>
                   )}
                   {onCreateErrorPin && (
@@ -258,6 +278,165 @@ function ErrorGroupCard({
         </Collapsible.Root>
       </Card.Body>
     </Card.Root>
+  );
+}
+
+/**
+ * Component to fetch and display student emails for affected submissions
+ */
+function AffectedStudentsEmails({ submissionIds }: { submissionIds: number[] }) {
+  const [emails, setEmails] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!isExpanded || submissionIds.length === 0) return;
+
+    let cancelled = false;
+
+    async function fetchEmails() {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const supabase = createClient();
+
+        // Step 1: Get profile_ids from submissions
+        const { data: submissions, error: submissionsError } = await supabase
+          .from("submissions")
+          .select("id, profile_id")
+          .in("id", submissionIds);
+
+        if (submissionsError) throw submissionsError;
+        if (!submissions || submissions.length === 0) {
+          if (!cancelled) setEmails([]);
+          return;
+        }
+
+        // Get unique profile IDs
+        const profileIds = [...new Set(submissions.map(s => s.profile_id).filter(Boolean))] as string[];
+
+        if (profileIds.length === 0) {
+          if (!cancelled) setEmails([]);
+          return;
+        }
+
+        // Step 2: Get user emails via user_roles
+        const { data: userRoles, error: rolesError } = await supabase
+          .from("user_roles")
+          .select("private_profile_id, users(email)")
+          .in("private_profile_id", profileIds);
+
+        if (rolesError) throw rolesError;
+
+        if (!cancelled) {
+          // Extract unique emails
+          const emailSet = new Set<string>();
+          userRoles?.forEach((role) => {
+            const users = role.users as unknown as { email: string } | null;
+            if (users?.email) {
+              emailSet.add(users.email);
+            }
+          });
+          setEmails(Array.from(emailSet).sort());
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to fetch emails");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void fetchEmails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isExpanded, submissionIds]);
+
+  const handleCopyEmails = useCallback(async () => {
+    if (emails.length === 0) return;
+
+    try {
+      await navigator.clipboard.writeText(emails.join(", "));
+      toaster.success({
+        title: "Copied!",
+        description: `${emails.length} email${emails.length !== 1 ? "s" : ""} copied to clipboard`
+      });
+    } catch {
+      toaster.error({
+        title: "Failed to copy",
+        description: "Could not copy emails to clipboard"
+      });
+    }
+  }, [emails]);
+
+  return (
+    <Box>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => setIsExpanded(!isExpanded)}
+        mb={isExpanded ? 2 : 0}
+      >
+        <Icon as={FaEnvelope} mr={2} />
+        {isExpanded ? "Hide" : "Show"} Student Emails
+      </Button>
+
+      {isExpanded && (
+        <Box
+          p={3}
+          bg="bg.muted"
+          borderRadius="md"
+          borderWidth="1px"
+          borderColor="border.muted"
+        >
+          {isLoading ? (
+            <HStack justify="center" p={2}>
+              <Spinner size="sm" />
+              <Text fontSize="sm" color="fg.muted">
+                Loading emails...
+              </Text>
+            </HStack>
+          ) : error ? (
+            <Text fontSize="sm" color="fg.error">
+              {error}
+            </Text>
+          ) : emails.length === 0 ? (
+            <Text fontSize="sm" color="fg.muted">
+              No emails found for affected students
+            </Text>
+          ) : (
+            <VStack align="stretch" gap={2}>
+              <HStack justify="space-between">
+                <Text fontSize="sm" fontWeight="medium">
+                  {emails.length} student email{emails.length !== 1 ? "s" : ""}
+                </Text>
+                <Button size="xs" variant="outline" onClick={handleCopyEmails}>
+                  <Icon as={FaCopy} mr={1} />
+                  Copy All
+                </Button>
+              </HStack>
+              <Textarea
+                value={emails.join(", ")}
+                readOnly
+                fontSize="xs"
+                fontFamily="mono"
+                rows={Math.min(4, Math.ceil(emails.length / 2))}
+                resize="vertical"
+                bg="bg.subtle"
+                onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+              />
+            </VStack>
+          )}
+        </Box>
+      )}
+    </Box>
   );
 }
 
