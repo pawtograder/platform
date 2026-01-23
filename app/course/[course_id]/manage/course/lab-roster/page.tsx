@@ -52,6 +52,7 @@ type LabSubmissionData = {
   submissionCount: number;
   score: number | null;
   submissionId: number | null;
+  isReviewGraded: boolean | null;
 };
 
 type StudentLabData = Map<string, Map<number, LabSubmissionData>>; // studentId -> assignmentId -> data
@@ -296,7 +297,7 @@ export default function LabRosterPage() {
 
       const { data, error } = await supabase
         .from("submissions_agg")
-        .select("assignment_id, profile_id, submissioncount, score, id")
+        .select("assignment_id, profile_id, submissioncount, score, id, is_review_graded")
         .in("assignment_id", assignmentIds)
         .in("profile_id", studentIds);
 
@@ -319,7 +320,8 @@ export default function LabRosterPage() {
               studentMap.set(row.assignment_id, {
                 submissionCount: row.submissioncount || 0,
                 score: row.score ?? null,
-                submissionId: row.id ?? null
+                submissionId: row.id ?? null,
+                isReviewGraded: row.is_review_graded ?? null
               });
             }
           }
@@ -477,6 +479,65 @@ export default function LabRosterPage() {
 
               return boxContent;
             }
+          },
+          {
+            id: `lab_${assignment.id}_review_graded`,
+            header: ({ column }) => (
+              <Box
+                textAlign="center"
+                borderRightWidth="1px"
+                borderBottomWidth="1px"
+                borderColor="border.muted"
+                cursor="pointer"
+                onClick={column.getToggleSortingHandler()}
+              >
+                <Text fontSize="xs" color="fg.muted" userSelect="none">
+                  Review Graded
+                  {{
+                    asc: " 🔼",
+                    desc: " 🔽"
+                  }[column.getIsSorted() as string] ?? ""}
+                </Text>
+              </Box>
+            ),
+            enableSorting: true,
+            accessorFn: (row) => {
+              const studentData = labSubmissionData.get(row.private_profile_id);
+              const assignmentData = studentData?.get(assignment.id);
+              // Return boolean for sorting: true = 1, false = 0, null = -1
+              if (assignmentData?.isReviewGraded === null || assignmentData?.isReviewGraded === undefined) {
+                return -1;
+              }
+              return assignmentData.isReviewGraded ? 1 : 0;
+            },
+            cell: ({ row }) => {
+              const studentData = labSubmissionData.get(row.original.private_profile_id);
+              const assignmentData = studentData?.get(assignment.id);
+              const isReviewGraded = assignmentData?.isReviewGraded;
+
+              return (
+                <Box
+                  textAlign="center"
+                  borderRightWidth="1px"
+                  borderBottomWidth="1px"
+                  borderColor="border.muted"
+                  px={2}
+                  py={1}
+                >
+                  {isReviewGraded === null || isReviewGraded === undefined ? (
+                    <Text color="fg.muted">—</Text>
+                  ) : isReviewGraded ? (
+                    <Badge colorPalette="green" size="sm">
+                      Yes
+                    </Badge>
+                  ) : (
+                    <Badge colorPalette="orange" size="sm">
+                      No
+                    </Badge>
+                  )}
+                </Box>
+              );
+            }
           }
         ]
       };
@@ -498,7 +559,11 @@ export default function LabRosterPage() {
     // Build headers: base columns + lab assignment columns
     const headers = ["Lab Section", "Name", "Email", "GitHub Username"];
     for (const assignment of visibleLabAssignments) {
-      headers.push(`${assignment.title} - NumSubmissions`, `${assignment.title} - Score`);
+      headers.push(
+        `${assignment.title} - NumSubmissions`,
+        `${assignment.title} - Score`,
+        `${assignment.title} - Review Graded`
+      );
     }
 
     const csvData = studentsInSelectedSection.map((student) => {
@@ -516,6 +581,13 @@ export default function LabRosterPage() {
         row.push(String(assignmentData?.submissionCount ?? 0));
         row.push(
           assignmentData?.score !== null && assignmentData?.score !== undefined ? String(assignmentData.score) : ""
+        );
+        row.push(
+          assignmentData?.isReviewGraded === null || assignmentData?.isReviewGraded === undefined
+            ? ""
+            : assignmentData.isReviewGraded
+              ? "Yes"
+              : "No"
         );
       }
 

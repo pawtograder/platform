@@ -7,10 +7,7 @@ import { useMemo, useState, useEffect } from "react";
 import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
 import { isUrl, CalendarColorPalette, isEventCurrentlyHappening } from "./calendar-utils";
 import { useCalendarColorsFromEvents, getResolvedQueueName } from "./CalendarColorContext";
-import { useParams } from "next/navigation";
-import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { toaster } from "@/components/ui/toaster";
+import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 
 interface EventsByDay {
   [dateKey: string]: CalendarEvent[];
@@ -40,12 +37,7 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
   const monthName = format(date, "MMM");
-  const { course_id } = useParams();
-  const controller = useOfficeHoursController();
-  const { helpQueueAssignments } = controller;
-  const { private_profile_id: taProfileId } = useClassProfiles();
   const helpQueues = useHelpQueues();
-  const allAssignments = useHelpQueueAssignments();
   const [now, setNow] = useState(new Date());
 
   // Update current time every minute to check if event is active
@@ -53,74 +45,6 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
     const interval = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(interval);
   }, []);
-
-  const handleQueueClick = async (queueName: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    if (!taProfileId) {
-      return;
-    }
-
-    const queue = helpQueues?.find((q) => q.name === queueName);
-
-    // Check that queue exists
-    if (!queue) {
-      toaster.error({
-        title: "Error",
-        description: `Queue "${queueName}" not found`
-      });
-      return;
-    }
-
-    // Check that queue is active
-    if (!queue.is_active) {
-      toaster.error({
-        title: "Queue Inactive",
-        description: `The queue "${queueName}" is not currently active`
-      });
-      return;
-    }
-
-    // Check for existing active assignment for this TA and queue
-    const existingActiveAssignment = allAssignments?.find(
-      (assignment) =>
-        assignment.help_queue_id === queue.id &&
-        assignment.ta_profile_id === taProfileId &&
-        assignment.is_active === true
-    );
-
-    if (existingActiveAssignment) {
-      toaster.error({
-        title: "Already Active",
-        description: `You are already working on the queue "${queueName}"`
-      });
-      return;
-    }
-
-    // Default max_concurrent_students (matches database default)
-    const maxConcurrentStudents = 3;
-
-    try {
-      await helpQueueAssignments.create({
-        class_id: Number(course_id),
-        help_queue_id: queue.id,
-        ta_profile_id: taProfileId,
-        is_active: true,
-        started_at: new Date().toISOString(),
-        ended_at: null,
-        max_concurrent_students: maxConcurrentStudents
-      });
-      toaster.success({
-        title: "Success",
-        description: "Started working on queue"
-      });
-    } catch (error) {
-      toaster.error({
-        title: "Error",
-        description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
-  };
 
   return (
     <VStack align="stretch" minH="120px">
@@ -190,19 +114,6 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                       📍 {event.location}
                     </Text>
                   ))}
-                {resolvedQueueName && (
-                  <Box
-                    as="button"
-                    fontSize="xs"
-                    color={colors.accent}
-                    fontWeight="medium"
-                    onClick={(e) => handleQueueClick(resolvedQueueName, e)}
-                    _hover={{ textDecoration: "underline" }}
-                    cursor="pointer"
-                  >
-                    {resolvedQueueName}
-                  </Box>
-                )}
               </Box>
             );
           })
@@ -212,11 +123,13 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
   );
 }
 
-interface OfficeHoursScheduleProps {
+interface QueueWeeklyScheduleProps {
+  queueId: number;
+  queueName: string;
   showTitle?: boolean;
 }
 
-export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursScheduleProps) {
+export default function QueueWeeklySchedule({ queueId, queueName, showTitle = true }: QueueWeeklyScheduleProps) {
   const [weekOffset, setWeekOffset] = useState(0);
 
   const weekStart = useMemo(() => {
@@ -228,7 +141,18 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
 
   // Get all office hours events for consistent color assignment
   const allOfficeHoursEvents = useOfficeHoursSchedule();
-  const events = useWeekSchedule(weekStart);
+  const weekEvents = useWeekSchedule(weekStart);
+
+  // Filter events for this specific queue
+  const queueEvents = useMemo(() => {
+    return weekEvents.filter(
+      (event) =>
+        event.resolved_help_queue_id === queueId ||
+        (event.resolved_help_queue_id === null &&
+          event.queue_name &&
+          event.queue_name.toLowerCase() === queueName.toLowerCase())
+    );
+  }, [weekEvents, queueId, queueName]);
 
   // Get color functions from the hook (colors assigned in order, no hashing)
   const { getOfficeHoursColor } = useCalendarColorsFromEvents(allOfficeHoursEvents);
@@ -245,7 +169,7 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
     }
 
     // Group events into their respective days
-    events.forEach((event) => {
+    queueEvents.forEach((event) => {
       const eventDate = parseISO(event.start_time);
       const dateKey = format(eventDate, "yyyy-MM-dd");
       if (grouped[dateKey]) {
@@ -259,7 +183,7 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
     });
 
     return grouped;
-  }, [events, weekStart]);
+  }, [queueEvents, weekStart]);
 
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -280,7 +204,7 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
           <HStack justify="space-between" wrap="wrap" gap={2}>
             <HStack gap={2}>
               <Icon as={BsCalendar} color="blue.500" />
-              {showTitle && <Heading size="sm">Office Hours Schedule</Heading>}
+              {showTitle && <Heading size="sm">{queueName} Schedule</Heading>}
             </HStack>
 
             <HStack gap={2}>
@@ -329,9 +253,9 @@ export default function OfficeHoursSchedule({ showTitle = true }: OfficeHoursSch
           </Grid>
 
           {/* Show more button */}
-          {events.length === 0 && (
+          {queueEvents.length === 0 && (
             <Text fontSize="sm" color="fg.muted" textAlign="center" py={4}>
-              No office hours scheduled for this week
+              No office hours scheduled for this queue this week
             </Text>
           )}
         </VStack>

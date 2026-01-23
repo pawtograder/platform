@@ -639,6 +639,12 @@ export default class TableController<
   private _isRefetching: boolean = false;
   private _refetchListeners: ((isRefetching: boolean) => void)[] = [];
   private _debounceInterval: number;
+  /**
+   * Maximum jitter to add to debounce interval (in ms).
+   * Used to prevent thundering herd when many clients reconnect simultaneously.
+   * Set to 0 for real-time sensitive tables like chat messages.
+   */
+  private _debounceJitter: number;
   private _listDataListeners: ((
     data: ResultOne[],
     { entered, left }: { entered: ResultOne[]; left: ResultOne[] }
@@ -784,12 +790,14 @@ export default class TableController<
       clearTimeout(this._debounceTimeout);
     }
 
-    this._debounceTimeout = setTimeout(
-      async () => {
-        await this._processBatchedOperations();
-      },
-      this._debounceInterval + Math.random() * 1000 * 5
-    ); // Add some jitter to prevent thundering herd
+    // Calculate delay: debounce interval + random jitter (if configured)
+    // Jitter helps prevent thundering herd when many clients process events simultaneously
+    const jitter = this._debounceJitter > 0 ? Math.random() * this._debounceJitter : 0;
+    const delay = this._debounceInterval + jitter;
+
+    this._debounceTimeout = setTimeout(async () => {
+      await this._processBatchedOperations();
+    }, delay);
   }
 
   /**
@@ -1395,7 +1403,8 @@ export default class TableController<
     loadEntireTable = true,
     initialData,
     enableAutoRefetch,
-    autoFetchMissingRows
+    autoFetchMissingRows,
+    debounceJitter
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1431,6 +1440,13 @@ export default class TableController<
      * If false, never auto-fetch missing rows on getById.
      */
     autoFetchMissingRows?: boolean;
+    /**
+     * Maximum jitter to add to debounce interval (in ms).
+     * Used to prevent thundering herd when many clients reconnect simultaneously.
+     * Set to 0 for real-time sensitive tables like chat messages.
+     * Default: 500ms
+     */
+    debounceJitter?: number;
   }) {
     this._rows = [];
     this._client = client;
@@ -1442,6 +1458,9 @@ export default class TableController<
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
     this._debounceInterval = debounceInterval || 500;
+    // Default jitter reduced from 5000ms to 500ms to improve perceived responsiveness
+    // while still providing some thundering herd protection
+    this._debounceJitter = debounceJitter ?? 500;
     this._enableAutoRefetch = enableAutoRefetch;
     this._autoFetchMissingRows = autoFetchMissingRows ?? true;
     // Track controller creation

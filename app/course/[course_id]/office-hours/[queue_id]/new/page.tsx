@@ -17,11 +17,13 @@ export default function NewRequestPage() {
   // Check if queue has an active assignment (staff is working)
   const hasActiveAssignment = useMemo(() => {
     if (!activeHelpQueueAssignments) return false;
+    // Demo queues don't require active staff
+    if (helpQueue?.is_demo) return true;
     return activeHelpQueueAssignments.some((assignment) => assignment.help_queue_id === Number(queue_id));
-  }, [activeHelpQueueAssignments, queue_id]);
+  }, [activeHelpQueueAssignments, queue_id, helpQueue?.is_demo]);
 
-  // Check if queue is available for new requests (both available flag AND has active staff)
-  const isQueueOpen = helpQueue?.available && hasActiveAssignment;
+  // Check if queue is available for new requests (both available flag AND has active staff, unless demo)
+  const isQueueOpen = helpQueue?.is_demo || (helpQueue?.available && hasActiveAssignment);
 
   useEffect(() => {
     if (helpQueue && !isQueueOpen) {

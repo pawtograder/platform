@@ -7,6 +7,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useMessageNotifications } from "@/hooks/useMessageNotifications";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
 import {
   useHelpRequestMessages,
@@ -144,6 +145,13 @@ export const RealtimeChat = ({
       classId: Number(course_id),
       enableChat: true
     });
+
+  // Enable message notifications for this chat
+  useMessageNotifications({
+    helpRequestId: request_id,
+    enabled: !readOnly,
+    titlePrefix: "New message"
+  });
 
   // Helper function to get timestamp from either message type
   const getMessageTimestamp = (msg: UnifiedMessage): string => {

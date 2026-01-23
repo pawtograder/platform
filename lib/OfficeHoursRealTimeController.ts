@@ -257,6 +257,18 @@ export class OfficeHoursRealTimeController implements PawtograderRealTimeControl
   }
 
   /**
+   * Ensure the help request channel is created and subscribed.
+   * Call this before subscribeToHelpRequest if you need to guarantee the channel is ready
+   * before performing operations like refetching data.
+   */
+  async ensureHelpRequestChannelReady(helpRequestId: number): Promise<void> {
+    if (this._closed) {
+      return;
+    }
+    await this._ensureHelpRequestChannels(helpRequestId);
+  }
+
+  /**
    * Subscribe to all messages for a specific help request
    */
   subscribeToHelpRequest(helpRequestId: number, callback: MessageCallback): () => void {

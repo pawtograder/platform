@@ -19,6 +19,11 @@ import { Alert } from "@/components/ui/alert";
 import { toaster } from "@/components/ui/toaster";
 import { useCourseController } from "@/hooks/useCourseController";
 import CalendarDayView from "@/components/calendar/calendar-day-view";
+import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
+import NotificationPermissionWarning, {
+  useShowNotificationWarning
+} from "@/components/notifications/notification-permission-warning";
+import { format, parseISO, differenceInMinutes } from "date-fns";
 
 /**
  * Dashboard component for instructors/TAs to manage their office-hour queues.
@@ -43,6 +48,10 @@ export default function HelpQueuesDashboard() {
   const allQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
   const { isConnected, connectionStatus } = useConnectionStatus();
+  const officeHoursEvents = useOfficeHoursSchedule();
+
+  // Check if notification permission warning should be shown
+  const showNotificationWarning = useShowNotificationWarning();
 
   // Filter assignments for current TA
   const activeAssignments = useMemo(() => {
@@ -54,7 +63,7 @@ export default function HelpQueuesDashboard() {
     return allHelpRequests.filter((request) => request.status !== "resolved" && request.status !== "closed");
   }, [allHelpRequests]);
 
-  // Group all active assignments by queue (used for both sorting and display)
+  // Group all active assignments by queue (used for display)
   const activeAssignmentsByQueue = useMemo(() => {
     const assignments = allQueueAssignments.filter((assignment) => assignment.is_active);
 
@@ -71,20 +80,110 @@ export default function HelpQueuesDashboard() {
     );
   }, [allQueueAssignments]);
 
+  // Sort queues always by ordinal
   const sortedQueues = useMemo(() => {
     return [...queues].sort((a, b) => {
-      // Sort queues with active assignments first
-      const aHasActive = (activeAssignmentsByQueue[a.id]?.length ?? 0) > 0;
-      const bHasActive = (activeAssignmentsByQueue[b.id]?.length ?? 0) > 0;
-
-      if (aHasActive !== bHasActive) {
-        return aHasActive ? -1 : 1;
+      // Primary sort: by ordinal (queues without ordinal sort to the end)
+      const aOrd = a.ordinal ?? Number.POSITIVE_INFINITY;
+      const bOrd = b.ordinal ?? Number.POSITIVE_INFINITY;
+      if (aOrd !== bOrd) {
+        return aOrd - bOrd;
       }
-
-      // Within each group, sort alphabetically by name
+      // Secondary sort: alphabetically by name
       return a.name.localeCompare(b.name);
     });
-  }, [queues, activeAssignmentsByQueue]);
+  }, [queues]);
+
+  // Calculate staffing information for each queue
+  const queueStaffingInfo = useMemo(() => {
+    const now = new Date();
+    const info: Record<
+      number,
+      {
+        currentStaffUntil: Date | null;
+        nextScheduledStart: Date | null;
+        nextScheduledTimeStr: string | null;
+        groupedAssignments: HelpQueueAssignment[][];
+      }
+    > = {};
+
+    sortedQueues.forEach((queue) => {
+      const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
+
+      // Find calendar events for this queue
+      const queueEvents = officeHoursEvents.filter(
+        (event) =>
+          event.resolved_help_queue_id === queue.id ||
+          (event.resolved_help_queue_id === null &&
+            event.queue_name &&
+            event.queue_name.toLowerCase() === queue.name.toLowerCase())
+      );
+
+      // Group overlapping assignments
+      // Since all assignments in queueAssignments are active (is_active = true),
+      // they're all currently overlapping, so group them all together
+      const groupedAssignments: HelpQueueAssignment[][] = queueAssignments.length > 0 ? [queueAssignments] : [];
+
+      // Find when current staffing will end
+      // Only show end time if there's a calendar event currently happening
+      let currentStaffUntil: Date | null = null;
+
+      if (queueAssignments.length > 0) {
+        // Find calendar events that are currently happening
+        const currentEvents = queueEvents.filter((event) => {
+          const eventStart = parseISO(event.start_time);
+          const eventEnd = parseISO(event.end_time);
+          return eventStart <= now && eventEnd >= now;
+        });
+
+        if (currentEvents.length > 0) {
+          // Use the latest end time from current events
+          currentStaffUntil = parseISO(
+            currentEvents.reduce(
+              (latest, event) => {
+                const eventEnd = parseISO(event.end_time);
+                const latestEnd = latest ? parseISO(latest) : null;
+                return !latestEnd || eventEnd > latestEnd ? event.end_time : latest;
+              },
+              null as string | null
+            ) || currentEvents[0].end_time
+          );
+        }
+        // If no current event, don't set currentStaffUntil - we don't know when it ends
+      }
+
+      // Find next scheduled staff start time (after current assignments end or now if no current staffing)
+      const searchStartTime = currentStaffUntil || now;
+      const nextScheduledEvents = queueEvents
+        .filter((event) => {
+          const eventStart = parseISO(event.start_time);
+          // Only show events that start after current staffing ends (or now if no current staffing)
+          return eventStart.getTime() > searchStartTime.getTime();
+        })
+        .sort((a, b) => {
+          const aStart = parseISO(a.start_time);
+          const bStart = parseISO(b.start_time);
+          return aStart.getTime() - bStart.getTime();
+        });
+
+      let nextScheduledStart: Date | null = null;
+      let nextScheduledTimeStr: string | null = null;
+
+      if (nextScheduledEvents.length > 0) {
+        nextScheduledStart = parseISO(nextScheduledEvents[0].start_time);
+        nextScheduledTimeStr = format(nextScheduledStart, "EEE, MMM d 'at' h:mm a");
+      }
+
+      info[queue.id] = {
+        currentStaffUntil,
+        nextScheduledStart,
+        nextScheduledTimeStr,
+        groupedAssignments
+      };
+    });
+
+    return info;
+  }, [sortedQueues, activeAssignmentsByQueue, officeHoursEvents]);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -142,6 +241,9 @@ export default function HelpQueuesDashboard() {
         </Alert>
       )}
 
+      {/* Notification Permission Warning */}
+      {showNotificationWarning && <NotificationPermissionWarning userType="staff" />}
+
       {/* Today's Calendar Schedule - only show if calendar is configured */}
       {hasCalendar && (
         <Box>
@@ -157,7 +259,12 @@ export default function HelpQueuesDashboard() {
       {sortedQueues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
         const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
-        const activeStaff = queueAssignments.map((assignment: HelpQueueAssignment) => assignment.ta_profile_id);
+        const staffingInfo = queueStaffingInfo[queue.id] || {
+          currentStaffUntil: null,
+          nextScheduledStart: null,
+          nextScheduledTimeStr: null,
+          groupedAssignments: []
+        };
 
         return (
           <Flex
@@ -165,12 +272,12 @@ export default function HelpQueuesDashboard() {
             p={4}
             borderWidth="1px"
             borderRadius="md"
-            alignItems="center"
+            alignItems="flex-start"
             justifyContent="space-between"
             role="region"
             aria-label={`Help queue: ${queue.name}`}
           >
-            <Box>
+            <Box flex={1}>
               <Text fontWeight="medium">{queue.name}</Text>
               <HStack spaceX="2" mt="1">
                 <Text fontSize="sm">Mode:</Text>
@@ -185,36 +292,81 @@ export default function HelpQueuesDashboard() {
                 )}
               </HStack>
 
-              {/* Active staff section */}
-              <VStack align="stretch" spaceY={2} mt={2}>
-                <HStack align="center" spaceX={2}>
-                  <BsPersonBadge />
-                  <Text fontSize="sm" fontWeight="medium">
-                    Staff on duty ({activeStaff.length})
-                  </Text>
-                </HStack>
+              {/* Staffing information */}
+              <VStack align="stretch" spaceY={2} mt={3}>
+                {queueAssignments.length > 0 ? (
+                  <>
+                    {/* Show grouped assignments */}
+                    {staffingInfo.groupedAssignments.map((group, groupIndex) => {
+                      const groupStaffIds = group.map((a) => a.ta_profile_id);
+                      const groupEnd = staffingInfo.currentStaffUntil;
+                      const minutesRemaining = groupEnd ? differenceInMinutes(groupEnd, new Date()) : 0;
 
-                {activeStaff.length > 0 ? (
-                  <HStack wrap="wrap" gap={2}>
-                    {activeStaff.slice(0, 4).map((staffId: string, index: number) => (
-                      <PersonAvatar key={`staff-${staffId}-${index}`} uid={staffId} size="sm" />
-                    ))}
-                    {activeStaff.length > 4 && <Text fontSize="xs">+{activeStaff.length - 4} more</Text>}
-                  </HStack>
+                      return (
+                        <Box key={`group-${groupIndex}`}>
+                          <HStack align="center" spaceX={2} mb={1}>
+                            <BsPersonBadge />
+                            <Text fontSize="sm" fontWeight="medium">
+                              Staff on duty ({groupStaffIds.length})
+                            </Text>
+                          </HStack>
+                          <HStack wrap="wrap" gap={2} mb={1}>
+                            {groupStaffIds.map((staffId: string, index: number) => (
+                              <PersonAvatar key={`staff-${staffId}-${index}`} uid={staffId} size="sm" />
+                            ))}
+                          </HStack>
+                          {groupEnd && (
+                            <Text fontSize="xs" color="gray.600">
+                              Until {format(groupEnd, "h:mm a")}
+                              {minutesRemaining > 0 && (
+                                <Text as="span" ml={1}>
+                                  ({Math.floor(minutesRemaining / 60)}h {minutesRemaining % 60}m remaining)
+                                </Text>
+                              )}
+                            </Text>
+                          )}
+                        </Box>
+                      );
+                    })}
+
+                    {/* Show next scheduled staff if current assignments will end */}
+                    {staffingInfo.currentStaffUntil && staffingInfo.nextScheduledTimeStr && (
+                      <Text fontSize="xs" color="gray.600" mt={1}>
+                        Next staff: {staffingInfo.nextScheduledTimeStr}
+                      </Text>
+                    )}
+                  </>
                 ) : (
-                  <Text fontSize="xs">No staff currently on duty</Text>
+                  <>
+                    <HStack align="center" spaceX={2}>
+                      <BsPersonBadge />
+                      <Text fontSize="sm" fontWeight="medium">
+                        Staff on duty (0)
+                      </Text>
+                    </HStack>
+                    <Text fontSize="xs" color="gray.600">
+                      No staff currently on duty
+                    </Text>
+                    {staffingInfo.nextScheduledTimeStr && (
+                      <Text fontSize="xs" color="gray.600" mt={1}>
+                        Next staff: {staffingInfo.nextScheduledTimeStr}
+                      </Text>
+                    )}
+                  </>
                 )}
               </VStack>
             </Box>
-            {myAssignment ? (
-              <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
-                Stop Working
-              </Button>
-            ) : (
-              <Button colorPalette="green" onClick={() => handleStartWorking(queue.id)}>
-                Start Working
-              </Button>
-            )}
+            <Box ml={4}>
+              {myAssignment ? (
+                <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
+                  Stop Working
+                </Button>
+              ) : (
+                <Button colorPalette="green" onClick={() => handleStartWorking(queue.id)}>
+                  Start Working
+                </Button>
+              )}
+            </Box>
           </Flex>
         );
       })}

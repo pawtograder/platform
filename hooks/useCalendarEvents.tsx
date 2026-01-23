@@ -53,6 +53,7 @@ function useAssignmentsAsEvents(): CalendarEvent[] {
           start_announced_at: null,
           end_announced_at: null,
           change_announced_at: null,
+          resolved_help_queue_id: null,
           created_at: assignment.created_at,
           updated_at: assignment.updated_at
         });
@@ -81,6 +82,7 @@ function useAssignmentsAsEvents(): CalendarEvent[] {
           start_announced_at: null,
           end_announced_at: null,
           change_announced_at: null,
+          resolved_help_queue_id: null,
           created_at: assignment.created_at,
           updated_at: assignment.updated_at
         });
@@ -220,6 +222,7 @@ function useLabSectionMeetingsAsEvents(): CalendarEvent[] {
         start_announced_at: null,
         end_announced_at: null,
         change_announced_at: null,
+        resolved_help_queue_id: null,
         created_at: meeting.created_at,
         updated_at: meeting.updated_at
       });

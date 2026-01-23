@@ -10,6 +10,7 @@ import { getCourse, getUserRolesForCourse, fetchCourseControllerData } from "@/l
 import { headers } from "next/headers";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
+import { HelpDrawerProvider } from "@/hooks/useHelpDrawer";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -54,13 +55,15 @@ const ProtectedLayout = async ({
             profileId={user_role.private_profile_id}
             role={user_role.role}
           >
-            <DynamicCourseNav />
-            {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
-            {/* mobilenav */}
-            <Box pt="0" ml="0" mr="0">
-              {children}
-            </Box>
-            <FloatingHelpRequestWidget />
+            <HelpDrawerProvider>
+              <DynamicCourseNav />
+              {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
+              {/* mobilenav */}
+              <Box pt="0" ml="0" mr="0">
+                {children}
+              </Box>
+              <FloatingHelpRequestWidget />
+            </HelpDrawerProvider>
           </OfficeHoursControllerProvider>
         </CourseControllerProvider>
       </NavigationProgressProvider>
