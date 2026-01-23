@@ -18,7 +18,7 @@ import {
   Text
 } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { BsPlus, BsTrash, BsX } from "react-icons/bs";
@@ -121,7 +121,7 @@ export function ErrorPinModal({
   });
 
   // Set default assignment when modal opens with defaultAssignmentId
-  useMemo(() => {
+  useEffect(() => {
     if (defaultAssignmentId && !existingPinId) {
       setValue("assignment_id", defaultAssignmentId);
     }

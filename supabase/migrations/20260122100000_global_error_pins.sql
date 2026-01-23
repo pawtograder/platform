@@ -390,8 +390,8 @@ BEGIN
     FOR v_submission_id IN
         SELECT s.id FROM submissions s
         JOIN assignments a ON a.id = s.assignment_id
-        WHERE (v_assignment_id IS NOT NULL AND s.assignment_id = v_assignment_id)
-           OR (v_assignment_id IS NULL AND a.class_id = v_class_id)
+        WHERE ((v_assignment_id IS NOT NULL AND s.assignment_id = v_assignment_id)
+           OR (v_assignment_id IS NULL AND a.class_id = v_class_id))
           AND s.is_active = true
     LOOP
         -- Get grader result
@@ -625,8 +625,8 @@ BEGIN
         FOR v_submission_id IN
             SELECT s.id FROM submissions s
             JOIN assignments a ON a.id = s.assignment_id
-            WHERE (p_assignment_id IS NOT NULL AND s.assignment_id = p_assignment_id)
-               OR (p_assignment_id IS NULL AND a.class_id = v_class_id)
+            WHERE ((p_assignment_id IS NOT NULL AND s.assignment_id = p_assignment_id)
+               OR (p_assignment_id IS NULL AND a.class_id = v_class_id))
               AND s.is_active = true
         LOOP
             -- Get grader result
