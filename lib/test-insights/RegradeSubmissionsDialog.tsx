@@ -140,7 +140,7 @@ export function RegradeSubmissionsDialog({
         }
 
         // Get unique profile IDs
-        const profileIds = [...new Set(submissions.map(s => s.profile_id).filter(Boolean))] as string[];
+        const profileIds = [...new Set(submissions.map((s) => s.profile_id).filter(Boolean))] as string[];
 
         if (profileIds.length === 0) {
           if (!cancelled) setEmails([]);
@@ -267,9 +267,7 @@ export function RegradeSubmissionsDialog({
                     <HStack>
                       <Icon as={FaBug} color="red.500" />
                       <Badge colorPalette="red">{errorGroup.test_name}</Badge>
-                      {errorGroup.test_part && (
-                        <Badge colorPalette="gray">{errorGroup.test_part}</Badge>
-                      )}
+                      {errorGroup.test_part && <Badge colorPalette="gray">{errorGroup.test_part}</Badge>}
                     </HStack>
                     <Text fontSize="sm" color="fg.muted" fontFamily="mono" truncate maxW="100%">
                       {errorGroup.error_signature}
@@ -286,25 +284,14 @@ export function RegradeSubmissionsDialog({
 
               {/* Affected Student Emails */}
               <Box>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setShowEmails(!showEmails)}
-                  mb={showEmails ? 2 : 0}
-                >
+                <Button size="sm" variant="outline" onClick={() => setShowEmails(!showEmails)} mb={showEmails ? 2 : 0}>
                   <Icon as={showEmails ? FaChevronDown : FaChevronRight} mr={2} />
                   <Icon as={FaEnvelope} mr={2} />
                   {showEmails ? "Hide" : "Show"} Affected Student Emails
                 </Button>
                 <Collapsible.Root open={showEmails}>
                   <Collapsible.Content>
-                    <Box
-                      p={3}
-                      bg="bg.muted"
-                      borderRadius="md"
-                      borderWidth="1px"
-                      borderColor="border.muted"
-                    >
+                    <Box p={3} bg="bg.muted" borderRadius="md" borderWidth="1px" borderColor="border.muted">
                       {emailsLoading ? (
                         <HStack justify="center" p={2}>
                           <Spinner size="sm" />
@@ -437,9 +424,8 @@ export function RegradeSubmissionsDialog({
               {/* Warning */}
               <Box p={4} bg="yellow.50" borderRadius="md" _dark={{ bg: "yellow.900" }}>
                 <Text fontSize="sm" color="yellow.700" _dark={{ color: "yellow.200" }}>
-                  This will queue {errorGroup.affected_submission_ids.length} submissions for regrading.
-                  The process runs asynchronously and may take several minutes depending on the number
-                  of submissions.
+                  This will queue {errorGroup.affected_submission_ids.length} submissions for regrading. The process
+                  runs asynchronously and may take several minutes depending on the number of submissions.
                 </Text>
               </Box>
             </VStack>

@@ -2,9 +2,32 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import { Badge, Box, Button, Card, Code, Collapsible, HStack, Icon, Spinner, Text, Textarea, VStack } from "@chakra-ui/react";
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  Code,
+  Collapsible,
+  HStack,
+  Icon,
+  Spinner,
+  Text,
+  Textarea,
+  VStack
+} from "@chakra-ui/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaBug, FaChevronDown, FaChevronRight, FaCopy, FaEnvelope, FaExclamationTriangle, FaLink, FaPlay, FaUsers } from "react-icons/fa";
+import {
+  FaBug,
+  FaChevronDown,
+  FaChevronRight,
+  FaCopy,
+  FaEnvelope,
+  FaExclamationTriangle,
+  FaLink,
+  FaPlay,
+  FaUsers
+} from "react-icons/fa";
 import { ErrorFilterPanel, DEFAULT_ERROR_FILTERS } from "./ErrorFilterPanel";
 import type { CommonErrorGroup, CommonErrorsResponse, ErrorExplorerFilters, TestStatistics } from "./types";
 
@@ -202,7 +225,8 @@ function ErrorGroupCard({
               <HStack gap={1}>
                 <Icon as={FaUsers} color="fg.muted" boxSize={3} />
                 <Badge colorPalette="purple" size="sm">
-                  {errorGroup.affected_submission_ids.length} submission{errorGroup.affected_submission_ids.length !== 1 ? "s" : ""}
+                  {errorGroup.affected_submission_ids.length} submission
+                  {errorGroup.affected_submission_ids.length !== 1 ? "s" : ""}
                 </Badge>
               </HStack>
               <Badge colorPalette={errorGroup.is_failing ? "red" : "yellow"} size="sm">
@@ -256,11 +280,7 @@ function ErrorGroupCard({
                     </Button>
                   )}
                   {onRegradeSubmissions && (
-                    <Button
-                      size="sm"
-                      colorPalette="green"
-                      onClick={() => onRegradeSubmissions(errorGroup)}
-                    >
+                    <Button size="sm" colorPalette="green" onClick={() => onRegradeSubmissions(errorGroup)}>
                       <Icon as={FaPlay} mr={2} />
                       Regrade Submissions
                     </Button>
@@ -315,7 +335,7 @@ function AffectedStudentsEmails({ submissionIds }: { submissionIds: number[] }) 
         }
 
         // Get unique profile IDs
-        const profileIds = [...new Set(submissions.map(s => s.profile_id).filter(Boolean))] as string[];
+        const profileIds = [...new Set(submissions.map((s) => s.profile_id).filter(Boolean))] as string[];
 
         if (profileIds.length === 0) {
           if (!cancelled) setEmails([]);
@@ -378,24 +398,13 @@ function AffectedStudentsEmails({ submissionIds }: { submissionIds: number[] }) 
 
   return (
     <Box>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => setIsExpanded(!isExpanded)}
-        mb={isExpanded ? 2 : 0}
-      >
+      <Button size="sm" variant="outline" onClick={() => setIsExpanded(!isExpanded)} mb={isExpanded ? 2 : 0}>
         <Icon as={FaEnvelope} mr={2} />
         {isExpanded ? "Hide" : "Show"} Student Emails
       </Button>
 
       {isExpanded && (
-        <Box
-          p={3}
-          bg="bg.muted"
-          borderRadius="md"
-          borderWidth="1px"
-          borderColor="border.muted"
-        >
+        <Box p={3} bg="bg.muted" borderRadius="md" borderWidth="1px" borderColor="border.muted">
           {isLoading ? (
             <HStack justify="center" p={2}>
               <Spinner size="sm" />

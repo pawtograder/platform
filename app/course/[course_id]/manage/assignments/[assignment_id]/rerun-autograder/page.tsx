@@ -462,7 +462,14 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       tc.close();
     };
   }, [supabase, assignment_id, classRealTimeController]);
-  const { getHeaderGroups, getRowModel, getRowCount, getCoreRowModel, data, isLoading: isTableLoading } = useTableControllerTable({
+  const {
+    getHeaderGroups,
+    getRowModel,
+    getRowCount,
+    getCoreRowModel,
+    data,
+    isLoading: isTableLoading
+  } = useTableControllerTable({
     columns,
     tableController,
     initialState: {
@@ -503,10 +510,10 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   useEffect(() => {
     // Only process once, and only when we have actual data with submissions
     if (hasProcessedPreselection.current) return;
-    
+
     const stored = sessionStorage.getItem("preselect_submission_ids");
     if (!stored) return;
-    
+
     // Wait until we have data with actual submission IDs
     if (!data || data.length === 0) return;
     const hasActiveSubmissions = data.some((row) => row.activesubmissionid !== null);
@@ -515,14 +522,12 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
     try {
       const preselectedIds = JSON.parse(stored) as number[];
       // Filter to only include IDs that exist in the current data
-      const validIds = preselectedIds.filter((id) =>
-        data.some((row) => row.activesubmissionid === id)
-      );
-      
+      const validIds = preselectedIds.filter((id) => data.some((row) => row.activesubmissionid === id));
+
       // Mark as processed before clearing storage
       hasProcessedPreselection.current = true;
       sessionStorage.removeItem("preselect_submission_ids");
-      
+
       if (validIds.length > 0) {
         setSelectedRows(validIds);
         toaster.info({
@@ -668,7 +673,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             </Checkbox.Root>
           </HStack>
         </Box>
-        
+
         {/* Loading indicator */}
         {isTableLoading && (
           <Box p={8} textAlign="center">
@@ -678,7 +683,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             </Text>
           </Box>
         )}
-        
+
         <Table.Root interactive display={isTableLoading ? "none" : undefined}>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (

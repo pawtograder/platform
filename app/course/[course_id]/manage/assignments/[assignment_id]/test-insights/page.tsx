@@ -55,10 +55,10 @@ export default function TestInsightsPage() {
     (submissionIds: number[]) => {
       // Store submission IDs in sessionStorage so the rerun-autograder page can pre-select them
       sessionStorage.setItem("preselect_submission_ids", JSON.stringify(submissionIds));
-      
+
       // Navigate to the rerun-autograder page
       router.push(`/course/${course_id}/manage/assignments/${assignment_id}/rerun-autograder`);
-      
+
       toaster.info({
         title: "Navigating to Rerun Autograder",
         description: `${submissionIds.length} submissions will be pre-selected for review.`
