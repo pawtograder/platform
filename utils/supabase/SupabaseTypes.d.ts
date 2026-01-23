@@ -2963,7 +2963,7 @@ export type Database = {
       };
       error_pins: {
         Row: {
-          assignment_id: number;
+          assignment_id: number | null;
           class_id: number;
           created_at: string;
           created_by: string;
@@ -2973,7 +2973,7 @@ export type Database = {
           rule_logic: string;
         };
         Insert: {
-          assignment_id: number;
+          assignment_id?: number | null;
           class_id: number;
           created_at?: string;
           created_by: string;
@@ -2983,7 +2983,7 @@ export type Database = {
           rule_logic?: string;
         };
         Update: {
-          assignment_id?: number;
+          assignment_id?: number | null;
           class_id?: number;
           created_at?: string;
           created_by?: string;
@@ -11559,7 +11559,7 @@ export type Database = {
         Returns: number;
       };
       preview_error_pin_matches: {
-        Args: { p_assignment_id: number; p_rule_logic?: string; p_rules: Json };
+        Args: { p_assignment_id: number | null; p_class_id?: number | null; p_rule_logic?: string; p_rules: Json };
         Returns: Json;
       };
       process_calendar_announcements: { Args: never; Returns: Json };
