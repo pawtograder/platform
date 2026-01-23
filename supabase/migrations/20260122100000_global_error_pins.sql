@@ -316,7 +316,18 @@ BEGIN
     
     IF NOT authorizeforclassgrader(v_class_id) THEN  
         RAISE EXCEPTION 'Only instructors and graders can create or modify error pins';  
-    END IF;  
+    END IF;
+    
+    -- Validate that discussion_thread_id belongs to the target class (prevent cross-class linkage)
+    IF (p_error_pin->>'discussion_thread_id')::bigint IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM discussion_threads dt
+            WHERE dt.id = (p_error_pin->>'discussion_thread_id')::bigint
+              AND dt.class_id = v_class_id
+        ) THEN
+            RAISE EXCEPTION 'Discussion thread not found or does not belong to this class';
+        END IF;
+    END IF;
   
     -- Insert or update error_pin
     IF (p_error_pin->>'id')::bigint IS NOT NULL THEN
@@ -778,6 +789,7 @@ BEGIN
                 LEFT JOIN profiles p ON p.id = s.profile_id
                 WHERE s.id = ANY(v_matching_submissions)
                 ORDER BY s.created_at DESC
+                LIMIT 10
             ) recent_submissions_query
         )
     );
