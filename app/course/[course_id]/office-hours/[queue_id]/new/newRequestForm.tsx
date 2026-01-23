@@ -5,6 +5,8 @@ import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import Markdown from "@/components/ui/markdown";
 import {
   useHelpRequests,
   useHelpRequestStudents,
@@ -28,6 +30,7 @@ import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
 import { X } from "lucide-react";
+import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
@@ -47,6 +50,7 @@ export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { course } = useCourseController();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
@@ -670,12 +674,43 @@ export default function HelpRequestForm() {
       <Stack spaceY={4}>
         <Box>
           <Heading>Request Live Help</Heading>
-          <Text>Submit a request to get help synchronously from a TA via text or video chat.</Text>
+          <Text mt={2}>Get real-time help from course staff via text chat or video call.</Text>
+          <Text fontSize="sm" color="fg.muted" mt={2}>
+            Once you submit a request, you&apos;ll be added to the queue and a staff member will join your chat as soon
+            as they&apos;re available. You can continue browsing the site while you wait — we&apos;ll notify you when
+            someone joins. Please stay available to respond promptly.
+          </Text>
           {selectedHelpQueue && openRequestsAhead > 0 && (
-            <Text color="blue.600" mt={2} fontSize="sm">
-              There are currently {openRequestsAhead} open request{openRequestsAhead !== 1 ? "s" : ""} in the help
-              queue. We will help you as soon as possible, and help students in a first-come, first-served basis.
+            <Text color="blue.600" mt={3} fontSize="sm" fontWeight="medium">
+              📋 There {openRequestsAhead === 1 ? "is" : "are"} currently {openRequestsAhead} request
+              {openRequestsAhead !== 1 ? "s" : ""} ahead of you. We help students first-come, first-served.
             </Text>
+          )}
+          <Box mt={4} p={3} bg="bg.subtle" borderRadius="md" borderWidth="1px" borderColor="border.muted">
+            <Text fontSize="sm" color="fg.muted">
+              <Text as="span" fontWeight="medium" color="fg.default">
+                💡 Not urgent?
+              </Text>{" "}
+              Consider posting on the{" "}
+              <Link
+                href={`/course/${course_id}/discussion`}
+                style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}
+              >
+                Discussion Forum
+              </Link>{" "}
+              instead. You can post publicly to get help from classmates and staff, or privately to reach only the
+              course staff. It&apos;s a great option for questions that don&apos;t need an immediate response.
+            </Text>
+          </Box>
+          {course?.office_hours_description && (
+            <Box mt={3} p={3} bg="bg.subtle" borderRadius="md" borderWidth="1px" borderColor="border.muted">
+              <Text fontSize="sm" fontWeight="medium" color="fg.muted" mb={1}>
+                📌 About Office Hours in {course?.name}
+              </Text>
+              <Box fontSize="sm" color="fg.muted">
+                <Markdown>{course.office_hours_description}</Markdown>
+              </Box>
+            </Box>
           )}
         </Box>
         <OfficeHoursDiscussionBrowser />

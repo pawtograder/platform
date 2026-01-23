@@ -3,11 +3,12 @@
 import { RealtimeChat } from "@/components/realtime-chat";
 import { useActiveHelpRequest } from "@/hooks/useActiveHelpRequest";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
+import { useMessageNotifications } from "@/hooks/useMessageNotifications";
 import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import { Badge, Box, Button, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
@@ -20,6 +21,7 @@ const HelpDrawer = dynamic(() => import("@/components/help-queue/help-drawer"), 
 export function FloatingHelpRequestWidget() {
   const activeRequest = useActiveHelpRequest();
   const router = useRouter();
+  const pathname = usePathname();
   const { course_id } = useParams();
   const { role } = useClassProfiles();
   const featureEnabled = useFeatureEnabled("office-hours");
@@ -30,6 +32,12 @@ export function FloatingHelpRequestWidget() {
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
+
+  // Check if user is on an office hours page (don't show widget there)
+  const isOnOfficeHoursPage = useMemo(() => {
+    if (!pathname) return false;
+    return pathname.includes("/office-hours");
+  }, [pathname]);
 
   // Get queue with ordinal 0 (default queue)
   const defaultQueue = useMemo(() => {
@@ -48,14 +56,14 @@ export function FloatingHelpRequestWidget() {
     return allHelpRequests.filter((request) => request.status === "open" || request.status === "in_progress").length;
   }, [allHelpRequests]);
 
-  // Determine button text and tooltip
-  const buttonText = useMemo(() => {
+  // Determine status subtitle for the Get Help button
+  const statusSubtitle = useMemo(() => {
     if (isDefaultQueueStaffed && openRequestCount === 0) {
-      return "Help queue is empty, staff are ready to help you right now";
+      return "Staff ready now!";
     } else if (openRequestCount > 0 && openRequestCount < 5) {
-      return "Queue is short, join it";
+      return "Queue is short";
     }
-    return "Get Help";
+    return null;
   }, [isDefaultQueueStaffed, openRequestCount]);
 
   const tooltipText = "Text chat or video chat with a TA right now!";
@@ -67,6 +75,20 @@ export function FloatingHelpRequestWidget() {
       .filter((student) => student.help_request_id === activeRequest.request.id)
       .map((student) => student.profile_id);
   }, [activeRequest, allHelpRequestStudents]);
+
+  // Enable notifications for active help request site-wide
+  // This ensures students get notified even when:
+  // 1. They're on a different page of the site
+  // 2. The widget is minimized (chat not visible)
+  // 3. The browser is backgrounded or another app is in front
+  // 4. They're on the office hours pages but not viewing their specific request
+  // Note: When widget is expanded OR student is on the help request page, RealtimeChat handles notifications
+  const isOnHelpRequestPage = pathname?.match(/\/office-hours\/[^/]+\/\d+$/);
+  useMessageNotifications({
+    helpRequestId: activeRequest?.request.id ?? 0,
+    enabled: !!activeRequest && !isExpanded && !isOnHelpRequestPage,
+    titlePrefix: "Help Request"
+  });
 
   const handleNavigateToRequest = useCallback(() => {
     if (activeRequest) {
@@ -95,37 +117,39 @@ export function FloatingHelpRequestWidget() {
     return null;
   }
 
+  // Don't show widget when student is already on the office hours pages
+  if (isOnOfficeHoursPage) {
+    return null;
+  }
+
   // Show "Get Help" button when no active request
   if (!activeRequest) {
     return (
       <>
-        <Box
-          position="fixed"
-          bottom={4}
-          right={4}
-          zIndex={1000}
-          display={{ base: "block", md: "block" }}
-          maxW={{ base: "calc(100vw - 2rem)", md: "300px" }}
-        >
+        <Box position="fixed" bottom={4} right={4} zIndex={1000}>
           <Tooltip content={tooltipText} positioning={{ placement: "left" }}>
             <Button
-              size="lg"
+              size="md"
               colorPalette="green"
               onClick={openDrawer}
-              boxShadow="xl"
-              _hover={{ transform: "scale(1.05)", boxShadow: "2xl" }}
+              boxShadow="lg"
+              _hover={{ transform: "scale(1.02)", boxShadow: "xl" }}
               transition="all 0.2s"
-              fontWeight="semibold"
-              px={6}
-              py={6}
-              whiteSpace="normal"
-              textAlign="left"
+              px={4}
+              py={3}
               h="auto"
-              minH="fit-content"
-              w="100%"
             >
-              <Icon as={BsQuestionCircle} boxSize={6} mr={2} flexShrink={0} />
-              <Text>{buttonText}</Text>
+              <Icon as={BsQuestionCircle} boxSize={5} mr={2} flexShrink={0} />
+              <Stack gap={0} align="start">
+                <Text fontWeight="semibold" fontSize="md">
+                  Get Help
+                </Text>
+                {statusSubtitle && (
+                  <Text fontSize="xs" fontWeight="normal" opacity={0.9}>
+                    {statusSubtitle}
+                  </Text>
+                )}
+              </Stack>
             </Button>
           </Tooltip>
         </Box>

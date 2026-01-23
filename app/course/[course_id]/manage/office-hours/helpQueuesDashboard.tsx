@@ -20,6 +20,9 @@ import { toaster } from "@/components/ui/toaster";
 import { useCourseController } from "@/hooks/useCourseController";
 import CalendarDayView from "@/components/calendar/calendar-day-view";
 import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
+import NotificationPermissionWarning, {
+  useShowNotificationWarning
+} from "@/components/notifications/notification-permission-warning";
 import { format, parseISO, differenceInMinutes } from "date-fns";
 
 /**
@@ -46,6 +49,9 @@ export default function HelpQueuesDashboard() {
   const allHelpRequests = useHelpRequests();
   const { isConnected, connectionStatus } = useConnectionStatus();
   const officeHoursEvents = useOfficeHoursSchedule();
+
+  // Check if notification permission warning should be shown
+  const showNotificationWarning = useShowNotificationWarning();
 
   // Filter assignments for current TA
   const activeAssignments = useMemo(() => {
@@ -234,6 +240,9 @@ export default function HelpQueuesDashboard() {
           Queue status may not be up to date. Connection status: {connectionStatus?.overall}
         </Alert>
       )}
+
+      {/* Notification Permission Warning */}
+      {showNotificationWarning && <NotificationPermissionWarning userType="staff" />}
 
       {/* Today's Calendar Schedule - only show if calendar is configured */}
       {hasCalendar && (

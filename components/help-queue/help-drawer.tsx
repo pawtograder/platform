@@ -261,7 +261,7 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
             {courseController?.course?.office_hours_description && (
               <Box p={4} borderWidth="1px" borderColor="border.muted" bg="bg.subtle" rounded="md">
                 <Text fontSize="sm" fontWeight="medium" mb={2} color="fg.muted">
-                  About Office Hours
+                  About Office Hours in {courseController?.course?.name}
                 </Text>
                 <Box fontSize="sm" color="fg.muted">
                   <Markdown>{courseController.course.office_hours_description}</Markdown>

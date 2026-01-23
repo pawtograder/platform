@@ -52,6 +52,9 @@ import Link from "next/link";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
 import StudentSummaryTrigger from "../ui/student-summary";
 import DiscordMessageLink from "@/components/discord/discord-message-link";
+import NotificationPermissionWarning, {
+  useShowNotificationWarning
+} from "@/components/notifications/notification-permission-warning";
 import { formatDistanceToNow } from "date-fns";
 
 /**
@@ -1010,6 +1013,9 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   // Check if current user is instructor or grader (not a student)
   const isInstructorOrGrader = useIsGraderOrInstructor();
 
+  // Check if notification permission warning should be shown
+  const showNotificationWarning = useShowNotificationWarning();
+
   /**
    * Handle back navigation based on context
    * - Management context: go back to help request list
@@ -1357,6 +1363,13 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
           </Accordion.Item>
         </Accordion.Root>
       </Box>
+
+      {/* Notification Permission Warning */}
+      {showNotificationWarning && !readOnly && (
+        <Box px={{ base: 2, md: 3 }}>
+          <NotificationPermissionWarning userType={isInstructorOrGrader ? "staff" : "student"} compact />
+        </Box>
+      )}
 
       {/* Chat Section - Maximized */}
       <Flex flex="1" width="100%" overflow="hidden" justify="center" align="stretch" minH={0}>

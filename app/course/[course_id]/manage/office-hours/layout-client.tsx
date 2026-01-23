@@ -3,6 +3,7 @@
 import { OfficeHoursHeader, type OfficeHoursViewMode } from "@/components/help-queue/office-hours-header";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
 import { useCourseController } from "@/hooks/useCourseController";
+import { getNotificationManager } from "@/lib/notifications";
 import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, usePathname } from "next/navigation";
@@ -70,6 +71,26 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
       document.title = `${courseController.course.name} - Office Hours`;
     }
   }, [courseController?.course?.name]);
+
+  // Initialize notification manager and handle visibility changes
+  useEffect(() => {
+    const manager = getNotificationManager();
+
+    // Clear notifications when page becomes visible
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        manager.clearNotifications();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      // Clear any pending notifications when leaving office hours
+      manager.clearNotifications();
+    };
+  }, []);
 
   return (
     <Box height="100dvh" overflow="hidden" display="flex" flexDirection="column">
