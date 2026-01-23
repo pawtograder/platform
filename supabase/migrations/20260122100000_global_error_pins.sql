@@ -320,6 +320,24 @@ BEGIN
   
     -- Insert or update error_pin
     IF (p_error_pin->>'id')::bigint IS NOT NULL THEN
+        -- Update existing pin - first verify the pin exists and belongs to a class we're authorized for
+        DECLARE
+            v_existing_class_id bigint;
+        BEGIN
+            SELECT class_id INTO v_existing_class_id
+            FROM error_pins
+            WHERE id = (p_error_pin->>'id')::bigint;
+            
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'Error pin not found';
+            END IF;
+            
+            -- Verify caller is authorized for the existing pin's class (prevent cross-class updates)
+            IF NOT authorizeforclassgrader(v_existing_class_id) THEN
+                RAISE EXCEPTION 'Permission denied: not authorized for this error pin';
+            END IF;
+        END;
+        
         -- Update existing pin (only allow changing discussion_thread_id, assignment_id, rule_logic, enabled)
         -- class_id is derived from assignment_id (or provided for class-level), created_by is not updated
         UPDATE error_pins
