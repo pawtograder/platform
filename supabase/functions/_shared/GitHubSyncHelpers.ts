@@ -708,7 +708,8 @@ export async function isRepoAlreadyInSync(
           return false;
         } catch (error: unknown) {
           // Only treat 404 as "file doesn't exist" - other errors (rate limit, auth, network) should fail the check
-          const status = error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
+          const status =
+            error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
           if (status === 404) {
             // File doesn't exist - good, it was supposed to be removed
             continue;
@@ -739,7 +740,8 @@ export async function isRepoAlreadyInSync(
           return false;
         }
       } catch (error: unknown) {
-        const status = error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
+        const status =
+          error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
         if (status === 404) {
           // File doesn't exist in student repo but should (added/modified file) - not in sync
           scope?.addBreadcrumb({
