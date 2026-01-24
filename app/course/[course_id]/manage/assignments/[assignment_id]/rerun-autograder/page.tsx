@@ -23,6 +23,7 @@ import {
   Input,
   List,
   Skeleton,
+  Spinner,
   Table,
   Text,
   VStack
@@ -32,7 +33,7 @@ import { useOne } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { Select as ReactSelect } from "chakra-react-select";
 
@@ -461,7 +462,14 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       tc.close();
     };
   }, [supabase, assignment_id, classRealTimeController]);
-  const { getHeaderGroups, getRowModel, getRowCount, getCoreRowModel, data } = useTableControllerTable({
+  const {
+    getHeaderGroups,
+    getRowModel,
+    getRowCount,
+    getCoreRowModel,
+    data,
+    isLoading: isTableLoading
+  } = useTableControllerTable({
     columns,
     tableController,
     initialState: {
@@ -496,6 +504,49 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   }, [data, showDevColumns]);
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
   const [regrading, setRegrading] = useState<boolean>(false);
+  const hasProcessedPreselection = useRef(false);
+
+  // Check for pre-selected submission IDs from sessionStorage (e.g., from test insights)
+  useEffect(() => {
+    // Only process once, and only when we have actual data with submissions
+    if (hasProcessedPreselection.current) return;
+
+    const stored = sessionStorage.getItem("preselect_submission_ids");
+    if (!stored) return;
+
+    // Wait until we have data with actual submission IDs
+    if (!data || data.length === 0) return;
+    const hasActiveSubmissions = data.some((row) => row.activesubmissionid !== null);
+    if (!hasActiveSubmissions) return;
+
+    try {
+      const preselectedIds = JSON.parse(stored) as number[];
+      // Filter to only include IDs that exist in the current data
+      const validIds = preselectedIds.filter((id) => data.some((row) => row.activesubmissionid === id));
+
+      // Mark as processed before clearing storage
+      hasProcessedPreselection.current = true;
+      sessionStorage.removeItem("preselect_submission_ids");
+
+      if (validIds.length > 0) {
+        setSelectedRows(validIds);
+        toaster.info({
+          title: "Submissions Pre-selected",
+          description: `${validIds.length} submission${validIds.length !== 1 ? "s" : ""} selected from Test Insights.`
+        });
+      } else if (preselectedIds.length > 0) {
+        // We had IDs but none matched - inform the user
+        toaster.warning({
+          title: "Could not pre-select submissions",
+          description: `${preselectedIds.length} submission ID${preselectedIds.length !== 1 ? "s were" : " was"} provided but ${preselectedIds.length !== 1 ? "they don't" : "it doesn't"} match any active submissions.`
+        });
+      }
+    } catch {
+      // Ignore parsing errors
+      hasProcessedPreselection.current = true;
+      sessionStorage.removeItem("preselect_submission_ids");
+    }
+  }, [data]);
 
   // Compute unique values for each column from ALL rows (before filtering)
   // Depends on 'data' so it recalculates when async data loads
@@ -622,7 +673,18 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
             </Checkbox.Root>
           </HStack>
         </Box>
-        <Table.Root interactive>
+
+        {/* Loading indicator */}
+        {isTableLoading && (
+          <Box p={8} textAlign="center">
+            <Spinner size="xl" />
+            <Text mt={4} color="fg.muted">
+              Loading submissions...
+            </Text>
+          </Box>
+        )}
+
+        <Table.Root interactive display={isTableLoading ? "none" : undefined}>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
               <Table.Row bg="bg.subtle" key={headerGroup.id}>
@@ -767,7 +829,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                             if (checked.checked) {
                               setSelectedRows((prev) => [...prev, id]);
                             } else {
-                              setSelectedRows((prev) => prev.filter((id) => id !== id));
+                              setSelectedRows((prev) => prev.filter((existingId) => existingId !== id));
                             }
                           }}
                         >
@@ -801,7 +863,12 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
               })}
           </Table.Body>
         </Table.Root>
-        <div>{getRowCount()} Rows</div>
+        {!isTableLoading && (
+          <Text fontSize="sm" color="fg.muted" py={2}>
+            {getRowCount()} submission{getRowCount() !== 1 ? "s" : ""} loaded
+            {selectedRows.length > 0 && ` (${selectedRows.length} selected)`}
+          </Text>
+        )}
       </VStack>
       <Box
         p="2"

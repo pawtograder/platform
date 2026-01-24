@@ -322,6 +322,31 @@ export default function HelpRequestForm() {
     ).length;
   }, [selectedHelpQueue, allHelpRequests]);
 
+  // Watch is_private for conflict detection
+  const is_private = watch("is_private");
+
+  // Check if the selected queue would conflict with current requests (moved up for use in effects)
+  const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
+  const wouldConflict = useMemo(() => {
+    return Boolean(
+      selectedHelpQueue &&
+        isCreatingSoloRequest &&
+        userActiveRequests.some(
+          (request) =>
+            Number(request.help_queue) === Number(selectedHelpQueue) &&
+            request.student_count === 1 &&
+            Boolean(request.is_private) === Boolean(is_private)
+        )
+    );
+  }, [selectedHelpQueue, isCreatingSoloRequest, userActiveRequests, is_private]);
+
+  // Clear conflict error when conflict is resolved
+  useEffect(() => {
+    if (!wouldConflict && errors.root?.conflict) {
+      clearErrors("root.conflict");
+    }
+  }, [wouldConflict, errors.root?.conflict, clearErrors]);
+
   // Validate that selected queue is available and has active staff (skip for demo queues)
   useEffect(() => {
     if (selectedHelpQueue) {
@@ -357,6 +382,13 @@ export default function HelpRequestForm() {
     }
   }, [selectedHelpQueue, helpQueues, allHelpQueues, queueIdsWithActiveStaff, setError, clearErrors, errors.help_queue]);
 
+  // Clear students error when students are selected
+  useEffect(() => {
+    if (selectedStudents.length > 0 && errors.root?.students) {
+      clearErrors("root.students");
+    }
+  }, [selectedStudents.length, errors.root?.students, clearErrors]);
+
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -379,6 +411,10 @@ export default function HelpRequestForm() {
           toaster.error({
             title: "Error",
             description: "At least one student must be selected for the help request."
+          });
+          setError("root.students", {
+            type: "manual",
+            message: "At least one student must be selected for the help request."
           });
           return;
         }
@@ -427,9 +463,14 @@ export default function HelpRequestForm() {
           );
 
           if (hasSoloRequestInQueue) {
+            const conflictMessage = `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`;
             toaster.error({
               title: "Error",
-              description: `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`
+              description: conflictMessage
+            });
+            setError("root.conflict", {
+              type: "manual",
+              message: conflictMessage
             });
             return;
           }
@@ -653,20 +694,6 @@ export default function HelpRequestForm() {
       </Box>
     );
   }
-  const is_private = watch("is_private");
-
-  // Check if the selected queue would conflict with current requests
-  const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
-  const wouldConflict = Boolean(
-    selectedHelpQueue &&
-      isCreatingSoloRequest &&
-      userActiveRequests.some(
-        (request) =>
-          Number(request.help_queue) === Number(selectedHelpQueue) &&
-          request.student_count === 1 &&
-          Boolean(request.is_private) === Boolean(is_private)
-      )
-  );
 
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
@@ -1202,13 +1229,7 @@ export default function HelpRequestForm() {
         <Button
           type="submit"
           loading={isSubmitting || isSubmittingGuard}
-          disabled={
-            isSubmitting ||
-            isSubmittingGuard ||
-            wouldConflict ||
-            selectedStudents.length === 0 ||
-            (templates.length > 0 && !watch("template_id"))
-          }
+          disabled={isSubmitting || isSubmittingGuard || Object.keys(errors).length > 0}
           mt={4}
         >
           Submit Request

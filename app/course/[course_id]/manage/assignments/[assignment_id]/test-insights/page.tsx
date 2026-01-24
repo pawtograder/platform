@@ -5,17 +5,20 @@ import {
   TestInsightsOverview,
   CommonErrorsExplorer,
   ErrorPinIntegration,
+  RegradeSubmissionsDialog,
   DEFAULT_ERROR_FILTERS,
   type ErrorExplorerFilters,
   type CommonErrorGroup
 } from "@/lib/test-insights";
+import { toaster } from "@/components/ui/toaster";
 import { Box, Heading, HStack, Icon, Tabs, Text, VStack } from "@chakra-ui/react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { FaBug, FaChartBar, FaExclamationTriangle } from "react-icons/fa";
 
 export default function TestInsightsPage() {
   const { course_id, assignment_id } = useParams();
+  const router = useRouter();
   const assignmentId = Number(assignment_id);
   const courseId = Number(course_id);
 
@@ -23,6 +26,7 @@ export default function TestInsightsPage() {
   const [filters, setFilters] = useState<ErrorExplorerFilters>(DEFAULT_ERROR_FILTERS);
   const [activeTab, setActiveTab] = useState<string>("overview");
   const [selectedErrorForPin, setSelectedErrorForPin] = useState<CommonErrorGroup | null>(null);
+  const [selectedErrorForRegrade, setSelectedErrorForRegrade] = useState<CommonErrorGroup | null>(null);
 
   // Validate route params - pass null to hooks if invalid
   const validAssignmentId = Number.isFinite(assignmentId) ? assignmentId : null;
@@ -46,19 +50,36 @@ export default function TestInsightsPage() {
     setSelectedErrorForPin(errorGroup);
   }, []);
 
-  // Handle viewing submissions for a common error - placeholder for future implementation
+  // Handle viewing submissions for a common error
   const handleViewSubmissions = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     (submissionIds: number[]) => {
-      // TODO: Navigate to the assignments table with a filter for these submissions
-      // Could use router.push with query params to filter the assignments table
+      // Store submission IDs in sessionStorage so the rerun-autograder page can pre-select them
+      sessionStorage.setItem("preselect_submission_ids", JSON.stringify(submissionIds));
+
+      // Navigate to the rerun-autograder page
+      router.push(`/course/${course_id}/manage/assignments/${assignment_id}/rerun-autograder`);
+
+      toaster.info({
+        title: "Navigating to Rerun Autograder",
+        description: `${submissionIds.length} submissions will be pre-selected for review.`
+      });
     },
-    []
+    [router, course_id, assignment_id]
   );
 
   // Handle closing the error pin modal
   const handleCloseErrorPinModal = useCallback(() => {
     setSelectedErrorForPin(null);
+  }, []);
+
+  // Handle regrading submissions for a common error
+  const handleRegradeSubmissions = useCallback((errorGroup: CommonErrorGroup) => {
+    setSelectedErrorForRegrade(errorGroup);
+  }, []);
+
+  // Handle closing the regrade modal
+  const handleCloseRegradeModal = useCallback(() => {
+    setSelectedErrorForRegrade(null);
   }, []);
 
   // Render error UI if params are invalid
@@ -133,6 +154,7 @@ export default function TestInsightsPage() {
               onFiltersChange={setFilters}
               onCreateErrorPin={handleCreateErrorPin}
               onViewSubmissions={handleViewSubmissions}
+              onRegradeSubmissions={handleRegradeSubmissions}
             />
           </Box>
         </Tabs.Content>
@@ -146,6 +168,17 @@ export default function TestInsightsPage() {
           errorGroup={selectedErrorForPin}
           isOpen={true}
           onClose={handleCloseErrorPinModal}
+        />
+      )}
+
+      {/* Regrade Submissions Modal */}
+      {selectedErrorForRegrade && (
+        <RegradeSubmissionsDialog
+          assignmentId={validAssignmentId}
+          courseId={validCourseId}
+          errorGroup={selectedErrorForRegrade}
+          isOpen={true}
+          onClose={handleCloseRegradeModal}
         />
       )}
     </VStack>
