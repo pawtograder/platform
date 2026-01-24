@@ -62,6 +62,19 @@ export function RegradeSubmissionsDialog({
 
   const supabase = useMemo(() => createClient(), []);
 
+  // Reset state when dialog opens or errorGroup changes
+  useEffect(() => {
+    if (isOpen) {
+      setManualSha("");
+      setSelectedCommit(null);
+      setShowEmails(false);
+      setEmails([]);
+      setEmailsError(null);
+      setEmailsLoading(false);
+      setCommitsError(null);
+    }
+  }, [isOpen, errorGroup]);
+
   // Load recent commits for the autograder
   useEffect(() => {
     let cancelled = false;
