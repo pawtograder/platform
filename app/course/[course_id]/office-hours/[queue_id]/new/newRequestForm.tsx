@@ -695,6 +695,12 @@ export default function HelpRequestForm() {
     );
   }
 
+  // Compute hasErrors, ignoring empty root object left by React Hook Form
+  const hasErrors = Object.keys(errors).some(
+    (key) =>
+      key !== "root" || (key === "root" && Object.keys((errors as Record<string, unknown>).root || {}).length > 0)
+  );
+
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
       <Toaster />
@@ -1229,7 +1235,7 @@ export default function HelpRequestForm() {
         <Button
           type="submit"
           loading={isSubmitting || isSubmittingGuard}
-          disabled={isSubmitting || isSubmittingGuard || Object.keys(errors).length > 0}
+          disabled={isSubmitting || isSubmittingGuard || hasErrors}
           mt={4}
         >
           Submit Request

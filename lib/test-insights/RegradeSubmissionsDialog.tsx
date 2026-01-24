@@ -217,6 +217,11 @@ export function RegradeSubmissionsDialog({
 
   // Handle regrade action
   const handleRegrade = useCallback(async () => {
+    // Early guard to prevent duplicate calls
+    if (isRegrading) {
+      return;
+    }
+
     if (errorGroup.affected_submission_ids.length === 0) {
       toaster.error({
         title: "Error",
@@ -254,7 +259,16 @@ export function RegradeSubmissionsDialog({
     } finally {
       setIsRegrading(false);
     }
-  }, [errorGroup.affected_submission_ids, courseId, manualSha, selectedCommit, autoPromote, supabase, onClose]);
+  }, [
+    errorGroup.affected_submission_ids,
+    courseId,
+    manualSha,
+    selectedCommit,
+    autoPromote,
+    supabase,
+    onClose,
+    isRegrading
+  ]);
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={({ open }) => !open && onClose()} size="xl">
@@ -453,7 +467,7 @@ export function RegradeSubmissionsDialog({
                 colorPalette="green"
                 onClick={handleRegrade}
                 loading={isRegrading}
-                disabled={errorGroup.affected_submission_ids.length === 0}
+                disabled={isRegrading || errorGroup.affected_submission_ids.length === 0}
               >
                 <Icon as={FaPlay} mr={2} />
                 Regrade {errorGroup.affected_submission_ids.length} Submissions
