@@ -11,7 +11,7 @@ import { Badge, Box, Button, Card, Flex, HStack, Icon, IconButton, Stack, Text }
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
+import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp, BsQuestionCircle, BsX } from "react-icons/bs";
 import { useHelpQueues, useHelpQueueAssignments, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { Tooltip } from "@/components/ui/tooltip";
 
@@ -27,6 +27,7 @@ export function FloatingHelpRequestWidget() {
   const featureEnabled = useFeatureEnabled("office-hours");
   const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
   const unreadCount = useHelpRequestUnreadCount(activeRequest?.request.id);
   const allHelpRequestStudents = useHelpRequestStudents();
   const allHelpQueues = useHelpQueues();
@@ -100,6 +101,11 @@ export function FloatingHelpRequestWidget() {
     setIsExpanded((prev) => !prev);
   }, []);
 
+  const handleToggleDismiss = useCallback(() => {
+    setIsDismissed(true);
+    setIsExpanded(false);
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -119,6 +125,13 @@ export function FloatingHelpRequestWidget() {
 
   // Don't show widget when student is already on the office hours pages
   if (isOnOfficeHoursPage) {
+    return null;
+  }
+
+  // If they dismiss stop showing the help pop up
+  // Renders again when page reloaded
+  if (isDismissed) {
+    
     return null;
   }
 
@@ -275,6 +288,19 @@ export function FloatingHelpRequestWidget() {
                 >
                   <Icon as={BsArrowRight} />
                 </IconButton>
+
+                <IconButton
+                  aria-label="Dismiss widget"
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleDismiss();
+                  }}
+                >
+                  <Icon as={BsX} />
+                </IconButton>
+
                 <IconButton
                   aria-label="Expand chat"
                   variant="ghost"
@@ -318,6 +344,18 @@ export function FloatingHelpRequestWidget() {
                     onClick={handleNavigateToRequest}
                   >
                     <Icon as={BsArrowRight} />
+                  </IconButton>
+                  
+                  <IconButton
+                    aria-label="Close"
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleDismiss();
+                    }}
+                  >
+                    <Icon as={BsX} />
                   </IconButton>
                   <IconButton aria-label="Minimize" variant="ghost" size="sm" onClick={handleToggleExpand}>
                     <Icon as={BsChevronDown} />
