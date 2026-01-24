@@ -336,9 +336,7 @@ export default function HelpRequestResolutionModal({
                       rows={3}
                       resize="vertical"
                     />
-                    <Field.HelperText>
-                      Your feedback helps instructors improve the help experience
-                    </Field.HelperText>
+                    <Field.HelperText>Your feedback helps instructors improve the help experience</Field.HelperText>
                   </Field.Root>
                 )}
               </Stack>
