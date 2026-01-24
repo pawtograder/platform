@@ -101,7 +101,7 @@ export function FloatingHelpRequestWidget() {
     setIsExpanded((prev) => !prev);
   }, []);
 
-  const handleToggleDismiss = useCallback(() => {
+  const handleDismiss = useCallback(() => {
     setIsDismissed(true);
     setIsExpanded(false);
   }, []);
@@ -295,7 +295,7 @@ export function FloatingHelpRequestWidget() {
                   size="sm"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleToggleDismiss();
+                    handleDismiss();
                   }}
                 >
                   <Icon as={BsX} />
@@ -347,12 +347,12 @@ export function FloatingHelpRequestWidget() {
                   </IconButton>
                   
                   <IconButton
-                    aria-label="Close"
+                    aria-label="Dismiss widget"
                     variant="ghost"
                     size="sm"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleToggleDismiss();
+                      handleDismiss();
                     }}
                   >
                     <Icon as={BsX} />
