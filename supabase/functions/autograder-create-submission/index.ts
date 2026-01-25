@@ -5,7 +5,7 @@
 // Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { createHash } from "node:crypto";
 import { TZDate } from "npm:@date-fns/tz";
 import { addSeconds, format, isAfter } from "npm:date-fns@4";
@@ -17,9 +17,9 @@ import {
   createCheckRun,
   getOctoKit,
   getRepoTarballURL,
-  GitHubOIDCToken,
   updateCheckRun,
-  validateOIDCToken,
+  validateOIDCTokenOrAllowE2E,
+  END_TO_END_REPO_PREFIX,
   PrimaryRateLimitError,
   SecondaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
@@ -27,7 +27,6 @@ import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { Buffer } from "node:buffer";
-import { decode } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -369,9 +368,6 @@ async function handleGitHubApiCall<T>(
   }
 }
 
-const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
-const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET") || "not-a-secret";
-
 function getRepoToCloneConsideringE2E(repository: string) {
   if (repository.startsWith(END_TO_END_REPO_PREFIX)) {
     const separatorPosition = repository.indexOf("--");
@@ -381,22 +377,6 @@ function getRepoToCloneConsideringE2E(repository: string) {
     return repository.slice(0, separatorPosition);
   }
   return repository;
-}
-async function validateOIDCTokenOrAllowE2E(token: string) {
-  const decoded = decode(token);
-  const payload = decoded[1] as GitHubOIDCToken;
-  if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
-    const header = decoded[0] as {
-      alg: string;
-      typ: string;
-      kid: string;
-    };
-    if (header.kid !== END_TO_END_SECRET) {
-      throw new SecurityError("E2E repo provided, but secret is incorrect");
-    }
-    return payload;
-  }
-  return await validateOIDCToken(token);
 }
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {

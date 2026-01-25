@@ -2,7 +2,7 @@ import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Redis } from "./Redis.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import * as Sentry from "npm:@sentry/deno";
@@ -619,6 +619,31 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
     expLeeway: 3600 // 1 hour
   });
   return verified as GitHubOIDCToken;
+}
+
+// E2E testing constants and helper
+export const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
+const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET") || "not-a-secret";
+
+/**
+ * Validates an OIDC token, or allows E2E test tokens that use the special prefix.
+ * For E2E runs, we don't validate the signature but check that the secret matches.
+ */
+export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHubOIDCToken> {
+  const decoded = decode(token);
+  const payload = decoded[1] as GitHubOIDCToken;
+  if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
+    const header = decoded[0] as {
+      alg: string;
+      typ: string;
+      kid: string;
+    };
+    if (header.kid !== END_TO_END_SECRET) {
+      throw new SecurityError("E2E repo provided, but secret is incorrect");
+    }
+    return payload;
+  }
+  return await validateOIDCToken(token);
 }
 
 export async function getRepos(org: string, scope?: Sentry.Scope) {
