@@ -26,7 +26,8 @@
     "audit:student-repos": "npx tsx scripts/AuditStudentRepos.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
     "lint": "next lint && prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "cli": "npx tsx cli/index.ts"
   },
   "dependencies": {
     "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
