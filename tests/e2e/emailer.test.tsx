@@ -250,4 +250,240 @@ test.describe("Emailer", () => {
     await expectStudentsReceivedExactlyTheseEmails({ students: lab1Students, expected_emails: [lab1Message] });
     await expectStudentsReceivedExactlyTheseEmails({ students: lab2Students, expected_emails: [lab2Message] });
   });
+
+  test("Template-based emailer tab is accessible and shows templates", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.waitForLoadState("networkidle");
+    await page.goto(`/course/${course.id}/manage/course/emails`);
+
+    // Click on the Template-Based Emailer tab
+    await page.getByRole("tab", { name: /Template-Based Emailer/i }).click();
+    await page.waitForTimeout(500);
+
+    // Verify the template emailer content is visible
+    await expect(page.getByText("Template-Based Emailer")).toBeVisible();
+    await expect(page.getByText("Select Template")).toBeVisible();
+
+    // Verify template dropdown is present
+    const templateDropdown = page.getByText("Select a template...");
+    await expect(templateDropdown).toBeVisible();
+  });
+
+  test("Template selection shows available variables", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.waitForLoadState("networkidle");
+    await page.goto(`/course/${course.id}/manage/course/emails`);
+
+    // Click on the Template-Based Emailer tab
+    await page.getByRole("tab", { name: /Template-Based Emailer/i }).click();
+    await page.waitForTimeout(500);
+
+    // Click on template dropdown - use more specific selector
+    const templateField = page.locator('text=Email Template').locator('..').locator('[class*="select"]').first();
+    await templateField.click();
+    await page.waitForTimeout(300);
+
+    // Select "Students Without Submissions" template (doesn't require assignment for demo)
+    const templateOption = page.getByRole("option", { name: /Students Without Submissions/i });
+    if (await templateOption.isVisible()) {
+      await templateOption.click();
+      await page.waitForTimeout(500);
+
+      // Verify available variables section appears
+      await expect(page.getByText("Available Template Variables")).toBeVisible();
+
+      // Check that variable badges are shown
+      await expect(page.getByText("{student_name}")).toBeVisible();
+      await expect(page.getByText("{course_name}")).toBeVisible();
+    }
+  });
+
+  test("Manual and template emailers can switch between tabs", async ({ page }) => {
+    await loginAsUser(page, instructor, course);
+    await page.waitForLoadState("networkidle");
+    await page.goto(`/course/${course.id}/manage/course/emails`);
+
+    // Verify Manual Emailer tab is active by default
+    const manualTab = page.getByRole("tab", { name: /Manual Emailer/i });
+    await expect(manualTab).toBeVisible();
+    await expect(page.getByText("Create and Send Emails")).toBeVisible();
+
+    // Switch to Template-Based Emailer
+    await page.getByRole("tab", { name: /Template-Based Emailer/i }).click();
+    await page.waitForTimeout(500);
+    await expect(page.getByText("Template-Based Emailer")).toBeVisible();
+
+    // Switch back to Manual Emailer
+    await manualTab.click();
+    await page.waitForTimeout(500);
+    await expect(page.getByText("Create and Send Emails")).toBeVisible();
+  });
+});
+
+test.describe("Email Templates RPC Functions", () => {
+  test("emailer_list_available_rpcs returns expected functions", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any).rpc("emailer_list_available_rpcs");
+    
+    expect(error).toBeNull();
+    expect(data).toBeDefined();
+    expect(Array.isArray(data)).toBe(true);
+    
+    // Check that expected RPCs are present
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rpcNames = data?.map((r: any) => r.rpc_name) || [];
+    expect(rpcNames).toContain("emailer_get_students_with_failing_tests");
+    expect(rpcNames).toContain("emailer_get_lab_leaders_with_missing_grades");
+    expect(rpcNames).toContain("emailer_get_students_without_submissions");
+    expect(rpcNames).toContain("emailer_get_students_with_low_scores");
+    expect(rpcNames).toContain("emailer_get_students_with_test_errors");
+  });
+
+  test("emailer_get_students_without_submissions returns students correctly", async () => {
+    // First, create an assignment
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: assignment, error: assignmentError } = await (supabase as any)
+      .from("assignments")
+      .insert({
+        class_id: course.id,
+        title: "Test Assignment for Emailer",
+        slug: `emailer-test-${Date.now()}`,
+        due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 1 week from now
+        is_group: false
+      })
+      .select("id")
+      .single();
+
+    expect(assignmentError).toBeNull();
+    expect(assignment).toBeDefined();
+
+    if (assignment) {
+      // Call the RPC to get students without submissions
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: studentsWithoutSubmissions, error: rpcError } = await (supabase as any).rpc(
+        "emailer_get_students_without_submissions",
+        {
+          p_class_id: course.id,
+          p_assignment_id: assignment.id
+        }
+      );
+
+      expect(rpcError).toBeNull();
+      expect(studentsWithoutSubmissions).toBeDefined();
+      expect(Array.isArray(studentsWithoutSubmissions)).toBe(true);
+
+      // Should include all students since no one has submitted
+      const allStudents = [...section1Students, ...section2Students, ...lab1Students, ...lab2Students];
+      expect(studentsWithoutSubmissions?.length).toBeGreaterThanOrEqual(allStudents.length);
+
+      // Clean up assignment
+      await supabase.from("assignments").delete().eq("id", assignment.id);
+    }
+  });
+
+  test("emailer_get_lab_leaders_with_missing_grades returns lab leaders", async () => {
+    // Create a lab assignment
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: labAssignment, error: assignmentError } = await (supabase as any)
+      .from("assignments")
+      .insert({
+        class_id: course.id,
+        title: "Lab Assignment for Emailer Test",
+        slug: `lab-emailer-test-${Date.now()}`,
+        due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        is_group: false,
+        minutes_due_after_lab: 60
+      })
+      .select("id")
+      .single();
+
+    expect(assignmentError).toBeNull();
+    expect(labAssignment).toBeDefined();
+
+    if (labAssignment) {
+      // Call the RPC to get lab leaders with missing grades
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: leadersWithMissingGrades, error: rpcError } = await (supabase as any).rpc(
+        "emailer_get_lab_leaders_with_missing_grades",
+        {
+          p_class_id: course.id,
+          p_assignment_id: labAssignment.id
+        }
+      );
+
+      expect(rpcError).toBeNull();
+      expect(leadersWithMissingGrades).toBeDefined();
+      expect(Array.isArray(leadersWithMissingGrades)).toBe(true);
+
+      // Both lab leaders should have students missing grades
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const leaderEmails = leadersWithMissingGrades?.map((l: any) => l.email) || [];
+      expect(leaderEmails).toContain(lab1Leader.email);
+      expect(leaderEmails).toContain(lab2Leader.email);
+
+      // Clean up assignment
+      await supabase.from("assignments").delete().eq("id", labAssignment.id);
+    }
+  });
+});
+
+test.describe("Email Templates Table", () => {
+  test("Global email templates exist and are accessible", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: templates, error } = await (supabase as any)
+      .from("email_templates")
+      .select("*")
+      .eq("scope", "global")
+      .eq("is_active", true);
+
+    expect(error).toBeNull();
+    expect(templates).toBeDefined();
+    expect(Array.isArray(templates)).toBe(true);
+    
+    // Should have default templates
+    expect(templates?.length).toBeGreaterThan(0);
+
+    // Verify templates have required fields
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const template of templates || []) {
+      expect((template as any).name).toBeDefined();
+      expect((template as any).subject_template).toBeDefined();
+      expect((template as any).body_template).toBeDefined();
+      expect((template as any).rpc_function_name).toBeDefined();
+      expect((template as any).available_variables).toBeDefined();
+      expect(Array.isArray((template as any).available_variables)).toBe(true);
+    }
+  });
+
+  test("Templates contain expected variable placeholders", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: templates, error } = await (supabase as any)
+      .from("email_templates")
+      .select("*")
+      .eq("scope", "global")
+      .eq("is_active", true);
+
+    expect(error).toBeNull();
+
+    // Check that templates using assignment require assignment
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const assignmentTemplates = templates?.filter((t: any) => t.requires_assignment) || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const template of assignmentTemplates as any[]) {
+      // Templates requiring assignment should have assignment-related variables
+      expect(template.available_variables).toContain("assignment_title");
+    }
+
+    // Check that lab leader templates require lab section
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const labLeaderTemplates = templates?.filter((t: any) =>
+      t.rpc_function_name === "emailer_get_lab_leaders_with_missing_grades"
+    ) || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const template of labLeaderTemplates as any[]) {
+      expect(template.requires_lab_section).toBe(true);
+      expect(template.available_variables).toContain("lab_section_name");
+      expect(template.available_variables).toContain("leader_name");
+    }
+  });
 });

@@ -122,6 +122,18 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                 Welcome Message
               </Link>
               <Link
+                href="/admin/email-templates"
+                color="blue.600"
+                _hover={{ color: "blue.800" }}
+                px={3}
+                py={2}
+                rounded="md"
+                fontSize="sm"
+                fontWeight="medium"
+              >
+                Email Templates
+              </Link>
+              <Link
                 href="/course"
                 color="fg.muted"
                 _hover={{ color: "fg" }}

@@ -1,6 +1,6 @@
 import { createClient } from "@/utils/supabase/server";
 import { Button } from "@/components/ui/button";
-import { Plus, Users, GraduationCap, Settings, FileText, MessageSquare } from "lucide-react";
+import { Plus, Users, GraduationCap, Settings, FileText, MessageSquare, Mail } from "lucide-react";
 import { Card, Text, Flex, Grid, HStack, VStack, Heading, Icon } from "@chakra-ui/react";
 import Link from "next/link";
 
@@ -208,6 +208,14 @@ export default async function AdminPage() {
                   <HStack gap={2}>
                     <MessageSquare size={16} />
                     <Text>Configure Welcome Message</Text>
+                  </HStack>
+                </Link>
+              </Button>
+              <Button variant="outline" w="full" justifyContent="start" asChild>
+                <Link href="/admin/email-templates">
+                  <HStack gap={2}>
+                    <Mail size={16} />
+                    <Text>Manage Email Templates</Text>
                   </HStack>
                 </Link>
               </Button>

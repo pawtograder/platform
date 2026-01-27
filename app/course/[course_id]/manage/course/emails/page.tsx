@@ -10,7 +10,7 @@ import {
   UserRole,
   LabSection
 } from "@/utils/supabase/DatabaseTypes";
-import { Button, Field, Fieldset, Heading, Input, Box, Flex, Text, Checkbox } from "@chakra-ui/react";
+import { Button, Field, Fieldset, Heading, Input, Box, Flex, Text, Checkbox, Tabs } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
 import { CreatableSelect, Select } from "chakra-react-select";
 import { useEffect, useRef, useState } from "react";
@@ -26,8 +26,9 @@ import HistoryPage from "./historyList";
 import { formatInTimeZone } from "date-fns-tz";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { LuCheck } from "react-icons/lu";
+import { LuCheck, LuMail, LuFileText } from "react-icons/lu";
 import MdEditor from "@/components/ui/md-editor";
+import TemplateEmailer from "./templateEmailer";
 /* types */
 enum Audience {
   All = "all",
@@ -856,7 +857,6 @@ function EmailsInnerPage() {
         </Fieldset.Content>
       </Fieldset.Root>
 
-      <EmailPreviewAndSend userRoles={userRolesData?.data} />
     </Box>
   );
 }
@@ -865,7 +865,32 @@ export default function EmailsPage() {
   return (
     <Box p={4}>
       <EmailManagementProvider>
-        <EmailsInnerPage />
+        <Tabs.Root defaultValue="manual" variant="line">
+          <Tabs.List mb={4}>
+            <Tabs.Trigger value="manual">
+              <Flex gap={2} align="center">
+                <LuMail size={16} />
+                <Text>Manual Emailer</Text>
+              </Flex>
+            </Tabs.Trigger>
+            <Tabs.Trigger value="template">
+              <Flex gap={2} align="center">
+                <LuFileText size={16} />
+                <Text>Template-Based Emailer</Text>
+              </Flex>
+            </Tabs.Trigger>
+          </Tabs.List>
+
+          <Tabs.Content value="manual">
+            <EmailsInnerPage />
+          </Tabs.Content>
+
+          <Tabs.Content value="template">
+            <TemplateEmailer />
+          </Tabs.Content>
+        </Tabs.Root>
+
+        <EmailPreviewAndSend userRoles={undefined} />
         <HistoryPage />
         <Toaster />
       </EmailManagementProvider>
