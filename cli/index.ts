@@ -22,6 +22,7 @@ import { hideBin } from "yargs/helpers";
 dotenv.config({ path: ".env.local" });
 
 // Import command modules
+import * as authCommand from "./commands/auth";
 import * as classesCommand from "./commands/classes";
 import * as assignmentsCommand from "./commands/assignments";
 import * as flashcardsCommand from "./commands/flashcards";
@@ -30,10 +31,78 @@ import * as submissionsCommand from "./commands/submissions";
 import * as helpRequestsCommand from "./commands/help-requests";
 import * as discussionsCommand from "./commands/discussions";
 import * as reviewsCommand from "./commands/reviews";
+import { startLoginFlow, logout, getCurrentUser } from "./utils/auth";
+import { getCredentialsPath } from "./utils/credentials";
+import { logger, handleError } from "./utils/logger";
 
 yargs(hideBin(process.argv))
   .scriptName("pawtograder")
   .usage("$0 <command> [options]")
+  // Auth commands
+  .command(authCommand)
+  .command(
+    "login",
+    "Sign in to Pawtograder via browser",
+    (yargs) => {
+      return yargs
+        .option("email", {
+          alias: "e",
+          describe: "Email address for magic link",
+          type: "string"
+        })
+        .option("no-browser", {
+          describe: "Don't auto-open browser, show URL instead",
+          type: "boolean",
+          default: false
+        });
+    },
+    async (args) => {
+      try {
+        await startLoginFlow({
+          email: args.email as string | undefined,
+          noBrowser: args["no-browser"] as boolean
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  )
+  .command(
+    "logout",
+    "Sign out and clear stored credentials",
+    () => {},
+    async () => {
+      try {
+        await logout();
+        logger.success("Logged out successfully");
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  )
+  .command(
+    "whoami",
+    "Show current authenticated user",
+    () => {},
+    async () => {
+      try {
+        const user = await getCurrentUser();
+        if (user) {
+          logger.step("Current User");
+          logger.info(`Email: ${user.email}`);
+          logger.info(`Name: ${user.name || "(not set)"}`);
+          logger.info(`User ID: ${user.id}`);
+          logger.blank();
+          logger.info(`Credentials: ${getCredentialsPath()}`);
+        } else {
+          logger.info("Not logged in. Run 'pawtograder login' to authenticate.");
+        }
+      } catch (error) {
+        handleError(error);
+      }
+    }
+  )
+  // Resource commands
   .command(classesCommand)
   .command(assignmentsCommand)
   .command(flashcardsCommand)
