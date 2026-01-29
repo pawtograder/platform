@@ -56,6 +56,7 @@ import NotificationPermissionWarning, {
   useShowNotificationWarning
 } from "@/components/notifications/notification-permission-warning";
 import { formatDistanceToNow } from "date-fns";
+import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
 
 /**
  * Office hours form and UI helper types
@@ -1282,6 +1283,12 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             {/* Staff-only actions */}
             {isInstructorOrGrader && request && (
               <>
+                <AIHelpIconButton
+                  contextType="help_request"
+                  resourceId={request.id}
+                  classId={request.class_id}
+                  submissionId={request.referenced_submission_id ?? undefined}
+                />
                 <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
                 <Tooltip content="Moderation" showArrow>
                   <IconButton

@@ -742,14 +742,25 @@ export default function AssignmentForm({
               </Checkbox.Root>
             </Field>
           </Fieldset.Content>
-          {/* <Fieldset.Content>
+          <Fieldset.Content>
             <Field
-              label="Description URL"
-              helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"
+              label="Handout URL"
+              helperText="A link to the assignment handout or instructions document. This URL will be provided to AI assistants helping students with this assignment."
+              errorText={errors.handout_url?.message?.toString()}
+              invalid={!!errors.handout_url}
             >
-              <Input name="description" />
+              <Input
+                type="url"
+                placeholder="https://..."
+                {...register("handout_url", {
+                  pattern: {
+                    value: /^https?:\/\/.+/,
+                    message: "Please enter a valid URL starting with http:// or https://"
+                  }
+                })}
+              />
             </Field>
-          </Fieldset.Content> */}
+          </Fieldset.Content>
           <Fieldset.Content>
             <Field
               label="Points Possible"
