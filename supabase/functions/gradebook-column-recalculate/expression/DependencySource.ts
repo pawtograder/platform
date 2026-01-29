@@ -881,24 +881,38 @@ export async function addDependencySourceFunctions({
     }
     return value <= threshold ? 1 : 0;
   };
-  imports["min"] = (...values: (number | GradebookColumnStudentWithMaxScore)[]) => {
-    const validValues = values
-      .filter((v) => {
-        if (isGradebookColumnStudent(v)) {
-          return v.score !== undefined;
+  // Helper to flatten and extract scalar values from mixed inputs (numbers, GradebookColumnStudent, arrays, matrices)
+  const extractScalarValues = (values: unknown[]): number[] => {
+    const result: number[] = [];
+    for (const v of values) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === "number") {
+        result.push(v);
+      } else if (isGradebookColumnStudent(v)) {
+        if (v.score !== undefined && v.score !== null) {
+          result.push(v.score);
         }
-        return v !== undefined;
-      })
-      .map((v) => {
-        if (isGradebookColumnStudent(v)) {
-          return v.score;
-        }
-        return v;
-      });
+      } else if (isDenseMatrix(v)) {
+        result.push(...extractScalarValues(v.toArray()));
+      } else if (Array.isArray(v)) {
+        result.push(...extractScalarValues(v));
+      }
+    }
+    return result;
+  };
+  imports["min"] = (...values: unknown[]) => {
+    const validValues = extractScalarValues(values);
     if (validValues.length === 0) {
       return undefined;
     }
     return Math.min(...validValues);
+  };
+  imports["max"] = (...values: unknown[]) => {
+    const validValues = extractScalarValues(values);
+    if (validValues.length === 0) {
+      return undefined;
+    }
+    return Math.max(...validValues);
   };
   imports["larger"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
     if (isGradebookColumnStudent(value)) {
