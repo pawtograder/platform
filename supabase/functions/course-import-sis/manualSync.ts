@@ -22,7 +22,7 @@
  *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SIS_API_URL, SIS_AUTH_TOKEN
  */
 
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 // Import types and functions from the main index.ts

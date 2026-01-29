@@ -1535,6 +1535,188 @@ export async function insertSubmissionViaAPI({
   };
 }
 
+export type GradingScriptResult = {
+  ret_code: number;
+  output: string;
+  execution_time: number;
+  feedback: {
+    score?: number;
+    max_score?: number;
+    output: {
+      hidden?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+      visible?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+      after_due_date?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+      after_published?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+    };
+    lint: {
+      status: "pass" | "fail";
+      output: string;
+      output_format?: "text" | "markdown" | "ansi";
+    };
+    tests: {
+      score?: number;
+      max_score?: number;
+      name: string;
+      name_format?: "text" | "markdown" | "ansi";
+      output: string;
+      output_format?: "text" | "markdown" | "ansi";
+      hidden_output?: string;
+      hidden_output_format?: "text" | "markdown" | "ansi";
+      part?: string;
+      hide_until_released?: boolean;
+    }[];
+  };
+  grader_sha: string;
+  action_ref: string;
+  action_repository: string;
+};
+
+export type GradeResponse = {
+  is_ok: boolean;
+  message: string;
+  details_url: string;
+  artifacts?: {
+    name: string;
+    path: string;
+    token: string;
+  }[];
+  supabase_url: string;
+  supabase_anon_key: string;
+};
+
+/**
+ * Submits feedback for a submission via the autograder-submit-feedback edge function.
+ * This simulates what the grading script does after grading completes.
+ */
+export async function submitFeedbackViaAPI({
+  repository,
+  sha,
+  run_id = 1,
+  run_attempt = 1,
+  feedback
+}: {
+  repository: string;
+  sha: string;
+  run_id?: number;
+  run_attempt?: number;
+  feedback: GradingScriptResult;
+}): Promise<GradeResponse> {
+  // Prepare a JWT token to invoke the edge function (same format as insertSubmissionViaAPI)
+  const payload = {
+    repository: repository,
+    sha: sha,
+    workflow_ref: ".github/workflows/grade.yml-e2e-test",
+    run_id: run_id,
+    run_attempt: run_attempt
+  };
+  const header = {
+    alg: "RS256",
+    typ: "JWT",
+    kid: process.env.END_TO_END_SECRET || "not-a-secret"
+  };
+  const token_str =
+    Buffer.from(JSON.stringify(header)).toString("base64") +
+    "." +
+    Buffer.from(JSON.stringify(payload)).toString("base64") +
+    ".";
+
+  const { data, error } = await supabase.functions.invoke("autograder-submit-feedback", {
+    headers: {
+      Authorization: token_str
+    },
+    body: feedback
+  });
+
+  if (error) {
+    throw new Error(`Failed to submit feedback: ${error.message}`);
+  }
+
+  if (data == null) {
+    throw new Error("Failed to submit feedback, no data returned");
+  }
+
+  if ("error" in data) {
+    if (typeof data.error === "object" && data.error && "details" in data.error) {
+      console.trace(data);
+      throw new Error(String((data.error as { details: string }).details));
+    }
+    throw new Error(`Failed to submit feedback: ${JSON.stringify(data.error)}`);
+  }
+
+  return data as GradeResponse;
+}
+
+/**
+ * Creates a sample GradingScriptResult with reasonable test data
+ */
+export function createSampleGradingResult(overrides?: Partial<GradingScriptResult>): GradingScriptResult {
+  return {
+    ret_code: 0,
+    output: "Grading completed successfully",
+    execution_time: 5000,
+    grader_sha: "abc123gradersha",
+    action_ref: "main",
+    action_repository: "pawtograder-playground/grader-action",
+    feedback: {
+      score: 85,
+      max_score: 100,
+      output: {
+        visible: {
+          output: "All visible tests passed!",
+          output_format: "text"
+        },
+        hidden: {
+          output: "Hidden test details here",
+          output_format: "text"
+        }
+      },
+      lint: {
+        status: "pass",
+        output: "No linting errors found",
+        output_format: "text"
+      },
+      tests: [
+        {
+          name: "Test 1 - Basic functionality",
+          score: 25,
+          max_score: 25,
+          output: "Test passed successfully",
+          output_format: "text",
+          part: "Part A"
+        },
+        {
+          name: "Test 2 - Edge cases",
+          score: 20,
+          max_score: 25,
+          output: "Partial credit: missed one edge case",
+          output_format: "text",
+          part: "Part A"
+        },
+        {
+          name: "Test 3 - Performance",
+          score: 25,
+          max_score: 25,
+          output: "Performance within acceptable limits",
+          output_format: "text",
+          part: "Part B"
+        },
+        {
+          name: "Test 4 - Hidden test",
+          score: 15,
+          max_score: 25,
+          output: "Hidden test result",
+          output_format: "text",
+          hidden_output: "Detailed hidden output for instructors",
+          hidden_output_format: "text",
+          hide_until_released: true,
+          part: "Part B"
+        }
+      ]
+    },
+    ...overrides
+  };
+}
+
 export async function createDueDateException(
   assignment_id: number,
   student_profile_id: string,
