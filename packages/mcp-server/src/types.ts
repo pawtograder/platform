@@ -34,6 +34,8 @@ export interface HelpRequestContext {
   updated_at: string;
   assignment?: AssignmentContext | null;
   submission?: SubmissionContext | null;
+  latest_submission?: SubmissionContext | null;
+  student_profile_id: string | null;
   student_name: string | null;
   help_queue_name: string;
   messages: HelpRequestMessage[];
@@ -56,8 +58,10 @@ export interface DiscussionThreadContext {
   updated_at: string;
   is_question: boolean;
   children_count: number;
+  author_profile_id: string | null;
   author_name: string | null;
   assignment?: AssignmentContext | null;
+  latest_submission?: SubmissionContext | null;
   replies: DiscussionReplyContext[];
 }
 
@@ -68,6 +72,13 @@ export interface DiscussionReplyContext {
   author_name: string | null;
   is_staff: boolean;
   is_answer: boolean;
+}
+
+// Submission file context
+export interface SubmissionFileContext {
+  id: number;
+  name: string;
+  contents: string;
 }
 
 // Submission context for MCP
@@ -81,6 +92,7 @@ export interface SubmissionContext {
   is_active: boolean;
   student_name: string | null;
   grader_result?: GraderResultContext | null;
+  files?: SubmissionFileContext[];
 }
 
 // Grader result context

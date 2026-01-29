@@ -16,6 +16,7 @@ import type {
   DiscussionThreadContext,
   DiscussionReplyContext,
   SubmissionContext,
+  SubmissionFileContext,
   GraderResultContext,
   TestResultContext,
   BuildOutputContext,
@@ -98,6 +99,56 @@ export async function getAssignment(
 }
 
 /**
+ * Get submission files for a submission
+ */
+export async function getSubmissionFiles(
+  supabase: SupabaseClient,
+  submissionId: number,
+  classId: number
+): Promise<SubmissionFileContext[]> {
+  const { data, error } = await supabase
+    .from("submission_files")
+    .select("id, name, contents")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("name", { ascending: true });
+
+  if (error || !data) return [];
+
+  return data.map((file) => ({
+    id: file.id,
+    name: file.name,
+    contents: file.contents,
+  }));
+}
+
+/**
+ * Get the latest submission for a student on an assignment
+ */
+export async function getLatestSubmissionForStudent(
+  supabase: SupabaseClient,
+  studentProfileId: string,
+  assignmentId: number,
+  classId: number,
+  includeFiles = true
+): Promise<SubmissionContext | null> {
+  // Get the most recent submission for this student on this assignment
+  const { data: submission, error } = await supabase
+    .from("submissions")
+    .select("id")
+    .eq("profile_id", studentProfileId)
+    .eq("assignment_id", assignmentId)
+    .eq("class_id", classId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !submission) return null;
+
+  return getSubmission(supabase, submission.id, classId, true, includeFiles);
+}
+
+/**
  * Get help request with full context
  */
 export async function getHelpRequest(
@@ -135,7 +186,8 @@ export async function getHelpRequest(
       supabase,
       helpRequest.referenced_submission_id,
       classId,
-      true
+      true,
+      true // include files
     );
   }
 
@@ -143,6 +195,23 @@ export async function getHelpRequest(
   let assignment: AssignmentContext | null = null;
   if (submission) {
     assignment = await getAssignment(supabase, submission.assignment_id, classId);
+  }
+
+  // Get the latest submission for the student on this assignment
+  // This is useful when the help request doesn't reference a specific submission
+  let latestSubmission: SubmissionContext | null = null;
+  if (assignment && helpRequest.created_by) {
+    latestSubmission = await getLatestSubmissionForStudent(
+      supabase,
+      helpRequest.created_by,
+      assignment.id,
+      classId,
+      true // include files
+    );
+    // If the referenced submission is the same as the latest, no need to duplicate
+    if (latestSubmission && submission && latestSubmission.id === submission.id) {
+      latestSubmission = null;
+    }
   }
 
   // Get help request messages
@@ -184,6 +253,8 @@ export async function getHelpRequest(
     updated_at: helpRequest.updated_at,
     assignment,
     submission,
+    latest_submission: latestSubmission,
+    student_profile_id: helpRequest.created_by,
     student_name: studentName,
     help_queue_name: helpQueueName,
     messages,
@@ -223,6 +294,18 @@ export async function getDiscussionThread(
   const topic = thread.discussion_topics as unknown as { assignment_id: number | null };
   if (topic?.assignment_id) {
     assignment = await getAssignment(supabase, topic.assignment_id, classId);
+  }
+
+  // Get the latest submission for the author on this assignment
+  let latestSubmission: SubmissionContext | null = null;
+  if (assignment && thread.author) {
+    latestSubmission = await getLatestSubmissionForStudent(
+      supabase,
+      thread.author,
+      assignment.id,
+      classId,
+      true // include files
+    );
   }
 
   // Get replies if requested
@@ -269,20 +352,23 @@ export async function getDiscussionThread(
     updated_at: thread.updated_at,
     is_question: thread.is_question,
     children_count: thread.children_count,
+    author_profile_id: thread.author,
     author_name: authorName,
     assignment,
+    latest_submission: latestSubmission,
     replies,
   };
 }
 
 /**
- * Get submission with grader results
+ * Get submission with grader results and optionally files
  */
 export async function getSubmission(
   supabase: SupabaseClient,
   submissionId: number,
   classId: number,
-  includeTestOutput = true
+  includeTestOutput = true,
+  includeFiles = true
 ): Promise<SubmissionContext | null> {
   // Fetch the submission
   const { data: submission, error: subError } = await supabase
@@ -370,6 +456,12 @@ export async function getSubmission(
     };
   }
 
+  // Get submission files if requested
+  let files: SubmissionFileContext[] | undefined;
+  if (includeFiles) {
+    files = await getSubmissionFiles(supabase, submissionId, classId);
+  }
+
   return {
     id: submission.id,
     assignment_id: submission.assignment_id,
@@ -380,6 +472,7 @@ export async function getSubmission(
     is_active: submission.is_active,
     student_name: studentName,
     grader_result: graderResult,
+    files,
   };
 }
 
@@ -404,7 +497,7 @@ export async function getSubmissionsForStudent(
 
   const results: SubmissionContext[] = [];
   for (const sub of submissions) {
-    const submission = await getSubmission(supabase, sub.id, classId, true);
+    const submission = await getSubmission(supabase, sub.id, classId, true, true);
     if (submission) {
       results.push(submission);
     }
