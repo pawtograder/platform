@@ -32,7 +32,9 @@ interface CreateTokenRequest {
  */
 function base64UrlEncode(buffer: Buffer | string): string {
   const base64 = Buffer.isBuffer(buffer) ? buffer.toString("base64") : Buffer.from(buffer).toString("base64");
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  // Replace + with -, / with _, and remove trailing = padding
+  // Base64 padding is always 0, 1, or 2 characters, so we can safely use trimEnd
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
 /**
