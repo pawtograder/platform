@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { Box, HStack, Icon, IconButton, Input, Text } from "@chakra-ui/react";
+import { Box, HStack, Icon, IconButton, Input, Text, Textarea, VStack } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { BsRobot, BsCopy, BsX } from "react-icons/bs";
+import { LuThumbsUp, LuThumbsDown } from "react-icons/lu";
 
 /**
  * Props for the AIHelpButton component
@@ -142,6 +143,152 @@ Provide helpful guidance that:
 }
 
 /**
+ * Submit feedback to the API
+ */
+async function submitFeedback(
+  classId: number,
+  contextType: "help_request" | "discussion_thread",
+  resourceId: number,
+  rating: "thumbs_up" | "thumbs_down",
+  comment?: string
+): Promise<boolean> {
+  try {
+    const response = await fetch("/api/ai-help-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        class_id: classId,
+        context_type: contextType,
+        resource_id: resourceId,
+        rating,
+        comment: comment || undefined
+      })
+    });
+
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Feedback component shown after copying AI context
+ */
+function FeedbackPanel({
+  classId,
+  contextType,
+  resourceId,
+  onClose
+}: {
+  classId: number;
+  contextType: "help_request" | "discussion_thread";
+  resourceId: number;
+  onClose: () => void;
+}) {
+  const [rating, setRating] = useState<"thumbs_up" | "thumbs_down" | null>(null);
+  const [comment, setComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!rating) return;
+
+    setSubmitting(true);
+    const success = await submitFeedback(classId, contextType, resourceId, rating, comment);
+    setSubmitting(false);
+
+    if (success) {
+      setSubmitted(true);
+      toaster.success({
+        title: "Thanks for your feedback!",
+        description: "Your feedback helps us improve the AI assistance feature."
+      });
+    } else {
+      toaster.error({
+        title: "Failed to submit feedback",
+        description: "Please try again later."
+      });
+    }
+  };
+
+  if (submitted) {
+    return (
+      <Box p={3} borderWidth="1px" borderRadius="md" bg="green.subtle" maxW="400px">
+        <HStack justify="space-between">
+          <Text fontSize="sm" fontWeight="medium" color="green.fg">
+            Thank you for your feedback!
+          </Text>
+          <IconButton aria-label="Close" size="xs" variant="ghost" onClick={onClose}>
+            <Icon as={BsX} />
+          </IconButton>
+        </HStack>
+      </Box>
+    );
+  }
+
+  return (
+    <Box p={3} borderWidth="1px" borderRadius="md" bg="bg.subtle" maxW="400px">
+      <HStack justify="space-between" mb={2}>
+        <Text fontSize="sm" fontWeight="medium">
+          How was the AI assistance?
+        </Text>
+        <IconButton aria-label="Close" size="xs" variant="ghost" onClick={onClose}>
+          <Icon as={BsX} />
+        </IconButton>
+      </HStack>
+
+      <VStack gap={3} align="stretch">
+        <HStack gap={2} justify="center">
+          <IconButton
+            aria-label="Thumbs up"
+            size="lg"
+            variant={rating === "thumbs_up" ? "solid" : "outline"}
+            colorPalette={rating === "thumbs_up" ? "green" : "gray"}
+            onClick={() => setRating("thumbs_up")}
+          >
+            <Icon as={LuThumbsUp} boxSize={5} />
+          </IconButton>
+          <IconButton
+            aria-label="Thumbs down"
+            size="lg"
+            variant={rating === "thumbs_down" ? "solid" : "outline"}
+            colorPalette={rating === "thumbs_down" ? "red" : "gray"}
+            onClick={() => setRating("thumbs_down")}
+          >
+            <Icon as={LuThumbsDown} boxSize={5} />
+          </IconButton>
+        </HStack>
+
+        <Textarea
+          placeholder="Any additional feedback? (optional)"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          fontSize="sm"
+          rows={2}
+          maxLength={2000}
+        />
+
+        <HStack gap={2}>
+          <Button size="sm" variant="ghost" onClick={onClose} flex={1}>
+            Skip
+          </Button>
+          <Button
+            size="sm"
+            colorPalette="purple"
+            onClick={handleSubmit}
+            disabled={!rating || submitting}
+            loading={submitting}
+            flex={1}
+          >
+            Submit
+          </Button>
+        </HStack>
+      </VStack>
+    </Box>
+  );
+}
+
+/**
  * AIHelpButton component for launching AI assistance context
  *
  * This component provides a button that instructors and graders can use
@@ -159,6 +306,7 @@ export function AIHelpButton({
 }: AIHelpButtonProps) {
   const isInstructorOrGrader = useIsGraderOrInstructor();
   const [showContext, setShowContext] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
 
   const prompt = useMemo(
     () =>
@@ -179,6 +327,9 @@ export function AIHelpButton({
         title: "Copied AI context",
         description: "The AI help prompt has been copied to your clipboard."
       });
+      // Show feedback panel after copying
+      setShowContext(false);
+      setShowFeedback(true);
     } catch {
       toaster.error({
         title: "Failed to copy",
@@ -187,9 +338,18 @@ export function AIHelpButton({
     }
   }, [prompt]);
 
+  const handleClose = useCallback(() => {
+    setShowContext(false);
+    setShowFeedback(false);
+  }, []);
+
   // Only show for instructors/graders
   if (!isInstructorOrGrader) {
     return null;
+  }
+
+  if (showFeedback) {
+    return <FeedbackPanel classId={classId} contextType={contextType} resourceId={resourceId} onClose={handleClose} />;
   }
 
   if (showContext) {
@@ -202,7 +362,7 @@ export function AIHelpButton({
               AI Help Context
             </Text>
           </HStack>
-          <IconButton aria-label="Close" size="xs" variant="ghost" onClick={() => setShowContext(false)}>
+          <IconButton aria-label="Close" size="xs" variant="ghost" onClick={handleClose}>
             <Icon as={BsX} />
           </IconButton>
         </HStack>
@@ -249,6 +409,7 @@ export function AIHelpIconButton({
   submissionId
 }: Omit<AIHelpButtonProps, "size" | "variant">) {
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  const [showFeedback, setShowFeedback] = useState(false);
 
   const prompt = useMemo(
     () =>
@@ -269,6 +430,8 @@ export function AIHelpIconButton({
         title: "Copied AI context",
         description: "Paste this prompt into your AI assistant to get help."
       });
+      // Show feedback after copying
+      setShowFeedback(true);
     } catch {
       toaster.error({
         title: "Failed to copy",
@@ -280,6 +443,17 @@ export function AIHelpIconButton({
   // Only show for instructors/graders
   if (!isInstructorOrGrader) {
     return null;
+  }
+
+  if (showFeedback) {
+    return (
+      <FeedbackPanel
+        classId={classId}
+        contextType={contextType}
+        resourceId={resourceId}
+        onClose={() => setShowFeedback(false)}
+      />
+    );
   }
 
   return (

@@ -132,6 +132,47 @@ export type Database = {
         };
         Relationships: [];
       };
+      ai_help_feedback: {
+        Row: {
+          id: string;
+          user_id: string;
+          class_id: number;
+          context_type: "help_request" | "discussion_thread";
+          resource_id: number;
+          rating: "thumbs_up" | "thumbs_down";
+          comment: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          class_id: number;
+          context_type: "help_request" | "discussion_thread";
+          resource_id: number;
+          rating: "thumbs_up" | "thumbs_down";
+          comment?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          class_id?: number;
+          context_type?: "help_request" | "discussion_thread";
+          resource_id?: number;
+          rating?: "thumbs_up" | "thumbs_down";
+          comment?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "ai_help_feedback_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignment_due_date_exceptions: {
         Row: {
           assignment_group_id: number | null;
