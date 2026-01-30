@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
-import * as jose from "jose";
-import { randomUUID } from "crypto";
+import { createHmac, randomUUID } from "crypto";
+import * as Sentry from "@sentry/nextjs";
 
 /**
  * MCP Token Management API
@@ -28,34 +28,52 @@ interface CreateTokenRequest {
 }
 
 /**
- * Create a signed MCP API token
+ * Base64url encode a buffer
  */
-async function createApiToken(
-  userId: string,
-  scopes: MCPScope[],
-  tokenId: string,
-  expiresInDays: number
-): Promise<string> {
+function base64UrlEncode(buffer: Buffer | string): string {
+  const base64 = Buffer.isBuffer(buffer) ? buffer.toString("base64") : Buffer.from(buffer).toString("base64");
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Create a signed MCP API token using HMAC-SHA256
+ */
+function createApiToken(userId: string, scopes: MCPScope[], tokenId: string, expiresInDays: number): string {
   if (!MCP_JWT_SECRET || MCP_JWT_SECRET.length < 32) {
     throw new Error("MCP_JWT_SECRET not configured or too short");
   }
 
-  const secret = new TextEncoder().encode(MCP_JWT_SECRET);
-  const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + expiresInDays * 24 * 60 * 60;
 
-  const jwt = await new jose.SignJWT({
+  // JWT Header
+  const header = {
+    alg: "HS256",
+    typ: "JWT"
+  };
+
+  // JWT Payload
+  const payload = {
     sub: userId,
     scopes,
     jti: tokenId,
     iss: "pawtograder",
     aud: "mcp",
-  })
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setIssuedAt()
-    .setExpirationTime(expiresAt)
-    .sign(secret);
+    iat: now,
+    exp: expiresAt
+  };
 
-  return MCP_TOKEN_PREFIX + jwt;
+  // Encode header and payload
+  const encodedHeader = base64UrlEncode(JSON.stringify(header));
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+
+  // Create signature
+  const signatureInput = `${encodedHeader}.${encodedPayload}`;
+  const signature = createHmac("sha256", MCP_JWT_SECRET).update(signatureInput).digest();
+  const encodedSignature = base64UrlEncode(signature);
+
+  // Return complete JWT
+  return MCP_TOKEN_PREFIX + `${encodedHeader}.${encodedPayload}.${encodedSignature}`;
 }
 
 /**
@@ -69,7 +87,7 @@ export async function GET(): Promise<NextResponse> {
     // Get current user
     const {
       data: { user },
-      error: userError,
+      error: userError
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
@@ -85,10 +103,7 @@ export async function GET(): Promise<NextResponse> {
       .in("role", ["instructor", "grader"]);
 
     if (!roles || roles.length === 0) {
-      return NextResponse.json(
-        { error: "MCP tokens are only available to instructors and graders" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "MCP tokens are only available to instructors and graders" }, { status: 403 });
     }
 
     // Get user's tokens
@@ -99,13 +114,17 @@ export async function GET(): Promise<NextResponse> {
       .order("created_at", { ascending: false });
 
     if (tokensError) {
-      console.error("Error fetching tokens:", tokensError);
+      Sentry.captureException(tokensError, {
+        tags: { endpoint: "mcp_tokens", operation: "list" }
+      });
       return NextResponse.json({ error: "Failed to fetch tokens" }, { status: 500 });
     }
 
     return NextResponse.json({ tokens: tokens || [] });
   } catch (error) {
-    console.error("Error in GET /api/mcp-tokens:", error);
+    Sentry.captureException(error, {
+      tags: { endpoint: "mcp_tokens", operation: "list" }
+    });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
@@ -121,7 +140,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Get current user
     const {
       data: { user },
-      error: userError,
+      error: userError
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
@@ -137,10 +156,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       .in("role", ["instructor", "grader"]);
 
     if (!roles || roles.length === 0) {
-      return NextResponse.json(
-        { error: "MCP tokens are only available to instructors and graders" },
-        { status: 403 }
-      );
+      return NextResponse.json({ error: "MCP tokens are only available to instructors and graders" }, { status: 403 });
     }
 
     // Parse request body
@@ -180,7 +196,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
 
     // Create the JWT token
-    const token = await createApiToken(user.id, scopes, tokenId, expiresInDays);
+    const token = createApiToken(user.id, scopes, tokenId, expiresInDays);
 
     // Store token metadata in database
     const { data: tokenRecord, error: insertError } = await supabase
@@ -190,13 +206,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         name: body.name.trim(),
         token_id: tokenId,
         scopes,
-        expires_at: expiresAt.toISOString(),
+        expires_at: expiresAt.toISOString()
       })
       .select("id, name, scopes, expires_at, created_at")
       .single();
 
     if (insertError) {
-      console.error("Error creating token:", insertError);
+      Sentry.captureException(insertError, {
+        tags: { endpoint: "mcp_tokens", operation: "create" }
+      });
       return NextResponse.json({ error: "Failed to create token" }, { status: 500 });
     }
 
@@ -204,10 +222,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({
       token,
       metadata: tokenRecord,
-      message: "Token created successfully. Save this token - it will only be shown once!",
+      message: "Token created successfully. Save this token - it will only be shown once!"
     });
   } catch (error) {
-    console.error("Error in POST /api/mcp-tokens:", error);
+    Sentry.captureException(error, {
+      tags: { endpoint: "mcp_tokens", operation: "create" }
+    });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

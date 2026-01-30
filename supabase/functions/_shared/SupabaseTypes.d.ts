@@ -96,6 +96,42 @@ export type Database = {
           }
         ];
       };
+      api_tokens: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          token_id: string;
+          scopes: string[];
+          expires_at: string;
+          revoked_at: string | null;
+          created_at: string;
+          last_used_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name: string;
+          token_id: string;
+          scopes?: string[];
+          expires_at: string;
+          revoked_at?: string | null;
+          created_at?: string;
+          last_used_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          name?: string;
+          token_id?: string;
+          scopes?: string[];
+          expires_at?: string;
+          revoked_at?: string | null;
+          created_at?: string;
+          last_used_at?: string | null;
+        };
+        Relationships: [];
+      };
       assignment_due_date_exceptions: {
         Row: {
           assignment_group_id: number | null;

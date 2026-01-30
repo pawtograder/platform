@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
+import * as Sentry from "@sentry/nextjs";
 
 /**
  * MCP Token Management API - Single Token Operations
@@ -18,18 +19,16 @@ interface RouteParams {
  * DELETE /api/mcp-tokens/[id]
  * Revoke (soft delete) a token
  */
-export async function DELETE(
-  _request: NextRequest,
-  { params }: RouteParams
-): Promise<NextResponse> {
+export async function DELETE(_request: NextRequest, { params }: RouteParams): Promise<NextResponse> {
+  const { id } = await params;
+
   try {
-    const { id } = await params;
     const supabase = await createClient();
 
     // Get current user
     const {
       data: { user },
-      error: userError,
+      error: userError
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
@@ -51,7 +50,10 @@ export async function DELETE(
         // No rows returned - token doesn't exist, doesn't belong to user, or already revoked
         return NextResponse.json({ error: "Token not found or already revoked" }, { status: 404 });
       }
-      console.error("Error revoking token:", updateError);
+      Sentry.captureException(updateError, {
+        tags: { endpoint: "mcp_tokens", operation: "revoke" },
+        extra: { token_id: id }
+      });
       return NextResponse.json({ error: "Failed to revoke token" }, { status: 500 });
     }
 
@@ -61,7 +63,10 @@ export async function DELETE(
 
     return NextResponse.json({ success: true, message: "Token revoked successfully" });
   } catch (error) {
-    console.error("Error in DELETE /api/mcp-tokens/[id]:", error);
+    Sentry.captureException(error, {
+      tags: { endpoint: "mcp_tokens", operation: "revoke" },
+      extra: { token_id: id }
+    });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

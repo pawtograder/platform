@@ -4,19 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import {
-  Badge,
-  Box,
-  Dialog,
-  Flex,
-  HStack,
-  IconButton,
-  Portal,
-  Spinner,
-  Table,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { Badge, Box, Dialog, Flex, HStack, IconButton, Portal, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useState } from "react";
 import { LuCopy, LuCheck, LuKey, LuTrash2, LuPlus } from "react-icons/lu";
 
@@ -253,12 +241,7 @@ export default function MCPTokensMenu() {
                         This token will only be shown once. Copy it now and store it securely.
                       </Text>
                       <HStack gap={2}>
-                        <Input
-                          value={newlyCreatedToken}
-                          readOnly
-                          fontFamily="mono"
-                          fontSize="sm"
-                        />
+                        <Input value={newlyCreatedToken} readOnly fontFamily="mono" fontSize="sm" />
                         <IconButton
                           aria-label="Copy token"
                           onClick={() => copyToken(newlyCreatedToken)}
@@ -267,12 +250,7 @@ export default function MCPTokensMenu() {
                           {copiedTokenId === newlyCreatedToken ? <LuCheck /> : <LuCopy />}
                         </IconButton>
                       </HStack>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        mt={2}
-                        onClick={() => setNewlyCreatedToken(null)}
-                      >
+                      <Button variant="ghost" size="sm" mt={2} onClick={() => setNewlyCreatedToken(null)}>
                         Dismiss
                       </Button>
                     </Box>
@@ -318,9 +296,7 @@ export default function MCPTokensMenu() {
                               </Table.Cell>
                               <Table.Cell>{formatDate(token.created_at)}</Table.Cell>
                               <Table.Cell>{formatDate(token.expires_at)}</Table.Cell>
-                              <Table.Cell>
-                                {token.last_used_at ? formatDate(token.last_used_at) : "Never"}
-                              </Table.Cell>
+                              <Table.Cell>{token.last_used_at ? formatDate(token.last_used_at) : "Never"}</Table.Cell>
                               <Table.Cell>
                                 {!token.revoked_at && !isExpired(token.expires_at) && (
                                   <IconButton

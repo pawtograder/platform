@@ -26,14 +26,14 @@ import {
   requireScope,
   MCPAuthContext,
   MCPAuthError,
-  updateTokenLastUsed,
+  updateTokenLastUsed
 } from "../_shared/MCPAuth.ts";
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA"),
+    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA")
   });
 }
 
@@ -41,7 +41,7 @@ if (Deno.env.get("SENTRY_DSN")) {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 
 // Type definitions for MCP protocol
@@ -67,45 +67,48 @@ interface MCPResponse {
 const TOOLS = {
   get_help_request: {
     name: "get_help_request",
-    description: "Get a help request with full context including the student's question, linked assignment (with handout URL), submission details, and conversation messages.",
+    description:
+      "Get a help request with full context including the student's question, linked assignment (with handout URL), submission details, and conversation messages.",
     inputSchema: {
       type: "object",
       properties: {
         help_request_id: { type: "number", description: "The ID of the help request to fetch" },
-        class_id: { type: "number", description: "The class ID where the help request exists" },
+        class_id: { type: "number", description: "The class ID where the help request exists" }
       },
-      required: ["help_request_id", "class_id"],
+      required: ["help_request_id", "class_id"]
     },
-    requiredScope: "mcp:read" as const,
+    requiredScope: "mcp:read" as const
   },
   get_discussion_thread: {
     name: "get_discussion_thread",
-    description: "Get a discussion thread with full context including the question, assignment (with handout URL), and replies.",
+    description:
+      "Get a discussion thread with full context including the question, assignment (with handout URL), and replies.",
     inputSchema: {
       type: "object",
       properties: {
         thread_id: { type: "number", description: "The ID of the discussion thread to fetch" },
         class_id: { type: "number", description: "The class ID where the thread exists" },
-        include_replies: { type: "boolean", description: "Whether to include replies", default: true },
+        include_replies: { type: "boolean", description: "Whether to include replies", default: true }
       },
-      required: ["thread_id", "class_id"],
+      required: ["thread_id", "class_id"]
     },
-    requiredScope: "mcp:read" as const,
+    requiredScope: "mcp:read" as const
   },
   get_submission: {
     name: "get_submission",
-    description: "Get a submission with full grader results including test outputs, build output, lint results, and error information.",
+    description:
+      "Get a submission with full grader results including test outputs, build output, lint results, and error information.",
     inputSchema: {
       type: "object",
       properties: {
         submission_id: { type: "number", description: "The ID of the submission to fetch" },
         class_id: { type: "number", description: "The class ID where the submission exists" },
         include_test_output: { type: "boolean", description: "Whether to include test output", default: true },
-        include_files: { type: "boolean", description: "Whether to include submission files", default: true },
+        include_files: { type: "boolean", description: "Whether to include submission files", default: true }
       },
-      required: ["submission_id", "class_id"],
+      required: ["submission_id", "class_id"]
     },
-    requiredScope: "mcp:read" as const,
+    requiredScope: "mcp:read" as const
   },
   get_submissions_for_student: {
     name: "get_submissions_for_student",
@@ -115,11 +118,11 @@ const TOOLS = {
       properties: {
         student_profile_id: { type: "string", description: "The profile ID of the student" },
         assignment_id: { type: "number", description: "The assignment ID" },
-        class_id: { type: "number", description: "The class ID" },
+        class_id: { type: "number", description: "The class ID" }
       },
-      required: ["student_profile_id", "assignment_id", "class_id"],
+      required: ["student_profile_id", "assignment_id", "class_id"]
     },
-    requiredScope: "mcp:read" as const,
+    requiredScope: "mcp:read" as const
   },
   get_assignment: {
     name: "get_assignment",
@@ -128,11 +131,11 @@ const TOOLS = {
       type: "object",
       properties: {
         assignment_id: { type: "number", description: "The ID of the assignment to fetch" },
-        class_id: { type: "number", description: "The class ID where the assignment exists" },
+        class_id: { type: "number", description: "The class ID where the assignment exists" }
       },
-      required: ["assignment_id", "class_id"],
+      required: ["assignment_id", "class_id"]
     },
-    requiredScope: "mcp:read" as const,
+    requiredScope: "mcp:read" as const
   },
   search_help_requests: {
     name: "search_help_requests",
@@ -143,15 +146,16 @@ const TOOLS = {
         class_id: { type: "number", description: "The class ID to search in" },
         assignment_id: { type: "number", description: "Filter by assignment ID" },
         status: { type: "string", description: "Filter by status" },
-        limit: { type: "number", description: "Maximum number of results", default: 20 },
+        limit: { type: "number", description: "Maximum number of results", default: 20 }
       },
-      required: ["class_id"],
+      required: ["class_id"]
     },
-    requiredScope: "mcp:read" as const,
+    requiredScope: "mcp:read" as const
   },
   search_discussion_threads: {
     name: "search_discussion_threads",
-    description: "Search discussion threads in a class, optionally filtered by assignment, question status, or search query.",
+    description:
+      "Search discussion threads in a class, optionally filtered by assignment, question status, or search query.",
     inputSchema: {
       type: "object",
       properties: {
@@ -159,12 +163,12 @@ const TOOLS = {
         assignment_id: { type: "number", description: "Filter by assignment ID" },
         is_question: { type: "boolean", description: "Filter to only questions" },
         search_query: { type: "string", description: "Search query for subject/body" },
-        limit: { type: "number", description: "Maximum number of results", default: 20 },
+        limit: { type: "number", description: "Maximum number of results", default: 20 }
       },
-      required: ["class_id"],
+      required: ["class_id"]
     },
-    requiredScope: "mcp:read" as const,
-  },
+    requiredScope: "mcp:read" as const
+  }
 };
 
 // =============================================================================
@@ -172,27 +176,16 @@ const TOOLS = {
 // These functions NEVER expose user table data or is_private_profile
 // =============================================================================
 
-async function getProfileName(
-  supabase: SupabaseClient<Database>,
-  profileId: string | null
-): Promise<string | null> {
+async function getProfileName(supabase: SupabaseClient<Database>, profileId: string | null): Promise<string | null> {
   if (!profileId) return null;
 
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("name")
-    .eq("id", profileId)
-    .single();
+  const { data, error } = await supabase.from("profiles").select("name").eq("id", profileId).single();
 
   if (error || !data) return null;
   return data.name;
 }
 
-async function getAssignment(
-  supabase: SupabaseClient<Database>,
-  assignmentId: number,
-  classId: number
-) {
+async function getAssignment(supabase: SupabaseClient<Database>, assignmentId: number, classId: number) {
   const { data, error } = await supabase
     .from("assignments")
     .select("id, title, slug, description, handout_url, due_date, release_date, total_points, has_autograder, class_id")
@@ -204,11 +197,7 @@ async function getAssignment(
   return data;
 }
 
-async function getSubmissionFiles(
-  supabase: SupabaseClient<Database>,
-  submissionId: number,
-  classId: number
-) {
+async function getSubmissionFiles(supabase: SupabaseClient<Database>, submissionId: number, classId: number) {
   const { data, error } = await supabase
     .from("submission_files")
     .select("id, name, contents")
@@ -265,7 +254,7 @@ async function getSubmission(
       max_score: test.max_score,
       output: includeTestOutput ? test.output : null,
       output_format: test.output_format,
-      is_released: test.is_released,
+      is_released: test.is_released
     }));
 
     // Get build output
@@ -286,7 +275,7 @@ async function getSubmission(
       execution_time: graderData.execution_time,
       ret_code: graderData.ret_code,
       tests,
-      build_output: outputData || null,
+      build_output: outputData || null
     };
   }
 
@@ -306,7 +295,7 @@ async function getSubmission(
     is_active: submission.is_active,
     student_name: studentName,
     grader_result: graderResult,
-    files,
+    files
   };
 }
 
@@ -331,18 +320,16 @@ async function getLatestSubmissionForStudent(
   return getSubmission(supabase, submission.id, classId, true, includeFiles);
 }
 
-async function getHelpRequest(
-  supabase: SupabaseClient<Database>,
-  helpRequestId: number,
-  classId: number
-) {
+async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId: number, classId: number) {
   const { data: helpRequest, error } = await supabase
     .from("help_requests")
-    .select(`
+    .select(
+      `
       id, request, status, created_at, updated_at, created_by,
       referenced_submission_id,
       help_queues!inner(name)
-    `)
+    `
+    )
     .eq("id", helpRequestId)
     .eq("class_id", classId)
     .single();
@@ -367,7 +354,13 @@ async function getHelpRequest(
   // Get latest submission for the student
   let latestSubmission = null;
   if (assignment && helpRequest.created_by) {
-    latestSubmission = await getLatestSubmissionForStudent(supabase, helpRequest.created_by, assignment.id, classId, true);
+    latestSubmission = await getLatestSubmissionForStudent(
+      supabase,
+      helpRequest.created_by,
+      assignment.id,
+      classId,
+      true
+    );
     if (latestSubmission && submission && latestSubmission.id === submission.id) {
       latestSubmission = null;
     }
@@ -397,7 +390,7 @@ async function getHelpRequest(
         content: msg.content,
         created_at: msg.created_at,
         author_name: authorName,
-        is_staff: !!roleData,
+        is_staff: !!roleData
       });
     }
   }
@@ -414,7 +407,7 @@ async function getHelpRequest(
     student_profile_id: helpRequest.created_by,
     student_name: studentName,
     help_queue_name: helpQueueName,
-    messages,
+    messages
   };
 }
 
@@ -426,11 +419,13 @@ async function getDiscussionThread(
 ) {
   const { data: thread, error } = await supabase
     .from("discussion_threads")
-    .select(`
+    .select(
+      `
       id, subject, body, created_at, updated_at, is_question,
       children_count, author, answer, topic_id,
       discussion_topics!inner(assignment_id)
-    `)
+    `
+    )
     .eq("id", threadId)
     .eq("class_id", classId)
     .single();
@@ -480,7 +475,7 @@ async function getDiscussionThread(
           created_at: reply.created_at,
           author_name: replyAuthorName,
           is_staff: !!roleData,
-          is_answer: thread.answer === reply.id,
+          is_answer: thread.answer === reply.id
         });
       }
     }
@@ -498,7 +493,7 @@ async function getDiscussionThread(
     author_name: authorName,
     assignment,
     latest_submission: latestSubmission,
-    replies,
+    replies
   };
 }
 
@@ -624,11 +619,7 @@ async function getSubmissionsForStudent(
 // Tool Execution
 // =============================================================================
 
-async function executeTool(
-  toolName: string,
-  args: Record<string, unknown>,
-  context: MCPAuthContext
-): Promise<unknown> {
+async function executeTool(toolName: string, args: Record<string, unknown>, context: MCPAuthContext): Promise<unknown> {
   const tool = TOOLS[toolName as keyof typeof TOOLS];
   if (!tool) {
     throw new Error(`Unknown tool: ${toolName}`);
@@ -689,7 +680,7 @@ async function executeTool(
       return await searchHelpRequests(context.supabase, args.class_id as number, {
         assignmentId: args.assignment_id as number | undefined,
         status: args.status as string | undefined,
-        limit: args.limit as number | undefined,
+        limit: args.limit as number | undefined
       });
 
     case "search_discussion_threads":
@@ -697,7 +688,7 @@ async function executeTool(
         assignmentId: args.assignment_id as number | undefined,
         isQuestion: args.is_question as boolean | undefined,
         searchQuery: args.search_query as string | undefined,
-        limit: args.limit as number | undefined,
+        limit: args.limit as number | undefined
       });
 
     default:
@@ -709,10 +700,7 @@ async function executeTool(
 // MCP Protocol Handler
 // =============================================================================
 
-async function handleMCPRequest(
-  request: MCPRequest,
-  context: MCPAuthContext
-): Promise<MCPResponse> {
+async function handleMCPRequest(request: MCPRequest, context: MCPAuthContext): Promise<MCPResponse> {
   const { id, method, params } = request;
 
   try {
@@ -725,12 +713,12 @@ async function handleMCPRequest(
             protocolVersion: "2024-11-05",
             serverInfo: {
               name: "pawtograder",
-              version: "0.1.0",
+              version: "0.1.0"
             },
             capabilities: {
-              tools: {},
-            },
-          },
+              tools: {}
+            }
+          }
         };
 
       case "tools/list":
@@ -741,9 +729,9 @@ async function handleMCPRequest(
             tools: Object.values(TOOLS).map((tool) => ({
               name: tool.name,
               description: tool.description,
-              inputSchema: tool.inputSchema,
-            })),
-          },
+              inputSchema: tool.inputSchema
+            }))
+          }
         };
 
       case "tools/call": {
@@ -759,10 +747,10 @@ async function handleMCPRequest(
             content: [
               {
                 type: "text",
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          },
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          }
         };
       }
 
@@ -772,8 +760,8 @@ async function handleMCPRequest(
           id,
           error: {
             code: -32601,
-            message: `Method not found: ${method}`,
-          },
+            message: `Method not found: ${method}`
+          }
         };
     }
   } catch (error) {
@@ -783,8 +771,8 @@ async function handleMCPRequest(
       id,
       error: {
         code: -32000,
-        message: error instanceof Error ? error.message : "Unknown error",
-      },
+        message: error instanceof Error ? error.message : "Unknown error"
+      }
     };
   }
 }
@@ -801,13 +789,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // Only accept POST requests
   if (req.method !== "POST") {
-    return new Response(
-      JSON.stringify({ error: "Method not allowed" }),
-      {
-        status: 405,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
   }
 
   try {
@@ -819,14 +804,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     updateTokenLastUsed(context.tokenId).catch(() => {});
 
     // Parse the MCP request
-    const mcpRequest = await req.json() as MCPRequest;
+    const mcpRequest = (await req.json()) as MCPRequest;
 
     // Handle the request
     const response = await handleMCPRequest(mcpRequest, context);
 
     return new Response(JSON.stringify(response), {
       status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (error) {
     console.error("Request error:", error);
@@ -841,12 +826,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
         id: null,
         error: {
           code: status === 401 ? -32000 : -32603,
-          message,
-        },
+          message
+        }
       }),
       {
         status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
       }
     );
   }

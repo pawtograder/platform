@@ -4,16 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import {
-  Box,
-  HStack,
-  Icon,
-  IconButton,
-  Text,
-  ClipboardRoot,
-  ClipboardIconButton,
-  ClipboardInput,
-} from "@chakra-ui/react";
+import { Box, HStack, Icon, IconButton, Input, Text } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { BsRobot, BsCopy, BsX } from "react-icons/bs";
 
@@ -46,7 +37,7 @@ function generateMCPContext(props: AIHelpButtonProps): object {
     version: "0.1.0",
     context_type: props.contextType,
     resource_id: props.resourceId,
-    class_id: props.classId,
+    class_id: props.classId
   };
 
   if (props.contextType === "help_request") {
@@ -55,7 +46,7 @@ function generateMCPContext(props: AIHelpButtonProps): object {
       tool: "get_help_request",
       params: {
         help_request_id: props.resourceId,
-        class_id: props.classId,
+        class_id: props.classId
       },
       // Include additional fetch suggestions
       suggested_tools: [
@@ -66,9 +57,9 @@ function generateMCPContext(props: AIHelpButtonProps): object {
                 params: {
                   submission_id: props.submissionId,
                   class_id: props.classId,
-                  include_test_output: true,
-                },
-              },
+                  include_test_output: true
+                }
+              }
             ]
           : []),
         ...(props.assignmentId
@@ -77,12 +68,12 @@ function generateMCPContext(props: AIHelpButtonProps): object {
                 tool: "get_assignment",
                 params: {
                   assignment_id: props.assignmentId,
-                  class_id: props.classId,
-                },
-              },
+                  class_id: props.classId
+                }
+              }
             ]
-          : []),
-      ],
+          : [])
+      ]
     };
   }
 
@@ -93,7 +84,7 @@ function generateMCPContext(props: AIHelpButtonProps): object {
     params: {
       thread_id: props.resourceId,
       class_id: props.classId,
-      include_replies: true,
+      include_replies: true
     },
     suggested_tools: [
       ...(props.assignmentId
@@ -102,9 +93,9 @@ function generateMCPContext(props: AIHelpButtonProps): object {
               tool: "get_assignment",
               params: {
                 assignment_id: props.assignmentId,
-                class_id: props.classId,
-              },
-            },
+                class_id: props.classId
+              }
+            }
           ]
         : []),
       {
@@ -113,11 +104,11 @@ function generateMCPContext(props: AIHelpButtonProps): object {
           class_id: props.classId,
           ...(props.assignmentId ? { assignment_id: props.assignmentId } : {}),
           is_question: true,
-          limit: 10,
+          limit: 10
         },
-        description: "Find related discussion threads",
-      },
-    ],
+        description: "Find related discussion threads"
+      }
+    ]
   };
 }
 
@@ -164,15 +155,10 @@ export function AIHelpButton({
   assignmentId,
   submissionId,
   size = "sm",
-  variant = "outline",
+  variant = "outline"
 }: AIHelpButtonProps) {
   const isInstructorOrGrader = useIsGraderOrInstructor();
   const [showContext, setShowContext] = useState(false);
-
-  // Only show for instructors/graders
-  if (!isInstructorOrGrader) {
-    return null;
-  }
 
   const prompt = useMemo(
     () =>
@@ -181,7 +167,7 @@ export function AIHelpButton({
         resourceId,
         classId,
         assignmentId,
-        submissionId,
+        submissionId
       }),
     [contextType, resourceId, classId, assignmentId, submissionId]
   );
@@ -191,25 +177,24 @@ export function AIHelpButton({
       await navigator.clipboard.writeText(prompt);
       toaster.success({
         title: "Copied AI context",
-        description: "The AI help prompt has been copied to your clipboard.",
+        description: "The AI help prompt has been copied to your clipboard."
       });
     } catch {
       toaster.error({
         title: "Failed to copy",
-        description: "Could not copy to clipboard. Please try again.",
+        description: "Could not copy to clipboard. Please try again."
       });
     }
   }, [prompt]);
 
+  // Only show for instructors/graders
+  if (!isInstructorOrGrader) {
+    return null;
+  }
+
   if (showContext) {
     return (
-      <Box
-        p={3}
-        borderWidth="1px"
-        borderRadius="md"
-        bg="bg.subtle"
-        maxW="400px"
-      >
+      <Box p={3} borderWidth="1px" borderRadius="md" bg="bg.subtle" maxW="400px">
         <HStack justify="space-between" mb={2}>
           <HStack gap={1}>
             <Icon as={BsRobot} color="purple.500" />
@@ -217,37 +202,25 @@ export function AIHelpButton({
               AI Help Context
             </Text>
           </HStack>
-          <IconButton
-            aria-label="Close"
-            size="xs"
-            variant="ghost"
-            onClick={() => setShowContext(false)}
-          >
+          <IconButton aria-label="Close" size="xs" variant="ghost" onClick={() => setShowContext(false)}>
             <Icon as={BsX} />
           </IconButton>
         </HStack>
         <Text fontSize="xs" color="fg.muted" mb={2}>
           Copy this prompt to use with Claude, ChatGPT, or any MCP-compatible AI assistant:
         </Text>
-        <ClipboardRoot value={prompt}>
-          <HStack gap={2}>
-            <ClipboardInput
-              readOnly
-              value={`AI Help: ${contextType === "help_request" ? "Help Request" : "Discussion"} #${resourceId}`}
-              fontSize="xs"
-              flex={1}
-            />
-            <ClipboardIconButton size="sm" onClick={handleCopyContext} />
-          </HStack>
-        </ClipboardRoot>
-        <Button
-          size="xs"
-          variant="solid"
-          colorPalette="purple"
-          mt={2}
-          w="full"
-          onClick={handleCopyContext}
-        >
+        <HStack gap={2}>
+          <Input
+            readOnly
+            value={`AI Help: ${contextType === "help_request" ? "Help Request" : "Discussion"} #${resourceId}`}
+            fontSize="xs"
+            flex={1}
+          />
+          <IconButton aria-label="Copy" size="sm" variant="outline" onClick={handleCopyContext}>
+            <Icon as={BsCopy} />
+          </IconButton>
+        </HStack>
+        <Button size="xs" variant="solid" colorPalette="purple" mt={2} w="full" onClick={handleCopyContext}>
           <Icon as={BsCopy} mr={1} />
           Copy Full Prompt
         </Button>
@@ -257,12 +230,7 @@ export function AIHelpButton({
 
   return (
     <Tooltip content="Get AI assistance for helping this student" showArrow>
-      <Button
-        size={size}
-        variant={variant}
-        colorPalette="purple"
-        onClick={() => setShowContext(true)}
-      >
+      <Button size={size} variant={variant} colorPalette="purple" onClick={() => setShowContext(true)}>
         <Icon as={BsRobot} />
         AI Help
       </Button>
@@ -278,14 +246,9 @@ export function AIHelpIconButton({
   resourceId,
   classId,
   assignmentId,
-  submissionId,
+  submissionId
 }: Omit<AIHelpButtonProps, "size" | "variant">) {
   const isInstructorOrGrader = useIsGraderOrInstructor();
-
-  // Only show for instructors/graders
-  if (!isInstructorOrGrader) {
-    return null;
-  }
 
   const prompt = useMemo(
     () =>
@@ -294,7 +257,7 @@ export function AIHelpIconButton({
         resourceId,
         classId,
         assignmentId,
-        submissionId,
+        submissionId
       }),
     [contextType, resourceId, classId, assignmentId, submissionId]
   );
@@ -304,25 +267,24 @@ export function AIHelpIconButton({
       await navigator.clipboard.writeText(prompt);
       toaster.success({
         title: "Copied AI context",
-        description: "Paste this prompt into your AI assistant to get help.",
+        description: "Paste this prompt into your AI assistant to get help."
       });
     } catch {
       toaster.error({
         title: "Failed to copy",
-        description: "Could not copy to clipboard.",
+        description: "Could not copy to clipboard."
       });
     }
   }, [prompt]);
 
+  // Only show for instructors/graders
+  if (!isInstructorOrGrader) {
+    return null;
+  }
+
   return (
     <Tooltip content="Copy AI help context" showArrow>
-      <IconButton
-        aria-label="Get AI help"
-        size="xs"
-        variant="ghost"
-        colorPalette="purple"
-        onClick={handleCopy}
-      >
+      <IconButton aria-label="Get AI help" size="xs" variant="ghost" colorPalette="purple" onClick={handleCopy}>
         <Icon as={BsRobot} boxSize={3} />
       </IconButton>
     </Tooltip>

@@ -104,7 +104,7 @@ export async function createApiToken(
     iss: "pawtograder",
     aud: "mcp",
     exp: getNumericDate(new Date(expiresAt)),
-    iat: getNumericDate(new Date(now)),
+    iat: getNumericDate(new Date(now))
   };
 
   const jwt = await create({ alg: "HS256", typ: "JWT" }, payload, key);
@@ -123,7 +123,7 @@ export async function verifyApiToken(token: string): Promise<MCPApiTokenPayload 
 
   try {
     const key = await getMcpJwtKey();
-    const payload = await verify(token, key) as MCPApiTokenPayload;
+    const payload = (await verify(token, key)) as MCPApiTokenPayload;
 
     // Validate required claims
     if (!payload.sub || !payload.jti || !payload.scopes) {
@@ -138,7 +138,7 @@ export async function verifyApiToken(token: string): Promise<MCPApiTokenPayload 
     }
 
     // Validate scopes
-    if (!Array.isArray(payload.scopes) || !payload.scopes.every(s => VALID_SCOPES.includes(s))) {
+    if (!Array.isArray(payload.scopes) || !payload.scopes.every((s) => VALID_SCOPES.includes(s))) {
       console.error("Invalid scopes in API token");
       return null;
     }
@@ -184,7 +184,8 @@ export async function mintSupabaseJwt(userId: string): Promise<string> {
 
   // Check cache first
   const cached = supabaseJwtCache.get(userId);
-  if (cached && cached.expiresAt > now + 5000) { // 5 second buffer
+  if (cached && cached.expiresAt > now + 5000) {
+    // 5 second buffer
     return cached.jwt;
   }
 
@@ -197,7 +198,7 @@ export async function mintSupabaseJwt(userId: string): Promise<string> {
     role: "authenticated",
     aud: "authenticated",
     exp: getNumericDate(new Date(expiresAt)),
-    iat: getNumericDate(new Date(now)),
+    iat: getNumericDate(new Date(now))
   };
 
   const jwt = await create({ alg: "HS256", typ: "JWT" }, payload, key);
@@ -215,30 +216,24 @@ export async function mintSupabaseJwt(userId: string): Promise<string> {
 export async function createAuthenticatedSupabaseClient(userId: string): Promise<SupabaseClient<Database>> {
   const jwt = await mintSupabaseJwt(userId);
 
-  return createClient<Database>(
-    Deno.env.get(SUPABASE_URL_ENV)!,
-    Deno.env.get(SUPABASE_ANON_KEY_ENV)!,
-    {
-      global: {
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-        },
-      },
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
+  return createClient<Database>(Deno.env.get(SUPABASE_URL_ENV)!, Deno.env.get(SUPABASE_ANON_KEY_ENV)!, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${jwt}`
+      }
+    },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
     }
-  );
+  });
 }
 
 /**
  * Full authentication flow for MCP requests
  * Extracts token from Authorization header, validates, and creates authenticated client
  */
-export async function authenticateMCPRequest(
-  authHeader: string | null
-): Promise<MCPAuthContext> {
+export async function authenticateMCPRequest(authHeader: string | null): Promise<MCPAuthContext> {
   if (!authHeader) {
     throw new MCPAuthError("Missing Authorization header");
   }
@@ -288,7 +283,7 @@ export async function authenticateMCPRequest(
     userId: payload.sub,
     scopes: payload.scopes,
     tokenId: payload.jti,
-    supabase,
+    supabase
   };
 }
 
@@ -329,10 +324,7 @@ export async function updateTokenLastUsed(tokenId: string): Promise<void> {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    await adminSupabase
-      .from("api_tokens")
-      .update({ last_used_at: new Date().toISOString() })
-      .eq("token_id", tokenId);
+    await adminSupabase.from("api_tokens").update({ last_used_at: new Date().toISOString() }).eq("token_id", tokenId);
   } catch (error) {
     // Non-critical, just log
     console.error("Failed to update token last_used_at:", error);
