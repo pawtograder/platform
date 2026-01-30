@@ -2,12 +2,62 @@
 
 A Model Context Protocol (MCP) server that provides AI assistants with tools to help TAs support students who are struggling with errors in their programming assignments.
 
-## Features
+## Architecture
 
-- **Supabase OAuth Authentication**: Uses pre-registered OAuth client for secure authentication
-- **Role-Based Access Control**: Restricted to instructors and graders only
-- **Privacy Protection**: Never exposes data from the "users" table or "is_private_profile" field
-- **Comprehensive Context**: Provides access to help requests, discussion threads, submissions, and test results
+The MCP server is implemented as a **Supabase Edge Function** (`/supabase/functions/mcp-server/`) that:
+
+1. **Authenticates** using long-lived API tokens (JWTs signed with MCP_JWT_SECRET)
+2. **Mints** short-lived Supabase JWTs for RLS enforcement
+3. **Restricts** access to instructors and graders only
+4. **Never exposes** data from the "users" table or "is_private_profile" field
+
+## Authentication Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Request Flow                               │
+└─────────────────────────────────────────────────────────────────────────┘
+
+1. USER LOGS INTO DASHBOARD
+   Browser ──► Supabase Auth ──► Session established
+
+2. USER CREATES API TOKEN (Dashboard Settings)
+   Browser ──► POST /api/mcp-tokens ──► Returns: mcp_eyJhbG...
+   (User saves token, shown only once)
+
+3. USER CONFIGURES MCP CLIENT
+   Claude Desktop config or environment variable:
+   { "headers": { "Authorization": "Bearer mcp_eyJhbG..." } }
+
+4. MCP REQUEST
+   ┌────────────────────────────────────────────────────────────────────┐
+   │   API Token (mcp_eyJhbG...)                                        │
+   │         │                                                          │
+   │         ▼                                                          │
+   │   ┌──────────────┐                                                 │
+   │   │ Verify JWT   │ ◄── MCP_JWT_SECRET                              │
+   │   │ (no DB hit)  │     Extract: user_id, scopes, exp               │
+   │   └──────────────┘                                                 │
+   │         │                                                          │
+   │         ▼                                                          │
+   │   ┌──────────────┐                                                 │
+   │   │ Check        │ ◄── Optional DB lookup for revocation           │
+   │   │ Revocation   │                                                 │
+   │   └──────────────┘                                                 │
+   │         │                                                          │
+   │         ▼                                                          │
+   │   ┌──────────────┐                                                 │
+   │   │ Mint short   │ ◄── SUPABASE_JWT_SECRET                         │
+   │   │ Supabase JWT │     60s TTL, cached per user                    │
+   │   └──────────────┘                                                 │
+   │         │                                                          │
+   │         ▼                                                          │
+   │   ┌──────────────┐                                                 │
+   │   │ Execute Tool │ ◄── RLS enforced via auth.uid()                 │
+   │   │ with RLS     │                                                 │
+   │   └──────────────┘                                                 │
+   └────────────────────────────────────────────────────────────────────┘
+```
 
 ## Available Tools
 
@@ -15,24 +65,27 @@ A Model Context Protocol (MCP) server that provides AI assistants with tools to 
 Get a help request with full context including:
 - Student's question
 - Linked assignment (with handout URL)
-- Submission details
+- Referenced submission details with test results and files
+- Latest submission for the student on this assignment
 - Conversation messages
 
 ### `get_discussion_thread`
 Get a discussion thread with:
 - Question/topic content
 - Assignment context (with handout URL)
+- Latest submission for the author
 - Replies with staff indicators
 
 ### `get_submission`
 Get a submission with full grader results including:
-- Test outputs
+- Test outputs and scores
 - Build output (stdout/stderr)
 - Lint results
 - Error information
+- All submission files
 
 ### `get_submissions_for_student`
-Get all submissions for a student on a specific assignment to track their progress.
+Get all submissions for a student on a specific assignment.
 
 ### `get_assignment`
 Get assignment details including:
@@ -46,81 +99,117 @@ Search help requests filtered by assignment or status.
 ### `search_discussion_threads`
 Search discussion threads filtered by assignment, question status, or keyword.
 
-## Setup
+## Environment Variables
 
-### Environment Variables
+### Edge Function Environment
+
+| Variable | Source | Purpose |
+|----------|--------|---------|
+| `MCP_JWT_SECRET` | Generate (min 32 chars) | Sign/verify MCP API tokens |
+| `SUPABASE_JWT_SECRET` | Dashboard → Settings → API | Mint user JWTs for RLS |
+| `SUPABASE_URL` | Dashboard | Supabase project URL |
+| `SUPABASE_ANON_KEY` | Dashboard | Public anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Dashboard | For admin operations |
+
+### Next.js Environment
+
+| Variable | Purpose |
+|----------|---------|
+| `MCP_JWT_SECRET` | Same secret for creating tokens |
+
+## Token Management
+
+### Creating a Token (Dashboard API)
 
 ```bash
-SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_anon_key
-MCP_PORT=3100  # optional, defaults to 3100
-MCP_HOST=0.0.0.0  # optional
+POST /api/mcp-tokens
+Authorization: <Supabase session cookie>
+Content-Type: application/json
+
+{
+  "name": "My Claude Desktop Token",
+  "scopes": ["mcp:read"],
+  "expires_in_days": 90
+}
 ```
 
-### Installation
+Response:
+```json
+{
+  "token": "mcp_eyJhbGciOiJIUzI1NiIs...",
+  "metadata": {
+    "id": "uuid",
+    "name": "My Claude Desktop Token",
+    "scopes": ["mcp:read"],
+    "expires_at": "2026-04-30T...",
+    "created_at": "2026-01-30T..."
+  },
+  "message": "Token created successfully. Save this token - it will only be shown once!"
+}
+```
+
+### Listing Tokens
 
 ```bash
-cd packages/mcp-server
-npm install
+GET /api/mcp-tokens
+Authorization: <Supabase session cookie>
 ```
 
-### Running
+### Revoking a Token
 
-Development:
 ```bash
-npm run dev
+DELETE /api/mcp-tokens/{id}
+Authorization: <Supabase session cookie>
 ```
 
-Production:
-```bash
-npm run build
-npm start
-```
+## Token Scopes
 
-## Authentication
+| Scope | Description |
+|-------|-------------|
+| `mcp:read` | Read-only access to help requests, discussions, submissions |
+| `mcp:write` | Create, update, delete operations (future) |
 
-The server uses Supabase OAuth for authentication. Clients must include a valid Supabase access token in the Authorization header:
+## Client Configuration
 
-```
-Authorization: Bearer <supabase_access_token>
-```
+### Claude Desktop / Claude Code
 
-The token must belong to a user who has an instructor or grader role in at least one class.
-
-## API Endpoints
-
-### POST /mcp
-The main MCP protocol endpoint. Accepts MCP JSON-RPC requests with Bearer token authentication.
-
-### GET /health
-Health check endpoint. Returns `{ status: "ok", service: "pawtograder-mcp-server" }`.
-
-### GET /auth/callback
-OAuth callback endpoint for completing the OAuth flow.
-
-## Client Integration
-
-To use this MCP server from an AI assistant:
-
-1. Obtain a Supabase access token through OAuth
-2. Connect to the MCP server using the Streamable HTTP transport
-3. Include the access token in all requests
-4. Use the available tools to fetch context for helping students
-
-Example MCP client configuration:
 ```json
 {
   "mcpServers": {
     "pawtograder": {
-      "url": "http://localhost:3100/mcp",
-      "transport": "streamableHttp",
+      "url": "https://<project>.supabase.co/functions/v1/mcp-server",
       "headers": {
-        "Authorization": "Bearer ${SUPABASE_ACCESS_TOKEN}"
+        "Authorization": "Bearer mcp_eyJhbG..."
       }
     }
   }
 }
 ```
+
+## Database Schema
+
+### `api_tokens` Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Primary key |
+| `user_id` | uuid | FK to auth.users |
+| `name` | text | User-provided label |
+| `token_id` | text | JWT `jti` claim (unique) |
+| `scopes` | text[] | Granted scopes |
+| `expires_at` | timestamptz | Token expiry |
+| `revoked_at` | timestamptz | Soft delete for revocation |
+| `created_at` | timestamptz | Creation timestamp |
+| `last_used_at` | timestamptz | Optional usage tracking |
+
+### `revoked_token_ids` Table
+
+Fast lookup table populated by trigger when tokens are revoked.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `token_id` | text | Primary key, matches JWT `jti` |
+| `revoked_at` | timestamptz | When revoked |
 
 ## Privacy Considerations
 
@@ -130,15 +219,40 @@ This server is designed with student privacy in mind:
 - **Never exposes "is_private_profile"**: Private profile settings are not leaked
 - **Safe profile access**: Only returns name and avatar for display purposes
 - **Role verification**: All requests verify instructor/grader access before returning data
+- **RLS enforcement**: Uses short-lived Supabase JWTs to enforce row-level security
 
-## Launching from Help Request or Discussion
+## Security
 
-The MCP server is designed to be invoked when a TA needs AI assistance while helping a student. The typical flow is:
+| Concern | Approach |
+|---------|----------|
+| Token storage | Shown once at creation, user stores securely |
+| Signing keys | Environment variables, isolated from DB |
+| Key rotation | Deploy new key, support both temporarily |
+| Scope enforcement | Embedded in JWT, checked before each tool |
+| Revocation | DB lookup via revoked_token_ids table |
+| RLS guarantee | Short-lived Supabase JWT, no service_role in handlers |
 
-1. TA views a help request or discussion thread
-2. TA clicks "Get AI Help" button
-3. Frontend opens MCP client with pre-filled context:
-   - `help_request_id` and `class_id` for help requests
-   - `thread_id` and `class_id` for discussions
-4. AI assistant uses the appropriate tool to fetch full context
-5. AI assistant helps TA understand and resolve the student's issue
+## Development
+
+The Edge Function code is in `/supabase/functions/mcp-server/index.ts`.
+
+Shared utilities are in:
+- `/supabase/functions/_shared/MCPAuth.ts` - Authentication utilities
+- `/supabase/functions/_shared/SupabaseTypes.d.ts` - Database types
+
+### Local Development
+
+```bash
+# Start Supabase locally
+supabase start
+
+# Run the edge function locally
+supabase functions serve mcp-server --env-file ./supabase/.env.local
+```
+
+### Deployment
+
+Edge functions are deployed automatically with Supabase. The function is available at:
+```
+https://<project>.supabase.co/functions/v1/mcp-server
+```
