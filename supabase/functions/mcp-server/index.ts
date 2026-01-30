@@ -22,7 +22,6 @@ import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
   authenticateMCPRequest,
-  hasScope,
   requireScope,
   MCPAuthContext,
   MCPAuthError,
@@ -765,7 +764,9 @@ async function handleMCPRequest(request: MCPRequest, context: MCPAuthContext): P
         };
     }
   } catch (error) {
-    console.error("MCP request error:", error);
+    Sentry.captureException(error, {
+      tags: { component: "mcp_handler", method }
+    });
     return {
       jsonrpc: "2.0",
       id,
@@ -814,8 +815,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (error) {
-    console.error("Request error:", error);
-    Sentry.captureException(error);
+    Sentry.captureException(error, {
+      tags: { component: "mcp_server" }
+    });
 
     const status = error instanceof MCPAuthError ? 401 : 500;
     const message = error instanceof Error ? error.message : "Internal server error";
