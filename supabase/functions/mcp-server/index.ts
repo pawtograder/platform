@@ -175,13 +175,55 @@ const TOOLS = {
 // These functions NEVER expose user table data or is_private_profile
 // =============================================================================
 
-async function getProfileName(supabase: SupabaseClient<Database>, profileId: string | null): Promise<string | null> {
-  if (!profileId) return null;
+// Maximum rows per query (Supabase limit)
+const MAX_ROWS = 1000;
 
-  const { data, error } = await supabase.from("profiles").select("name").eq("id", profileId).single();
+/**
+ * Batch fetch profile names for multiple profile IDs
+ */
+async function getProfileNames(
+  supabase: SupabaseClient<Database>,
+  profileIds: (string | null)[]
+): Promise<Map<string, string>> {
+  const uniqueIds = [...new Set(profileIds.filter((id): id is string => id !== null))];
+  if (uniqueIds.length === 0) return new Map();
 
-  if (error || !data) return null;
-  return data.name;
+  const { data } = await supabase.from("profiles").select("id, name").in("id", uniqueIds.slice(0, MAX_ROWS));
+
+  const map = new Map<string, string>();
+  if (data) {
+    for (const profile of data) {
+      if (profile.name) map.set(profile.id, profile.name);
+    }
+  }
+  return map;
+}
+
+/**
+ * Batch check if profile IDs are staff (instructor/grader) in a class
+ */
+async function getStaffProfileIds(
+  supabase: SupabaseClient<Database>,
+  profileIds: (string | null)[],
+  classId: number
+): Promise<Set<string>> {
+  const uniqueIds = [...new Set(profileIds.filter((id): id is string => id !== null))];
+  if (uniqueIds.length === 0) return new Set();
+
+  const { data } = await supabase
+    .from("user_roles")
+    .select("private_profile_id")
+    .eq("class_id", classId)
+    .in("private_profile_id", uniqueIds.slice(0, MAX_ROWS))
+    .in("role", ["instructor", "grader"]);
+
+  const set = new Set<string>();
+  if (data) {
+    for (const role of data) {
+      if (role.private_profile_id) set.add(role.private_profile_id);
+    }
+  }
+  return set;
 }
 
 async function getAssignment(supabase: SupabaseClient<Database>, assignmentId: number, classId: number) {
@@ -196,18 +238,6 @@ async function getAssignment(supabase: SupabaseClient<Database>, assignmentId: n
   return data;
 }
 
-async function getSubmissionFiles(supabase: SupabaseClient<Database>, submissionId: number, classId: number) {
-  const { data, error } = await supabase
-    .from("submission_files")
-    .select("id, name, contents")
-    .eq("submission_id", submissionId)
-    .eq("class_id", classId)
-    .order("name", { ascending: true });
-
-  if (error || !data) return [];
-  return data;
-}
-
 async function getSubmission(
   supabase: SupabaseClient<Database>,
   submissionId: number,
@@ -215,74 +245,23 @@ async function getSubmission(
   includeTestOutput = true,
   includeFiles = true
 ) {
+  // Fetch submission with profile name joined
   const { data: submission, error: subError } = await supabase
     .from("submissions")
-    .select("id, assignment_id, created_at, sha, repository, ordinal, is_active, profile_id")
+    .select("id, assignment_id, created_at, sha, repository, ordinal, is_active, profile_id, profiles!inner(name)")
     .eq("id", submissionId)
     .eq("class_id", classId)
     .single();
 
   if (subError || !submission) return null;
 
-  const studentName = await getProfileName(supabase, submission.profile_id);
+  const studentName = (submission.profiles as unknown as { name: string })?.name || null;
 
-  // Get grader result
-  const { data: graderData } = await supabase
-    .from("grader_results")
-    .select("id, score, max_score, lint_passed, lint_output, lint_output_format, errors, execution_time, ret_code")
-    .eq("submission_id", submissionId)
-    .eq("class_id", classId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  let graderResult = null;
-  if (graderData) {
-    // Get test results
-    const { data: testsData } = await supabase
-      .from("grader_result_tests")
-      .select("id, name, part, score, max_score, output, output_format, is_released")
-      .eq("grader_result_id", graderData.id)
-      .order("id", { ascending: true });
-
-    const tests = (testsData || []).map((test) => ({
-      id: test.id,
-      name: test.name,
-      part: test.part,
-      score: test.score,
-      max_score: test.max_score,
-      output: includeTestOutput ? test.output : null,
-      output_format: test.output_format,
-      is_released: test.is_released
-    }));
-
-    // Get build output
-    const { data: outputData } = await supabase
-      .from("grader_result_output")
-      .select("stdout, stderr, combined_output, output_format")
-      .eq("grader_result_id", graderData.id)
-      .maybeSingle();
-
-    graderResult = {
-      id: graderData.id,
-      score: graderData.score,
-      max_score: graderData.max_score,
-      lint_passed: graderData.lint_passed,
-      lint_output: graderData.lint_output,
-      lint_output_format: graderData.lint_output_format,
-      errors: graderData.errors,
-      execution_time: graderData.execution_time,
-      ret_code: graderData.ret_code,
-      tests,
-      build_output: outputData || null
-    };
-  }
-
-  // Get submission files
-  let files = null;
-  if (includeFiles) {
-    files = await getSubmissionFiles(supabase, submissionId, classId);
-  }
+  // Parallel fetch: grader result, files (if needed)
+  const [graderResult, files] = await Promise.all([
+    getGraderResult(supabase, submissionId, classId, includeTestOutput),
+    includeFiles ? getSubmissionFiles(supabase, submissionId, classId) : Promise.resolve(null)
+  ]);
 
   return {
     id: submission.id,
@@ -296,6 +275,77 @@ async function getSubmission(
     grader_result: graderResult,
     files
   };
+}
+
+async function getGraderResult(
+  supabase: SupabaseClient<Database>,
+  submissionId: number,
+  classId: number,
+  includeTestOutput: boolean
+) {
+  const { data: graderData } = await supabase
+    .from("grader_results")
+    .select("id, score, max_score, lint_passed, lint_output, lint_output_format, errors, execution_time, ret_code")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!graderData) return null;
+
+  // Parallel fetch tests and build output
+  const [testsData, outputData] = await Promise.all([
+    supabase
+      .from("grader_result_tests")
+      .select("id, name, part, score, max_score, output, output_format, is_released")
+      .eq("grader_result_id", graderData.id)
+      .order("id", { ascending: true })
+      .limit(MAX_ROWS),
+    supabase
+      .from("grader_result_output")
+      .select("stdout, stderr, combined_output, output_format")
+      .eq("grader_result_id", graderData.id)
+      .maybeSingle()
+  ]);
+
+  const tests = (testsData.data || []).map((test) => ({
+    id: test.id,
+    name: test.name,
+    part: test.part,
+    score: test.score,
+    max_score: test.max_score,
+    output: includeTestOutput ? test.output : null,
+    output_format: test.output_format,
+    is_released: test.is_released
+  }));
+
+  return {
+    id: graderData.id,
+    score: graderData.score,
+    max_score: graderData.max_score,
+    lint_passed: graderData.lint_passed,
+    lint_output: graderData.lint_output,
+    lint_output_format: graderData.lint_output_format,
+    errors: graderData.errors,
+    execution_time: graderData.execution_time,
+    ret_code: graderData.ret_code,
+    tests,
+    build_output: outputData.data || null
+  };
+}
+
+async function getSubmissionFiles(supabase: SupabaseClient<Database>, submissionId: number, classId: number) {
+  const { data, error } = await supabase
+    .from("submission_files")
+    .select("id, name, contents")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("name", { ascending: true })
+    .limit(MAX_ROWS);
+
+  if (error || !data) return [];
+  return data;
 }
 
 async function getLatestSubmissionForStudent(
@@ -320,13 +370,15 @@ async function getLatestSubmissionForStudent(
 }
 
 async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId: number, classId: number) {
+  // Single query with joins for help request, student name, and queue name
   const { data: helpRequest, error } = await supabase
     .from("help_requests")
     .select(
       `
       id, request, status, created_at, updated_at, created_by,
       referenced_submission_id,
-      help_queues!inner(name)
+      help_queues!inner(name),
+      profiles!help_requests_created_by_fkey(name)
     `
     )
     .eq("id", helpRequestId)
@@ -335,64 +387,61 @@ async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId:
 
   if (error || !helpRequest) return null;
 
-  const studentName = await getProfileName(supabase, helpRequest.created_by);
+  const studentName = (helpRequest.profiles as unknown as { name: string })?.name || null;
   const helpQueueName = (helpRequest.help_queues as unknown as { name: string })?.name || "Unknown Queue";
 
-  // Get linked submission
-  let submission = null;
-  if (helpRequest.referenced_submission_id) {
-    submission = await getSubmission(supabase, helpRequest.referenced_submission_id, classId, true, true);
-  }
+  // Parallel fetch: submission, messages
+  const [submissionResult, messagesResult] = await Promise.all([
+    helpRequest.referenced_submission_id
+      ? getSubmission(supabase, helpRequest.referenced_submission_id, classId, true, true)
+      : Promise.resolve(null),
+    supabase
+      .from("help_requests_messages")
+      .select("id, content, created_at, profile_id")
+      .eq("help_request_id", helpRequestId)
+      .order("created_at", { ascending: true })
+      .limit(MAX_ROWS)
+  ]);
 
-  // Get assignment
+  const submission = submissionResult;
+  const messagesData = messagesResult.data || [];
+
+  // Get assignment (if we have submission)
   let assignment = null;
-  if (submission) {
-    assignment = await getAssignment(supabase, submission.assignment_id, classId);
-  }
-
-  // Get latest submission for the student
   let latestSubmission = null;
-  if (assignment && helpRequest.created_by) {
-    latestSubmission = await getLatestSubmissionForStudent(
-      supabase,
-      helpRequest.created_by,
-      assignment.id,
-      classId,
-      true
-    );
-    if (latestSubmission && submission && latestSubmission.id === submission.id) {
+
+  if (submission) {
+    // Parallel fetch: assignment and latest submission
+    const [assignmentResult, latestResult] = await Promise.all([
+      getAssignment(supabase, submission.assignment_id, classId),
+      helpRequest.created_by
+        ? getLatestSubmissionForStudent(supabase, helpRequest.created_by, submission.assignment_id, classId, true)
+        : Promise.resolve(null)
+    ]);
+
+    assignment = assignmentResult;
+    latestSubmission = latestResult;
+
+    // Don't include latest if same as referenced
+    if (latestSubmission && latestSubmission.id === submission.id) {
       latestSubmission = null;
     }
   }
 
-  // Get messages
-  const { data: messagesData } = await supabase
-    .from("help_requests_messages")
-    .select("id, content, created_at, profile_id")
-    .eq("help_request_id", helpRequestId)
-    .order("created_at", { ascending: true });
+  // Batch fetch profile names and staff status for messages
+  const messageProfileIds = messagesData.map((m) => m.profile_id);
+  const [profileNames, staffIds] = await Promise.all([
+    getProfileNames(supabase, messageProfileIds),
+    getStaffProfileIds(supabase, messageProfileIds, classId)
+  ]);
 
-  const messages = [];
-  if (messagesData) {
-    for (const msg of messagesData) {
-      const authorName = await getProfileName(supabase, msg.profile_id);
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("private_profile_id", msg.profile_id)
-        .eq("class_id", classId)
-        .in("role", ["instructor", "grader"])
-        .maybeSingle();
-
-      messages.push({
-        id: msg.id,
-        content: msg.content,
-        created_at: msg.created_at,
-        author_name: authorName,
-        is_staff: !!roleData
-      });
-    }
-  }
+  const messages = messagesData.map((msg) => ({
+    id: msg.id,
+    content: msg.content,
+    created_at: msg.created_at,
+    author_name: msg.profile_id ? profileNames.get(msg.profile_id) || null : null,
+    is_staff: msg.profile_id ? staffIds.has(msg.profile_id) : false
+  }));
 
   return {
     id: helpRequest.id,
@@ -416,13 +465,15 @@ async function getDiscussionThread(
   classId: number,
   includeReplies = true
 ) {
+  // Single query with joins for thread, author name, and topic
   const { data: thread, error } = await supabase
     .from("discussion_threads")
     .select(
       `
       id, subject, body, created_at, updated_at, is_question,
       children_count, author, answer, topic_id,
-      discussion_topics!inner(assignment_id)
+      discussion_topics!inner(assignment_id),
+      profiles!discussion_threads_author_fkey(name)
     `
     )
     .eq("id", threadId)
@@ -431,53 +482,51 @@ async function getDiscussionThread(
 
   if (error || !thread) return null;
 
-  const authorName = await getProfileName(supabase, thread.author);
-
-  // Get assignment
-  let assignment = null;
+  const authorName = (thread.profiles as unknown as { name: string })?.name || null;
   const topic = thread.discussion_topics as unknown as { assignment_id: number | null };
-  if (topic?.assignment_id) {
-    assignment = await getAssignment(supabase, topic.assignment_id, classId);
-  }
 
-  // Get latest submission for author
-  let latestSubmission = null;
-  if (assignment && thread.author) {
-    latestSubmission = await getLatestSubmissionForStudent(supabase, thread.author, assignment.id, classId, true);
-  }
-
-  // Get replies
-  const replies = [];
-  if (includeReplies && thread.children_count > 0) {
-    const { data: repliesData } = await supabase
-      .from("discussion_threads")
-      .select("id, body, created_at, author")
-      .eq("root", threadId)
-      .eq("class_id", classId)
-      .order("created_at", { ascending: true })
-      .limit(50);
-
-    if (repliesData) {
-      for (const reply of repliesData) {
-        const replyAuthorName = await getProfileName(supabase, reply.author);
-        const { data: roleData } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("private_profile_id", reply.author)
+  // Parallel fetch: assignment, latest submission, replies
+  const [assignment, latestSubmission, repliesData] = await Promise.all([
+    topic?.assignment_id ? getAssignment(supabase, topic.assignment_id, classId) : Promise.resolve(null),
+    topic?.assignment_id && thread.author
+      ? getLatestSubmissionForStudent(supabase, thread.author, topic.assignment_id, classId, true)
+      : Promise.resolve(null),
+    includeReplies && thread.children_count > 0
+      ? supabase
+          .from("discussion_threads")
+          .select("id, body, created_at, author")
+          .eq("root", threadId)
           .eq("class_id", classId)
-          .in("role", ["instructor", "grader"])
-          .maybeSingle();
+          .order("created_at", { ascending: true })
+          .limit(50)
+      : Promise.resolve({ data: null })
+  ]);
 
-        replies.push({
-          id: reply.id,
-          body: reply.body,
-          created_at: reply.created_at,
-          author_name: replyAuthorName,
-          is_staff: !!roleData,
-          is_answer: thread.answer === reply.id
-        });
-      }
-    }
+  // Process replies with batch lookups
+  let replies: Array<{
+    id: number;
+    body: string | null;
+    created_at: string;
+    author_name: string | null;
+    is_staff: boolean;
+    is_answer: boolean;
+  }> = [];
+
+  if (repliesData.data && repliesData.data.length > 0) {
+    const replyAuthorIds = repliesData.data.map((r) => r.author);
+    const [profileNames, staffIds] = await Promise.all([
+      getProfileNames(supabase, replyAuthorIds),
+      getStaffProfileIds(supabase, replyAuthorIds, classId)
+    ]);
+
+    replies = repliesData.data.map((reply) => ({
+      id: reply.id,
+      body: reply.body,
+      created_at: reply.created_at,
+      author_name: reply.author ? profileNames.get(reply.author) || null : null,
+      is_staff: reply.author ? staffIds.has(reply.author) : false,
+      is_answer: thread.answer === reply.id
+    }));
   }
 
   return {
@@ -501,12 +550,22 @@ async function searchHelpRequests(
   classId: number,
   options: { assignmentId?: number; status?: string; limit?: number } = {}
 ) {
+  const limit = Math.min(options.limit || 20, MAX_ROWS);
+
+  // Build query with joins to get assignment info for filtering
   let query = supabase
     .from("help_requests")
-    .select("id")
+    .select(
+      `
+      id, request, status, created_at, updated_at, created_by,
+      referenced_submission_id,
+      help_queues!inner(name),
+      profiles!help_requests_created_by_fkey(name)
+    `
+    )
     .eq("class_id", classId)
     .order("created_at", { ascending: false })
-    .limit(options.limit || 20);
+    .limit(limit);
 
   if (options.status) {
     query = query.eq("status", options.status);
@@ -515,22 +574,54 @@ async function searchHelpRequests(
   const { data, error } = await query;
   if (error || !data) return [];
 
-  const results = [];
-  for (const hr of data) {
-    const helpRequest = await getHelpRequest(supabase, hr.id, classId);
-    if (helpRequest) {
-      if (options.assignmentId) {
-        if (helpRequest.assignment?.id === options.assignmentId) {
-          results.push(helpRequest);
+  // If filtering by assignment, we need to check submission -> assignment
+  // Fetch all at once and filter in memory
+  let helpRequests = data;
+
+  if (options.assignmentId) {
+    // Get submission assignment IDs in batch
+    const submissionIds = helpRequests
+      .filter((hr) => hr.referenced_submission_id)
+      .map((hr) => hr.referenced_submission_id as number);
+
+    if (submissionIds.length > 0) {
+      const { data: submissions } = await supabase
+        .from("submissions")
+        .select("id, assignment_id")
+        .in("id", submissionIds.slice(0, MAX_ROWS));
+
+      const submissionAssignmentMap = new Map<number, number>();
+      if (submissions) {
+        for (const sub of submissions) {
+          submissionAssignmentMap.set(sub.id, sub.assignment_id);
         }
-      } else {
-        results.push(helpRequest);
       }
+
+      // Filter to only those with matching assignment
+      helpRequests = helpRequests.filter((hr) => {
+        if (!hr.referenced_submission_id) return false;
+        return submissionAssignmentMap.get(hr.referenced_submission_id) === options.assignmentId;
+      });
+    } else {
+      helpRequests = [];
     }
-    if (results.length >= (options.limit || 20)) break;
   }
 
-  return results;
+  // Limit results after filtering
+  helpRequests = helpRequests.slice(0, limit);
+
+  // Return lightweight results for search (no full submission/messages context)
+  return helpRequests.map((hr) => ({
+    id: hr.id,
+    request: hr.request,
+    status: hr.status,
+    created_at: hr.created_at,
+    updated_at: hr.updated_at,
+    student_profile_id: hr.created_by,
+    student_name: (hr.profiles as unknown as { name: string })?.name || null,
+    help_queue_name: (hr.help_queues as unknown as { name: string })?.name || "Unknown Queue",
+    has_submission: !!hr.referenced_submission_id
+  }));
 }
 
 async function searchDiscussionThreads(
@@ -538,13 +629,16 @@ async function searchDiscussionThreads(
   classId: number,
   options: { assignmentId?: number; isQuestion?: boolean; searchQuery?: string; limit?: number } = {}
 ) {
+  const limit = Math.min(options.limit || 20, MAX_ROWS);
+
   let topicIds: number[] | null = null;
   if (options.assignmentId) {
     const { data: topics } = await supabase
       .from("discussion_topics")
       .select("id")
       .eq("class_id", classId)
-      .eq("assignment_id", options.assignmentId);
+      .eq("assignment_id", options.assignmentId)
+      .limit(MAX_ROWS);
 
     if (topics && topics.length > 0) {
       topicIds = topics.map((t) => t.id);
@@ -553,13 +647,20 @@ async function searchDiscussionThreads(
     }
   }
 
+  // Build query with author profile joined
   let query = supabase
     .from("discussion_threads")
-    .select("id")
+    .select(
+      `
+      id, subject, body, created_at, updated_at, is_question,
+      children_count, author, answer, topic_id,
+      profiles!discussion_threads_author_fkey(name)
+    `
+    )
     .eq("class_id", classId)
     .is("parent", null)
     .order("created_at", { ascending: false })
-    .limit(options.limit || 20);
+    .limit(limit);
 
   if (topicIds) {
     query = query.in("topic_id", topicIds);
@@ -576,15 +677,19 @@ async function searchDiscussionThreads(
   const { data, error } = await query;
   if (error || !data) return [];
 
-  const results = [];
-  for (const thread of data) {
-    const threadContext = await getDiscussionThread(supabase, thread.id, classId, false);
-    if (threadContext) {
-      results.push(threadContext);
-    }
-  }
-
-  return results;
+  // Return lightweight results for search (no replies/submission context)
+  return data.map((thread) => ({
+    id: thread.id,
+    subject: thread.subject,
+    body: thread.body,
+    created_at: thread.created_at,
+    updated_at: thread.updated_at,
+    is_question: thread.is_question,
+    children_count: thread.children_count,
+    author_profile_id: thread.author,
+    author_name: (thread.profiles as unknown as { name: string })?.name || null,
+    has_answer: thread.answer !== null
+  }));
 }
 
 async function getSubmissionsForStudent(
@@ -593,25 +698,25 @@ async function getSubmissionsForStudent(
   assignmentId: number,
   classId: number
 ) {
+  // Limit to reasonable number of submissions
+  const limit = Math.min(50, MAX_ROWS);
+
   const { data: submissions, error } = await supabase
     .from("submissions")
     .select("id")
     .eq("profile_id", studentProfileId)
     .eq("assignment_id", assignmentId)
     .eq("class_id", classId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(limit);
 
-  if (error || !submissions) return [];
+  if (error || !submissions || submissions.length === 0) return [];
 
-  const results = [];
-  for (const sub of submissions) {
-    const submission = await getSubmission(supabase, sub.id, classId, true, true);
-    if (submission) {
-      results.push(submission);
-    }
-  }
+  // Fetch all submissions in parallel
+  const results = await Promise.all(submissions.map((sub) => getSubmission(supabase, sub.id, classId, true, true)));
 
-  return results;
+  // Filter out null results
+  return results.filter((r): r is NonNullable<typeof r> => r !== null);
 }
 
 // =============================================================================
