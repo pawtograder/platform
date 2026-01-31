@@ -8,7 +8,7 @@
  * - Scope validation
  */
 
-import { create, verify, decode, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
+import { create, verify, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "./SupabaseTypes.d.ts";
 
@@ -25,7 +25,7 @@ export const MCP_TOKEN_PREFIX = "mcp_";
 export type MCPScope = "mcp:read" | "mcp:write";
 export const VALID_SCOPES: MCPScope[] = ["mcp:read", "mcp:write"];
 
-// API Token payload
+// API Token payload (index signature required for djwt Payload compatibility)
 export interface MCPApiTokenPayload {
   sub: string; // User ID
   scopes: MCPScope[];
@@ -34,6 +34,7 @@ export interface MCPApiTokenPayload {
   aud: string;
   exp: number;
   iat: number;
+  [key: string]: unknown; // Index signature for djwt compatibility
 }
 
 // Authenticated context passed to MCP handlers
