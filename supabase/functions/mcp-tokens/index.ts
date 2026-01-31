@@ -249,7 +249,18 @@ async function handleDelete(authHeader: string | null, body: DeleteTokenRequest)
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  await adminSupabase.from("revoked_token_ids").insert({ token_id: body.token_id }).single();
+  const { error: revokeInsertError } = await adminSupabase
+    .from("revoked_token_ids")
+    .insert({ token_id: body.token_id });
+
+  if (revokeInsertError) {
+    // Log but don't fail - the token is already marked revoked in api_tokens
+    // The revoked_token_ids table is just for fast lookup optimization
+    Sentry.captureException(revokeInsertError, {
+      tags: { endpoint: "mcp_tokens", operation: "revoke_insert" },
+      extra: { token_id: body.token_id }
+    });
+  }
 
   return new Response(JSON.stringify({ success: true, message: "Token revoked successfully" }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -292,7 +303,12 @@ Deno.serve(async (req) => {
     });
 
     const message = error instanceof Error ? error.message : "Internal server error";
-    const status = message === "Unauthorized" ? 401 : message.includes("only available to") ? 403 : 500;
+    const status =
+      message === "Unauthorized" || message === "Missing Authorization header"
+        ? 401
+        : message.includes("only available to")
+          ? 403
+          : 500;
 
     return new Response(JSON.stringify({ error: message }), {
       status,

@@ -137,6 +137,12 @@ export async function verifyApiToken(token: string): Promise<MCPApiTokenPayload 
       return null;
     }
 
+    // Validate issuer
+    if (payload.iss !== "pawtograder") {
+      console.error("Invalid issuer in API token");
+      return null;
+    }
+
     // Validate scopes
     if (!Array.isArray(payload.scopes) || !payload.scopes.every((s) => VALID_SCOPES.includes(s))) {
       console.error("Invalid scopes in API token");

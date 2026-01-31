@@ -50,8 +50,26 @@ BEGIN
         RETURN json_build_object('error', 'Feedback is only available to instructors and graders');
     END IF;
 
-    -- Insert feedback
-    INSERT INTO public.ai_help_feedback (
+    -- Validate resource belongs to the class
+    IF p_context_type = 'help_request' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.help_requests
+            WHERE id = p_resource_id AND class_id = p_class_id
+        ) THEN
+            RETURN json_build_object('error', 'Help request not found in this class');
+        END IF;
+    ELSIF p_context_type = 'discussion_thread' THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.discussion_threads
+            WHERE id = p_resource_id AND class_id = p_class_id
+        ) THEN
+            RETURN json_build_object('error', 'Discussion thread not found in this class');
+        END IF;
+    END IF;
+
+    -- Insert feedback (with exception handling)
+    BEGIN
+        INSERT INTO public.ai_help_feedback (
         user_id,
         class_id,
         context_type,
@@ -67,6 +85,9 @@ BEGIN
         NULLIF(trim(p_comment), '')
     )
     RETURNING id INTO v_feedback_id;
+    EXCEPTION WHEN OTHERS THEN
+        RETURN json_build_object('error', 'Failed to save feedback');
+    END;
 
     RETURN json_build_object(
         'success', true,
