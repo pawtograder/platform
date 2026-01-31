@@ -7,3 +7,4 @@ export { TestInsightsOverview } from "./TestInsightsOverview";
 export { CommonErrorsExplorer } from "./CommonErrorsExplorer";
 export { ErrorPinIntegration } from "./ErrorPinIntegration";
 export { RegradeSubmissionsDialog } from "./RegradeSubmissionsDialog";
+export { AIHelpTestErrorButton } from "./AIHelpTestErrorButton";
