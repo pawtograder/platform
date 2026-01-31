@@ -26,25 +26,7 @@ interface AIHelpTestErrorButtonProps {
 function generateTestErrorPrompt(errorGroup: CommonErrorGroup, assignmentId: number, classId: number): string {
   const submissionIds = errorGroup.affected_submission_ids.slice(0, 10); // Limit to first 10
 
-  const mcpContext = {
-    mcp_server: "pawtograder",
-    version: "0.1.0",
-    context_type: "test_error_pattern",
-    class_id: classId,
-    assignment_id: assignmentId,
-    error_pattern: {
-      test_name: errorGroup.test_name,
-      test_part: errorGroup.test_part,
-      error_signature: errorGroup.error_signature,
-      occurrence_count: errorGroup.occurrence_count,
-      affected_submission_count: errorGroup.affected_submission_ids.length,
-      avg_score: errorGroup.avg_score,
-      is_failing: errorGroup.is_failing
-    },
-    sample_outputs: errorGroup.sample_outputs.slice(0, 3) // Include up to 3 samples
-  };
-
-  const prompt = `You are helping an instructor analyze a common test error pattern that is affecting multiple student submissions.
+  const prompt = `You are helping an instructor analyze a common test error pattern affecting ${errorGroup.occurrence_count} student submissions.
 
 ## Error Pattern Summary
 
@@ -64,47 +46,64 @@ ${errorGroup.sample_outputs
   )
   .join("\n\n")}
 
-## MCP Context (for fetching additional data)
+## MCP Tools Available
 
-\`\`\`json
-${JSON.stringify(mcpContext, null, 2)}
-\`\`\`
+Use the Pawtograder MCP server to fetch additional context:
 
-## Suggested Actions
-
-To get more context, use the Pawtograder MCP server with these tools:
-
-1. **Get assignment details**:
+1. **Get assignment spec/handout**:
    \`\`\`json
    {"tool": "get_assignment", "params": {"assignment_id": ${assignmentId}, "class_id": ${classId}}}
    \`\`\`
 
-2. **Get specific submission details** (for any of these affected submissions):
+2. **Get submission with full test output** (sample affected submissions):
 ${submissionIds
-  .slice(0, 5)
+  .slice(0, 3)
   .map(
     (id) =>
       `   \`\`\`json
    {"tool": "get_submission", "params": {"submission_id": ${id}, "class_id": ${classId}, "include_test_output": true}}
    \`\`\``
   )
-  .join("\n\n")}
+  .join("\n")}
 
 ## Your Task
 
-Analyze this common error pattern and provide:
+Analyze this error pattern and provide TWO things:
 
-1. **Root Cause Analysis**: What is likely causing this error? Look for patterns in the error output.
+### 1. Assignment/Test Issue Assessment
 
-2. **Common Misconceptions**: What programming concept might students be misunderstanding?
+Determine if this error pattern suggests a problem with the assignment itself:
+- Does the test contradict the assignment specification?
+- Is the test checking for behavior not described in the handout?
+- Are error messages unclear or misleading?
+- Is the expected behavior ambiguous in the spec?
 
-3. **Suggested Guidance**: What hints or explanations would help students fix this issue WITHOUT giving away the solution?
+If you identify a potential assignment issue, explain what needs to be fixed (test logic, spec clarification, etc.).
 
-4. **Discussion Post Draft**: If helpful, draft a discussion post that could be pinned to help all affected students.
+If the test appears correct and students are genuinely making mistakes, say so clearly.
 
-5. **Additional Data Needed**: If you need more context, specify which MCP tools to call and why.
+### 2. Discussion Post for Students (Ready to Copy/Paste)
 
-Remember: Help the instructor understand the pattern and guide students toward the solution, but avoid revealing the complete answer.`;
+If this is a student error (not an assignment bug), draft a discussion post in markdown that the instructor can pin to help affected students. The post should:
+
+- Have a clear, descriptive title
+- Explain the common mistake WITHOUT giving away the solution
+- Provide hints and debugging strategies
+- Reference relevant concepts from the assignment
+- Be encouraging and educational
+
+Format the discussion post like this:
+
+---
+**DISCUSSION POST (copy below this line):**
+
+# [Title Here]
+
+[Post content in markdown...]
+
+---
+
+Remember: Never reveal the complete solution. Guide students toward understanding their mistake.`;
 
   return prompt;
 }
