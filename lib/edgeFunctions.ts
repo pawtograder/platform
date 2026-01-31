@@ -448,21 +448,41 @@ export interface AIHelpFeedbackResponse {
   success: boolean;
   feedback_id: string;
   message: string;
+  error?: string;
 }
 
 /**
- * Submit AI help feedback
+ * Submit AI help feedback via RPC
  */
 export async function aiHelpFeedbackSubmit(
   params: AIHelpFeedbackRequest,
   supabase: SupabaseClient<Database>
 ): Promise<AIHelpFeedbackResponse> {
-  const { data } = await supabase.functions.invoke("ai-help-feedback", {
-    body: params
+  // Use type assertion since the RPC function may not be in generated types yet
+  const { data, error } = await (supabase.rpc as CallableFunction)("submit_ai_help_feedback", {
+    p_class_id: params.class_id,
+    p_context_type: params.context_type,
+    p_resource_id: params.resource_id,
+    p_rating: params.rating,
+    p_comment: params.comment ?? null
   });
-  const { error } = data as FunctionTypes.GenericResponse;
+
   if (error) {
-    throw new EdgeFunctionError(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: error.message,
+      recoverable: false
+    });
   }
-  return data as AIHelpFeedbackResponse;
+
+  const result = data as unknown as AIHelpFeedbackResponse;
+  if (result.error) {
+    throw new EdgeFunctionError({
+      details: result.error,
+      message: result.error,
+      recoverable: false
+    });
+  }
+
+  return result;
 }
