@@ -43,6 +43,24 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 
+/**
+ * Sanitize a string for use in PostgREST filter expressions.
+ * Escapes SQL wildcards and PostgREST reserved characters to prevent injection.
+ */
+function sanitizeForPostgrestFilter(input: string): string {
+  // Escape SQL wildcards that could be used for injection
+  // % and _ are SQL LIKE wildcards
+  // Also escape backslash which is the escape character
+  return input
+    .replace(/\\/g, "\\\\") // Escape backslashes first
+    .replace(/%/g, "\\%") // Escape percent
+    .replace(/_/g, "\\_") // Escape underscore
+    .replace(/,/g, "\\,") // Escape comma (PostgREST OR separator)
+    .replace(/\(/g, "\\(") // Escape parentheses
+    .replace(/\)/g, "\\)")
+    .replace(/\./g, "\\."); // Escape dot (PostgREST operator separator)
+}
+
 // Type definitions for MCP protocol
 interface MCPRequest {
   jsonrpc: "2.0";
@@ -671,7 +689,8 @@ async function searchDiscussionThreads(
   }
 
   if (options.searchQuery) {
-    query = query.or(`subject.ilike.%${options.searchQuery}%,body.ilike.%${options.searchQuery}%`);
+    const sanitized = sanitizeForPostgrestFilter(options.searchQuery);
+    query = query.or(`subject.ilike.%${sanitized}%,body.ilike.%${sanitized}%`);
   }
 
   const { data, error } = await query;

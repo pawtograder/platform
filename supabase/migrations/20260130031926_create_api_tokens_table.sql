@@ -22,8 +22,7 @@ CREATE TABLE IF NOT EXISTS public.api_tokens (
 -- Create index for fast user lookups
 CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON public.api_tokens(user_id);
 
--- Create index for token_id lookups (revocation checks)
-CREATE INDEX IF NOT EXISTS idx_api_tokens_token_id ON public.api_tokens(token_id);
+-- Note: token_id already has an index from the UNIQUE constraint
 
 -- Create the revoked_token_ids table for fast revocation checks
 CREATE TABLE IF NOT EXISTS public.revoked_token_ids (

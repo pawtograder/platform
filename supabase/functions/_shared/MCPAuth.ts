@@ -70,8 +70,8 @@ async function getMcpJwtKey(): Promise<CryptoKey> {
  */
 async function getSupabaseJwtKey(): Promise<CryptoKey> {
   const secret = Deno.env.get(SUPABASE_JWT_SECRET_ENV);
-  if (!secret) {
-    throw new Error(`${SUPABASE_JWT_SECRET_ENV} must be set`);
+  if (!secret || secret.length < 32) {
+    throw new Error(`${SUPABASE_JWT_SECRET_ENV} must be set and at least 32 characters`);
   }
 
   return await crypto.subtle.importKey(

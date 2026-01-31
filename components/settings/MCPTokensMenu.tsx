@@ -4,54 +4,33 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { mcpTokensList, mcpTokensCreate, mcpTokensRevoke, MCPToken } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Dialog, Flex, HStack, IconButton, Portal, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useState } from "react";
 import { LuCopy, LuCheck, LuKey, LuTrash2, LuPlus } from "react-icons/lu";
-
-interface TokenMetadata {
-  id: string;
-  name: string;
-  scopes: string[];
-  expires_at: string;
-  revoked_at: string | null;
-  created_at: string;
-  last_used_at: string | null;
-}
-
-interface CreateTokenResponse {
-  token: string;
-  metadata: TokenMetadata;
-  message: string;
-}
 
 /**
  * Dialog component for managing MCP API tokens.
  * Only available to instructors and graders.
  */
 export default function MCPTokensMenu() {
+  const isInstructorOrGrader = useIsGraderOrInstructor();
   const [open, setOpen] = useState(false);
-  const [tokens, setTokens] = useState<TokenMetadata[]>([]);
+  const [tokens, setTokens] = useState<MCPToken[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTokenName, setNewTokenName] = useState("");
   const [newlyCreatedToken, setNewlyCreatedToken] = useState<string | null>(null);
   const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
 
   const fetchTokens = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch("/api/mcp-tokens");
-      if (response.status === 403) {
-        setIsAuthorized(false);
-        return;
-      }
-      if (!response.ok) {
-        throw new Error("Failed to fetch tokens");
-      }
-      const data = await response.json();
-      setTokens(data.tokens || []);
-      setIsAuthorized(true);
+      const supabase = createClient();
+      const { tokens: fetchedTokens } = await mcpTokensList(supabase);
+      setTokens(fetchedTokens || []);
     } catch (error) {
       toaster.error({
         title: "Error fetching tokens",
@@ -79,22 +58,16 @@ export default function MCPTokensMenu() {
 
     setCreating(true);
     try {
-      const response = await fetch("/api/mcp-tokens", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const supabase = createClient();
+      const data = await mcpTokensCreate(
+        {
           name: newTokenName.trim(),
           scopes: ["mcp:read", "mcp:write"],
           expires_in_days: 90
-        })
-      });
+        },
+        supabase
+      );
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to create token");
-      }
-
-      const data: CreateTokenResponse = await response.json();
       setNewlyCreatedToken(data.token);
       setNewTokenName("");
       await fetchTokens();
@@ -115,14 +88,8 @@ export default function MCPTokensMenu() {
 
   const revokeToken = async (tokenId: string) => {
     try {
-      const response = await fetch(`/api/mcp-tokens/${tokenId}`, {
-        method: "DELETE"
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to revoke token");
-      }
+      const supabase = createClient();
+      await mcpTokensRevoke({ token_id: tokenId }, supabase);
 
       await fetchTokens();
       toaster.success({
@@ -167,7 +134,7 @@ export default function MCPTokensMenu() {
   };
 
   // Don't render if not authorized (not an instructor/grader)
-  if (isAuthorized === false) {
+  if (!isInstructorOrGrader) {
     return null;
   }
 
@@ -304,7 +271,7 @@ export default function MCPTokensMenu() {
                                     size="sm"
                                     variant="ghost"
                                     colorPalette="red"
-                                    onClick={() => revokeToken(token.id)}
+                                    onClick={() => revokeToken(token.token_id)}
                                   >
                                     <LuTrash2 />
                                   </IconButton>

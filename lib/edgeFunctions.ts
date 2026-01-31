@@ -366,6 +366,7 @@ export type MCPScope = "mcp:read" | "mcp:write";
 
 export interface MCPToken {
   id: number;
+  token_id: string;
   name: string;
   scopes: MCPScope[];
   expires_at: string;

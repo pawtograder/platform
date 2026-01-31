@@ -99,7 +99,7 @@ async function handleGet(authHeader: string | null): Promise<Response> {
 
   const { data: tokens, error: tokensError } = await supabase
     .from("api_tokens")
-    .select("id, name, scopes, expires_at, revoked_at, created_at, last_used_at")
+    .select("id, token_id, name, scopes, expires_at, revoked_at, created_at, last_used_at")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
 

@@ -168,16 +168,14 @@ function ThreadActions({
       </Tooltip>
       {/* Discord link - shown if thread has a Discord message (staff only see it) */}
       <DiscordDiscussionMessageLink threadId={thread.id} />
-      {/* AI Help button for staff */}
+      {/* AI Help button for staff - component has internal tooltip */}
       {canPin && (
-        <Tooltip content="Get AI assistance">
-          <AIHelpIconButton
-            contextType="discussion_thread"
-            resourceId={thread.id}
-            classId={thread.class_id}
-            assignmentId={topicAssignmentId ?? undefined}
-          />
-        </Tooltip>
+        <AIHelpIconButton
+          contextType="discussion_thread"
+          resourceId={thread.id}
+          classId={thread.class_id}
+          assignmentId={topicAssignmentId ?? undefined}
+        />
       )}
       {/* <Tooltip content="Emote">
         <Button aria-label="Emote" variant="ghost" size="sm">
