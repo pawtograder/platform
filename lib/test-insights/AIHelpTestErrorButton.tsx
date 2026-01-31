@@ -137,7 +137,13 @@ export function AIHelpTestErrorButton({
 
   return (
     <Tooltip content="Copy AI prompt for analyzing this error pattern" showArrow>
-      <Button size={size} variant={variant} colorPalette="purple" onClick={handleCopy}>
+      <Button
+        size={size}
+        variant={variant}
+        colorPalette="purple"
+        onClick={handleCopy}
+        aria-label={size === "xs" ? "AI Analyze error pattern" : undefined}
+      >
         <Icon as={BsRobot} mr={size === "xs" ? 0 : 1} />
         {size !== "xs" && "AI Analyze"}
       </Button>
