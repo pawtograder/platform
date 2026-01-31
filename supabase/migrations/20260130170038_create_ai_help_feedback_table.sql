@@ -36,8 +36,8 @@ CREATE POLICY "Users can view their own feedback"
     TO authenticated
     USING (auth.uid() = user_id);
 
--- Policy: Instructors can view all feedback in their classes
-CREATE POLICY "Instructors can view class feedback"
+-- Policy: Instructors and graders can view all feedback in their classes
+CREATE POLICY "Staff can view class feedback"
     ON public.ai_help_feedback
     FOR SELECT
     TO authenticated
@@ -46,7 +46,7 @@ CREATE POLICY "Instructors can view class feedback"
             SELECT 1 FROM public.user_roles ur
             WHERE ur.user_id = auth.uid()
             AND ur.class_id = ai_help_feedback.class_id
-            AND ur.role = 'instructor'
+            AND ur.role IN ('instructor', 'grader')
             AND ur.disabled = false
         )
     );

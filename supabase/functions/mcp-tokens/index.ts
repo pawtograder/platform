@@ -146,9 +146,10 @@ async function handlePost(authHeader: string | null, body: CreateTokenRequest): 
     });
   }
 
-  // Validate expiry
-  const expiresInDays = body.expires_in_days || DEFAULT_EXPIRY_DAYS;
-  if (typeof expiresInDays !== "number" || expiresInDays < 1 || expiresInDays > 365) {
+  // Validate expiry (use nullish coalescing to properly handle 0 or invalid values)
+  const rawExpiry = body.expires_in_days ?? DEFAULT_EXPIRY_DAYS;
+  const expiresInDays = Number.isFinite(rawExpiry) ? rawExpiry : DEFAULT_EXPIRY_DAYS;
+  if (expiresInDays < 1 || expiresInDays > 365) {
     return new Response(JSON.stringify({ error: "expires_in_days must be between 1 and 365" }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" }

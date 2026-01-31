@@ -751,13 +751,15 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
   // Check scope
   requireScope(context, tool.requiredScope);
 
-  // Verify user has access to the class
+  // Verify user has access to the class (explicit user_id check for defense in depth)
   const classId = args.class_id as number;
   if (classId) {
     const { data: roleData } = await context.supabase
       .from("user_roles")
       .select("role")
+      .eq("user_id", context.userId)
       .eq("class_id", classId)
+      .eq("disabled", false)
       .in("role", ["instructor", "grader"])
       .maybeSingle();
 
@@ -926,7 +928,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const context = await authenticateMCPRequest(authHeader);
 
     // Update last used timestamp asynchronously
-    updateTokenLastUsed(context.tokenId).catch(() => {});
+    updateTokenLastUsed(context.tokenId).catch((err) => {
+      Sentry.captureException(err, {
+        tags: { operation: "update_token_last_used", tokenId: context.tokenId }
+      });
+    });
 
     // Parse the MCP request
     const mcpRequest = (await req.json()) as MCPRequest;
