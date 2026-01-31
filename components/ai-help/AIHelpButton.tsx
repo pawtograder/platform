@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { aiHelpFeedbackSubmit } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 import { Box, HStack, Icon, IconButton, Input, Text, Textarea, VStack } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
 import { BsRobot, BsCopy, BsX } from "react-icons/bs";
@@ -143,7 +145,7 @@ Provide helpful guidance that:
 }
 
 /**
- * Submit feedback to the API
+ * Submit feedback via Edge Function
  */
 async function submitFeedback(
   classId: number,
@@ -153,19 +155,18 @@ async function submitFeedback(
   comment?: string
 ): Promise<boolean> {
   try {
-    const response = await fetch("/api/ai-help-feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const supabase = createClient();
+    await aiHelpFeedbackSubmit(
+      {
         class_id: classId,
         context_type: contextType,
         resource_id: resourceId,
         rating,
         comment: comment || undefined
-      })
-    });
-
-    return response.ok;
+      },
+      supabase
+    );
+    return true;
   } catch {
     return false;
   }

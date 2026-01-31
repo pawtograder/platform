@@ -360,3 +360,109 @@ export class EdgeFunctionError extends Error {
     this.recoverable = recoverable;
   }
 }
+
+// MCP Token types
+export type MCPScope = "mcp:read" | "mcp:write";
+
+export interface MCPToken {
+  id: number;
+  name: string;
+  scopes: MCPScope[];
+  expires_at: string;
+  revoked_at: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface MCPTokenCreateRequest {
+  name: string;
+  scopes?: MCPScope[];
+  expires_in_days?: number;
+}
+
+export interface MCPTokenCreateResponse {
+  token: string;
+  metadata: MCPToken;
+  message: string;
+}
+
+/**
+ * List all MCP tokens for the current user
+ */
+export async function mcpTokensList(supabase: SupabaseClient<Database>): Promise<{ tokens: MCPToken[] }> {
+  const { data } = await supabase.functions.invoke("mcp-tokens", {
+    method: "GET"
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as { tokens: MCPToken[] };
+}
+
+/**
+ * Create a new MCP token
+ */
+export async function mcpTokensCreate(
+  params: MCPTokenCreateRequest,
+  supabase: SupabaseClient<Database>
+): Promise<MCPTokenCreateResponse> {
+  const { data } = await supabase.functions.invoke("mcp-tokens", {
+    body: params
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as MCPTokenCreateResponse;
+}
+
+/**
+ * Revoke an MCP token
+ */
+export async function mcpTokensRevoke(
+  params: { token_id: string },
+  supabase: SupabaseClient<Database>
+): Promise<{ success: boolean; message: string }> {
+  const { data } = await supabase.functions.invoke("mcp-tokens", {
+    method: "DELETE",
+    body: params
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as { success: boolean; message: string };
+}
+
+// AI Help Feedback types
+export interface AIHelpFeedbackRequest {
+  class_id: number;
+  context_type: "help_request" | "discussion_thread";
+  resource_id: number;
+  rating: "thumbs_up" | "thumbs_down";
+  comment?: string;
+}
+
+export interface AIHelpFeedbackResponse {
+  success: boolean;
+  feedback_id: string;
+  message: string;
+}
+
+/**
+ * Submit AI help feedback
+ */
+export async function aiHelpFeedbackSubmit(
+  params: AIHelpFeedbackRequest,
+  supabase: SupabaseClient<Database>
+): Promise<AIHelpFeedbackResponse> {
+  const { data } = await supabase.functions.invoke("ai-help-feedback", {
+    body: params
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as AIHelpFeedbackResponse;
+}
