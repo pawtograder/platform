@@ -1,9 +1,11 @@
 "use client";
 
+import { AIHelpFeedbackPanel } from "@/components/ai-help/AIHelpFeedbackPanel";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { Button, Icon } from "@chakra-ui/react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { BsRobot } from "react-icons/bs";
 import type { CommonErrorGroup } from "./types";
 
@@ -109,7 +111,8 @@ Remember: Never reveal the complete solution. Guide students toward understandin
 }
 
 /**
- * Button component to get AI assistance for analyzing a common test error pattern
+ * Button component to get AI assistance for analyzing a common test error pattern.
+ * Shows feedback panel after copying prompt.
  */
 export function AIHelpTestErrorButton({
   errorGroup,
@@ -118,6 +121,9 @@ export function AIHelpTestErrorButton({
   size = "sm",
   variant = "outline"
 }: AIHelpTestErrorButtonProps) {
+  const isInstructorOrGrader = useIsGraderOrInstructor();
+  const [showFeedback, setShowFeedback] = useState(false);
+
   const handleCopy = useCallback(async () => {
     const prompt = generateTestErrorPrompt(errorGroup, assignmentId, classId);
 
@@ -127,6 +133,8 @@ export function AIHelpTestErrorButton({
         title: "Copied AI context",
         description: `Error pattern analysis prompt copied for ${errorGroup.occurrence_count} submissions.`
       });
+      // Show feedback panel after copying
+      setShowFeedback(true);
     } catch {
       toaster.error({
         title: "Failed to copy",
@@ -134,6 +142,23 @@ export function AIHelpTestErrorButton({
       });
     }
   }, [errorGroup, assignmentId, classId]);
+
+  // Only show for instructors/graders
+  if (!isInstructorOrGrader) {
+    return null;
+  }
+
+  // Show feedback panel after copying
+  if (showFeedback) {
+    return (
+      <AIHelpFeedbackPanel
+        classId={classId}
+        contextType="test_insights"
+        resourceId={assignmentId}
+        onClose={() => setShowFeedback(false)}
+      />
+    );
+  }
 
   return (
     <Tooltip content="Copy AI prompt for analyzing this error pattern" showArrow>

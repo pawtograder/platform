@@ -437,9 +437,11 @@ export async function mcpTokensRevoke(
 }
 
 // AI Help Feedback types
+export type AIHelpContextType = "help_request" | "discussion_thread" | "test_failure" | "build_error" | "test_insights";
+
 export interface AIHelpFeedbackRequest {
   class_id: number;
-  context_type: "help_request" | "discussion_thread";
+  context_type: AIHelpContextType;
   resource_id: number;
   rating: "thumbs_up" | "thumbs_down";
   comment?: string;

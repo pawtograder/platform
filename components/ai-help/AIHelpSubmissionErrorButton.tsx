@@ -4,8 +4,9 @@ import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { IconButton, Icon } from "@chakra-ui/react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { BsRobot } from "react-icons/bs";
+import { AIHelpFeedbackPanel } from "./AIHelpFeedbackPanel";
 
 interface AIHelpSubmissionErrorButtonProps {
   /** Type of error: test failure or build error */
@@ -126,9 +127,11 @@ If you need more context, use the MCP tools to:
 /**
  * Compact icon button for AI assistance on test failures or build errors.
  * Only visible to instructors and graders.
+ * Shows feedback panel after copying prompt.
  */
 export function AIHelpSubmissionErrorButton(props: AIHelpSubmissionErrorButtonProps) {
   const isInstructorOrGrader = useIsGraderOrInstructor();
+  const [showFeedback, setShowFeedback] = useState(false);
 
   const handleCopy = useCallback(async () => {
     const prompt = generateErrorPrompt(props);
@@ -142,6 +145,8 @@ export function AIHelpSubmissionErrorButton(props: AIHelpSubmissionErrorButtonPr
             ? "Build error analysis prompt copied to clipboard."
             : `Test failure analysis prompt for "${props.testName}" copied to clipboard.`
       });
+      // Show feedback panel after copying
+      setShowFeedback(true);
     } catch {
       toaster.error({
         title: "Failed to copy",
@@ -153,6 +158,18 @@ export function AIHelpSubmissionErrorButton(props: AIHelpSubmissionErrorButtonPr
   // Only show for instructors/graders
   if (!isInstructorOrGrader) {
     return null;
+  }
+
+  // Show feedback panel after copying
+  if (showFeedback) {
+    return (
+      <AIHelpFeedbackPanel
+        classId={props.classId}
+        contextType={props.errorType}
+        resourceId={props.submissionId}
+        onClose={() => setShowFeedback(false)}
+      />
+    );
   }
 
   const tooltipContent =
