@@ -41,6 +41,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
+import { AIHelpSubmissionErrorButton } from "@/components/ai-help/AIHelpSubmissionErrorButton";
 
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
@@ -716,9 +717,17 @@ function PyretRepl({
 }
 
 function GenericBuildError({
-  errorPinMatches
+  errorPinMatches,
+  buildOutput,
+  assignmentId,
+  classId,
+  submissionId
 }: {
   errorPinMatches?: Map<number | null, import("@/hooks/useErrorPinMatches").ErrorPinMatch[]>;
+  buildOutput?: string;
+  assignmentId: number;
+  classId: number;
+  submissionId: number;
 }) {
   // Get all matches (both submission-level and test-level) for build errors
   const allMatches: import("@/hooks/useErrorPinMatches").ErrorPinMatch[] = [];
@@ -735,9 +744,20 @@ function GenericBuildError({
   return (
     <Box mt={3}>
       <Box p={3} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
-        <Text fontWeight="bold" color="fg.error" fontSize="sm">
-          Error: Gradle build failed
-        </Text>
+        <HStack justify="space-between">
+          <Text fontWeight="bold" color="fg.error" fontSize="sm">
+            Error: Gradle build failed
+          </Text>
+          {buildOutput && (
+            <AIHelpSubmissionErrorButton
+              errorType="build_error"
+              errorOutput={buildOutput}
+              assignmentId={assignmentId}
+              classId={classId}
+              submissionId={submissionId}
+            />
+          )}
+        </HStack>
         <Box mt={2} p={2} bg="bg.error" borderRadius="sm">
           <Text color="fg.error">
             The autograding script failed to build your code. Please inspect the output below for more details:
@@ -952,9 +972,21 @@ export default function GraderResults() {
   );
   const hasBuildError = query.data.data.grader_results.lint_output === "Gradle build failed";
   const data = query.data.data;
+  // Get build output for AI analysis
+  const buildOutput = data.grader_results?.grader_result_output?.[0]?.output ||
+    data.grader_results?.lint_output ||
+    "";
   return (
     <Box>
-      {hasBuildError && <GenericBuildError errorPinMatches={errorPinMatches} />}
+      {hasBuildError && (
+        <GenericBuildError
+          errorPinMatches={errorPinMatches}
+          buildOutput={buildOutput}
+          assignmentId={data.assignment_id}
+          classId={data.class_id}
+          submissionId={data.id}
+        />
+      )}
       <Tabs.Root
         m={3}
         defaultValue={hasBuildError ? data.grader_results?.grader_result_output[0]?.visibility : "tests"}
@@ -1088,15 +1120,31 @@ export default function GraderResults() {
                 };
                 const style = result.max_score === 0 ? "info" : result.score === result.max_score ? "success" : "error";
                 const showScore = result.max_score !== 0;
+                const isFailing = (result.max_score ?? 0) > 0 && (result.score ?? 0) < (result.max_score ?? 0);
 
                 const testMatches = errorPinMatches.get(result.id) || [];
 
                 return (
                   <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
                     <CardHeader bg={`bg.${style}`} p={2}>
-                      <Heading size="lg" color={`fg.${style}`}>
-                        {result.name} {showScore ? result.score + "/" + result.max_score : ""}
-                      </Heading>
+                      <HStack justify="space-between">
+                        <Heading size="lg" color={`fg.${style}`}>
+                          {result.name} {showScore ? result.score + "/" + result.max_score : ""}
+                        </Heading>
+                        {isFailing && result.output && (
+                          <AIHelpSubmissionErrorButton
+                            errorType="test_failure"
+                            testName={result.name}
+                            testPart={result.part}
+                            score={result.score ?? undefined}
+                            maxScore={result.max_score ?? undefined}
+                            errorOutput={result.output}
+                            assignmentId={data.assignment_id}
+                            classId={data.class_id}
+                            submissionId={data.id}
+                          />
+                        )}
+                      </HStack>
                     </CardHeader>
                     {testMatches.length > 0 && (
                       <Box px={4} pt={2}>
