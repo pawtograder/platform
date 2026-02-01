@@ -14,7 +14,7 @@ import { Database } from "./SupabaseTypes.d.ts";
 
 // Environment variable names
 const MCP_JWT_SECRET_ENV = "MCP_JWT_SECRET";
-const SUPABASE_JWT_SECRET_ENV = "SUPABASE_JWT_SECRET";
+const SUPABASE_JWT_SECRET_ENV = "JWT_SECRET";
 const SUPABASE_URL_ENV = "SUPABASE_URL";
 const SUPABASE_ANON_KEY_ENV = "SUPABASE_ANON_KEY";
 
@@ -53,8 +53,9 @@ const supabaseJwtCache = new Map<string, { jwt: string; expiresAt: number }>();
  */
 async function getMcpJwtKey(): Promise<CryptoKey> {
   const secret = Deno.env.get(MCP_JWT_SECRET_ENV);
+
   if (!secret || secret.length < 32) {
-    throw new Error(`${MCP_JWT_SECRET_ENV} must be set and at least 32 characters`);
+    throw new MCPAuthError(`${MCP_JWT_SECRET_ENV} must be set and at least 32 characters`);
   }
 
   return await crypto.subtle.importKey(
@@ -67,21 +68,53 @@ async function getMcpJwtKey(): Promise<CryptoKey> {
 }
 
 /**
- * Get the crypto key for Supabase JWT minting
+ * Get the crypto key for Supabase JWT minting (ES256 only)
  */
-async function getSupabaseJwtKey(): Promise<CryptoKey> {
+async function getSupabaseJwtKey(): Promise<{ key: CryptoKey; kid: string }> {
   const secret = Deno.env.get(SUPABASE_JWT_SECRET_ENV);
-  if (!secret || secret.length < 32) {
-    throw new Error(`${SUPABASE_JWT_SECRET_ENV} must be set and at least 32 characters`);
+
+  if (!secret) {
+    throw new MCPAuthError(`${SUPABASE_JWT_SECRET_ENV} must be set. Generate with: supabase gen signing-key --algorithm ES256`);
   }
 
-  return await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
+  if (!secret.startsWith("{")) {
+    throw new MCPAuthError("JWT_SECRET must be a JWK JSON object for ES256 signing");
+  }
+
+  const jwkFull = JSON.parse(secret);
+  const kid = jwkFull.kid;
+  
+  if (!kid) {
+    throw new MCPAuthError("JWK must have a 'kid' field");
+  }
+  
+  if (jwkFull.kty !== "EC" || jwkFull.crv !== "P-256") {
+    throw new MCPAuthError("JWK must be an EC key with P-256 curve (ES256)");
+  }
+  
+  if (!jwkFull.d) {
+    throw new MCPAuthError("JWK must include private key component 'd'");
+  }
+  
+  // Create a clean JWK with only the fields needed for import
+  // Deno's WebCrypto can be strict about extra fields like 'key_ops'
+  const jwk: Record<string, unknown> = {
+    kty: jwkFull.kty,
+    crv: jwkFull.crv,
+    x: jwkFull.x,
+    y: jwkFull.y,
+    d: jwkFull.d
+  };
+  
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    { name: "ECDSA", namedCurve: "P-256" },
     false,
-    ["sign", "verify"]
+    ["sign"]
   );
+  
+  return { key, kid };
 }
 
 /**
@@ -128,31 +161,26 @@ export async function verifyApiToken(token: string): Promise<MCPApiTokenPayload 
 
     // Validate required claims
     if (!payload.sub || !payload.jti || !payload.scopes) {
-      console.error("Missing required claims in API token");
       return null;
     }
 
     // Validate audience
     if (payload.aud !== "mcp") {
-      console.error("Invalid audience in API token");
       return null;
     }
 
     // Validate issuer
     if (payload.iss !== "pawtograder") {
-      console.error("Invalid issuer in API token");
       return null;
     }
 
     // Validate scopes
     if (!Array.isArray(payload.scopes) || !payload.scopes.every((s) => VALID_SCOPES.includes(s))) {
-      console.error("Invalid scopes in API token");
       return null;
     }
 
     return payload;
-  } catch (error) {
-    console.error("Failed to verify API token:", error);
+  } catch {
     return null;
   }
 }
@@ -162,10 +190,15 @@ export async function verifyApiToken(token: string): Promise<MCPApiTokenPayload 
  * Uses the revoked_token_ids table for fast lookup
  */
 export async function isTokenRevoked(tokenId: string): Promise<boolean> {
-  const adminSupabase = createClient<Database>(
-    Deno.env.get(SUPABASE_URL_ENV)!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  const supabaseUrl = Deno.env.get(SUPABASE_URL_ENV);
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    // Fail closed - treat as revoked if we can't check
+    return true;
+  }
+
+  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);
 
   const { data, error } = await adminSupabase
     .from("revoked_token_ids")
@@ -174,7 +207,6 @@ export async function isTokenRevoked(tokenId: string): Promise<boolean> {
     .maybeSingle();
 
   if (error) {
-    console.error("Error checking token revocation:", error);
     // Fail closed - treat as revoked if we can't check
     return true;
   }
@@ -192,12 +224,12 @@ export async function mintSupabaseJwt(userId: string): Promise<string> {
   // Check cache first
   const cached = supabaseJwtCache.get(userId);
   if (cached && cached.expiresAt > now + 5000) {
-    // 5 second buffer
     return cached.jwt;
   }
 
-  // Mint a new JWT
-  const key = await getSupabaseJwtKey();
+  // Mint a new JWT using ES256 asymmetric key
+  const { key, kid } = await getSupabaseJwtKey();
+
   const expiresAt = now + 60 * 1000; // 60 seconds
 
   const payload = {
@@ -208,7 +240,9 @@ export async function mintSupabaseJwt(userId: string): Promise<string> {
     iat: getNumericDate(new Date(now))
   };
 
-  const jwt = await create({ alg: "HS256", typ: "JWT" }, payload, key);
+  // Build JWT header with ES256 algorithm and kid
+  const header = { alg: "ES256" as const, typ: "JWT" as const, kid };
+  const jwt = await create(header, payload, key);
 
   // Cache the JWT
   supabaseJwtCache.set(userId, { jwt, expiresAt });
@@ -221,9 +255,16 @@ export async function mintSupabaseJwt(userId: string): Promise<string> {
  * Uses a short-lived JWT minted for that user
  */
 export async function createAuthenticatedSupabaseClient(userId: string): Promise<SupabaseClient<Database>> {
+  const supabaseUrl = Deno.env.get(SUPABASE_URL_ENV);
+  const anonKey = Deno.env.get(SUPABASE_ANON_KEY_ENV);
+
+  if (!supabaseUrl || !anonKey) {
+    throw new MCPAuthError("Server configuration error");
+  }
+
   const jwt = await mintSupabaseJwt(userId);
 
-  return createClient<Database>(Deno.env.get(SUPABASE_URL_ENV)!, Deno.env.get(SUPABASE_ANON_KEY_ENV)!, {
+  return createClient<Database>(supabaseUrl, anonKey, {
     global: {
       headers: {
         Authorization: `Bearer ${jwt}`
@@ -247,6 +288,7 @@ export async function authenticateMCPRequest(authHeader: string | null): Promise
 
   // Extract token from Bearer header
   const parts = authHeader.split(" ");
+
   if (parts.length !== 2 || parts[0].toLowerCase() !== "bearer") {
     throw new MCPAuthError("Invalid Authorization header format");
   }
@@ -255,22 +297,28 @@ export async function authenticateMCPRequest(authHeader: string | null): Promise
 
   // Verify the API token
   const payload = await verifyApiToken(token);
+
   if (!payload) {
     throw new MCPAuthError("Invalid or expired API token");
   }
 
   // Check for revocation
   const revoked = await isTokenRevoked(payload.jti);
+
   if (revoked) {
     throw new MCPAuthError("API token has been revoked");
   }
 
+  // Check required environment variables
+  const supabaseUrl = Deno.env.get(SUPABASE_URL_ENV);
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new MCPAuthError("Server configuration error");
+  }
+
   // Check that user has instructor/grader role somewhere
-  // (This is an additional security check beyond the token)
-  const adminSupabase = createClient<Database>(
-    Deno.env.get(SUPABASE_URL_ENV)!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  const adminSupabase = createClient<Database>(supabaseUrl, serviceRoleKey);
 
   const { data: roles, error: rolesError } = await adminSupabase
     .from("user_roles")
@@ -279,7 +327,11 @@ export async function authenticateMCPRequest(authHeader: string | null): Promise
     .eq("disabled", false)
     .in("role", ["instructor", "grader"]);
 
-  if (rolesError || !roles || roles.length === 0) {
+  if (rolesError) {
+    throw new MCPAuthError("Failed to verify user permissions");
+  }
+
+  if (!roles || roles.length === 0) {
     throw new MCPAuthError("User must be an instructor or grader to use MCP");
   }
 
@@ -332,8 +384,7 @@ export async function updateTokenLastUsed(tokenId: string): Promise<void> {
     );
 
     await adminSupabase.from("api_tokens").update({ last_used_at: new Date().toISOString() }).eq("token_id", tokenId);
-  } catch (error) {
-    // Non-critical, just log
-    console.error("Failed to update token last_used_at:", error);
+  } catch {
+    // Non-critical, silently ignore
   }
 }

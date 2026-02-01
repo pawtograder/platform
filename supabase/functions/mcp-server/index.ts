@@ -39,8 +39,8 @@ if (Deno.env.get("SENTRY_DSN")) {
 // CORS headers
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS"
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, accept, mcp-session-id, last-event-id",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS"
 };
 
 /**
@@ -133,7 +133,7 @@ const TOOLS = {
     inputSchema: {
       type: "object",
       properties: {
-        student_profile_id: { type: "string", description: "The profile ID of the student" },
+        student_profile_id: { type: "string", description: "The public profile ID of the student" },
         assignment_id: { type: "number", description: "The assignment ID" },
         class_id: { type: "number", description: "The class ID" }
       },
@@ -196,29 +196,165 @@ const TOOLS = {
 // Maximum rows per query (Supabase limit)
 const MAX_ROWS = 1000;
 
-/**
- * Batch fetch profile names for multiple profile IDs
- */
-async function getProfileNames(
-  supabase: SupabaseClient<Database>,
-  profileIds: (string | null)[]
-): Promise<Map<string, string>> {
-  const uniqueIds = [...new Set(profileIds.filter((id): id is string => id !== null))];
-  if (uniqueIds.length === 0) return new Map();
+// =============================================================================
+// Global Profile Cache (across all requests)
+// =============================================================================
 
-  const { data } = await supabase.from("profiles").select("id, name").in("id", uniqueIds.slice(0, MAX_ROWS));
+// Cache TTL: 5 minutes (profile data rarely changes)
+const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 
-  const map = new Map<string, string>();
-  if (data) {
-    for (const profile of data) {
-      if (profile.name) map.set(profile.id, profile.name);
-    }
-  }
-  return map;
+interface CachedProfile {
+  publicProfileId: string;
+  publicName: string | null;
+  cachedAt: number;
+}
+
+interface CachedStaff {
+  staffIds: Set<string>;
+  cachedAt: number;
 }
 
 /**
- * Batch check if profile IDs are staff (instructor/grader) in a class
+ * Global cache for profile lookups across requests.
+ * Keyed by classId since profiles are class-specific.
+ * Uses TTL to eventually refresh stale data.
+ */
+const profileCache = {
+  // Key: `${classId}:${privateProfileId}` -> public profile info
+  privateToPublic: new Map<string, CachedProfile>(),
+  // Key: `${classId}:${publicProfileId}` -> privateProfileId
+  publicToPrivate: new Map<string, { privateId: string; cachedAt: number }>(),
+  // Key: classId -> all staff private profile IDs
+  staffByClass: new Map<number, CachedStaff>()
+};
+
+function makePrivateKey(classId: number, privateId: string): string {
+  return `${classId}:${privateId}`;
+}
+
+function makePublicKey(classId: number, publicId: string): string {
+  return `${classId}:${publicId}`;
+}
+
+function isExpired(cachedAt: number): boolean {
+  return Date.now() - cachedAt > PROFILE_CACHE_TTL_MS;
+}
+
+function getCachedPublicProfile(classId: number, privateId: string): CachedProfile | null {
+  const cached = profileCache.privateToPublic.get(makePrivateKey(classId, privateId));
+  if (cached && !isExpired(cached.cachedAt)) return cached;
+  return null;
+}
+
+function setCachedPublicProfile(classId: number, privateId: string, publicId: string, publicName: string | null): void {
+  const now = Date.now();
+  profileCache.privateToPublic.set(makePrivateKey(classId, privateId), {
+    publicProfileId: publicId,
+    publicName,
+    cachedAt: now
+  });
+  profileCache.publicToPrivate.set(makePublicKey(classId, publicId), {
+    privateId,
+    cachedAt: now
+  });
+}
+
+function getCachedPrivateId(classId: number, publicId: string): string | null {
+  const cached = profileCache.publicToPrivate.get(makePublicKey(classId, publicId));
+  if (cached && !isExpired(cached.cachedAt)) return cached.privateId;
+  return null;
+}
+
+function getCachedStaffIds(classId: number): Set<string> | null {
+  const cached = profileCache.staffByClass.get(classId);
+  if (cached && !isExpired(cached.cachedAt)) return cached.staffIds;
+  return null;
+}
+
+function setCachedStaffIds(classId: number, staffIds: Set<string>): void {
+  profileCache.staffByClass.set(classId, { staffIds, cachedAt: Date.now() });
+}
+
+/**
+ * Translate private profile IDs to public profile IDs via user_roles.
+ * Uses and populates the global cache.
+ */
+async function getPublicProfiles(
+  supabase: SupabaseClient<Database>,
+  privateProfileIds: (string | null)[],
+  classId: number
+): Promise<Map<string, { publicProfileId: string; publicName: string | null }>> {
+  const uniqueIds = [...new Set(privateProfileIds.filter((id): id is string => id !== null))];
+  if (uniqueIds.length === 0) return new Map();
+
+  // Check cache first, collect missing IDs
+  const result = new Map<string, { publicProfileId: string; publicName: string | null }>();
+  const missingIds: string[] = [];
+
+  for (const id of uniqueIds) {
+    const cached = getCachedPublicProfile(classId, id);
+    if (cached) {
+      result.set(id, { publicProfileId: cached.publicProfileId, publicName: cached.publicName });
+    } else {
+      missingIds.push(id);
+    }
+  }
+
+  // Fetch missing from DB
+  if (missingIds.length > 0) {
+    const { data } = await supabase
+      .from("user_roles")
+      .select("private_profile_id, public_profile_id, profiles!user_roles_public_profile_id_fkey(name)")
+      .eq("class_id", classId)
+      .in("private_profile_id", missingIds.slice(0, MAX_ROWS));
+
+    if (data) {
+      for (const role of data) {
+        const publicName = (role.profiles as unknown as { name: string })?.name || null;
+        setCachedPublicProfile(classId, role.private_profile_id, role.public_profile_id, publicName);
+        result.set(role.private_profile_id, {
+          publicProfileId: role.public_profile_id,
+          publicName
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Translate a public profile ID to private profile ID for queries.
+ * Uses and populates the global cache.
+ */
+async function getPrivateProfileId(
+  supabase: SupabaseClient<Database>,
+  publicProfileId: string,
+  classId: number
+): Promise<string | null> {
+  // Check cache first
+  const cached = getCachedPrivateId(classId, publicProfileId);
+  if (cached) return cached;
+
+  const { data } = await supabase
+    .from("user_roles")
+    .select("private_profile_id, profiles!user_roles_public_profile_id_fkey(name)")
+    .eq("class_id", classId)
+    .eq("public_profile_id", publicProfileId)
+    .maybeSingle();
+
+  if (data) {
+    const publicName = (data.profiles as unknown as { name: string })?.name || null;
+    setCachedPublicProfile(classId, data.private_profile_id, publicProfileId, publicName);
+    return data.private_profile_id;
+  }
+
+  return null;
+}
+
+/**
+ * Batch check if profile IDs are staff (instructor/grader) in a class.
+ * Uses and populates the global cache.
  */
 async function getStaffProfileIds(
   supabase: SupabaseClient<Database>,
@@ -228,20 +364,38 @@ async function getStaffProfileIds(
   const uniqueIds = [...new Set(profileIds.filter((id): id is string => id !== null))];
   if (uniqueIds.length === 0) return new Set();
 
+  // Check if we have cached staff for this class
+  const cachedStaff = getCachedStaffIds(classId);
+  if (cachedStaff) {
+    // Filter to only requested IDs that are staff
+    const result = new Set<string>();
+    for (const id of uniqueIds) {
+      if (cachedStaff.has(id)) result.add(id);
+    }
+    return result;
+  }
+
+  // Fetch all staff for this class (they're rare, so fetch all once)
   const { data } = await supabase
     .from("user_roles")
     .select("private_profile_id")
     .eq("class_id", classId)
-    .in("private_profile_id", uniqueIds.slice(0, MAX_ROWS))
     .in("role", ["instructor", "grader"]);
 
-  const set = new Set<string>();
+  const allStaff = new Set<string>();
   if (data) {
     for (const role of data) {
-      if (role.private_profile_id) set.add(role.private_profile_id);
+      if (role.private_profile_id) allStaff.add(role.private_profile_id);
     }
   }
-  return set;
+  setCachedStaffIds(classId, allStaff);
+
+  // Return only requested IDs that are staff
+  const result = new Set<string>();
+  for (const id of uniqueIds) {
+    if (allStaff.has(id)) result.add(id);
+  }
+  return result;
 }
 
 async function getAssignment(supabase: SupabaseClient<Database>, assignmentId: number, classId: number) {
@@ -263,17 +417,21 @@ async function getSubmission(
   includeTestOutput = true,
   includeFiles = true
 ) {
-  // Fetch submission with profile name joined
+  // Fetch submission (profile_id is private profile)
   const { data: submission, error: subError } = await supabase
     .from("submissions")
-    .select("id, assignment_id, created_at, sha, repository, ordinal, is_active, profile_id, profiles!inner(name)")
+    .select("id, assignment_id, created_at, sha, repository, ordinal, is_active, profile_id")
     .eq("id", submissionId)
     .eq("class_id", classId)
     .single();
 
   if (subError || !submission) return null;
 
-  const studentName = (submission.profiles as unknown as { name: string })?.name || null;
+  // Translate private profile to public profile
+  const publicProfiles = submission.profile_id
+    ? await getPublicProfiles(supabase, [submission.profile_id], classId)
+    : new Map();
+  const publicProfile = submission.profile_id ? publicProfiles.get(submission.profile_id) : null;
 
   // Parallel fetch: grader result, files (if needed)
   const [graderResult, files] = await Promise.all([
@@ -289,7 +447,8 @@ async function getSubmission(
     repository: submission.repository,
     ordinal: submission.ordinal,
     is_active: submission.is_active,
-    student_name: studentName,
+    student_profile_id: publicProfile?.publicProfileId || null,
+    student_name: publicProfile?.publicName || null,
     grader_result: graderResult,
     files
   };
@@ -388,15 +547,14 @@ async function getLatestSubmissionForStudent(
 }
 
 async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId: number, classId: number) {
-  // Single query with joins for help request, student name, and queue name
+  // Single query with joins for help request and queue name (created_by is private profile)
   const { data: helpRequest, error } = await supabase
     .from("help_requests")
     .select(
       `
       id, request, status, created_at, updated_at, created_by,
       referenced_submission_id,
-      help_queues!inner(name),
-      profiles!help_requests_created_by_fkey(name)
+      help_queues!inner(name)
     `
     )
     .eq("id", helpRequestId)
@@ -405,8 +563,13 @@ async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId:
 
   if (error || !helpRequest) return null;
 
-  const studentName = (helpRequest.profiles as unknown as { name: string })?.name || null;
   const helpQueueName = (helpRequest.help_queues as unknown as { name: string })?.name || "Unknown Queue";
+
+  // Translate private profile to public profile for student
+  const studentPublicProfiles = helpRequest.created_by
+    ? await getPublicProfiles(supabase, [helpRequest.created_by], classId)
+    : new Map();
+  const studentPublicProfile = helpRequest.created_by ? studentPublicProfiles.get(helpRequest.created_by) : null;
 
   // Parallel fetch: submission, messages
   const [submissionResult, messagesResult] = await Promise.all([
@@ -414,8 +577,8 @@ async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId:
       ? getSubmission(supabase, helpRequest.referenced_submission_id, classId, true, true)
       : Promise.resolve(null),
     supabase
-      .from("help_requests_messages")
-      .select("id, content, created_at, profile_id")
+      .from("help_request_messages")
+      .select("id, message, created_at, author")
       .eq("help_request_id", helpRequestId)
       .order("created_at", { ascending: true })
       .limit(MAX_ROWS)
@@ -446,20 +609,23 @@ async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId:
     }
   }
 
-  // Batch fetch profile names and staff status for messages
-  const messageProfileIds = messagesData.map((m) => m.profile_id);
-  const [profileNames, staffIds] = await Promise.all([
-    getProfileNames(supabase, messageProfileIds),
-    getStaffProfileIds(supabase, messageProfileIds, classId)
+  // Batch fetch public profiles and staff status for messages
+  const messageAuthorIds = messagesData.map((m) => m.author);
+  const [publicProfiles, staffIds] = await Promise.all([
+    getPublicProfiles(supabase, messageAuthorIds, classId),
+    getStaffProfileIds(supabase, messageAuthorIds, classId)
   ]);
 
-  const messages = messagesData.map((msg) => ({
-    id: msg.id,
-    content: msg.content,
-    created_at: msg.created_at,
-    author_name: msg.profile_id ? profileNames.get(msg.profile_id) || null : null,
-    is_staff: msg.profile_id ? staffIds.has(msg.profile_id) : false
-  }));
+  const messages = messagesData.map((msg) => {
+    const publicProfile = msg.author ? publicProfiles.get(msg.author) : null;
+    return {
+      id: msg.id,
+      content: msg.message,
+      created_at: msg.created_at,
+      author_name: publicProfile?.publicName || null,
+      is_staff: msg.author ? staffIds.has(msg.author) : false
+    };
+  });
 
   return {
     id: helpRequest.id,
@@ -470,8 +636,8 @@ async function getHelpRequest(supabase: SupabaseClient<Database>, helpRequestId:
     assignment,
     submission,
     latest_submission: latestSubmission,
-    student_profile_id: helpRequest.created_by,
-    student_name: studentName,
+    student_profile_id: studentPublicProfile?.publicProfileId || null,
+    student_name: studentPublicProfile?.publicName || null,
     help_queue_name: helpQueueName,
     messages
   };
@@ -483,15 +649,14 @@ async function getDiscussionThread(
   classId: number,
   includeReplies = true
 ) {
-  // Single query with joins for thread, author name, and topic
+  // Single query with joins for thread and topic (author is private profile)
   const { data: thread, error } = await supabase
     .from("discussion_threads")
     .select(
       `
       id, subject, body, created_at, updated_at, is_question,
       children_count, author, answer, topic_id,
-      discussion_topics!inner(assignment_id),
-      profiles!discussion_threads_author_fkey(name)
+      discussion_topics!inner(assignment_id)
     `
     )
     .eq("id", threadId)
@@ -500,8 +665,13 @@ async function getDiscussionThread(
 
   if (error || !thread) return null;
 
-  const authorName = (thread.profiles as unknown as { name: string })?.name || null;
   const topic = thread.discussion_topics as unknown as { assignment_id: number | null };
+
+  // Translate private profile to public profile for author
+  const authorPublicProfiles = thread.author
+    ? await getPublicProfiles(supabase, [thread.author], classId)
+    : new Map();
+  const authorPublicProfile = thread.author ? authorPublicProfiles.get(thread.author) : null;
 
   // Parallel fetch: assignment, latest submission, replies
   const [assignment, latestSubmission, repliesData] = await Promise.all([
@@ -532,19 +702,22 @@ async function getDiscussionThread(
 
   if (repliesData.data && repliesData.data.length > 0) {
     const replyAuthorIds = repliesData.data.map((r) => r.author);
-    const [profileNames, staffIds] = await Promise.all([
-      getProfileNames(supabase, replyAuthorIds),
+    const [publicProfiles, staffIds] = await Promise.all([
+      getPublicProfiles(supabase, replyAuthorIds, classId),
       getStaffProfileIds(supabase, replyAuthorIds, classId)
     ]);
 
-    replies = repliesData.data.map((reply) => ({
-      id: reply.id,
-      body: reply.body,
-      created_at: reply.created_at,
-      author_name: reply.author ? profileNames.get(reply.author) || null : null,
-      is_staff: reply.author ? staffIds.has(reply.author) : false,
-      is_answer: thread.answer === reply.id
-    }));
+    replies = repliesData.data.map((reply) => {
+      const publicProfile = reply.author ? publicProfiles.get(reply.author) : null;
+      return {
+        id: reply.id,
+        body: reply.body,
+        created_at: reply.created_at,
+        author_name: publicProfile?.publicName || null,
+        is_staff: reply.author ? staffIds.has(reply.author) : false,
+        is_answer: thread.answer === reply.id
+      };
+    });
   }
 
   return {
@@ -555,8 +728,8 @@ async function getDiscussionThread(
     updated_at: thread.updated_at,
     is_question: thread.is_question,
     children_count: thread.children_count,
-    author_profile_id: thread.author,
-    author_name: authorName,
+    author_profile_id: authorPublicProfile?.publicProfileId || null,
+    author_name: authorPublicProfile?.publicName || null,
     assignment,
     latest_submission: latestSubmission,
     replies
@@ -570,15 +743,14 @@ async function searchHelpRequests(
 ) {
   const limit = Math.min(options.limit || 20, MAX_ROWS);
 
-  // Build query with joins to get assignment info for filtering
+  // Build query with joins to get queue name (created_by is private profile)
   let query = supabase
     .from("help_requests")
     .select(
       `
       id, request, status, created_at, updated_at, created_by,
       referenced_submission_id,
-      help_queues!inner(name),
-      profiles!help_requests_created_by_fkey(name)
+      help_queues!inner(name)
     `
     )
     .eq("class_id", classId)
@@ -586,7 +758,7 @@ async function searchHelpRequests(
     .limit(limit);
 
   if (options.status) {
-    query = query.eq("status", options.status);
+    query = query.eq("status", options.status as Database["public"]["Enums"]["help_request_status"]);
   }
 
   const { data, error } = await query;
@@ -628,18 +800,25 @@ async function searchHelpRequests(
   // Limit results after filtering
   helpRequests = helpRequests.slice(0, limit);
 
+  // Batch fetch public profiles for all results
+  const privateProfileIds = helpRequests.map((hr) => hr.created_by).filter((id): id is string => id !== null);
+  const publicProfiles = await getPublicProfiles(supabase, privateProfileIds, classId);
+
   // Return lightweight results for search (no full submission/messages context)
-  return helpRequests.map((hr) => ({
-    id: hr.id,
-    request: hr.request,
-    status: hr.status,
-    created_at: hr.created_at,
-    updated_at: hr.updated_at,
-    student_profile_id: hr.created_by,
-    student_name: (hr.profiles as unknown as { name: string })?.name || null,
-    help_queue_name: (hr.help_queues as unknown as { name: string })?.name || "Unknown Queue",
-    has_submission: !!hr.referenced_submission_id
-  }));
+  return helpRequests.map((hr) => {
+    const publicProfile = hr.created_by ? publicProfiles.get(hr.created_by) : null;
+    return {
+      id: hr.id,
+      request: hr.request,
+      status: hr.status,
+      created_at: hr.created_at,
+      updated_at: hr.updated_at,
+      student_profile_id: publicProfile?.publicProfileId || null,
+      student_name: publicProfile?.publicName || null,
+      help_queue_name: (hr.help_queues as unknown as { name: string })?.name || "Unknown Queue",
+      has_submission: !!hr.referenced_submission_id
+    };
+  });
 }
 
 async function searchDiscussionThreads(
@@ -665,14 +844,13 @@ async function searchDiscussionThreads(
     }
   }
 
-  // Build query with author profile joined
+  // Build query (author is private profile)
   let query = supabase
     .from("discussion_threads")
     .select(
       `
       id, subject, body, created_at, updated_at, is_question,
-      children_count, author, answer, topic_id,
-      profiles!discussion_threads_author_fkey(name)
+      children_count, author, answer, topic_id
     `
     )
     .eq("class_id", classId)
@@ -696,34 +874,45 @@ async function searchDiscussionThreads(
   const { data, error } = await query;
   if (error || !data) return [];
 
+  // Batch fetch public profiles for all results
+  const authorIds = data.map((thread) => thread.author).filter((id): id is string => id !== null);
+  const publicProfiles = await getPublicProfiles(supabase, authorIds, classId);
+
   // Return lightweight results for search (no replies/submission context)
-  return data.map((thread) => ({
-    id: thread.id,
-    subject: thread.subject,
-    body: thread.body,
-    created_at: thread.created_at,
-    updated_at: thread.updated_at,
-    is_question: thread.is_question,
-    children_count: thread.children_count,
-    author_profile_id: thread.author,
-    author_name: (thread.profiles as unknown as { name: string })?.name || null,
-    has_answer: thread.answer !== null
-  }));
+  return data.map((thread) => {
+    const publicProfile = thread.author ? publicProfiles.get(thread.author) : null;
+    return {
+      id: thread.id,
+      subject: thread.subject,
+      body: thread.body,
+      created_at: thread.created_at,
+      updated_at: thread.updated_at,
+      is_question: thread.is_question,
+      children_count: thread.children_count,
+      author_profile_id: publicProfile?.publicProfileId || null,
+      author_name: publicProfile?.publicName || null,
+      has_answer: thread.answer !== null
+    };
+  });
 }
 
 async function getSubmissionsForStudent(
   supabase: SupabaseClient<Database>,
-  studentProfileId: string,
+  publicProfileId: string,
   assignmentId: number,
   classId: number
 ) {
+  // Translate public profile ID to private profile ID for querying
+  const privateProfileId = await getPrivateProfileId(supabase, publicProfileId, classId);
+  if (!privateProfileId) return [];
+
   // Limit to reasonable number of submissions
   const limit = Math.min(50, MAX_ROWS);
 
   const { data: submissions, error } = await supabase
     .from("submissions")
     .select("id")
-    .eq("profile_id", studentProfileId)
+    .eq("profile_id", privateProfileId)
     .eq("assignment_id", assignmentId)
     .eq("class_id", classId)
     .order("created_at", { ascending: false })
@@ -750,23 +939,6 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
 
   // Check scope
   requireScope(context, tool.requiredScope);
-
-  // Verify user has access to the class (explicit user_id check for defense in depth)
-  const classId = args.class_id as number;
-  if (classId) {
-    const { data: roleData } = await context.supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", context.userId)
-      .eq("class_id", classId)
-      .eq("disabled", false)
-      .in("role", ["instructor", "grader"])
-      .maybeSingle();
-
-    if (!roleData) {
-      throw new Error("Access denied: You must be an instructor or grader in this class");
-    }
-  }
 
   // Execute the tool
   switch (toolName) {
@@ -879,6 +1051,21 @@ async function handleMCPRequest(request: MCPRequest, context: MCPAuthContext): P
         };
       }
 
+      case "notifications/initialized":
+        // Client acknowledges initialization - no response needed for notifications
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {}
+        };
+
+      case "ping":
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {}
+        };
+
       default:
         return {
           jsonrpc: "2.0",
@@ -905,6 +1092,91 @@ async function handleMCPRequest(request: MCPRequest, context: MCPAuthContext): P
 }
 
 // =============================================================================
+// SSE Stream Management
+// =============================================================================
+
+interface SSEStream {
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  encoder: TextEncoder;
+  eventId: number;
+}
+
+function createSSEStream(): { stream: ReadableStream<Uint8Array>; sse: SSEStream } {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+    cancel() {
+      // Client disconnected
+    }
+  });
+
+  // The start() callback is called synchronously, so controller should be set
+  if (!controller) {
+    throw new Error("Failed to initialize SSE stream controller");
+  }
+
+  return {
+    stream,
+    sse: {
+      controller,
+      encoder,
+      eventId: 0
+    }
+  };
+}
+
+function sendSSEEvent(sse: SSEStream, event: string, data: unknown, options: { includeId?: boolean; raw?: boolean } = {}): void {
+  const { includeId = true, raw = false } = options;
+  const lines: string[] = [];
+  if (includeId) {
+    lines.push(`id: ${++sse.eventId}`);
+  }
+  lines.push(`event: ${event}`);
+  // For raw mode, send data as-is (useful for endpoint event which is just a URL string)
+  // For normal mode, JSON encode the data
+  lines.push(`data: ${raw ? String(data) : JSON.stringify(data)}`);
+  lines.push(""); // Empty line to end the event
+
+  const message = lines.join("\n") + "\n";
+  sse.controller.enqueue(sse.encoder.encode(message));
+}
+
+function sendSSEMessage(sse: SSEStream, data: unknown): void {
+  sendSSEEvent(sse, "message", data, { includeId: true, raw: false });
+}
+
+function closeSSEStream(sse: SSEStream): void {
+  try {
+    sse.controller.close();
+  } catch {
+    // Already closed
+  }
+}
+
+/**
+ * Get the full endpoint URL for the MCP server.
+ * Uses EDGE_FUNCTIONS_URL environment variable for the base URL.
+ */
+function getEndpointUrl(req: Request): string {
+  // Use EDGE_FUNCTIONS_URL as the authoritative base URL
+  const edgeFunctionsUrl = Deno.env.get("EDGE_FUNCTIONS_URL");
+  
+  if (edgeFunctionsUrl) {
+    return `${edgeFunctionsUrl}/functions/v1/mcp-server`;
+  }
+  
+  // Fallback: construct from request
+  const url = new URL(req.url);
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || url.host;
+  return `${proto}://${host}/functions/v1/mcp-server`;
+}
+
+// =============================================================================
 // Main Handler
 // =============================================================================
 
@@ -914,7 +1186,72 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  // Only accept POST requests
+  // Handle DELETE for session termination (Streamable HTTP 2025-03-26)
+  if (req.method === "DELETE") {
+    return new Response(null, {
+      status: 202,
+      headers: corsHeaders
+    });
+  }
+
+  // Handle GET for SSE stream (supports both transports)
+  if (req.method === "GET") {
+    const acceptHeader = req.headers.get("accept") || "";
+
+    // Check if client accepts SSE
+    if (!acceptHeader.includes("text/event-stream")) {
+      return new Response(JSON.stringify({ error: "Must accept text/event-stream" }), {
+        status: 406,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    try {
+      // Authenticate the request
+      const authHeader = req.headers.get("authorization");
+      const context = await authenticateMCPRequest(authHeader);
+
+      // Update last used timestamp asynchronously
+      updateTokenLastUsed(context.tokenId).catch((err) => {
+        Sentry.captureException(err, {
+          tags: { operation: "update_token_last_used", tokenId: context.tokenId }
+        });
+      });
+
+      // Create SSE stream
+      const { stream, sse } = createSSEStream();
+
+      // For backwards compatibility with HTTP+SSE (2024-11-05),
+      // send an endpoint event with the URL for POST messages
+      const postEndpoint = getEndpointUrl(req);
+      sendSSEEvent(sse, "endpoint", postEndpoint, { includeId: false, raw: true });
+
+      // Keep the stream open for server-to-client messages
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive"
+        }
+      });
+    } catch (error) {
+      Sentry.captureException(error, {
+        tags: { component: "mcp_server", method: "GET" }
+      });
+
+      const status = error instanceof MCPAuthError ? 401 : 500;
+      const message = error instanceof Error ? error.message : "Internal server error";
+
+      return new Response(JSON.stringify({ error: message }), {
+        status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+  }
+
+  // Handle POST for JSON-RPC messages
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
@@ -934,12 +1271,73 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
     });
 
-    // Parse the MCP request
-    const mcpRequest = (await req.json()) as MCPRequest;
+    // Parse the MCP request (can be single or batch)
+    const body = await req.json();
+
+    // Check Accept header to determine response format
+    const acceptHeader = req.headers.get("accept") || "";
+    const acceptsSSE = acceptHeader.includes("text/event-stream");
+    const acceptsJSON = acceptHeader.includes("application/json") || acceptHeader.includes("*/*") || !acceptHeader;
+
+    // Handle batch requests
+    if (Array.isArray(body)) {
+      // Check if it's all notifications/responses (no requests needing response)
+      const hasRequests = body.some((msg) => "method" in msg && msg.id !== undefined && msg.id !== null);
+
+      if (!hasRequests) {
+        return new Response(null, {
+          status: 202,
+          headers: corsHeaders
+        });
+      }
+
+      // Process batch requests
+      const responses: MCPResponse[] = [];
+      for (const mcpRequest of body) {
+        if ("method" in mcpRequest && mcpRequest.id !== undefined && mcpRequest.id !== null) {
+          const response = await handleMCPRequest(mcpRequest as MCPRequest, context);
+          responses.push(response);
+        }
+      }
+
+      if (acceptsSSE && !acceptsJSON) {
+        const { stream, sse } = createSSEStream();
+        for (const response of responses) {
+          sendSSEMessage(sse, response);
+        }
+        closeSSEStream(sse);
+
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache"
+          }
+        });
+      }
+
+      return new Response(JSON.stringify(responses), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    // Single request
+    const mcpRequest = body as MCPRequest;
+
+    // Check if it's a notification (no id or null id)
+    if (mcpRequest.id === undefined || mcpRequest.id === null) {
+      return new Response(null, {
+        status: 202,
+        headers: corsHeaders
+      });
+    }
 
     // Handle the request
     const response = await handleMCPRequest(mcpRequest, context);
 
+    // Return as JSON (default for single requests)
     return new Response(JSON.stringify(response), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" }
