@@ -4,9 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { Box, HStack, Icon, IconButton, Input, Text } from "@chakra-ui/react";
-import { useCallback, useMemo, useState } from "react";
+import { mcpTokensList } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
+import { Box, Dialog, HStack, Icon, IconButton, Input, Link, List, Portal, Text, VStack } from "@chakra-ui/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BsRobot, BsCopy, BsX } from "react-icons/bs";
+import { LuExternalLink, LuKey, LuDownload, LuSettings } from "react-icons/lu";
 import { AIHelpFeedbackPanel } from "./AIHelpFeedbackPanel";
 
 /**
@@ -143,6 +146,244 @@ Provide helpful guidance that:
 }
 
 /**
+ * Setup dialog shown when user has no MCP tokens configured
+ */
+function MCPSetupDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const mcpServerUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/functions/v1/mcp-server` : "/functions/v1/mcp-server";
+
+  return (
+    <Dialog.Root open={isOpen} onOpenChange={(e) => !e.open && onClose()}>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content maxW="600px" maxH="80vh" overflowY="auto">
+            <Dialog.Header>
+              <Dialog.Title>
+                <HStack gap={2}>
+                  <Icon as={BsRobot} color="purple.500" />
+                  <Text>Set Up AI Help with Claude Desktop</Text>
+                </HStack>
+              </Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <VStack gap={5} align="stretch">
+                <Text color="fg.muted">
+                  AI Help uses Claude Desktop with the Pawtograder MCP server to provide intelligent assistance. Follow
+                  these steps to get started:
+                </Text>
+
+                {/* Step 1 */}
+                <Box>
+                  <HStack gap={2} mb={2}>
+                    <Box
+                      bg="purple.500"
+                      color="white"
+                      borderRadius="full"
+                      w={6}
+                      h={6}
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      fontSize="sm"
+                      fontWeight="bold"
+                    >
+                      1
+                    </Box>
+                    <Text fontWeight="semibold">Install Claude Desktop</Text>
+                  </HStack>
+                  <Box pl={8}>
+                    <Text fontSize="sm" color="fg.muted" mb={2}>
+                      Download and install Claude Desktop from Anthropic:
+                    </Text>
+                    <Link
+                      href="https://claude.ai/download"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      color="purple.500"
+                      fontSize="sm"
+                    >
+                      <HStack gap={1}>
+                        <Icon as={LuDownload} />
+                        <Text>claude.ai/download</Text>
+                        <Icon as={LuExternalLink} boxSize={3} />
+                      </HStack>
+                    </Link>
+                  </Box>
+                </Box>
+
+                {/* Step 2 */}
+                <Box>
+                  <HStack gap={2} mb={2}>
+                    <Box
+                      bg="purple.500"
+                      color="white"
+                      borderRadius="full"
+                      w={6}
+                      h={6}
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      fontSize="sm"
+                      fontWeight="bold"
+                    >
+                      2
+                    </Box>
+                    <Text fontWeight="semibold">Install the MCP Proxy</Text>
+                  </HStack>
+                  <Box pl={8}>
+                    <Text fontSize="sm" color="fg.muted" mb={2}>
+                      Claude Desktop currently only supports stdio-based MCP servers. Install the proxy to connect to
+                      Pawtograder:
+                    </Text>
+                    <Box bg="bg.emphasized" p={3} borderRadius="md" fontFamily="mono" fontSize="xs">
+                      npx @anthropic-ai/mcp-proxy@latest
+                    </Box>
+                  </Box>
+                </Box>
+
+                {/* Step 3 */}
+                <Box>
+                  <HStack gap={2} mb={2}>
+                    <Box
+                      bg="purple.500"
+                      color="white"
+                      borderRadius="full"
+                      w={6}
+                      h={6}
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      fontSize="sm"
+                      fontWeight="bold"
+                    >
+                      3
+                    </Box>
+                    <Text fontWeight="semibold">Create an API Token</Text>
+                  </HStack>
+                  <Box pl={8}>
+                    <Text fontSize="sm" color="fg.muted" mb={2}>
+                      Go to Settings → API Tokens in Pawtograder and create a new token. Copy the token - you will need
+                      it for the next step.
+                    </Text>
+                    <HStack gap={2}>
+                      <Icon as={LuKey} color="fg.muted" />
+                      <Text fontSize="sm" color="fg.muted">
+                        Settings → API Tokens → Create New Token
+                      </Text>
+                    </HStack>
+                  </Box>
+                </Box>
+
+                {/* Step 4 */}
+                <Box>
+                  <HStack gap={2} mb={2}>
+                    <Box
+                      bg="purple.500"
+                      color="white"
+                      borderRadius="full"
+                      w={6}
+                      h={6}
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      fontSize="sm"
+                      fontWeight="bold"
+                    >
+                      4
+                    </Box>
+                    <Text fontWeight="semibold">Configure Claude Desktop</Text>
+                  </HStack>
+                  <Box pl={8}>
+                    <Text fontSize="sm" color="fg.muted" mb={2}>
+                      Open Claude Desktop settings and add this MCP server configuration:
+                    </Text>
+                    <List.Root fontSize="sm" color="fg.muted" mb={2} gap={1}>
+                      <List.Item>
+                        <strong>macOS:</strong> ~/Library/Application Support/Claude/claude_desktop_config.json
+                      </List.Item>
+                      <List.Item>
+                        <strong>Windows:</strong> %APPDATA%\Claude\claude_desktop_config.json
+                      </List.Item>
+                    </List.Root>
+                    <Box bg="bg.emphasized" p={3} borderRadius="md" fontFamily="mono" fontSize="xs" overflowX="auto">
+                      <pre style={{ margin: 0 }}>
+                        {JSON.stringify(
+                          {
+                            mcpServers: {
+                              pawtograder: {
+                                command: "npx",
+                                args: ["-y", "@anthropic-ai/mcp-proxy@latest", mcpServerUrl],
+                                env: {
+                                  MCP_HEADERS: JSON.stringify({
+                                    Authorization: "Bearer YOUR_TOKEN_HERE"
+                                  })
+                                }
+                              }
+                            }
+                          },
+                          null,
+                          2
+                        )}
+                      </pre>
+                    </Box>
+                    <Text fontSize="xs" color="fg.muted" mt={2}>
+                      Replace YOUR_TOKEN_HERE with the token you created in step 3.
+                    </Text>
+                  </Box>
+                </Box>
+
+                {/* Step 5 */}
+                <Box>
+                  <HStack gap={2} mb={2}>
+                    <Box
+                      bg="purple.500"
+                      color="white"
+                      borderRadius="full"
+                      w={6}
+                      h={6}
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      fontSize="sm"
+                      fontWeight="bold"
+                    >
+                      5
+                    </Box>
+                    <Text fontWeight="semibold">Restart Claude Desktop</Text>
+                  </HStack>
+                  <Box pl={8}>
+                    <Text fontSize="sm" color="fg.muted">
+                      Quit and reopen Claude Desktop. You should see &quot;pawtograder&quot; listed as an available MCP
+                      server in the tools menu.
+                    </Text>
+                  </Box>
+                </Box>
+
+                <Box bg="blue.subtle" p={3} borderRadius="md">
+                  <HStack gap={2}>
+                    <Icon as={LuSettings} color="blue.500" />
+                    <Text fontSize="sm" color="blue.fg">
+                      Once configured, click the AI Help button again to copy context that Claude can use with the
+                      Pawtograder tools.
+                    </Text>
+                  </HStack>
+                </Box>
+              </VStack>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Button variant="outline" onClick={onClose}>
+                Close
+              </Button>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
+  );
+}
+
+/**
  * AIHelpButton component for launching AI assistance context
  *
  * This component provides a button that instructors and graders can use
@@ -161,6 +402,29 @@ export function AIHelpButton({
   const isInstructorOrGrader = useIsGraderOrInstructor();
   const [showContext, setShowContext] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [showSetupDialog, setShowSetupDialog] = useState(false);
+  const [hasTokens, setHasTokens] = useState<boolean | null>(null); // null = not checked yet
+
+  // Check if user has any active MCP tokens
+  useEffect(() => {
+    if (!isInstructorOrGrader) return;
+
+    async function checkTokens() {
+      try {
+        const supabase = createClient();
+        const { tokens } = await mcpTokensList(supabase);
+        // Check for at least one non-revoked, non-expired token
+        const now = new Date();
+        const hasActiveToken = tokens?.some((t) => !t.revoked_at && new Date(t.expires_at) > now);
+        setHasTokens(hasActiveToken ?? false);
+      } catch {
+        // If we can't check, assume they might have tokens
+        setHasTokens(true);
+      }
+    }
+
+    checkTokens();
+  }, [isInstructorOrGrader]);
 
   const prompt = useMemo(
     () =>
@@ -195,11 +459,24 @@ export function AIHelpButton({
   const handleClose = useCallback(() => {
     setShowContext(false);
     setShowFeedback(false);
+    setShowSetupDialog(false);
   }, []);
+
+  const handleButtonClick = useCallback(() => {
+    if (hasTokens === false) {
+      setShowSetupDialog(true);
+    } else {
+      setShowContext(true);
+    }
+  }, [hasTokens]);
 
   // Only show for instructors/graders
   if (!isInstructorOrGrader) {
     return null;
+  }
+
+  if (showSetupDialog) {
+    return <MCPSetupDialog isOpen={showSetupDialog} onClose={handleClose} />;
   }
 
   if (showFeedback) {
@@ -246,7 +523,7 @@ export function AIHelpButton({
 
   return (
     <Tooltip content="Get AI assistance for helping this student" showArrow>
-      <Button size={size} variant={variant} colorPalette="purple" onClick={() => setShowContext(true)}>
+      <Button size={size} variant={variant} colorPalette="purple" onClick={handleButtonClick}>
         <Icon as={BsRobot} />
         AI Help
       </Button>
@@ -266,6 +543,27 @@ export function AIHelpIconButton({
 }: Omit<AIHelpButtonProps, "size" | "variant">) {
   const isInstructorOrGrader = useIsGraderOrInstructor();
   const [showFeedback, setShowFeedback] = useState(false);
+  const [showSetupDialog, setShowSetupDialog] = useState(false);
+  const [hasTokens, setHasTokens] = useState<boolean | null>(null);
+
+  // Check if user has any active MCP tokens
+  useEffect(() => {
+    if (!isInstructorOrGrader) return;
+
+    async function checkTokens() {
+      try {
+        const supabase = createClient();
+        const { tokens } = await mcpTokensList(supabase);
+        const now = new Date();
+        const hasActiveToken = tokens?.some((t) => !t.revoked_at && new Date(t.expires_at) > now);
+        setHasTokens(hasActiveToken ?? false);
+      } catch {
+        setHasTokens(true);
+      }
+    }
+
+    checkTokens();
+  }, [isInstructorOrGrader]);
 
   const prompt = useMemo(
     () =>
@@ -279,7 +577,13 @@ export function AIHelpIconButton({
     [contextType, resourceId, classId, assignmentId, submissionId]
   );
 
-  const handleCopy = useCallback(async () => {
+  const handleClick = useCallback(async () => {
+    // Show setup dialog if no tokens
+    if (hasTokens === false) {
+      setShowSetupDialog(true);
+      return;
+    }
+
     try {
       await navigator.clipboard.writeText(prompt);
       toaster.success({
@@ -294,27 +598,31 @@ export function AIHelpIconButton({
         description: "Could not copy to clipboard."
       });
     }
-  }, [prompt]);
+  }, [prompt, hasTokens]);
+
+  const handleClose = useCallback(() => {
+    setShowFeedback(false);
+    setShowSetupDialog(false);
+  }, []);
 
   // Only show for instructors/graders
   if (!isInstructorOrGrader) {
     return null;
   }
 
+  if (showSetupDialog) {
+    return <MCPSetupDialog isOpen={showSetupDialog} onClose={handleClose} />;
+  }
+
   if (showFeedback) {
     return (
-      <AIHelpFeedbackPanel
-        classId={classId}
-        contextType={contextType}
-        resourceId={resourceId}
-        onClose={() => setShowFeedback(false)}
-      />
+      <AIHelpFeedbackPanel classId={classId} contextType={contextType} resourceId={resourceId} onClose={handleClose} />
     );
   }
 
   return (
     <Tooltip content="Copy AI help context" showArrow>
-      <IconButton aria-label="Get AI help" size="xs" variant="ghost" colorPalette="purple" onClick={handleCopy}>
+      <IconButton aria-label="Get AI help" size="xs" variant="ghost" colorPalette="purple" onClick={handleClick}>
         <Icon as={BsRobot} boxSize={3} />
       </IconButton>
     </Tooltip>
