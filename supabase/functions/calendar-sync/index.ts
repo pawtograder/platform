@@ -1269,13 +1269,16 @@ async function runSync(): Promise<void> {
     }
   }
 
-  // Process announcements
-  try {
-    await processAnnouncements(supabase, scope);
-  } catch (error) {
-    console.error("[calendar-sync] Error processing announcements:", error);
-    Sentry.captureException(error, scope);
-  }
+  // Process announcements - currently disabled to reduce database churn
+  // Discord notifications are disabled, so announcement processing is skipped.
+  // When Discord notifications are re-enabled, uncomment the following:
+  // try {
+  //   await processAnnouncements(supabase, scope);
+  // } catch (error) {
+  //   console.error("[calendar-sync] Error processing announcements:", error);
+  //   Sentry.captureException(error, scope);
+  // }
+  console.log("[calendar-sync] Skipping announcement processing (Discord notifications disabled)");
 
   console.log("[calendar-sync] Sync complete");
 }
