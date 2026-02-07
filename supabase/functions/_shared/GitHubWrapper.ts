@@ -632,7 +632,7 @@ const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
 /**
  * Validates an OIDC token, or allows E2E test tokens that use the special prefix.
  * For E2E runs, we don't validate the signature but check that the secret matches.
- * 
+ *
  * SECURITY: E2E bypass is only enabled if both E2E_ENABLE=true and END_TO_END_SECRET
  * are explicitly set. This prevents accidental use in production.
  */
@@ -644,7 +644,7 @@ export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHub
     if (!E2E_ENABLE) {
       console.error(
         "E2E token detected but E2E_ENABLE is not set to 'true'. " +
-        "E2E bypass is disabled for security. Set E2E_ENABLE=true and END_TO_END_SECRET to enable."
+          "E2E bypass is disabled for security. Set E2E_ENABLE=true and END_TO_END_SECRET to enable."
       );
       throw new SecurityError(
         "E2E testing is not enabled. E2E bypass requires explicit opt-in via E2E_ENABLE=true and END_TO_END_SECRET environment variables."
@@ -653,13 +653,13 @@ export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHub
     if (!END_TO_END_SECRET || END_TO_END_SECRET.trim() === "") {
       console.error(
         "E2E token detected but END_TO_END_SECRET is missing or empty. " +
-        "E2E bypass requires a non-empty secret to prevent unauthorized access."
+          "E2E bypass requires a non-empty secret to prevent unauthorized access."
       );
       throw new SecurityError(
         "E2E testing secret is not configured. END_TO_END_SECRET must be set to a non-empty value to enable E2E bypass."
       );
     }
-    
+
     const header = decoded[0] as {
       alg: string;
       typ: string;

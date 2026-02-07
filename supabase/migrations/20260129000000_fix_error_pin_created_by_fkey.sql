@@ -31,6 +31,7 @@ DECLARE
     v_matching_test_id bigint;
     v_has_grader_level_rule boolean;
     v_first_test_id bigint;
+    v_mixed_tests boolean := false;
     v_private_profile_id uuid;
 BEGIN
     -- Insert or update error_pin
@@ -276,6 +277,7 @@ BEGIN
             v_matching_test_id := NULL;
             v_has_grader_level_rule := false;
             v_first_test_id := NULL;
+            v_mixed_tests := false;
             
             FOR v_rule_record IN
                 SELECT * FROM error_pin_rules
@@ -311,12 +313,15 @@ BEGIN
                             v_test_id
                         ) THEN
                             v_rule_matches := true;
-                            -- Track the test_id that matched
-                            IF v_first_test_id IS NULL THEN
-                                v_first_test_id := v_test_id;
-                            ELSIF v_first_test_id != v_test_id THEN
-                                -- Different test matched, can't use specific test_id
-                                v_first_test_id := NULL;
+                            -- Track the test_id that matched (only while we have a single consistent test)
+                            IF NOT v_mixed_tests THEN
+                                IF v_first_test_id IS NULL THEN
+                                    v_first_test_id := v_test_id;
+                                ELSIF v_first_test_id != v_test_id THEN
+                                    -- Different test matched, can't use specific test_id
+                                    v_mixed_tests := true;
+                                    v_first_test_id := NULL;
+                                END IF;
                             END IF;
                             EXIT;
                         END IF;
@@ -330,8 +335,8 @@ BEGIN
             
             IF v_all_rules_match THEN
                 -- If all rules are test-level and they all match the same test, use that test_id
-                -- Otherwise, use NULL (submission-level match)
-                IF NOT v_has_grader_level_rule AND v_first_test_id IS NOT NULL THEN
+                -- Otherwise, use NULL (submission-level match). v_first_test_id is valid only when NOT v_mixed_tests.
+                IF NOT v_has_grader_level_rule AND NOT v_mixed_tests AND v_first_test_id IS NOT NULL THEN
                     v_matching_test_id := v_first_test_id;
                 END IF;
                 
