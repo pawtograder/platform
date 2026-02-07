@@ -59,7 +59,11 @@ const RESOLUTION_OPTIONS: ResolutionOption[] = [
 type HelpRequestResolutionModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (resolutionStatus: HelpRequestResolutionStatus, feedback?: HelpRequestFeedback, notes?: string) => Promise<void>;
+  onSuccess: (
+    resolutionStatus: HelpRequestResolutionStatus,
+    feedback?: HelpRequestFeedback,
+    notes?: string
+  ) => Promise<void>;
   helpRequestId: number;
   classId: number;
   studentProfileId: string;
