@@ -382,31 +382,31 @@ export default function HelpRequestResolutionModal({
                   </Field.Root>
                 )}
               </Stack>
+
+              <Dialog.Footer>
+                <HStack justify="space-between" w="100%">
+                  <Button type="button" variant="ghost" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                  <HStack gap={2}>
+                    {showFeedback && (
+                      <Button type="button" variant="outline" onClick={handleSkip} disabled={!selectedResolution}>
+                        Skip Feedback
+                      </Button>
+                    )}
+                    <Button
+                      type="submit"
+                      colorPalette="green"
+                      loading={isSubmitting}
+                      disabled={!selectedResolution || isSubmitting}
+                    >
+                      {showFeedback && selectedRating !== null ? "Submit & Resolve" : "Resolve Request"}
+                    </Button>
+                  </HStack>
+                </HStack>
+              </Dialog.Footer>
             </form>
           </Dialog.Body>
-
-          <Dialog.Footer>
-            <HStack justify="space-between" w="100%">
-              <Button variant="ghost" onClick={handleClose}>
-                Cancel
-              </Button>
-              <HStack gap={2}>
-                {showFeedback && (
-                  <Button variant="outline" onClick={handleSkip} disabled={!selectedResolution}>
-                    Skip Feedback
-                  </Button>
-                )}
-                <Button
-                  colorPalette="green"
-                  onClick={handleSubmit(onSubmit)}
-                  loading={isSubmitting}
-                  disabled={!selectedResolution}
-                >
-                  {showFeedback && selectedRating !== null ? "Submit & Resolve" : "Resolve Request"}
-                </Button>
-              </HStack>
-            </HStack>
-          </Dialog.Footer>
         </Dialog.Content>
       </Dialog.Positioner>
     </Dialog.Root>
