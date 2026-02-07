@@ -33,65 +33,31 @@ DECLARE
     v_first_test_id bigint;
     v_private_profile_id uuid;
 BEGIN
-    -- Get assignment_id (can be NULL for class-level pins)
-    v_assignment_id := (p_error_pin->>'assignment_id')::bigint;
-    
-    -- Look up class_id: either from assignment (if provided) or directly from input
-    IF v_assignment_id IS NOT NULL THEN
-        SELECT class_id INTO v_class_id
-        FROM assignments
-        WHERE id = v_assignment_id;
-        
-        IF v_class_id IS NULL THEN
-            RAISE EXCEPTION 'Assignment not found';
-        END IF;
-    ELSE
-        -- For class-level pins, class_id must be provided directly
-        v_class_id := (p_error_pin->>'class_id')::bigint;
-        
-        IF v_class_id IS NULL THEN
-            RAISE EXCEPTION 'class_id is required for class-level pins';
-        END IF;
-        
-        -- Verify the class exists
-        IF NOT EXISTS (SELECT 1 FROM classes WHERE id = v_class_id) THEN
-            RAISE EXCEPTION 'Class not found';
-        END IF;
-    END IF;
-    
-    IF NOT authorizeforclassgrader(v_class_id) THEN  
-        RAISE EXCEPTION 'Only instructors and graders can create or modify error pins';  
-    END IF;
-    
-    -- Look up the user's private_profile_id for this class
-    -- This is needed because created_by references profiles.id, not auth.users.id
-    SELECT up.private_profile_id INTO v_private_profile_id
-    FROM user_privileges up
-    WHERE up.user_id = auth.uid()
-      AND up.class_id = v_class_id;
-    
-    IF v_private_profile_id IS NULL THEN
-        RAISE EXCEPTION 'User profile not found for this class';
-    END IF;
-    
-    -- Validate that discussion_thread_id belongs to the target class (prevent cross-class linkage)
-    IF (p_error_pin->>'discussion_thread_id')::bigint IS NOT NULL THEN
-        IF NOT EXISTS (
-            SELECT 1 FROM discussion_threads dt
-            WHERE dt.id = (p_error_pin->>'discussion_thread_id')::bigint
-              AND dt.class_id = v_class_id
-        ) THEN
-            RAISE EXCEPTION 'Discussion thread not found or does not belong to this class';
-        END IF;
-    END IF;
-  
     -- Insert or update error_pin
     IF (p_error_pin->>'id')::bigint IS NOT NULL THEN
         -- Update existing pin - first verify the pin exists and belongs to a class we're authorized for
         DECLARE
             v_existing_class_id bigint;
+            v_existing_discussion_thread_id bigint;
+            v_existing_assignment_id bigint;
+            v_existing_class_id_already_set bigint;
+            v_existing_rule_logic text;
+            v_existing_enabled boolean;
         BEGIN
-            SELECT class_id INTO v_existing_class_id
+            SELECT 
+                class_id,
+                discussion_thread_id,
+                assignment_id,
+                class_id,
+                rule_logic,
+                enabled
+            INTO 
+                v_existing_class_id,
+                v_existing_discussion_thread_id,
+                v_existing_assignment_id,
+                v_existing_class_id_already_set,
+                v_existing_rule_logic,
+                v_existing_enabled
             FROM error_pins
             WHERE id = (p_error_pin->>'id')::bigint;
             
@@ -103,19 +69,126 @@ BEGIN
             IF NOT authorizeforclassgrader(v_existing_class_id) THEN
                 RAISE EXCEPTION 'Permission denied: not authorized for this error pin';
             END IF;
+            
+            -- Derive v_class_id/v_assignment_id from JSON if provided, otherwise fall back to existing values
+            -- If assignment_id is provided in JSON, derive class_id from it
+            IF p_error_pin ? 'assignment_id' AND (p_error_pin->>'assignment_id')::bigint IS NOT NULL THEN
+                v_assignment_id := (p_error_pin->>'assignment_id')::bigint;
+                SELECT class_id INTO v_class_id
+                FROM assignments
+                WHERE id = v_assignment_id;
+                
+                IF v_class_id IS NULL THEN
+                    RAISE EXCEPTION 'Assignment not found';
+                END IF;
+            ELSIF p_error_pin ? 'class_id' AND (p_error_pin->>'class_id')::bigint IS NOT NULL THEN
+                -- For class-level pins, class_id must be provided directly
+                v_class_id := (p_error_pin->>'class_id')::bigint;
+                v_assignment_id := NULL;
+                
+                -- Verify the class exists
+                IF NOT EXISTS (SELECT 1 FROM classes WHERE id = v_class_id) THEN
+                    RAISE EXCEPTION 'Class not found';
+                END IF;
+            ELSE
+                -- Fall back to existing values when JSON keys are missing
+                v_assignment_id := v_existing_assignment_id;
+                v_class_id := v_existing_class_id_already_set;
+            END IF;
+            
+            -- Verify authorization for the derived class_id (may differ from existing if assignment changed)
+            IF NOT authorizeforclassgrader(v_class_id) THEN
+                RAISE EXCEPTION 'Only instructors and graders can create or modify error pins';
+            END IF;
+            
+            -- Validate that discussion_thread_id belongs to the target class (prevent cross-class linkage)
+            IF (p_error_pin->>'discussion_thread_id')::bigint IS NOT NULL THEN
+                IF NOT EXISTS (
+                    SELECT 1 FROM discussion_threads dt
+                    WHERE dt.id = (p_error_pin->>'discussion_thread_id')::bigint
+                      AND dt.class_id = v_class_id
+                ) THEN
+                    RAISE EXCEPTION 'Discussion thread not found or does not belong to this class';
+                END IF;
+            END IF;
+            
+            -- Update existing pin (only allow changing discussion_thread_id, assignment_id, rule_logic, enabled)
+            -- class_id is derived from assignment_id (or provided for class-level), created_by is not updated
+            -- Use COALESCE to preserve existing values when JSON fields are omitted
+            UPDATE error_pins
+            SET discussion_thread_id = CASE
+                    WHEN p_error_pin ? 'discussion_thread_id' THEN (p_error_pin->>'discussion_thread_id')::bigint
+                    ELSE v_existing_discussion_thread_id
+                END,
+                assignment_id = v_assignment_id,
+                class_id = v_class_id,
+                rule_logic = COALESCE(
+                    CASE WHEN p_error_pin ? 'rule_logic' THEN p_error_pin->>'rule_logic' ELSE NULL END,
+                    v_existing_rule_logic,
+                    'and'
+                ),
+                enabled = COALESCE(
+                    CASE WHEN p_error_pin ? 'enabled' THEN (p_error_pin->>'enabled')::boolean ELSE NULL END,
+                    v_existing_enabled,
+                    true
+                )
+            WHERE id = (p_error_pin->>'id')::bigint
+            RETURNING id, assignment_id INTO v_pin_id, v_assignment_id;
         END;
-        
-        -- Update existing pin (only allow changing discussion_thread_id, assignment_id, rule_logic, enabled)
-        -- class_id is derived from assignment_id (or provided for class-level), created_by is not updated
-        UPDATE error_pins
-        SET discussion_thread_id = (p_error_pin->>'discussion_thread_id')::bigint,
-            assignment_id = v_assignment_id,
-            class_id = v_class_id,
-            rule_logic = COALESCE(p_error_pin->>'rule_logic', 'and'),
-            enabled = COALESCE((p_error_pin->>'enabled')::boolean, true)
-        WHERE id = (p_error_pin->>'id')::bigint
-        RETURNING id, assignment_id INTO v_pin_id, v_assignment_id;
     ELSE
+        -- Insert new pin - derive assignment_id and class_id from JSON
+        -- Get assignment_id (can be NULL for class-level pins)
+        v_assignment_id := (p_error_pin->>'assignment_id')::bigint;
+        
+        -- Look up class_id: either from assignment (if provided) or directly from input
+        IF v_assignment_id IS NOT NULL THEN
+            SELECT class_id INTO v_class_id
+            FROM assignments
+            WHERE id = v_assignment_id;
+            
+            IF v_class_id IS NULL THEN
+                RAISE EXCEPTION 'Assignment not found';
+            END IF;
+        ELSE
+            -- For class-level pins, class_id must be provided directly
+            v_class_id := (p_error_pin->>'class_id')::bigint;
+            
+            IF v_class_id IS NULL THEN
+                RAISE EXCEPTION 'class_id is required for class-level pins';
+            END IF;
+            
+            -- Verify the class exists
+            IF NOT EXISTS (SELECT 1 FROM classes WHERE id = v_class_id) THEN
+                RAISE EXCEPTION 'Class not found';
+            END IF;
+        END IF;
+        
+        IF NOT authorizeforclassgrader(v_class_id) THEN  
+            RAISE EXCEPTION 'Only instructors and graders can create or modify error pins';  
+        END IF;
+        
+        -- Look up the user's private_profile_id for this class
+        -- This is needed because created_by references profiles.id, not auth.users.id
+        SELECT up.private_profile_id INTO v_private_profile_id
+        FROM user_privileges up
+        WHERE up.user_id = auth.uid()
+          AND up.class_id = v_class_id;
+        
+        IF v_private_profile_id IS NULL THEN
+            RAISE EXCEPTION 'User profile not found for this class';
+        END IF;
+        
+        -- Validate that discussion_thread_id belongs to the target class (prevent cross-class linkage)
+        IF (p_error_pin->>'discussion_thread_id')::bigint IS NOT NULL THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM discussion_threads dt
+                WHERE dt.id = (p_error_pin->>'discussion_thread_id')::bigint
+                  AND dt.class_id = v_class_id
+            ) THEN
+                RAISE EXCEPTION 'Discussion thread not found or does not belong to this class';
+            END IF;
+        END IF;
+        
         -- Insert new pin using private_profile_id (NOT auth.uid())
         INSERT INTO error_pins (
             discussion_thread_id,
@@ -134,6 +207,15 @@ BEGIN
             COALESCE((p_error_pin->>'enabled')::boolean, true)
         )
         RETURNING id, assignment_id INTO v_pin_id, v_assignment_id;
+    END IF;
+
+    -- Get pin record to check rule_logic before processing rules
+    SELECT * INTO v_pin_record FROM error_pins WHERE id = v_pin_id;
+
+    -- Guard: Check if no rules provided with 'and' logic (invalid combination)
+    -- An error pin with 'and' logic and zero rules would never match anything
+    IF jsonb_array_length(p_rules) = 0 AND v_pin_record.rule_logic = 'and' THEN
+        RAISE EXCEPTION 'Error pin with rule_logic=''and'' requires at least one rule. Cannot create or update an error pin with zero rules when using AND logic.';
     END IF;
 
     -- Delete old rules
@@ -165,9 +247,6 @@ BEGIN
     -- Auto-populate: compute matches for all active submissions
     -- Clear existing matches first
     DELETE FROM error_pin_submission_matches WHERE error_pin_id = v_pin_id;
-
-    -- Get pin record with rules
-    SELECT * INTO v_pin_record FROM error_pins WHERE id = v_pin_id;
 
     -- Process each active submission
     -- For assignment-level pins: only submissions for that assignment
