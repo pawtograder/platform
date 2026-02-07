@@ -103,17 +103,42 @@ function buildThreadEmbed(
   };
 }
 
+/** Build a compact stats snapshot for change detection */
+function buildStatsSnapshot(thread: DiscussionThread): Record<string, unknown> {
+  return {
+    likes_count: thread.likes_count ?? 0,
+    children_count: thread.children_count ?? 0,
+    is_question: thread.is_question,
+    has_answer: thread.answer !== null
+  };
+}
+
+/** Returns true if the current stats differ from the last-synced snapshot */
+function statsChanged(
+  current: Record<string, unknown>,
+  lastSynced: Record<string, unknown> | null | undefined
+): boolean {
+  if (!lastSynced) return true; // never synced before
+  return (
+    current.likes_count !== lastSynced.likes_count ||
+    current.children_count !== lastSynced.children_count ||
+    current.is_question !== lastSynced.is_question ||
+    current.has_answer !== lastSynced.has_answer
+  );
+}
+
 async function runStatsUpdate(
   supabase: SupabaseClient<Database>,
   scope: Sentry.Scope
 ): Promise<{
   processed: number;
   updated: number;
+  skipped: number;
   errors: number;
 }> {
   console.log("[discord-discussion-stats-update] Starting stats update");
 
-  const stats = { processed: 0, updated: 0, errors: 0 };
+  const stats = { processed: 0, updated: 0, skipped: 0, errors: 0 };
 
   // Process messages in batches using offset-based pagination
   const batchSize = 500;
@@ -121,10 +146,10 @@ async function runStatsUpdate(
   let hasMore = true;
 
   while (hasMore) {
-    // Fetch batch with offset-based pagination
+    // Fetch batch with offset-based pagination (include last_synced_stats for change detection)
     const { data: discordMessages, error: messagesError } = await supabase
       .from("discord_messages")
-      .select("id, discord_message_id, discord_channel_id, resource_id, class_id")
+      .select("id, discord_message_id, discord_channel_id, resource_id, class_id, last_synced_stats")
       .eq("resource_type", "discussion_thread")
       .order("id", { ascending: true })
       .range(offset, offset + batchSize - 1);
@@ -147,8 +172,6 @@ async function runStatsUpdate(
     const threadIds = discordMessages.map((m) => m.resource_id);
 
     // Fetch all threads in one query
-    // Note: No need to filter for root threads since only root threads get posted to Discord
-    // (the trigger only fires for threads where root = id)
     const { data: threads, error: threadsError } = await supabase
       .from("discussion_threads")
       .select(
@@ -164,7 +187,6 @@ async function runStatsUpdate(
 
     if (!threads || threads.length === 0) {
       console.log("[discord-discussion-stats-update] No matching threads found in this batch");
-      // Move to next batch
       offset += batchSize;
       hasMore = discordMessages.length === batchSize;
       continue;
@@ -235,6 +257,15 @@ async function runStatsUpdate(
         continue;
       }
 
+      // Check if stats actually changed since last sync
+      const currentStats = buildStatsSnapshot(thread);
+      const lastSynced = msg.last_synced_stats as Record<string, unknown> | null;
+
+      if (!statsChanged(currentStats, lastSynced)) {
+        stats.skipped++;
+        continue;
+      }
+
       const authorName = authorMap.get(thread.author) || "Anonymous";
 
       try {
@@ -262,6 +293,20 @@ async function runStatsUpdate(
           console.error(`[discord-discussion-stats-update] Error queuing update for thread ${thread.id}:`, queueError);
           stats.errors++;
         } else {
+          // Persist the stats snapshot so we skip this thread next time if nothing changed
+          const { error: updateError } = await supabase
+            .from("discord_messages")
+            .update({ last_synced_stats: currentStats as unknown as Json })
+            .eq("id", msg.id);
+
+          if (updateError) {
+            console.warn(
+              `[discord-discussion-stats-update] Failed to update last_synced_stats for message ${msg.id}:`,
+              updateError
+            );
+            // Non-fatal: the update was enqueued, we'll just re-send next hour
+          }
+
           stats.updated++;
         }
       } catch (err) {
@@ -276,7 +321,7 @@ async function runStatsUpdate(
   }
 
   console.log(
-    `[discord-discussion-stats-update] Completed: ${stats.processed} processed, ${stats.updated} updated, ${stats.errors} errors`
+    `[discord-discussion-stats-update] Completed: ${stats.processed} processed, ${stats.updated} updated, ${stats.skipped} skipped (unchanged), ${stats.errors} errors`
   );
   return stats;
 }

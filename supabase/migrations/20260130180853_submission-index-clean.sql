@@ -1,0 +1,5 @@
+DROP INDEX idx_submissions_assignment_id;
+DROP INDEX submissions_repository_idx;
+DROP INDEX idx_submissions_assignment_id_is_active;
+DROP INDEX idx_submissions_assignment_group_assignment_active;
+DROP INDEX idx_submissions_class_profile_assignment_active_covering;
