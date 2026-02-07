@@ -59,7 +59,7 @@ const RESOLUTION_OPTIONS: ResolutionOption[] = [
 type HelpRequestResolutionModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (resolutionStatus: HelpRequestResolutionStatus, feedback?: HelpRequestFeedback, notes?: string) => void;
+  onSuccess: (resolutionStatus: HelpRequestResolutionStatus, feedback?: HelpRequestFeedback, notes?: string) => Promise<void>;
   helpRequestId: number;
   classId: number;
   studentProfileId: string;
@@ -141,7 +141,7 @@ export default function HelpRequestResolutionModal({
       const notesToSend = selectedResolution === "other" ? data.notes?.trim() || undefined : undefined;
 
       // Call onSuccess before closing modal
-      onSuccess(selectedResolution, feedbackData, notesToSend);
+      await onSuccess(selectedResolution, feedbackData, notesToSend);
 
       // Show success message
       toaster.success({
@@ -160,7 +160,7 @@ export default function HelpRequestResolutionModal({
     }
   };
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
     if (!selectedResolution) {
       toaster.error({
         title: "Resolution Required",
@@ -170,7 +170,7 @@ export default function HelpRequestResolutionModal({
     }
     try {
       // Call onSuccess before closing modal
-      onSuccess(selectedResolution, undefined, undefined);
+      await onSuccess(selectedResolution, undefined, undefined);
       // Only close modal after onSuccess completes successfully
       handleClose();
     } catch (error) {
