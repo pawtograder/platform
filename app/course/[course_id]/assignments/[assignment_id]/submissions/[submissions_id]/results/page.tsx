@@ -973,9 +973,7 @@ export default function GraderResults() {
   const hasBuildError = query.data.data.grader_results.lint_output === "Gradle build failed";
   const data = query.data.data;
   // Get build output for AI analysis
-  const buildOutput = data.grader_results?.grader_result_output?.[0]?.output ||
-    data.grader_results?.lint_output ||
-    "";
+  const buildOutput = data.grader_results?.grader_result_output?.[0]?.output || data.grader_results?.lint_output || "";
   return (
     <Box>
       {hasBuildError && (

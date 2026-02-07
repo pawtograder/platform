@@ -33,17 +33,7 @@ interface AIHelpSubmissionErrorButtonProps {
  * Generates an AI prompt for analyzing a test failure or build error
  */
 function generateErrorPrompt(props: AIHelpSubmissionErrorButtonProps): string {
-  const {
-    errorType,
-    testName,
-    testPart,
-    score,
-    maxScore,
-    errorOutput,
-    assignmentId,
-    classId,
-    submissionId
-  } = props;
+  const { errorType, testName, testPart, score, maxScore, errorOutput, assignmentId, classId, submissionId } = props;
 
   const truncatedOutput = errorOutput.slice(0, 4000) + (errorOutput.length > 4000 ? "\n... (truncated)" : "");
 
@@ -179,13 +169,7 @@ export function AIHelpSubmissionErrorButton(props: AIHelpSubmissionErrorButtonPr
 
   return (
     <Tooltip content={tooltipContent} showArrow>
-      <IconButton
-        aria-label={tooltipContent}
-        size="xs"
-        variant="ghost"
-        colorPalette="purple"
-        onClick={handleCopy}
-      >
+      <IconButton aria-label={tooltipContent} size="xs" variant="ghost" colorPalette="purple" onClick={handleCopy}>
         <Icon as={BsRobot} />
       </IconButton>
     </Tooltip>

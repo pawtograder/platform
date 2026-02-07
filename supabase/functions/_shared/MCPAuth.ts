@@ -74,7 +74,9 @@ async function getSupabaseJwtKey(): Promise<{ key: CryptoKey; kid: string }> {
   const secret = Deno.env.get(SUPABASE_JWT_SECRET_ENV);
 
   if (!secret) {
-    throw new MCPAuthError(`${SUPABASE_JWT_SECRET_ENV} must be set. Generate with: supabase gen signing-key --algorithm ES256`);
+    throw new MCPAuthError(
+      `${SUPABASE_JWT_SECRET_ENV} must be set. Generate with: supabase gen signing-key --algorithm ES256`
+    );
   }
 
   if (!secret.startsWith("{")) {
@@ -83,19 +85,19 @@ async function getSupabaseJwtKey(): Promise<{ key: CryptoKey; kid: string }> {
 
   const jwkFull = JSON.parse(secret);
   const kid = jwkFull.kid;
-  
+
   if (!kid) {
     throw new MCPAuthError("JWK must have a 'kid' field");
   }
-  
+
   if (jwkFull.kty !== "EC" || jwkFull.crv !== "P-256") {
     throw new MCPAuthError("JWK must be an EC key with P-256 curve (ES256)");
   }
-  
+
   if (!jwkFull.d) {
     throw new MCPAuthError("JWK must include private key component 'd'");
   }
-  
+
   // Create a clean JWK with only the fields needed for import
   // Deno's WebCrypto can be strict about extra fields like 'key_ops'
   const jwk: Record<string, unknown> = {
@@ -105,15 +107,9 @@ async function getSupabaseJwtKey(): Promise<{ key: CryptoKey; kid: string }> {
     y: jwkFull.y,
     d: jwkFull.d
   };
-  
-  const key = await crypto.subtle.importKey(
-    "jwk",
-    jwk,
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign"]
-  );
-  
+
+  const key = await crypto.subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+
   return { key, kid };
 }
 

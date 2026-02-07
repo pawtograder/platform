@@ -39,7 +39,8 @@ if (Deno.env.get("SENTRY_DSN")) {
 // CORS headers
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, accept, mcp-session-id, last-event-id",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, accept, mcp-session-id, last-event-id",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS"
 };
 
@@ -668,9 +669,7 @@ async function getDiscussionThread(
   const topic = thread.discussion_topics as unknown as { assignment_id: number | null };
 
   // Translate private profile to public profile for author
-  const authorPublicProfiles = thread.author
-    ? await getPublicProfiles(supabase, [thread.author], classId)
-    : new Map();
+  const authorPublicProfiles = thread.author ? await getPublicProfiles(supabase, [thread.author], classId) : new Map();
   const authorPublicProfile = thread.author ? authorPublicProfiles.get(thread.author) : null;
 
   // Parallel fetch: assignment, latest submission, replies
@@ -1129,7 +1128,12 @@ function createSSEStream(): { stream: ReadableStream<Uint8Array>; sse: SSEStream
   };
 }
 
-function sendSSEEvent(sse: SSEStream, event: string, data: unknown, options: { includeId?: boolean; raw?: boolean } = {}): void {
+function sendSSEEvent(
+  sse: SSEStream,
+  event: string,
+  data: unknown,
+  options: { includeId?: boolean; raw?: boolean } = {}
+): void {
   const { includeId = true, raw = false } = options;
   const lines: string[] = [];
   if (includeId) {
@@ -1164,11 +1168,11 @@ function closeSSEStream(sse: SSEStream): void {
 function getEndpointUrl(req: Request): string {
   // Use EDGE_FUNCTIONS_URL as the authoritative base URL
   const edgeFunctionsUrl = Deno.env.get("EDGE_FUNCTIONS_URL");
-  
+
   if (edgeFunctionsUrl) {
     return `${edgeFunctionsUrl}/functions/v1/mcp-server`;
   }
-  
+
   // Fallback: construct from request
   const url = new URL(req.url);
   const proto = req.headers.get("x-forwarded-proto") || "https";
@@ -1233,7 +1237,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ...corsHeaders,
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
-          "Connection": "keep-alive"
+          Connection: "keep-alive"
         }
       });
     } catch (error) {
