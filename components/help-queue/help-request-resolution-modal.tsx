@@ -187,27 +187,47 @@ export default function HelpRequestResolutionModal({
                     How was your issue resolved?
                   </Text>
 
-                  <Stack spaceY={2}>
+                  <Stack spaceY={2} role="radiogroup" aria-label="How was your issue resolved?">
                     {RESOLUTION_OPTIONS.map((option) => {
                       const isSelected = selectedResolution === option.value;
                       return (
                         <Box
                           key={option.value}
+                          role="radio"
+                          tabIndex={0}
+                          aria-checked={isSelected}
+                          aria-label={`${option.label}${isSelected ? ", selected" : ""}`}
                           p={3}
                           borderWidth="2px"
                           borderColor={isSelected ? `${option.colorPalette}.500` : "border.emphasized"}
                           borderRadius="lg"
                           cursor="pointer"
                           onClick={() => setSelectedResolution(option.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedResolution(option.value);
+                            }
+                          }}
                           bg={isSelected ? `${option.colorPalette}.50` : "bg.surface"}
                           _hover={{
                             borderColor: isSelected ? `${option.colorPalette}.500` : `${option.colorPalette}.300`,
                             bg: isSelected ? `${option.colorPalette}.50` : "bg.subtle"
                           }}
+                          _focus={{
+                            outline: "2px solid",
+                            outlineColor: `${option.colorPalette}.500`,
+                            outlineOffset: "2px"
+                          }}
                           _dark={{
                             bg: isSelected ? `${option.colorPalette}.900` : "bg.surface",
                             _hover: {
                               bg: isSelected ? `${option.colorPalette}.900` : "bg.subtle"
+                            },
+                            _focus: {
+                              outline: "2px solid",
+                              outlineColor: `${option.colorPalette}.400`,
+                              outlineOffset: "2px"
                             }
                           }}
                           transition="all 0.2s"
@@ -258,7 +278,7 @@ export default function HelpRequestResolutionModal({
                   </Stack>
 
                   {selectedResolution === null && (
-                    <Text colorPalette="orange" fontSize="sm" mt={2}>
+                    <Text color="orange.500" fontSize="sm" mt={2}>
                       Please select an option above
                     </Text>
                   )}
