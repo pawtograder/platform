@@ -137,18 +137,26 @@ export default function HelpRequestResolutionModal({
         feedbackData = response.data;
       }
 
-      handleClose();
-      onSuccess(selectedResolution, feedbackData, data.notes?.trim() || undefined);
+      // Only include notes if "other" resolution is selected
+      const notesToSend = selectedResolution === "other" ? data.notes?.trim() || undefined : undefined;
 
+      // Call onSuccess before closing modal
+      onSuccess(selectedResolution, feedbackData, notesToSend);
+
+      // Show success message
       toaster.success({
         title: "Request Resolved",
         description: "Thank you for letting us know how your request was resolved."
       });
+
+      // Only close modal after all operations succeed
+      handleClose();
     } catch (error) {
       toaster.error({
         title: "Error",
         description: `Failed to resolve request: ${error instanceof Error ? error.message : String(error)}`
       });
+      // Don't call handleClose() here so user can retry with selections intact
     }
   };
 
@@ -160,8 +168,18 @@ export default function HelpRequestResolutionModal({
       });
       return;
     }
-    handleClose();
-    onSuccess(selectedResolution, undefined, undefined);
+    try {
+      // Call onSuccess before closing modal
+      onSuccess(selectedResolution, undefined, undefined);
+      // Only close modal after onSuccess completes successfully
+      handleClose();
+    } catch (error) {
+      toaster.error({
+        title: "Error",
+        description: `Failed to resolve request: ${error instanceof Error ? error.message : String(error)}`
+      });
+      // Don't call handleClose() here so user can retry with selections intact
+    }
   };
 
   return (
