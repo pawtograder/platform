@@ -482,6 +482,16 @@ const ReplyContext = ({
   );
 };
 
+/**
+ * Helper to check if message is a system message
+ */
+const isSystemMessage = (message: UnifiedMessage): boolean => {
+  if ("is_system_message" in message && message.is_system_message === true) {
+    return true;
+  }
+  return false;
+};
+
 export const ChatMessageItem = ({
   message,
   isOwnMessage,
@@ -516,6 +526,34 @@ export const ChatMessageItem = ({
       onReply(messageId);
     }
   };
+
+  // System messages have a special centered layout
+  if (isSystemMessage(message)) {
+    return (
+      <Flex mt={3} mb={3} justify="center" w="100%">
+        <Box
+          py={2}
+          px={4}
+          borderRadius="lg"
+          fontSize="sm"
+          bg="bg.muted"
+          borderWidth="1px"
+          borderColor="border.emphasized"
+          textAlign="center"
+          maxW="90%"
+        >
+          <Markdown>{getMessageContent(message)}</Markdown>
+          <Text fontSize="xs" color="fg.muted" mt={1}>
+            {new Date(getMessageTimestamp(message)).toLocaleTimeString("en-US", {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true
+            })}
+          </Text>
+        </Box>
+      </Flex>
+    );
+  }
 
   return (
     <Flex mt={2} justify={isOwnMessage ? "flex-end" : "flex-start"}>
