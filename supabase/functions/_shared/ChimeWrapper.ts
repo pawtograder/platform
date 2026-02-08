@@ -2,9 +2,9 @@ import { ChimeSDKMeetings } from "npm:@aws-sdk/client-chime-sdk-meetings";
 import { Database } from "./SupabaseTypes.d.ts";
 // import { jwtDecode } from "npm:jwt-decode"; // Currently unused
 import { UserVisibleError } from "./HandlerUtils.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
 function uuid() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {

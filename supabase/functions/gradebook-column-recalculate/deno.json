@@ -1,7 +1,6 @@
 {
   "imports": {
     "@supabase/postgrest-js": "npm:@supabase/postgrest-js@^1.19.4",
-    "@supabase/supabase-js": "npm:@supabase/supabase-js@^2.50.0",
     "@types/mathjs": "npm:@types/mathjs@^9.4.2",
     "mathjs": "npm:mathjs@^14.5.2",
     "minimatch": "npm:minimatch@^10.0.3"

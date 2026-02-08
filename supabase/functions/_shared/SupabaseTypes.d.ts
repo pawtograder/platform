@@ -2128,6 +2128,7 @@ export type Database = {
           discord_channel_id: string;
           discord_message_id: string;
           id: number;
+          last_synced_stats: Json | null;
           resource_id: number;
           resource_type: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -2137,6 +2138,7 @@ export type Database = {
           discord_channel_id: string;
           discord_message_id: string;
           id?: number;
+          last_synced_stats?: Json | null;
           resource_id: number;
           resource_type: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -2146,6 +2148,7 @@ export type Database = {
           discord_channel_id?: string;
           discord_message_id?: string;
           id?: number;
+          last_synced_stats?: Json | null;
           resource_id?: number;
           resource_type?: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -11168,6 +11171,8 @@ export type Database = {
           async_queue_size: number;
           dlq_queue_size: number;
           gradebook_row_recalculate_queue_size: number;
+          discord_queue_size: number;
+          discord_dlq_queue_size: number;
         }[];
       };
       get_circuit_breaker_statuses: {
