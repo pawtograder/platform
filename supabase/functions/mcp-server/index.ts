@@ -908,9 +908,10 @@ async function getSubmissionsForStudent(
   // Limit to reasonable number of submissions
   const limit = Math.min(50, MAX_ROWS);
 
+  // Fetch lightweight summary columns from submissions table
   const { data: submissions, error } = await supabase
     .from("submissions")
-    .select("id")
+    .select("id, assignment_id, created_at, sha, repository, ordinal, is_active")
     .eq("profile_id", privateProfileId)
     .eq("assignment_id", assignmentId)
     .eq("class_id", classId)
@@ -919,11 +920,55 @@ async function getSubmissionsForStudent(
 
   if (error || !submissions || submissions.length === 0) return [];
 
-  // Fetch all submissions in parallel
-  const results = await Promise.all(submissions.map((sub) => getSubmission(supabase, sub.id, classId, true, true)));
+  // Batch fetch latest grader_results for all submissions to get scores
+  const submissionIds = submissions.map((s) => s.id);
+  const { data: graderResults } = await supabase
+    .from("grader_results")
+    .select("submission_id, score, max_score")
+    .in("submission_id", submissionIds)
+    .eq("class_id", classId)
+    .order("created_at", { ascending: false });
 
-  // Filter out null results
-  return results.filter((r): r is NonNullable<typeof r> => r !== null);
+  // Build a map of submission_id -> latest grader result
+  const scoreMap = new Map<number, { score: number; max_score: number }>();
+  if (graderResults) {
+    for (const gr of graderResults) {
+      if (gr.submission_id !== null && gr.score !== null && gr.max_score !== null && !scoreMap.has(gr.submission_id)) {
+        scoreMap.set(gr.submission_id, { score: gr.score, max_score: gr.max_score });
+      }
+    }
+  }
+
+  // Return lightweight summary (callers can use getSubmission for full details)
+  return submissions.map((sub) => {
+    const score = scoreMap.get(sub.id);
+
+    return {
+      id: sub.id,
+      assignment_id: sub.assignment_id,
+      created_at: sub.created_at,
+      sha: sub.sha,
+      repository: sub.repository,
+      ordinal: sub.ordinal,
+      is_active: sub.is_active,
+      student_name: null, // Not included in summary
+      grader_result: score
+        ? {
+            id: 0, // Not included in summary
+            score: score.score,
+            max_score: score.max_score,
+            lint_passed: false, // Not included in summary
+            lint_output: "", // Not included in summary
+            lint_output_format: "", // Not included in summary
+            errors: null, // Not included in summary
+            execution_time: null, // Not included in summary
+            ret_code: null, // Not included in summary
+            tests: [] // Not included in summary
+          }
+        : null,
+      files: undefined // Not included in summary
+    };
+  });
 }
 
 // =============================================================================

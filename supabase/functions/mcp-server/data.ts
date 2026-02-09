@@ -35,13 +35,15 @@ async function getSafeProfile(supabase: SupabaseClient, profileId: string | null
 
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, name, avatar_url, class_id")
+    .select("id, name, avatar_url, class_id, is_private_profile")
     .eq("id", profileId)
     .single();
 
   if (error || !data) return null;
 
-  // Note: We deliberately do not include is_private_profile in the select
+  // Enforce privacy: return null if profile is private
+  if (data.is_private_profile) return null;
+
   return {
     id: data.id,
     name: data.name,
@@ -219,24 +221,53 @@ export async function getHelpRequest(
 
   const messages: HelpRequestMessage[] = [];
   if (messagesData) {
-    for (const msg of messagesData) {
-      const authorName = await getProfileName(supabase, msg.profile_id);
+    // Collect all unique profile_ids for batched queries
+    const uniqueProfileIds = [...new Set(messagesData.map((msg) => msg.profile_id).filter(Boolean))];
 
-      // Check if the message author is staff
-      const { data: roleData } = await supabase
+    // Batch query profiles to get names (respecting privacy)
+    const profileNameMap = new Map<string, string | null>();
+    if (uniqueProfileIds.length > 0) {
+      const { data: profilesData } = await supabase
+        .from("profiles")
+        .select("id, name, is_private_profile")
+        .in("id", uniqueProfileIds);
+
+      if (profilesData) {
+        for (const profile of profilesData) {
+          // Enforce privacy: only include name if profile is not private
+          profileNameMap.set(profile.id, profile.is_private_profile ? null : profile.name);
+        }
+      }
+    }
+
+    // Batch query user_roles to get staff flags
+    const isStaffMap = new Map<string, boolean>();
+    if (uniqueProfileIds.length > 0) {
+      const { data: rolesData } = await supabase
         .from("user_roles")
-        .select("role")
-        .eq("private_profile_id", msg.profile_id)
+        .select("private_profile_id")
+        .in("private_profile_id", uniqueProfileIds)
         .eq("class_id", classId)
-        .in("role", ["instructor", "grader"])
-        .maybeSingle();
+        .in("role", ["instructor", "grader"]);
+
+      if (rolesData) {
+        for (const role of rolesData) {
+          isStaffMap.set(role.private_profile_id, true);
+        }
+      }
+    }
+
+    // Build messages using lookup maps
+    for (const msg of messagesData) {
+      const authorName = msg.profile_id ? (profileNameMap.get(msg.profile_id) ?? null) : null;
+      const isStaff = msg.profile_id ? (isStaffMap.get(msg.profile_id) ?? false) : false;
 
       messages.push({
         id: msg.id,
         content: msg.content,
         created_at: msg.created_at,
         author_name: authorName,
-        is_staff: !!roleData
+        is_staff: isStaff
       });
     }
   }
@@ -316,24 +347,53 @@ export async function getDiscussionThread(
       .limit(50); // Limit replies to avoid huge responses
 
     if (repliesData) {
-      for (const reply of repliesData) {
-        const replyAuthorName = await getProfileName(supabase, reply.author);
+      // Collect all unique author IDs for batched queries
+      const uniqueAuthorIds = [...new Set(repliesData.map((reply) => reply.author).filter(Boolean))];
 
-        // Check if reply author is staff
-        const { data: roleData } = await supabase
+      // Batch query profiles to get names (respecting privacy)
+      const authorNameMap = new Map<string, string | null>();
+      if (uniqueAuthorIds.length > 0) {
+        const { data: profilesData } = await supabase
+          .from("profiles")
+          .select("id, name, is_private_profile")
+          .in("id", uniqueAuthorIds);
+
+        if (profilesData) {
+          for (const profile of profilesData) {
+            // Enforce privacy: only include name if profile is not private
+            authorNameMap.set(profile.id, profile.is_private_profile ? null : profile.name);
+          }
+        }
+      }
+
+      // Batch query user_roles to get staff flags
+      const isStaffMap = new Map<string, boolean>();
+      if (uniqueAuthorIds.length > 0) {
+        const { data: rolesData } = await supabase
           .from("user_roles")
-          .select("role")
-          .eq("private_profile_id", reply.author)
+          .select("private_profile_id")
+          .in("private_profile_id", uniqueAuthorIds)
           .eq("class_id", classId)
-          .in("role", ["instructor", "grader"])
-          .maybeSingle();
+          .in("role", ["instructor", "grader"]);
+
+        if (rolesData) {
+          for (const role of rolesData) {
+            isStaffMap.set(role.private_profile_id, true);
+          }
+        }
+      }
+
+      // Build replies using lookup maps
+      for (const reply of repliesData) {
+        const replyAuthorName = reply.author ? (authorNameMap.get(reply.author) ?? null) : null;
+        const isStaff = reply.author ? (isStaffMap.get(reply.author) ?? false) : false;
 
         replies.push({
           id: reply.id,
           body: reply.body,
           created_at: reply.created_at,
           author_name: replyAuthorName,
-          is_staff: !!roleData,
+          is_staff: isStaff,
           is_answer: thread.answer === reply.id
         });
       }
@@ -546,6 +606,22 @@ export async function searchHelpRequests(
 }
 
 /**
+ * Escape and quote a search query for safe use in PostgREST filters
+ * Escapes backslashes, double quotes, and SQL wildcard characters (% and _)
+ */
+function escapeSearchQuery(searchQuery: string): string {
+  // First escape backslashes (must be done first since backslash is the escape character)
+  let escaped = searchQuery.replace(/\\/g, "\\\\");
+  // Escape double quotes
+  escaped = escaped.replace(/"/g, '\\"');
+  // Escape SQL wildcard characters (% and _) so they're treated as literals
+  escaped = escaped.replace(/%/g, "\\%");
+  escaped = escaped.replace(/_/g, "\\_");
+  // Return escaped value (will be wrapped in quotes with wildcards in the filter string)
+  return escaped;
+}
+
+/**
  * Search discussion threads
  */
 export async function searchDiscussionThreads(
@@ -591,7 +667,9 @@ export async function searchDiscussionThreads(
   }
 
   if (options.searchQuery) {
-    query = query.or(`subject.ilike.%${options.searchQuery}%,body.ilike.%${options.searchQuery}%`);
+    const escapedQuery = escapeSearchQuery(options.searchQuery);
+    // Wrap the pattern in quotes to prevent filter injection, with % wildcards for "contains" matching
+    query = query.or(`subject.ilike."%${escapedQuery}%",body.ilike."%${escapedQuery}%"`);
   }
 
   const { data, error } = await query;
@@ -608,6 +686,36 @@ export async function searchDiscussionThreads(
 
   return results;
 }
+
+/**
+ * Normalize a template repository string to extract org and repo
+ * Handles full URLs, missing org, extra segments, etc.
+ * Returns [org, repo] or null if invalid
+ */
+function normalizeTemplateRepo(templateRepo: string | null): [string, string] | null {
+  if (!templateRepo) return null;
+
+  // Remove protocol and domain if present (e.g., https://github.com/org/repo -> org/repo)
+  let normalized = templateRepo.replace(/^https?:\/\/(www\.)?github\.com\//i, "");
+  normalized = normalized.replace(/^git@github\.com:/i, "");
+  normalized = normalized.replace(/\.git$/, "");
+
+  // Remove leading/trailing slashes
+  normalized = normalized.trim().replace(/^\/+|\/+$/g, "");
+
+  // Split by slash and filter out empty parts
+  const parts = normalized.split("/").filter((p) => p.length > 0);
+
+  // Must have exactly two parts (org and repo)
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  return [parts[0], parts[1]];
+}
+
+const MAX_FILES = 100; // Maximum number of files to process
+const FILE_FETCH_CONCURRENCY = 10; // Maximum concurrent file fetches
 
 /**
  * Get handout files from the template repository
@@ -629,13 +737,22 @@ export async function getHandoutFiles(
     return [];
   }
 
+  // Validate and normalize template_repo before destructuring
+  const normalizedRepo = normalizeTemplateRepo(assignment.template_repo);
+  if (!normalizedRepo) {
+    return []; // Fail-fast if template_repo doesn't resolve to exactly two parts
+  }
+
+  const [org, repo] = normalizedRepo;
+
   try {
     // List all files in the template repo
-    const [org, repo] = assignment.template_repo.split("/");
-    const files = await github.listFilesInRepo(org, repo);
+    const allFiles = await github.listFilesInRepo(org, repo);
 
-    // Filter out common non-code files and get content for each file
-    const codeFiles: HandoutFileContext[] = [];
+    // Cap the number of files processed
+    const files = allFiles.slice(0, MAX_FILES);
+
+    // Filter out common non-code files
     const excludePatterns = [
       /^\.git/,
       /^\.github\/workflows/,
@@ -646,28 +763,48 @@ export async function getHandoutFiles(
       /^__pycache__/
     ];
 
-    for (const file of files) {
+    // Filter files by excludePatterns and size before parallel processing
+    const eligibleFiles = files.filter((file) => {
       // Skip excluded patterns
       if (excludePatterns.some((pattern) => pattern.test(file.path))) {
-        continue;
+        return false;
       }
-
       // Skip large files (> 100KB)
       if (file.size > 100000) {
-        continue;
+        return false;
       }
+      return true;
+    });
 
-      try {
-        const content = await github.getFileFromRepo(assignment.template_repo, file.path);
-        if (content && "content" in content) {
-          codeFiles.push({
-            path: file.path,
-            content: content.content
-          });
+    // Process files in parallel with bounded concurrency using Promise.allSettled
+    const templateRepo = `${org}/${repo}`;
+    const codeFiles: HandoutFileContext[] = [];
+
+    // Process files in batches with bounded concurrency
+    for (let i = 0; i < eligibleFiles.length; i += FILE_FETCH_CONCURRENCY) {
+      const batch = eligibleFiles.slice(i, i + FILE_FETCH_CONCURRENCY);
+      const batchPromises = batch.map(async (file) => {
+        try {
+          const content = await github.getFileFromRepo(templateRepo, file.path);
+          if (content && "content" in content) {
+            return {
+              path: file.path,
+              content: content.content
+            } as HandoutFileContext;
+          }
+          return null;
+        } catch {
+          // Skip files that can't be read (binary, etc.)
+          return null;
         }
-      } catch {
-        // Skip files that can't be read (binary, etc.)
-        continue;
+      });
+
+      // Use Promise.allSettled to handle failures gracefully
+      const batchResults = await Promise.allSettled(batchPromises);
+      for (const result of batchResults) {
+        if (result.status === "fulfilled" && result.value !== null) {
+          codeFiles.push(result.value);
+        }
       }
     }
 

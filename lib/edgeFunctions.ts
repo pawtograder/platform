@@ -396,7 +396,8 @@ export async function mcpTokensList(supabase: SupabaseClient<Database>): Promise
   });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
-    throw new EdgeFunctionError(error);
+    const normalizedError = typeof error === "string" ? { message: error, details: "", recoverable: false } : error;
+    throw new EdgeFunctionError(normalizedError);
   }
   return data as { tokens: MCPToken[] };
 }
@@ -413,7 +414,8 @@ export async function mcpTokensCreate(
   });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
-    throw new EdgeFunctionError(error);
+    const normalizedError = typeof error === "string" ? { message: error, details: "", recoverable: false } : error;
+    throw new EdgeFunctionError(normalizedError);
   }
   return data as MCPTokenCreateResponse;
 }
@@ -431,7 +433,8 @@ export async function mcpTokensRevoke(
   });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
-    throw new EdgeFunctionError(error);
+    const normalizedError = typeof error === "string" ? { message: error, details: "", recoverable: false } : error;
+    throw new EdgeFunctionError(normalizedError);
   }
   return data as { success: boolean; message: string };
 }

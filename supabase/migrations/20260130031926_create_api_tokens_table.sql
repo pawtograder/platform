@@ -24,6 +24,42 @@ CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON public.api_tokens(user_id);
 
 -- Note: token_id already has an index from the UNIQUE constraint
 
+-- Function to prevent mutation of immutable fields
+CREATE OR REPLACE FUNCTION public.prevent_api_token_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+    -- Check if immutable fields are being changed
+    IF NEW.token_id IS DISTINCT FROM OLD.token_id THEN
+        RAISE EXCEPTION 'Cannot modify token_id';
+    END IF;
+    
+    IF NEW.scopes IS DISTINCT FROM OLD.scopes THEN
+        RAISE EXCEPTION 'Cannot modify scopes';
+    END IF;
+    
+    IF NEW.user_id IS DISTINCT FROM OLD.user_id THEN
+        RAISE EXCEPTION 'Cannot modify user_id';
+    END IF;
+    
+    IF NEW.expires_at IS DISTINCT FROM OLD.expires_at THEN
+        RAISE EXCEPTION 'Cannot modify expires_at';
+    END IF;
+    
+    -- Allow updates to revoked_at, name, and last_used_at
+    RETURN NEW;
+END;
+$$;
+
+-- Trigger to enforce field immutability
+DROP TRIGGER IF EXISTS prevent_token_mutation ON public.api_tokens;
+CREATE TRIGGER prevent_token_mutation
+    BEFORE UPDATE ON public.api_tokens
+    FOR EACH ROW
+    EXECUTE FUNCTION public.prevent_api_token_mutation();
+
 -- Create the revoked_token_ids table for fast revocation checks
 CREATE TABLE IF NOT EXISTS public.revoked_token_ids (
     token_id TEXT PRIMARY KEY,
