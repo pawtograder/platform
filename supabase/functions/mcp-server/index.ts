@@ -21,7 +21,6 @@ import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { minimatch } from "npm:minimatch@9";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import type { SubmissionSummary } from "./types.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import {
   authenticateMCPRequest,
@@ -284,7 +283,9 @@ const TOOLS = {
       properties: {
         student_profile_id: { type: "string", description: "The public profile ID of the student" },
         assignment_id: { type: "number", description: "The assignment ID" },
-        class_id: { type: "number", description: "The class ID" }
+        class_id: { type: "number", description: "The class ID" },
+        limit: { type: "number", description: "Maximum number of submissions to return (default 10)", default: 10 },
+        include_files: { type: "boolean", description: "Include submission file contents (default false)", default: false }
       },
       required: ["student_profile_id", "assignment_id", "class_id"]
     },
@@ -1685,62 +1686,35 @@ async function getSubmissionsForStudent(
   supabase: SupabaseClient<Database>,
   publicProfileId: string,
   assignmentId: number,
-  classId: number
-): Promise<SubmissionSummary[]> {
+  classId: number,
+  limit = 10,
+  includeFiles = false
+): Promise<Awaited<ReturnType<typeof getSubmission>>[]> {
   // Translate public profile ID to private profile ID for querying
   const privateProfileId = await getPrivateProfileId(supabase, publicProfileId, classId);
   if (!privateProfileId) return [];
 
-  // Limit to reasonable number of submissions
-  const limit = Math.min(50, MAX_ROWS);
+  const cappedLimit = Math.min(limit, MAX_ROWS);
 
-  // Fetch lightweight summary columns from submissions table
+  // Fetch submission IDs (and minimal columns) with limit to avoid query amplification
   const { data: submissions, error } = await supabase
     .from("submissions")
-    .select("id, assignment_id, created_at, sha, repository, ordinal, is_active")
+    .select("id")
     .eq("profile_id", privateProfileId)
     .eq("assignment_id", assignmentId)
     .eq("class_id", classId)
     .order("created_at", { ascending: false })
-    .limit(limit);
+    .limit(cappedLimit);
 
   if (error || !submissions || submissions.length === 0) return [];
 
-  // Batch fetch latest grader_results for all submissions to get scores
-  const submissionIds = submissions.map((s) => s.id);
-  const { data: graderResults } = await supabase
-    .from("grader_results")
-    .select("submission_id, score, max_score")
-    .in("submission_id", submissionIds)
-    .eq("class_id", classId)
-    .order("created_at", { ascending: false });
-
-  // Build a map of submission_id -> latest grader result
-  const scoreMap = new Map<number, { score: number; max_score: number }>();
-  if (graderResults) {
-    for (const gr of graderResults) {
-      if (gr.submission_id !== null && gr.score !== null && gr.max_score !== null && !scoreMap.has(gr.submission_id)) {
-        scoreMap.set(gr.submission_id, { score: gr.score, max_score: gr.max_score });
-      }
-    }
+  // Fetch full submission context for each (include test output; include files only when requested)
+  const results: Awaited<ReturnType<typeof getSubmission>>[] = [];
+  for (const sub of submissions) {
+    const detail = await getSubmission(supabase, sub.id, classId, true, includeFiles);
+    if (detail !== null) results.push(detail);
   }
-
-  // Return lightweight summary (callers can use getSubmission for full details)
-  return submissions.map((sub): SubmissionSummary => {
-    const score = scoreMap.get(sub.id);
-
-    return {
-      id: sub.id,
-      assignment_id: sub.assignment_id,
-      created_at: sub.created_at,
-      sha: sub.sha,
-      repository: sub.repository,
-      ordinal: sub.ordinal,
-      is_active: sub.is_active,
-      student_name: null,
-      grader_result: score ? { score: score.score, max_score: score.max_score } : null
-    };
-  });
+  return results;
 }
 
 // =============================================================================
@@ -1841,7 +1815,9 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
         context.supabase,
         args.student_profile_id as string,
         args.assignment_id as number,
-        args.class_id as number
+        args.class_id as number,
+        (args.limit as number) ?? 10,
+        args.include_files === true
       );
 
     case "get_assignment":
