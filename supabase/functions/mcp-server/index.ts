@@ -124,8 +124,16 @@ const TOOLS = {
       properties: {
         submission_id: { type: "number", description: "The ID of the submission to fetch" },
         class_id: { type: "number", description: "The class ID where the submission exists" },
-        include_test_output: { type: "boolean", description: "Whether to include full test output (default: false)", default: false },
-        include_files: { type: "boolean", description: "Whether to include submission file contents (default: false)", default: false }
+        include_test_output: {
+          type: "boolean",
+          description: "Whether to include full test output (default: false)",
+          default: false
+        },
+        include_files: {
+          type: "boolean",
+          description: "Whether to include submission file contents (default: false)",
+          default: false
+        }
       },
       required: ["submission_id", "class_id"]
     },
@@ -154,7 +162,10 @@ const TOOLS = {
       properties: {
         submission_id: { type: "number", description: "The ID of the submission" },
         class_id: { type: "number", description: "The class ID where the submission exists" },
-        glob_pattern: { type: "string", description: "Glob pattern to filter files (e.g., '*.java', 'src/**/*.py', 'test/*')" }
+        glob_pattern: {
+          type: "string",
+          description: "Glob pattern to filter files (e.g., '*.java', 'src/**/*.py', 'test/*')"
+        }
       },
       required: ["submission_id", "class_id"]
     },
@@ -227,7 +238,10 @@ const TOOLS = {
       properties: {
         assignment_id: { type: "number", description: "The ID of the assignment" },
         class_id: { type: "number", description: "The class ID where the assignment exists" },
-        glob_pattern: { type: "string", description: "Glob pattern to filter files (e.g., '*.java', 'mutants/**/*', 'src/**/*.py')" }
+        glob_pattern: {
+          type: "string",
+          description: "Glob pattern to filter files (e.g., '*.java', 'mutants/**/*', 'src/**/*.py')"
+        }
       },
       required: ["assignment_id", "class_id"]
     },
@@ -664,11 +678,7 @@ async function getGraderResult(
       .eq("grader_result_id", graderData.id)
       .order("id", { ascending: true })
       .limit(MAX_ROWS),
-    supabase
-      .from("grader_result_output")
-      .select("output, format")
-      .eq("grader_result_id", graderData.id)
-      .maybeSingle()
+    supabase.from("grader_result_output").select("output, format").eq("grader_result_id", graderData.id).maybeSingle()
   ]);
 
   const allTests = testsData.data || [];
@@ -763,11 +773,7 @@ async function getSubmissionFiles(supabase: SupabaseClient<Database>, submission
   return data;
 }
 
-async function listSubmissionFiles(
-  supabase: SupabaseClient<Database>,
-  submissionId: number,
-  classId: number
-) {
+async function listSubmissionFiles(supabase: SupabaseClient<Database>, submissionId: number, classId: number) {
   // Use RPC or raw query to get file sizes without fetching contents
   // Since PostgREST doesn't support LENGTH() in select, we'll fetch names and compute sizes
   const { data, error } = await supabase
@@ -1053,11 +1059,7 @@ function normalizeTemplateRepo(templateRepo: string | null): [string, string] | 
   return [parts[0], parts[1]];
 }
 
-async function listGraderFiles(
-  supabase: SupabaseClient<Database>,
-  assignmentId: number,
-  classId: number
-) {
+async function listGraderFiles(supabase: SupabaseClient<Database>, assignmentId: number, classId: number) {
   // Get the autograder info to find the grader repo
   const { data: autograder, error } = await supabase
     .from("autograder")
@@ -1168,11 +1170,7 @@ async function getGraderFilesFiltered(
   }
 }
 
-async function listHandoutFiles(
-  supabase: SupabaseClient<Database>,
-  assignmentId: number,
-  classId: number
-) {
+async function listHandoutFiles(supabase: SupabaseClient<Database>, assignmentId: number, classId: number) {
   // Get the assignment to find the template repo
   const { data: assignment, error } = await supabase
     .from("assignments")
@@ -1781,11 +1779,7 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
       );
 
     case "list_submission_files":
-      return await listSubmissionFiles(
-        context.supabase,
-        args.submission_id as number,
-        args.class_id as number
-      );
+      return await listSubmissionFiles(context.supabase, args.submission_id as number, args.class_id as number);
 
     case "get_submission_files":
       return await getSubmissionFilesFiltered(
@@ -1821,11 +1815,7 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
       );
 
     case "list_grader_files":
-      return await listGraderFiles(
-        context.supabase,
-        args.assignment_id as number,
-        args.class_id as number
-      );
+      return await listGraderFiles(context.supabase, args.assignment_id as number, args.class_id as number);
 
     case "get_grader_files":
       return await getGraderFilesFiltered(
@@ -1836,11 +1826,7 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
       );
 
     case "list_handout_files":
-      return await listHandoutFiles(
-        context.supabase,
-        args.assignment_id as number,
-        args.class_id as number
-      );
+      return await listHandoutFiles(context.supabase, args.assignment_id as number, args.class_id as number);
 
     case "get_handout_files":
       return await getHandoutFilesFiltered(
