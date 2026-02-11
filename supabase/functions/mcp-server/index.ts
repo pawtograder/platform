@@ -285,7 +285,11 @@ const TOOLS = {
         assignment_id: { type: "number", description: "The assignment ID" },
         class_id: { type: "number", description: "The class ID" },
         limit: { type: "number", description: "Maximum number of submissions to return (default 10)", default: 10 },
-        include_files: { type: "boolean", description: "Include submission file contents (default false)", default: false }
+        include_files: {
+          type: "boolean",
+          description: "Include submission file contents (default false)",
+          default: false
+        }
       },
       required: ["student_profile_id", "assignment_id", "class_id"]
     },
