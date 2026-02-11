@@ -2208,6 +2208,7 @@ export type Database = {
           discord_channel_id: string;
           discord_message_id: string;
           id: number;
+          last_synced_stats: Json | null;
           resource_id: number;
           resource_type: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -2217,6 +2218,7 @@ export type Database = {
           discord_channel_id: string;
           discord_message_id: string;
           id?: number;
+          last_synced_stats?: Json | null;
           resource_id: number;
           resource_type: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -2226,6 +2228,7 @@ export type Database = {
           discord_channel_id?: string;
           discord_message_id?: string;
           id?: number;
+          last_synced_stats?: Json | null;
           resource_id?: number;
           resource_type?: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -4701,6 +4704,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           instructors_only: boolean;
+          is_system_message: boolean;
           message: string;
           reply_to_message_id: number | null;
           updated_at: string;
@@ -4712,6 +4716,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           instructors_only?: boolean;
+          is_system_message?: boolean;
           message: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -4723,6 +4728,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           instructors_only?: boolean;
+          is_system_message?: boolean;
           message?: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -5107,6 +5113,8 @@ export type Database = {
           location_type: Database["public"]["Enums"]["location_type"];
           referenced_submission_id: number | null;
           request: string;
+          resolution_notes: string | null;
+          resolution_status: Database["public"]["Enums"]["help_request_resolution_status"] | null;
           resolved_at: string | null;
           resolved_by: string | null;
           status: Database["public"]["Enums"]["help_request_status"];
@@ -5126,6 +5134,8 @@ export type Database = {
           location_type?: Database["public"]["Enums"]["location_type"];
           referenced_submission_id?: number | null;
           request: string;
+          resolution_notes?: string | null;
+          resolution_status?: Database["public"]["Enums"]["help_request_resolution_status"] | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
@@ -5145,6 +5155,8 @@ export type Database = {
           location_type?: Database["public"]["Enums"]["location_type"];
           referenced_submission_id?: number | null;
           request?: string;
+          resolution_notes?: string | null;
+          resolution_status?: Database["public"]["Enums"]["help_request_resolution_status"] | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
@@ -11254,6 +11266,8 @@ export type Database = {
           async_queue_size: number;
           dlq_queue_size: number;
           gradebook_row_recalculate_queue_size: number;
+          discord_queue_size: number;
+          discord_dlq_queue_size: number;
         }[];
       };
       get_circuit_breaker_statuses: {
@@ -11951,6 +11965,7 @@ export type Database = {
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
+      help_request_resolution_status: "self_solved" | "staff_helped" | "peer_helped" | "no_time" | "other";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
@@ -12141,6 +12156,7 @@ export const Constants = {
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],
       help_request_status: ["open", "in_progress", "resolved", "closed"],
+      help_request_resolution_status: ["self_solved", "staff_helped", "peer_helped", "no_time", "other"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],

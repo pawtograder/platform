@@ -244,11 +244,7 @@ export const RealtimeChat = ({
   const handleSendMessage = useCallback(
     async (message: string) => {
       if (!isConnected) {
-        toaster.error({
-          title: "Not connected to chat",
-          description: "Please wait for the chat to connect before sending messages."
-        });
-        return;
+        throw new Error("Please wait for the chat to connect before sending messages.");
       }
       if (!message.trim() || !sendMessage || moderationStatus.isBanned) return;
 

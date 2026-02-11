@@ -1,7 +1,6 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import { Json } from "@/utils/supabase/SupabaseTypes";
@@ -93,7 +92,6 @@ export function ErrorPinModal({
 }: ErrorPinModalProps) {
   const { course_id } = useParams();
   const assignments = useAssignments();
-  const { private_profile_id } = useClassProfiles();
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [previewSubmissions, setPreviewSubmissions] = useState<
@@ -297,22 +295,15 @@ export function ErrorPinModal({
       return;
     }
 
-    if (!private_profile_id) {
-      toaster.error({
-        title: "Error",
-        description: "User profile not found"
-      });
-      return;
-    }
-
     try {
       const supabase = createClient();
+      // Note: created_by is handled by the server-side save_error_pin function
+      // which looks up the user's private_profile_id from user_privileges
       const pinData = {
         id: existingPinId || undefined,
         discussion_thread_id,
         assignment_id: data.is_class_level ? null : data.assignment_id,
         class_id: Number(course_id),
-        created_by: private_profile_id,
         rule_logic: data.rule_logic,
         enabled: data.enabled
       };

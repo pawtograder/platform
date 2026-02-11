@@ -403,6 +403,8 @@ export type HelpRequestMessageReadReceipt = GetResult<
 
 export type HelpRequestLocationType = Database["public"]["Enums"]["location_type"];
 
+export type HelpRequestResolutionStatus = Database["public"]["Enums"]["help_request_resolution_status"];
+
 export type HelpRequestTemplate = GetResult<
   Database["public"],
   Database["public"]["Tables"]["help_request_templates"]["Row"],

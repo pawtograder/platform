@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { createAllRepos } from "./index.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 
 const adminSupabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);

@@ -4,18 +4,25 @@ import { RealtimeChat } from "@/components/realtime-chat";
 import { useActiveHelpRequest } from "@/hooks/useActiveHelpRequest";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
 import { useMessageNotifications } from "@/hooks/useMessageNotifications";
-import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import { Badge, Box, Button, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { BsArrowRight, BsChatDots, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
+import { BsArrowRight, BsChatDots, BsCheckCircle, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
 import { useHelpQueues, useHelpQueueAssignments, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { Tooltip } from "@/components/ui/tooltip";
+import { toaster } from "@/components/ui/toaster";
+import type { HelpRequestResolutionStatus } from "@/utils/supabase/DatabaseTypes";
+import useModalManager from "@/hooks/useModalManager";
 
 const HelpDrawer = dynamic(() => import("@/components/help-queue/help-drawer"), {
+  ssr: false
+});
+
+const HelpRequestResolutionModal = dynamic(() => import("@/components/help-queue/help-request-resolution-modal"), {
   ssr: false
 });
 export function FloatingHelpRequestWidget() {
@@ -23,7 +30,7 @@ export function FloatingHelpRequestWidget() {
   const router = useRouter();
   const pathname = usePathname();
   const { course_id } = useParams();
-  const { role } = useClassProfiles();
+  const { role, private_profile_id } = useClassProfiles();
   const featureEnabled = useFeatureEnabled("office-hours");
   const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const [isExpanded, setIsExpanded] = useState(false);
@@ -32,6 +39,9 @@ export function FloatingHelpRequestWidget() {
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
   const allHelpRequests = useHelpRequests();
+  const resolutionModal = useModalManager();
+  const controller = useOfficeHoursController();
+  const { helpRequests, studentHelpActivity } = controller;
 
   // Check if user is on an office hours page (don't show widget there)
   const isOnOfficeHoursPage = useMemo(() => {
@@ -95,6 +105,53 @@ export function FloatingHelpRequestWidget() {
       router.push(`/course/${course_id}/office-hours/${activeRequest.request.help_queue}/${activeRequest.request.id}`);
     }
   }, [activeRequest, course_id, router]);
+
+  // Handle resolution from the modal
+  const handleResolutionSuccess = useCallback(
+    async (resolutionStatus: HelpRequestResolutionStatus, _feedback?: unknown, notes?: string) => {
+      if (!activeRequest || !private_profile_id) return;
+
+      try {
+        // Update the help request with resolution status
+        await helpRequests.update(activeRequest.request.id, {
+          status: "resolved",
+          resolved_by: private_profile_id,
+          resolved_at: new Date().toISOString(),
+          resolution_status: resolutionStatus,
+          resolution_notes: notes || null
+        });
+
+        // Log activity for students
+        const requestStudents = allHelpRequestStudents.filter(
+          (student) => student.help_request_id === activeRequest.request.id
+        );
+        for (const student of requestStudents) {
+          try {
+            await studentHelpActivity.create({
+              student_profile_id: student.profile_id,
+              class_id: activeRequest.request.class_id,
+              help_request_id: activeRequest.request.id,
+              activity_type: "request_resolved",
+              activity_description: `Request resolved by student (${resolutionStatus})`
+            });
+          } catch {
+            // Don't block on activity logging failures
+          }
+        }
+
+        toaster.success({
+          title: "Help Request Resolved",
+          description: "Your help request has been resolved."
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Error",
+          description: `Failed to resolve request: ${error instanceof Error ? error.message : String(error)}`
+        });
+      }
+    },
+    [activeRequest, private_profile_id, helpRequests, studentHelpActivity, allHelpRequestStudents]
+  );
 
   const handleToggleExpand = useCallback(() => {
     setIsExpanded((prev) => !prev);
@@ -264,6 +321,20 @@ export function FloatingHelpRequestWidget() {
                 </Text>
               </Stack>
               <HStack gap={1}>
+                <Tooltip content="Resolve request" positioning={{ placement: "top" }}>
+                  <IconButton
+                    aria-label="Resolve request"
+                    variant="ghost"
+                    size="sm"
+                    colorPalette="green"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resolutionModal.openModal();
+                    }}
+                  >
+                    <Icon as={BsCheckCircle} />
+                  </IconButton>
+                </Tooltip>
                 <IconButton
                   aria-label="Go to request"
                   variant="ghost"
@@ -311,6 +382,17 @@ export function FloatingHelpRequestWidget() {
                   </Badge>
                 </HStack>
                 <HStack gap={1}>
+                  <Tooltip content="Resolve request" positioning={{ placement: "top" }}>
+                    <IconButton
+                      aria-label="Resolve request"
+                      variant="ghost"
+                      size="sm"
+                      colorPalette="green"
+                      onClick={() => resolutionModal.openModal()}
+                    >
+                      <Icon as={BsCheckCircle} />
+                    </IconButton>
+                  </Tooltip>
                   <IconButton
                     aria-label="Go to full request page"
                     variant="ghost"
@@ -335,6 +417,20 @@ export function FloatingHelpRequestWidget() {
           )}
         </Card.Body>
       </Card.Root>
+
+      {/* Resolution Modal */}
+      {resolutionModal.isOpen && activeRequest && private_profile_id && (
+        <HelpRequestResolutionModal
+          isOpen={resolutionModal.isOpen}
+          onClose={resolutionModal.closeModal}
+          onSuccess={handleResolutionSuccess}
+          helpRequestId={activeRequest.request.id}
+          classId={activeRequest.request.class_id}
+          studentProfileId={private_profile_id}
+          showFeedback={true}
+          title="Resolve Help Request"
+        />
+      )}
     </Box>
   );
 }
