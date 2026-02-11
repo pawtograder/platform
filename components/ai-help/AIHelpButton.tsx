@@ -60,9 +60,26 @@ function generateMCPContext(props: AIHelpButtonProps): object {
                 tool: "get_submission",
                 params: {
                   submission_id: props.submissionId,
+                  class_id: props.classId
+                },
+                description: "Get submission summary (metadata only - use granular tools for files/tests)"
+              },
+              {
+                tool: "list_submission_files",
+                params: {
+                  submission_id: props.submissionId,
+                  class_id: props.classId
+                },
+                description: "See what files are available before fetching"
+              },
+              {
+                tool: "list_submission_tests",
+                params: {
+                  submission_id: props.submissionId,
                   class_id: props.classId,
-                  include_test_output: true
-                }
+                  only_failed: true
+                },
+                description: "See which tests failed (without full output)"
               }
             ]
           : []),

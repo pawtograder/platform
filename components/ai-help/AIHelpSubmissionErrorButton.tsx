@@ -57,9 +57,24 @@ Use the Pawtograder MCP server to fetch additional context:
    {"tool": "get_assignment", "params": {"assignment_id": ${assignmentId}, "class_id": ${classId}}}
    \`\`\`
 
-2. **Get full submission with files**:
+2. **Get submission summary** (to see what files are available):
    \`\`\`json
-   {"tool": "get_submission", "params": {"submission_id": ${submissionId}, "class_id": ${classId}, "include_test_output": true, "include_files": true}}
+   {"tool": "get_submission", "params": {"submission_id": ${submissionId}, "class_id": ${classId}}}
+   \`\`\`
+
+3. **List available files**:
+   \`\`\`json
+   {"tool": "list_submission_files", "params": {"submission_id": ${submissionId}, "class_id": ${classId}}}
+   \`\`\`
+
+4. **Get relevant source files** (use glob patterns like "*.java", "src/**/*.py"):
+   \`\`\`json
+   {"tool": "get_submission_files", "params": {"submission_id": ${submissionId}, "class_id": ${classId}, "glob_pattern": "*.java"}}
+   \`\`\`
+
+5. **Get build output**:
+   \`\`\`json
+   {"tool": "get_submission_build_output", "params": {"submission_id": ${submissionId}, "class_id": ${classId}}}
    \`\`\`
 
 ## Your Task
@@ -69,7 +84,7 @@ Use the Pawtograder MCP server to fetch additional context:
 3. **Suggest how to fix it** without giving away assignment solutions
 4. **Check if this might be an assignment issue** (missing dependencies, unclear instructions, etc.)
 
-If you need more context, use the MCP tools to fetch the assignment handout and submission files.`;
+Use the granular MCP tools to fetch only the files you need (e.g., source files matching the error) rather than fetching everything at once.`;
   }
 
   // Test failure prompt
@@ -96,9 +111,29 @@ Use the Pawtograder MCP server to fetch additional context:
    {"tool": "get_assignment", "params": {"assignment_id": ${assignmentId}, "class_id": ${classId}}}
    \`\`\`
 
-2. **Get full submission with all test outputs and files**:
+2. **Get submission summary** (to see what files and tests are available):
    \`\`\`json
-   {"tool": "get_submission", "params": {"submission_id": ${submissionId}, "class_id": ${classId}, "include_test_output": true, "include_files": true}}
+   {"tool": "get_submission", "params": {"submission_id": ${submissionId}, "class_id": ${classId}}}
+   \`\`\`
+
+3. **List available files**:
+   \`\`\`json
+   {"tool": "list_submission_files", "params": {"submission_id": ${submissionId}, "class_id": ${classId}}}
+   \`\`\`
+
+4. **Get relevant source files** (use glob patterns like "*.java", "src/**/*.py"):
+   \`\`\`json
+   {"tool": "get_submission_files", "params": {"submission_id": ${submissionId}, "class_id": ${classId}, "glob_pattern": "*.java"}}
+   \`\`\`
+
+5. **List test results** (to see which tests failed):
+   \`\`\`json
+   {"tool": "list_submission_tests", "params": {"submission_id": ${submissionId}, "class_id": ${classId}, "only_failed": true}}
+   \`\`\`
+
+6. **Get output for this specific test**:
+   \`\`\`json
+   {"tool": "get_test_output", "params": {"submission_id": ${submissionId}, "class_id": ${classId}, "test_name": "${testName}"}}
    \`\`\`
 
 ## Your Task
@@ -108,10 +143,10 @@ Use the Pawtograder MCP server to fetch additional context:
 3. **Suggest debugging strategies** without revealing the solution
 4. **Check if this might be an assignment/test issue** (unclear spec, edge case not covered, etc.)
 
-If you need more context, use the MCP tools to:
-- Fetch the assignment handout to understand what's expected
-- Fetch the submission files to see the student's code
-- Look at other test results to see if there's a pattern`;
+Use the granular MCP tools to fetch only what you need:
+- Use \`list_submission_files\` to see available files, then \`get_submission_files\` with glob patterns to fetch specific files
+- Use \`list_submission_tests\` to see test summary, then \`get_test_output\` for specific test details
+- This prevents overwhelming the context window with dozens of large files`;
 }
 
 /**

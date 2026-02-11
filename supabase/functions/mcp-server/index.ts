@@ -19,7 +19,10 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
+import { minimatch } from "npm:minimatch@9";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { SubmissionSummary } from "./types.ts";
+import * as github from "../_shared/GitHubWrapper.ts";
 import {
   authenticateMCPRequest,
   requireScope,
@@ -115,16 +118,147 @@ const TOOLS = {
   get_submission: {
     name: "get_submission",
     description:
-      "Get a submission with full grader results including test outputs, build output, lint results, and error information.",
+      "Get a submission summary with grader results. By default, returns metadata only (file count, test summary). Use granular tools (list_submission_files, get_submission_files, list_submission_tests, get_test_output) to fetch specific data.",
     inputSchema: {
       type: "object",
       properties: {
         submission_id: { type: "number", description: "The ID of the submission to fetch" },
         class_id: { type: "number", description: "The class ID where the submission exists" },
-        include_test_output: { type: "boolean", description: "Whether to include test output", default: true },
-        include_files: { type: "boolean", description: "Whether to include submission files", default: true }
+        include_test_output: { type: "boolean", description: "Whether to include full test output (default: false)", default: false },
+        include_files: { type: "boolean", description: "Whether to include submission file contents (default: false)", default: false }
       },
       required: ["submission_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  list_submission_files: {
+    name: "list_submission_files",
+    description:
+      "List all files in a submission with names and sizes (no contents). Use get_submission_files to fetch contents filtered by glob pattern.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        submission_id: { type: "number", description: "The ID of the submission" },
+        class_id: { type: "number", description: "The class ID where the submission exists" }
+      },
+      required: ["submission_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  get_submission_files: {
+    name: "get_submission_files",
+    description:
+      "Get file contents from a submission. Use glob_pattern to filter files (e.g., '*.java', 'src/**/*.py', 'test/*').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        submission_id: { type: "number", description: "The ID of the submission" },
+        class_id: { type: "number", description: "The class ID where the submission exists" },
+        glob_pattern: { type: "string", description: "Glob pattern to filter files (e.g., '*.java', 'src/**/*.py', 'test/*')" }
+      },
+      required: ["submission_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  list_submission_tests: {
+    name: "list_submission_tests",
+    description:
+      "List test results with pass/fail status and scores (no output). Use get_test_output to fetch full output for specific tests.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        submission_id: { type: "number", description: "The ID of the submission" },
+        class_id: { type: "number", description: "The class ID where the submission exists" },
+        only_failed: { type: "boolean", description: "Only return failed tests", default: false }
+      },
+      required: ["submission_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  get_test_output: {
+    name: "get_test_output",
+    description: "Get the full output for a specific test by ID or name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        submission_id: { type: "number", description: "The ID of the submission" },
+        class_id: { type: "number", description: "The class ID where the submission exists" },
+        test_id: { type: "number", description: "The ID of the test" },
+        test_name: { type: "string", description: "The name of the test" }
+      },
+      required: ["submission_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  get_submission_build_output: {
+    name: "get_submission_build_output",
+    description: "Get build output (stdout/stderr) and optionally lint results separately.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        submission_id: { type: "number", description: "The ID of the submission" },
+        class_id: { type: "number", description: "The class ID where the submission exists" },
+        include_lint: { type: "boolean", description: "Whether to include lint results", default: true }
+      },
+      required: ["submission_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  list_grader_files: {
+    name: "list_grader_files",
+    description:
+      "List all files in the grader/solution repository (where instructor tests and mutants are stored) with names and sizes (no contents). Use get_grader_files to fetch contents filtered by glob pattern.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        assignment_id: { type: "number", description: "The ID of the assignment" },
+        class_id: { type: "number", description: "The class ID where the assignment exists" }
+      },
+      required: ["assignment_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  get_grader_files: {
+    name: "get_grader_files",
+    description:
+      "Get file contents from the grader/solution repository (instructor tests, mutants, solution code). Use glob_pattern to filter files (e.g., '*.java', 'src/**/*.py', 'mutants/*').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        assignment_id: { type: "number", description: "The ID of the assignment" },
+        class_id: { type: "number", description: "The class ID where the assignment exists" },
+        glob_pattern: { type: "string", description: "Glob pattern to filter files (e.g., '*.java', 'mutants/**/*', 'src/**/*.py')" }
+      },
+      required: ["assignment_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  list_handout_files: {
+    name: "list_handout_files",
+    description:
+      "List all files in the template/handout repository (starter code) with names and sizes (no contents). Use get_handout_files to fetch contents filtered by glob pattern.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        assignment_id: { type: "number", description: "The ID of the assignment" },
+        class_id: { type: "number", description: "The class ID where the assignment exists" }
+      },
+      required: ["assignment_id", "class_id"]
+    },
+    requiredScope: "mcp:read" as const
+  },
+  get_handout_files: {
+    name: "get_handout_files",
+    description:
+      "Get file contents from the template/handout repository (starter code). Use glob_pattern to filter files (e.g., '*.java', 'src/**/*.py').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        assignment_id: { type: "number", description: "The ID of the assignment" },
+        class_id: { type: "number", description: "The class ID where the assignment exists" },
+        glob_pattern: { type: "string", description: "Glob pattern to filter files (e.g., '*.java', 'src/**/*.py')" }
+      },
+      required: ["assignment_id", "class_id"]
     },
     requiredScope: "mcp:read" as const
   },
@@ -196,6 +330,32 @@ const TOOLS = {
 
 // Maximum rows per query (Supabase limit)
 const MAX_ROWS = 1000;
+
+// GitHub file fetch limits (avoid rate limits and unbounded work)
+const MAX_FILES = 100;
+const FILE_FETCH_CONCURRENCY = 10;
+
+/**
+ * Run async mapper over items with bounded concurrency; skip-on-error (nulls omitted from result).
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R | null>
+): Promise<R[]> {
+  const results: R[] = [];
+  let index = 0;
+  async function worker(): Promise<void> {
+    while (index < items.length) {
+      const i = index++;
+      const value = await fn(items[i]);
+      if (value !== null) results.push(value);
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 // =============================================================================
 // Global Profile Cache (across all requests)
@@ -415,8 +575,8 @@ async function getSubmission(
   supabase: SupabaseClient<Database>,
   submissionId: number,
   classId: number,
-  includeTestOutput = true,
-  includeFiles = true
+  includeTestOutput = false,
+  includeFiles = false
 ) {
   // Fetch submission (profile_id is private profile)
   const { data: submission, error: subError } = await supabase
@@ -434,13 +594,29 @@ async function getSubmission(
     : new Map();
   const publicProfile = submission.profile_id ? publicProfiles.get(submission.profile_id) : null;
 
-  // Parallel fetch: grader result, files (if needed)
-  const [graderResult, files] = await Promise.all([
+  // Parallel fetch: grader result, files (if needed), file list (for summary)
+  const [graderResult, files, fileList] = await Promise.all([
     getGraderResult(supabase, submissionId, classId, includeTestOutput),
-    includeFiles ? getSubmissionFiles(supabase, submissionId, classId) : Promise.resolve(null)
+    includeFiles ? getSubmissionFiles(supabase, submissionId, classId) : Promise.resolve(null),
+    includeFiles ? Promise.resolve(null) : listSubmissionFiles(supabase, submissionId, classId)
   ]);
 
-  return {
+  // Build result with summary fields
+  const result: {
+    id: number;
+    assignment_id: number;
+    created_at: string;
+    sha: string;
+    repository: string;
+    ordinal: number;
+    is_active: boolean;
+    student_profile_id: string | null;
+    student_name: string | null;
+    grader_result: ReturnType<typeof getGraderResult> extends Promise<infer T> ? T : never;
+    files?: unknown;
+    file_count?: number;
+    file_names?: string[];
+  } = {
     id: submission.id,
     assignment_id: submission.assignment_id,
     created_at: submission.created_at,
@@ -450,9 +626,17 @@ async function getSubmission(
     is_active: submission.is_active,
     student_profile_id: publicProfile?.publicProfileId || null,
     student_name: publicProfile?.publicName || null,
-    grader_result: graderResult,
-    files
+    grader_result: graderResult
   };
+
+  if (includeFiles) {
+    result.files = files;
+  } else if (fileList) {
+    result.file_count = fileList.total_count;
+    result.file_names = fileList.files.map((f) => f.name);
+  }
+
+  return result;
 }
 
 async function getGraderResult(
@@ -482,23 +666,59 @@ async function getGraderResult(
       .limit(MAX_ROWS),
     supabase
       .from("grader_result_output")
-      .select("stdout, stderr, combined_output, output_format")
+      .select("output, format")
       .eq("grader_result_id", graderData.id)
       .maybeSingle()
   ]);
 
-  const tests = (testsData.data || []).map((test) => ({
-    id: test.id,
-    name: test.name,
-    part: test.part,
-    score: test.score,
-    max_score: test.max_score,
-    output: includeTestOutput ? test.output : null,
-    output_format: test.output_format,
-    is_released: test.is_released
-  }));
+  const allTests = testsData.data || [];
 
-  return {
+  // Calculate summary statistics
+  let testsPassed = 0;
+  let testsFailed = 0;
+  const testNames: string[] = [];
+
+  for (const test of allTests) {
+    testNames.push(test.name);
+    const score = test.score !== null ? Number(test.score) : null;
+    const maxScore = test.max_score !== null ? Number(test.max_score) : null;
+    if (score !== null && maxScore !== null && score >= maxScore) {
+      testsPassed++;
+    } else {
+      testsFailed++;
+    }
+  }
+
+  const tests = includeTestOutput
+    ? allTests.map((test) => ({
+        id: test.id,
+        name: test.name,
+        part: test.part,
+        score: test.score,
+        max_score: test.max_score,
+        output: test.output,
+        output_format: test.output_format,
+        is_released: test.is_released
+      }))
+    : [];
+
+  const result: {
+    id: number;
+    score: number;
+    max_score: number;
+    lint_passed: boolean;
+    lint_output: string;
+    lint_output_format: string;
+    errors: unknown | null;
+    execution_time: number | null;
+    ret_code: number | null;
+    tests: typeof tests;
+    build_output: unknown;
+    test_count?: number;
+    tests_passed?: number;
+    tests_failed?: number;
+    test_names?: string[];
+  } = {
     id: graderData.id,
     score: graderData.score,
     max_score: graderData.max_score,
@@ -509,8 +729,25 @@ async function getGraderResult(
     execution_time: graderData.execution_time,
     ret_code: graderData.ret_code,
     tests,
-    build_output: outputData.data || null
+    build_output: outputData.data
+      ? {
+          stdout: null,
+          stderr: null,
+          combined_output: outputData.data.output,
+          output_format: outputData.data.format
+        }
+      : null
   };
+
+  // Add summary fields if not including full test output
+  if (!includeTestOutput) {
+    result.test_count = allTests.length;
+    result.tests_passed = testsPassed;
+    result.tests_failed = testsFailed;
+    result.test_names = testNames;
+  }
+
+  return result;
 }
 
 async function getSubmissionFiles(supabase: SupabaseClient<Database>, submissionId: number, classId: number) {
@@ -524,6 +761,557 @@ async function getSubmissionFiles(supabase: SupabaseClient<Database>, submission
 
   if (error || !data) return [];
   return data;
+}
+
+async function listSubmissionFiles(
+  supabase: SupabaseClient<Database>,
+  submissionId: number,
+  classId: number
+) {
+  // Use RPC or raw query to get file sizes without fetching contents
+  // Since PostgREST doesn't support LENGTH() in select, we'll fetch names and compute sizes
+  const { data, error } = await supabase
+    .from("submission_files")
+    .select("name, contents")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("name", { ascending: true })
+    .limit(MAX_ROWS);
+
+  if (error || !data) {
+    return { files: [], total_count: 0 };
+  }
+
+  const files = data.map((file) => ({
+    name: file.name,
+    size: file.contents ? new TextEncoder().encode(file.contents).length : 0
+  }));
+
+  return {
+    files,
+    total_count: files.length
+  };
+}
+
+async function getSubmissionFilesFiltered(
+  supabase: SupabaseClient<Database>,
+  submissionId: number,
+  classId: number,
+  globPattern?: string
+) {
+  const { data, error } = await supabase
+    .from("submission_files")
+    .select("id, name, contents")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("name", { ascending: true })
+    .limit(MAX_ROWS);
+
+  if (error || !data) {
+    return { files: [], matched_count: 0 };
+  }
+
+  // Filter by glob pattern if provided
+  let filtered = data;
+  if (globPattern) {
+    filtered = data.filter((file) => minimatch(file.name, globPattern));
+  }
+
+  return {
+    files: filtered.map((file) => ({
+      id: file.id,
+      name: file.name,
+      contents: file.contents
+    })),
+    matched_count: filtered.length
+  };
+}
+
+async function listSubmissionTests(
+  supabase: SupabaseClient<Database>,
+  submissionId: number,
+  classId: number,
+  onlyFailed = false
+) {
+  // First get the grader result ID
+  const { data: graderData } = await supabase
+    .from("grader_results")
+    .select("id")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!graderData) {
+    return {
+      tests: [],
+      summary: { passed: 0, failed: 0, total_score: 0, max_score: 0 }
+    };
+  }
+
+  // Get tests without output
+  let query = supabase
+    .from("grader_result_tests")
+    .select("id, name, part, score, max_score")
+    .eq("grader_result_id", graderData.id)
+    .order("id", { ascending: true })
+    .limit(MAX_ROWS);
+
+  if (onlyFailed) {
+    query = query.or("score.is.null,score.lt.max_score");
+  }
+
+  const { data: testsData, error } = await query;
+
+  if (error || !testsData) {
+    return {
+      tests: [],
+      summary: { passed: 0, failed: 0, total_score: 0, max_score: 0 }
+    };
+  }
+
+  const tests = testsData.map((test) => {
+    const score = test.score !== null ? Number(test.score) : null;
+    const maxScore = test.max_score !== null ? Number(test.max_score) : null;
+    const passed = score !== null && maxScore !== null && score >= maxScore;
+
+    return {
+      id: test.id,
+      name: test.name,
+      part: test.part,
+      score,
+      max_score: maxScore,
+      passed
+    };
+  });
+
+  // Calculate summary
+  let passed = 0;
+  let failed = 0;
+  let totalScore = 0;
+  let maxScore = 0;
+
+  for (const test of tests) {
+    if (test.max_score !== null) {
+      maxScore += test.max_score;
+    }
+    if (test.score !== null) {
+      totalScore += test.score;
+    }
+    if (test.passed) {
+      passed++;
+    } else {
+      failed++;
+    }
+  }
+
+  return {
+    tests,
+    summary: {
+      passed,
+      failed,
+      total_score: totalScore,
+      max_score: maxScore
+    }
+  };
+}
+
+async function getTestOutput(
+  supabase: SupabaseClient<Database>,
+  submissionId: number,
+  classId: number,
+  testId?: number,
+  testName?: string
+) {
+  // First get the grader result ID
+  const { data: graderData } = await supabase
+    .from("grader_results")
+    .select("id")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!graderData) {
+    return { test: null };
+  }
+
+  // Build query for test
+  let query = supabase
+    .from("grader_result_tests")
+    .select("id, name, part, output, output_format")
+    .eq("grader_result_id", graderData.id)
+    .limit(1);
+
+  if (testId) {
+    query = query.eq("id", testId);
+  } else if (testName) {
+    query = query.eq("name", testName);
+  } else {
+    return { test: null };
+  }
+
+  const { data: testData, error } = await query.maybeSingle();
+
+  if (error || !testData) {
+    return { test: null };
+  }
+
+  return {
+    test: {
+      id: testData.id,
+      name: testData.name,
+      part: testData.part,
+      output: testData.output,
+      output_format: testData.output_format
+    }
+  };
+}
+
+async function getBuildOutput(
+  supabase: SupabaseClient<Database>,
+  submissionId: number,
+  classId: number,
+  includeLint = true
+) {
+  // Get grader result
+  const { data: graderData } = await supabase
+    .from("grader_results")
+    .select("id, lint_passed, lint_output, lint_output_format")
+    .eq("submission_id", submissionId)
+    .eq("class_id", classId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!graderData) {
+    return {
+      build: null,
+      lint: includeLint ? null : undefined
+    };
+  }
+
+  // Get build output - use actual schema columns (output, format)
+  const { data: outputData } = await supabase
+    .from("grader_result_output")
+    .select("output, format")
+    .eq("grader_result_id", graderData.id)
+    .maybeSingle();
+
+  // Map to BuildOutputContext format (using combined_output for the output field)
+  const build = outputData
+    ? {
+        stdout: null,
+        stderr: null,
+        combined_output: outputData.output,
+        output_format: outputData.format
+      }
+    : null;
+
+  // Get lint output if requested
+  let lint = undefined;
+  if (includeLint) {
+    lint = {
+      passed: graderData.lint_passed,
+      output: graderData.lint_output || "",
+      output_format: graderData.lint_output_format || "text"
+    };
+  }
+
+  return {
+    build,
+    lint
+  };
+}
+
+/**
+ * Normalize a template repository string to extract org and repo
+ * Handles full URLs, missing org, extra segments, etc.
+ * Returns [org, repo] or null if invalid
+ */
+function normalizeTemplateRepo(templateRepo: string | null): [string, string] | null {
+  if (!templateRepo) return null;
+
+  // Remove protocol and domain if present (e.g., https://github.com/org/repo -> org/repo)
+  let normalized = templateRepo.replace(/^https?:\/\/(www\.)?github\.com\//i, "");
+  normalized = normalized.replace(/^git@github\.com:/i, "");
+  normalized = normalized.replace(/\.git$/, "");
+
+  // Remove leading/trailing slashes
+  normalized = normalized.trim().replace(/^\/+|\/+$/g, "");
+
+  // Split by slash and filter out empty parts
+  const parts = normalized.split("/").filter((p) => p.length > 0);
+
+  // Must have exactly two parts (org and repo)
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  return [parts[0], parts[1]];
+}
+
+async function listGraderFiles(
+  supabase: SupabaseClient<Database>,
+  assignmentId: number,
+  classId: number
+) {
+  // Get the autograder info to find the grader repo
+  const { data: autograder, error } = await supabase
+    .from("autograder")
+    .select("grader_repo")
+    .eq("id", assignmentId)
+    .single();
+
+  if (error || !autograder?.grader_repo) {
+    return { files: [], total_count: 0 };
+  }
+
+  try {
+    const [org, repo] = autograder.grader_repo.split("/");
+    const allFiles = await github.listFilesInRepo(org, repo);
+
+    // Filter out common non-code files
+    const excludePatterns = [/^\.git/, /node_modules/, /^\.DS_Store$/, /\.class$/, /\.pyc$/, /^__pycache__/];
+
+    const eligibleFiles = allFiles.filter((file) => {
+      // Skip excluded patterns
+      if (excludePatterns.some((pattern) => pattern.test(file.path))) {
+        return false;
+      }
+      // Skip large files (> 100KB)
+      if (file.size > 100000) {
+        return false;
+      }
+      return true;
+    });
+
+    return {
+      files: eligibleFiles.map((file) => ({
+        name: file.path,
+        size: file.size
+      })),
+      total_count: eligibleFiles.length
+    };
+  } catch {
+    return { files: [], total_count: 0 };
+  }
+}
+
+async function getGraderFilesFiltered(
+  supabase: SupabaseClient<Database>,
+  assignmentId: number,
+  classId: number,
+  globPattern?: string
+) {
+  // Get the autograder info to find the grader repo
+  const { data: autograder, error } = await supabase
+    .from("autograder")
+    .select("grader_repo")
+    .eq("id", assignmentId)
+    .single();
+
+  if (error || !autograder?.grader_repo) {
+    return { files: [], matched_count: 0 };
+  }
+
+  const graderRepo = autograder.grader_repo;
+
+  try {
+    const [org, repo] = graderRepo.split("/");
+    const allFiles = await github.listFilesInRepo(org, repo);
+
+    // Filter out common non-code files
+    const excludePatterns = [/^\.git/, /node_modules/, /^\.DS_Store$/, /\.class$/, /\.pyc$/, /^__pycache__/];
+
+    let eligibleFiles = allFiles.filter((file) => {
+      // Skip excluded patterns
+      if (excludePatterns.some((pattern) => pattern.test(file.path))) {
+        return false;
+      }
+      // Skip large files (> 100KB)
+      if (file.size > 100000) {
+        return false;
+      }
+      return true;
+    });
+
+    // Filter by glob pattern if provided
+    if (globPattern) {
+      eligibleFiles = eligibleFiles.filter((file) => minimatch(file.path, globPattern));
+    }
+
+    // Cap how many files we fetch to avoid rate limits and unbounded work
+    const toFetch = eligibleFiles.slice(0, MAX_FILES);
+
+    // Fetch contents with bounded concurrency (skip-on-error)
+    const files = await mapWithConcurrency(toFetch, FILE_FETCH_CONCURRENCY, async (file) => {
+      try {
+        const content = await github.getFileFromRepo(graderRepo, file.path);
+        if (content && "content" in content) {
+          return { name: file.path, contents: content.content };
+        }
+      } catch {
+        // Skip files that can't be read
+      }
+      return null;
+    });
+
+    return {
+      files,
+      matched_count: files.length
+    };
+  } catch {
+    return { files: [], matched_count: 0 };
+  }
+}
+
+async function listHandoutFiles(
+  supabase: SupabaseClient<Database>,
+  assignmentId: number,
+  classId: number
+) {
+  // Get the assignment to find the template repo
+  const { data: assignment, error } = await supabase
+    .from("assignments")
+    .select("template_repo")
+    .eq("id", assignmentId)
+    .eq("class_id", classId)
+    .single();
+
+  if (error || !assignment?.template_repo) {
+    return { files: [], total_count: 0 };
+  }
+
+  // Validate and normalize template_repo
+  const normalizedRepo = normalizeTemplateRepo(assignment.template_repo);
+  if (!normalizedRepo) {
+    return { files: [], total_count: 0 };
+  }
+
+  const [org, repo] = normalizedRepo;
+
+  try {
+    const allFiles = await github.listFilesInRepo(org, repo);
+
+    // Filter out common non-code files
+    const excludePatterns = [
+      /^\.git/,
+      /^\.github\/workflows/,
+      /node_modules/,
+      /^\.DS_Store$/,
+      /\.class$/,
+      /\.pyc$/,
+      /^__pycache__/
+    ];
+
+    const eligibleFiles = allFiles.filter((file) => {
+      // Skip excluded patterns
+      if (excludePatterns.some((pattern) => pattern.test(file.path))) {
+        return false;
+      }
+      // Skip large files (> 100KB)
+      if (file.size > 100000) {
+        return false;
+      }
+      return true;
+    });
+
+    return {
+      files: eligibleFiles.map((file) => ({
+        name: file.path,
+        size: file.size
+      })),
+      total_count: eligibleFiles.length
+    };
+  } catch {
+    return { files: [], total_count: 0 };
+  }
+}
+
+async function getHandoutFilesFiltered(
+  supabase: SupabaseClient<Database>,
+  assignmentId: number,
+  classId: number,
+  globPattern?: string
+) {
+  // Get the assignment to find the template repo
+  const { data: assignment, error } = await supabase
+    .from("assignments")
+    .select("template_repo")
+    .eq("id", assignmentId)
+    .eq("class_id", classId)
+    .single();
+
+  if (error || !assignment?.template_repo) {
+    return { files: [], matched_count: 0 };
+  }
+
+  // Validate and normalize template_repo
+  const normalizedRepo = normalizeTemplateRepo(assignment.template_repo);
+  if (!normalizedRepo) {
+    return { files: [], matched_count: 0 };
+  }
+
+  const [org, repo] = normalizedRepo;
+
+  try {
+    const allFiles = await github.listFilesInRepo(org, repo);
+
+    // Filter out common non-code files
+    const excludePatterns = [
+      /^\.git/,
+      /^\.github\/workflows/,
+      /node_modules/,
+      /^\.DS_Store$/,
+      /\.class$/,
+      /\.pyc$/,
+      /^__pycache__/
+    ];
+
+    let eligibleFiles = allFiles.filter((file) => {
+      // Skip excluded patterns
+      if (excludePatterns.some((pattern) => pattern.test(file.path))) {
+        return false;
+      }
+      // Skip large files (> 100KB)
+      if (file.size > 100000) {
+        return false;
+      }
+      return true;
+    });
+
+    // Filter by glob pattern if provided
+    if (globPattern) {
+      eligibleFiles = eligibleFiles.filter((file) => minimatch(file.path, globPattern));
+    }
+
+    // Cap how many files we fetch to avoid rate limits and unbounded work
+    const toFetch = eligibleFiles.slice(0, MAX_FILES);
+    const templateRepo = `${org}/${repo}`;
+
+    // Fetch contents with bounded concurrency (skip-on-error)
+    const files = await mapWithConcurrency(toFetch, FILE_FETCH_CONCURRENCY, async (file) => {
+      try {
+        const content = await github.getFileFromRepo(templateRepo, file.path);
+        if (content && "content" in content) {
+          return { name: file.path, contents: content.content };
+        }
+      } catch {
+        // Skip files that can't be read
+      }
+      return null;
+    });
+
+    return {
+      files,
+      matched_count: files.length
+    };
+  } catch {
+    return { files: [], matched_count: 0 };
+  }
 }
 
 async function getLatestSubmissionForStudent(
@@ -900,7 +1688,7 @@ async function getSubmissionsForStudent(
   publicProfileId: string,
   assignmentId: number,
   classId: number
-) {
+): Promise<SubmissionSummary[]> {
   // Translate public profile ID to private profile ID for querying
   const privateProfileId = await getPrivateProfileId(supabase, publicProfileId, classId);
   if (!privateProfileId) return [];
@@ -940,7 +1728,7 @@ async function getSubmissionsForStudent(
   }
 
   // Return lightweight summary (callers can use getSubmission for full details)
-  return submissions.map((sub) => {
+  return submissions.map((sub): SubmissionSummary => {
     const score = scoreMap.get(sub.id);
 
     return {
@@ -951,22 +1739,8 @@ async function getSubmissionsForStudent(
       repository: sub.repository,
       ordinal: sub.ordinal,
       is_active: sub.is_active,
-      student_name: null, // Not included in summary
-      grader_result: score
-        ? {
-            id: 0, // Not included in summary
-            score: score.score,
-            max_score: score.max_score,
-            lint_passed: false, // Not included in summary
-            lint_output: "", // Not included in summary
-            lint_output_format: "", // Not included in summary
-            errors: null, // Not included in summary
-            execution_time: null, // Not included in summary
-            ret_code: null, // Not included in summary
-            tests: [] // Not included in summary
-          }
-        : null,
-      files: undefined // Not included in summary
+      student_name: null,
+      grader_result: score ? { score: score.score, max_score: score.max_score } : null
     };
   });
 }
@@ -1002,8 +1776,78 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
         context.supabase,
         args.submission_id as number,
         args.class_id as number,
-        args.include_test_output !== false,
-        args.include_files !== false
+        args.include_test_output === true,
+        args.include_files === true
+      );
+
+    case "list_submission_files":
+      return await listSubmissionFiles(
+        context.supabase,
+        args.submission_id as number,
+        args.class_id as number
+      );
+
+    case "get_submission_files":
+      return await getSubmissionFilesFiltered(
+        context.supabase,
+        args.submission_id as number,
+        args.class_id as number,
+        args.glob_pattern as string | undefined
+      );
+
+    case "list_submission_tests":
+      return await listSubmissionTests(
+        context.supabase,
+        args.submission_id as number,
+        args.class_id as number,
+        args.only_failed === true
+      );
+
+    case "get_test_output":
+      return await getTestOutput(
+        context.supabase,
+        args.submission_id as number,
+        args.class_id as number,
+        args.test_id as number | undefined,
+        args.test_name as string | undefined
+      );
+
+    case "get_submission_build_output":
+      return await getBuildOutput(
+        context.supabase,
+        args.submission_id as number,
+        args.class_id as number,
+        args.include_lint !== false
+      );
+
+    case "list_grader_files":
+      return await listGraderFiles(
+        context.supabase,
+        args.assignment_id as number,
+        args.class_id as number
+      );
+
+    case "get_grader_files":
+      return await getGraderFilesFiltered(
+        context.supabase,
+        args.assignment_id as number,
+        args.class_id as number,
+        args.glob_pattern as string | undefined
+      );
+
+    case "list_handout_files":
+      return await listHandoutFiles(
+        context.supabase,
+        args.assignment_id as number,
+        args.class_id as number
+      );
+
+    case "get_handout_files":
+      return await getHandoutFilesFiltered(
+        context.supabase,
+        args.assignment_id as number,
+        args.class_id as number,
+        args.glob_pattern as string | undefined
       );
 
     case "get_submissions_for_student":
@@ -1041,7 +1885,7 @@ async function executeTool(toolName: string, args: Record<string, unknown>, cont
 // MCP Protocol Handler
 // =============================================================================
 
-async function handleMCPRequest(request: MCPRequest, context: MCPAuthContext): Promise<MCPResponse> {
+async function handleMCPRequest(request: MCPRequest, context: MCPAuthContext): Promise<MCPResponse | null> {
   const { id, method, params } = request;
 
   try {
@@ -1096,12 +1940,8 @@ async function handleMCPRequest(request: MCPRequest, context: MCPAuthContext): P
       }
 
       case "notifications/initialized":
-        // Client acknowledges initialization - no response needed for notifications
-        return {
-          jsonrpc: "2.0",
-          id,
-          result: {}
-        };
+        // Notifications must not receive a JSON-RPC response; return null so no reply is emitted
+        return null;
 
       case "ping":
         return {
@@ -1208,21 +2048,30 @@ function closeSSEStream(sse: SSEStream): void {
 
 /**
  * Get the full endpoint URL for the MCP server.
- * Uses EDGE_FUNCTIONS_URL environment variable for the base URL.
+ * Only uses EDGE_FUNCTIONS_URL; never trusts x-forwarded-proto or x-forwarded-host
+ * (they are client-controllable and would allow endpoint URL spoofing).
+ * Returns null when EDGE_FUNCTIONS_URL is not set so callers do not emit an
+ * endpoint derived from unvalidated headers.
  */
-function getEndpointUrl(req: Request): string {
-  // Use EDGE_FUNCTIONS_URL as the authoritative base URL
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature kept for API consistency; only EDGE_FUNCTIONS_URL is used
+function getEndpointUrl(_req: Request): string | null {
   const edgeFunctionsUrl = Deno.env.get("EDGE_FUNCTIONS_URL");
 
   if (edgeFunctionsUrl) {
     return `${edgeFunctionsUrl}/functions/v1/mcp-server`;
   }
 
-  // Fallback: construct from request
-  const url = new URL(req.url);
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || url.host;
-  return `${proto}://${host}/functions/v1/mcp-server`;
+  // Refuse fallback: do not derive from x-forwarded-* or Host (spoofable).
+  // Log so operators set EDGE_FUNCTIONS_URL when running behind a proxy.
+  const msg =
+    "EDGE_FUNCTIONS_URL is not set; skipping SSE endpoint event to avoid emitting a URL from unvalidated headers. Set EDGE_FUNCTIONS_URL for the canonical MCP endpoint URL.";
+  if (Deno.env.get("SENTRY_DSN")) {
+    Sentry.captureMessage(msg, "warning");
+  } else {
+    // eslint-disable-next-line no-console -- intentional operational warning
+    console.warn("[mcp-server]", msg);
+  }
+  return null;
 }
 
 // =============================================================================
@@ -1271,9 +2120,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const { stream, sse } = createSSEStream();
 
       // For backwards compatibility with HTTP+SSE (2024-11-05),
-      // send an endpoint event with the URL for POST messages
+      // send an endpoint event only when we have a trusted URL (EDGE_FUNCTIONS_URL).
+      // Never emit an endpoint derived from x-forwarded-* headers.
       const postEndpoint = getEndpointUrl(req);
-      sendSSEEvent(sse, "endpoint", postEndpoint, { includeId: false, raw: true });
+      if (postEndpoint !== null) {
+        sendSSEEvent(sse, "endpoint", postEndpoint, { includeId: false, raw: true });
+      }
 
       // Keep the stream open for server-to-client messages
       return new Response(stream, {
@@ -1345,7 +2197,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       for (const mcpRequest of body) {
         if ("method" in mcpRequest && mcpRequest.id !== undefined && mcpRequest.id !== null) {
           const response = await handleMCPRequest(mcpRequest as MCPRequest, context);
-          responses.push(response);
+          if (response !== null) responses.push(response);
         }
       }
 
@@ -1386,7 +2238,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // Handle the request
     const response = await handleMCPRequest(mcpRequest, context);
 
-    // Return as JSON (default for single requests)
+    // Notifications (e.g. notifications/initialized) must not receive a response
+    if (response === null) {
+      return new Response(null, { status: 202, headers: corsHeaders });
+    }
+
     return new Response(JSON.stringify(response), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" }

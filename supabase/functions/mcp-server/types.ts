@@ -82,6 +82,85 @@ export interface SubmissionFileContext {
   contents: string;
 }
 
+// Submission file metadata (without contents)
+export interface SubmissionFileMetadata {
+  name: string;
+  size: number;
+}
+
+// Submission file list response
+export interface SubmissionFileListResponse {
+  files: SubmissionFileMetadata[];
+  total_count: number;
+}
+
+// Submission files response (with contents)
+export interface SubmissionFilesResponse {
+  files: SubmissionFileContext[];
+  matched_count: number;
+}
+
+// Test summary (without output)
+export interface TestSummary {
+  id: number;
+  name: string;
+  part: string | null;
+  score: number | null;
+  max_score: number | null;
+  passed: boolean;
+}
+
+// Test list response
+export interface TestListResponse {
+  tests: TestSummary[];
+  summary: {
+    passed: number;
+    failed: number;
+    total_score: number;
+    max_score: number;
+  };
+}
+
+// Test output response
+export interface TestOutputResponse {
+  test: {
+    id: number;
+    name: string;
+    part: string | null;
+    output: string | null;
+    output_format: string | null;
+  };
+}
+
+// Build output response
+export interface BuildOutputResponse {
+  build: BuildOutputContext | null;
+  lint?: {
+    passed: boolean;
+    output: string;
+    output_format: string;
+  } | null;
+}
+
+// Lightweight grader result (score only); used in submission list/summary
+export interface GraderResultSummary {
+  score: number;
+  max_score: number;
+}
+
+// Lightweight submission list item (no full grader result, no files)
+export interface SubmissionSummary {
+  id: number;
+  assignment_id: number;
+  created_at: string;
+  sha: string;
+  repository: string;
+  ordinal: number;
+  is_active: boolean;
+  student_name: null;
+  grader_result: GraderResultSummary | null;
+}
+
 // Submission context for MCP
 export interface SubmissionContext {
   id: number;
@@ -94,6 +173,9 @@ export interface SubmissionContext {
   student_name: string | null;
   grader_result?: GraderResultContext | null;
   files?: SubmissionFileContext[];
+  // Summary fields (when files/test_output not included)
+  file_count?: number;
+  file_names?: string[];
 }
 
 // Grader result context
@@ -109,6 +191,11 @@ export interface GraderResultContext {
   ret_code: number | null;
   tests: TestResultContext[];
   build_output?: BuildOutputContext | null;
+  // Summary fields (when tests not included)
+  test_count?: number;
+  tests_passed?: number;
+  tests_failed?: number;
+  test_names?: string[];
 }
 
 // Test result context

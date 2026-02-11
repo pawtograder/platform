@@ -57,16 +57,34 @@ Use the Pawtograder MCP server to fetch additional context:
    {"tool": "get_assignment", "params": {"assignment_id": ${assignmentId}, "class_id": ${classId}}}
    \`\`\`
 
-2. **Get submission with full test output** (sample affected submissions):
+2. **Get submission summaries** (sample affected submissions - returns metadata only):
 ${submissionIds
   .slice(0, 3)
   .map(
     (id) =>
       `   \`\`\`json
-   {"tool": "get_submission", "params": {"submission_id": ${id}, "class_id": ${classId}, "include_test_output": true}}
+   {"tool": "get_submission", "params": {"submission_id": ${id}, "class_id": ${classId}}}
    \`\`\``
   )
   .join("\n")}
+
+3. **List test results** (to see which tests failed):
+   \`\`\`json
+   {"tool": "list_submission_tests", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}, "only_failed": true}}
+   \`\`\`
+
+4. **Get output for the specific failing test**:
+   \`\`\`json
+   {"tool": "get_test_output", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}, "test_name": "${errorGroup.test_name}"}}
+   \`\`\`
+
+5. **Get relevant source files** (if needed, use glob patterns):
+   \`\`\`json
+   {"tool": "list_submission_files", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}}}
+   \`\`\`
+   \`\`\`json
+   {"tool": "get_submission_files", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}, "glob_pattern": "*.java"}}
+   \`\`\`
 
 ## Your Task
 

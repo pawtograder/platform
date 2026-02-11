@@ -48,6 +48,10 @@ BEGIN
         RAISE EXCEPTION 'Cannot modify expires_at';
     END IF;
     
+    IF NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'Cannot modify created_at';
+    END IF;
+    
     -- Allow updates to revoked_at, name, and last_used_at
     RETURN NEW;
 END;
@@ -111,17 +115,14 @@ CREATE POLICY "Users can revoke own tokens"
     USING (auth.uid() = user_id)
     WITH CHECK (auth.uid() = user_id);
 
--- Users can delete their own tokens
-CREATE POLICY "Users can delete own tokens"
-    ON public.api_tokens
-    FOR DELETE
-    USING (auth.uid() = user_id);
+-- No DELETE policy: tokens must be revoked (set revoked_at), not deleted.
+-- Deletion would leave JWTs valid because MCPAuth checks revoked_token_ids only.
 
 -- Instructors/graders only check (uses the custom_access_token_hook to verify roles)
 -- This is enforced at the edge function level, not RLS
 
 -- Grant necessary permissions
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.api_tokens TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.api_tokens TO authenticated;
 GRANT SELECT ON public.revoked_token_ids TO authenticated;
 
 -- Add comments
