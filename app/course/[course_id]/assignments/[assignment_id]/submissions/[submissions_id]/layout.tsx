@@ -1308,6 +1308,7 @@ function RubricView() {
       borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
+      pb="80px"
       height="100vh"
       overflowX="hidden"
       overflowY="auto"
