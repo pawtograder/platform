@@ -30,6 +30,33 @@ function generateTestErrorPrompt(errorGroup: CommonErrorGroup, assignmentId: num
 
   const prompt = `You are helping an instructor analyze a common test error pattern affecting ${errorGroup.occurrence_count} student submissions.
 
+## Available MCP Tools
+
+Use the Pawtograder MCP server to auto-fetch context. **On your first reply, fetch relevant data for a detailed diagnosis.**
+
+### Assignment Context:
+- **get_assignment** - Get assignment spec, handout URL, rubric (essential to verify if test matches spec)
+
+### Submission & Code Tools (use to compare multiple students' approaches):
+- **get_submission** - Get submission metadata
+- **list_submission_files** - See what files a student submitted
+- **get_submission_files** - Fetch specific source files (glob patterns: "*.java", "src/**/*.py")
+- **search_submissions** - Search across submissions for patterns
+
+### Test & Build Tools:
+- **list_submission_tests** - See all test results for a submission
+- **get_test_output** - Get detailed output for a specific test
+- **get_submission_build_output** - Get compilation errors
+
+### Search Tools:
+- **search_discussion_threads** - Find related questions/discussions
+
+## Starting Context
+
+Use these IDs when calling MCP tools:
+- **Assignment ID**: ${assignmentId}
+- **Class ID**: ${classId}
+
 ## Error Pattern Summary
 
 - **Test Name**: ${errorGroup.test_name}${errorGroup.test_part ? ` (Part: ${errorGroup.test_part})` : ""}
@@ -48,82 +75,73 @@ ${errorGroup.sample_outputs
   )
   .join("\n\n")}
 
-## MCP Tools Available
+## Sample Submission IDs for Deeper Analysis
 
-Use the Pawtograder MCP server to fetch additional context:
-
-1. **Get assignment spec/handout**:
-   \`\`\`json
-   {"tool": "get_assignment", "params": {"assignment_id": ${assignmentId}, "class_id": ${classId}}}
-   \`\`\`
-
-2. **Get submission summaries** (sample affected submissions - returns metadata only):
 ${submissionIds
-  .slice(0, 3)
-  .map(
-    (id) =>
-      `   \`\`\`json
-   {"tool": "get_submission", "params": {"submission_id": ${id}, "class_id": ${classId}}}
-   \`\`\``
-  )
+  .slice(0, 5)
+  .map((id) => `- Submission ${id}`)
   .join("\n")}
-
-3. **List test results** (to see which tests failed):
-   \`\`\`json
-   {"tool": "list_submission_tests", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}, "only_failed": true}}
-   \`\`\`
-
-4. **Get output for the specific failing test**:
-   \`\`\`json
-   {"tool": "get_test_output", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}, "test_name": "${errorGroup.test_name}"}}
-   \`\`\`
-
-5. **Get relevant source files** (if needed, use glob patterns):
-   \`\`\`json
-   {"tool": "list_submission_files", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}}}
-   \`\`\`
-   \`\`\`json
-   {"tool": "get_submission_files", "params": {"submission_id": ${submissionIds[0]}, "class_id": ${classId}, "glob_pattern": "*.java"}}
-   \`\`\`
 
 ## Your Task
 
-Analyze this error pattern and provide TWO things:
+**First, fetch:**
+1. The assignment spec to verify what behavior is expected
+2. Source files from 2-3 affected submissions to see the common mistake
+3. The full test output to understand exactly what's being checked
 
-### 1. Assignment/Test Issue Assessment
+Then provide your analysis:
 
-Determine if this error pattern suggests a problem with the assignment itself:
+### 1. Diagnosis with Evidence
+
+Cite **direct evidence** from:
+- The assignment specification (quote the relevant section)
+- Student code patterns (show snippets from multiple submissions)
+- Test output (what's expected vs what students produce)
+
+Example:
+> **Evidence**: The spec states "sort in ascending order" (Section 2.3), but the test expects descending. OR: 15 of 20 submissions have \`if (x > 0)\` instead of \`if (x >= 0)\`, suggesting students misread "non-negative" as "positive".
+
+**Verification**: The instructor should cross-check your diagnosis against the spec and student code before acting.
+
+### 2. Assignment/Test Issue Assessment
+
+Determine if this pattern suggests a problem with the assignment:
 - Does the test contradict the assignment specification?
 - Is the test checking for behavior not described in the handout?
 - Are error messages unclear or misleading?
 - Is the expected behavior ambiguous in the spec?
 
-If you identify a potential assignment issue, explain what needs to be fixed (test logic, spec clarification, etc.).
+If you identify an assignment issue, explain what needs to be fixed.
+If students are genuinely making mistakes, say so clearly.
 
-If the test appears correct and students are genuinely making mistakes, say so clearly.
+### 3. Discussion Post for Students (Ready to Copy/Paste)
 
-### 2. Discussion Post for Students (Ready to Copy/Paste)
+If this is a student error (not an assignment bug), draft TWO versions:
 
-If this is a student error (not an assignment bug), draft a discussion post in markdown that the instructor can pin to help affected students. The post should:
+**Version A (Socratic/Exploratory):**
+For students just encountering the issue - asks guiding questions, encourages debugging.
 
-- Have a clear, descriptive title
-- Explain the common mistake WITHOUT giving away the solution
-- Provide hints and debugging strategies
-- Reference relevant concepts from the assignment
-- Be encouraging and educational
+**Version B (Direct/Efficient):**
+For students who've been stuck a while - clear explanation with concrete next steps.
 
-Format the discussion post like this:
-
+Format:
 ---
-**DISCUSSION POST (copy below this line):**
+**DISCUSSION POST - Version A (Socratic):**
 
 # [Title Here]
 
-[Post content in markdown...]
+[Post content...]
+
+---
+**DISCUSSION POST - Version B (Direct):**
+
+# [Title Here]
+
+[Post content...]
 
 ---
 
-Remember: Never reveal the complete solution. Guide students toward understanding their mistake.`;
+**After using this AI help, please provide feedback in Pawtograder** on whether the analysis was accurate. This helps improve AI assistance for the course.`;
 
   return prompt;
 }
