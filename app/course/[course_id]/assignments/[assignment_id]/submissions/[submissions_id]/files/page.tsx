@@ -1281,7 +1281,7 @@ export default function FilesView() {
             </Box>
           ) : selectedFile ? (
             <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
-              {isMarkdownFile(selectedFile.name) ? (
+              {isMarkdownFile(selectedFile.name) && !selectedFile.is_binary ? (
                 <MarkdownFilePreview
                   key={selectedFile.id}
                   file={selectedFile}

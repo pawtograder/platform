@@ -29,7 +29,7 @@ import {
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Flex, Heading, HStack, Separator, Spinner, Text, VStack } from "@chakra-ui/react";
 import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -66,6 +66,8 @@ function MermaidDiagram({ code }: { code: string }) {
     async function render() {
       try {
         const mermaid = (await import("mermaid")).default;
+        // securityLevel: "strict" enables Mermaid's built-in DOMPurify sanitization
+        // to prevent XSS from student-authored diagram input
         mermaid.initialize({
           startOnLoad: false,
           theme: "default",
@@ -118,6 +120,7 @@ function MermaidDiagram({ code }: { code: string }) {
       my={2}
       display="flex"
       justifyContent="center"
+      // SVG is sanitized by mermaid.initialize({ securityLevel: "strict" }) above
       dangerouslySetInnerHTML={{ __html: svg }}
       css={{
         "& svg": {
@@ -161,12 +164,17 @@ export function isMarkdownFile(filename: string): boolean {
 
 // Resolve a relative path from the current file's directory
 function resolveRelativePath(currentFilePath: string, relativePath: string): string {
+  // Absolute paths (root-relative): e.g. /images/photo.png -> images/photo.png
+  if (relativePath.startsWith("/")) {
+    return relativePath.replace(/^\/+/, "");
+  }
+
   // Get the directory of the current file
   const parts = currentFilePath.split("/");
   parts.pop(); // Remove the file name
   const dir = parts.join("/");
 
-  // Handle relative path
+  // Handle relative path (./ and ../ cases)
   const segments = (dir ? dir + "/" + relativePath : relativePath).split("/");
   const resolved: string[] = [];
   for (const seg of segments) {
@@ -179,7 +187,8 @@ function resolveRelativePath(currentFilePath: string, relativePath: string): str
   return resolved.join("/");
 }
 
-// Fetch binary file content from Supabase Storage and return data URI
+// Fetch binary file content from Supabase Storage and return data URI.
+// Uses FileReader.readAsDataURL for O(n) base64 encoding (avoids quadratic reduce on large files).
 async function fetchBinaryFileAsDataUri(storageKey: string, mimeType: string): Promise<string> {
   const client = createClient();
   const { data, error } = await client.storage.from("submission-files").download(storageKey);
@@ -187,9 +196,16 @@ async function fetchBinaryFileAsDataUri(storageKey: string, mimeType: string): P
     console.error("Failed to fetch binary file from storage:", error);
     return "";
   }
-  const arrayBuffer = await data.arrayBuffer();
-  const base64 = btoa(new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ""));
-  return `data:${mimeType};base64,${base64}`;
+  const blob = new Blob([data], { type: mimeType });
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      resolve(typeof result === "string" ? result : `data:${mimeType};base64,`);
+    };
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(blob);
+  });
 }
 
 /**
@@ -429,6 +445,21 @@ function MarkdownAnnotationPopover({ file }: { file: SubmissionFile }) {
                   defaultSingleLine={true}
                   sendButtonText="Add Annotation"
                   sendMessage={async (message) => {
+                    if (file.class_id == null) {
+                      toaster.error({
+                        title: "Cannot add annotation",
+                        description: "File is not associated with a class."
+                      });
+                      return;
+                    }
+                    if (authorProfileId == null) {
+                      toaster.error({
+                        title: "Cannot add annotation",
+                        description: "Your profile is not available. Please refresh and try again."
+                      });
+                      return;
+                    }
+
                     let points = selectedCheckOption.check?.points;
                     if (selectedSubOption) {
                       points = selectedSubOption.points;
@@ -442,10 +473,10 @@ function MarkdownAnnotationPopover({ file }: { file: SubmissionFile }) {
                       comment: commentText,
                       line: MARKDOWN_FILE_COMMENT_LINE,
                       rubric_check_id: selectedCheckOption.check?.id ?? null,
-                      class_id: file.class_id!,
+                      class_id: file.class_id,
                       submission_file_id: file.id,
                       submission_id: submission.id,
-                      author: authorProfileId!,
+                      author: authorProfileId,
                       released: submissionReview ? submissionReview.released : true,
                       points: points ?? null,
                       submission_review_id: submissionReview?.id ?? null,
@@ -621,25 +652,22 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
 
       // Custom code block renderer that handles mermaid
       pre: ({ children, ...props }) => {
-        // Check if the child is a code element with mermaid language
-        if (
-          children &&
-          typeof children === "object" &&
-          "props" in (children as React.ReactElement) &&
-          (children as React.ReactElement).props
-        ) {
-          const childProps = (children as React.ReactElement).props;
-          const className = childProps.className || "";
-          if (className.includes("language-mermaid")) {
-            const code =
-              typeof childProps.children === "string"
-                ? childProps.children
-                : Array.isArray(childProps.children)
-                  ? childProps.children.join("")
-                  : "";
-            if (code) {
-              return <MermaidDiagram code={code.trim()} />;
-            }
+        const childArray = React.Children.toArray(children);
+        const mermaidChild = childArray.find(
+          (child) =>
+            React.isValidElement(child) &&
+            (child.props as { className?: string }).className?.includes("language-mermaid")
+        );
+        if (mermaidChild && React.isValidElement(mermaidChild)) {
+          const childProps = mermaidChild.props as { children?: React.ReactNode };
+          const code =
+            typeof childProps.children === "string"
+              ? childProps.children
+              : Array.isArray(childProps.children)
+                ? childProps.children.join("")
+                : "";
+          if (code) {
+            return <MermaidDiagram code={code.trim()} />;
           }
         }
         return <pre {...props}>{children}</pre>;
@@ -686,15 +714,7 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
 
       // Styled blockquote - use native element to avoid Box/blockquote type mismatch
       blockquote: ({ children }) => (
-        <Box
-          as="blockquote"
-          borderLeftWidth="4px"
-          borderLeftColor="blue.300"
-          pl={4}
-          py={1}
-          my={2}
-          color="fg.muted"
-        >
+        <Box as="blockquote" borderLeftWidth="4px" borderLeftColor="blue.300" pl={4} py={1} my={2} color="fg.muted">
           {children}
         </Box>
       ),

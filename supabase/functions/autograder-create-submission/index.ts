@@ -1016,7 +1016,30 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .map((f: { storage_key: string | null }) => f.storage_key)
               .filter((k: string | null): k is string => k !== null);
             if (storageKeys.length > 0) {
-              await adminSupabase.storage.from("submission-files").remove(storageKeys);
+              try {
+                const { error: storageRemoveError } = await adminSupabase.storage
+                  .from("submission-files")
+                  .remove(storageKeys);
+                if (storageRemoveError) {
+                  throw storageRemoveError;
+                }
+              } catch (storageErr) {
+                console.error("Failed to remove binary files from storage:", storageErr);
+                scope?.setTag("storage_cleanup_error", "remove_failed");
+                scope?.setContext("storage_remove_failed", {
+                  submission_id: existingSubmission.id,
+                  storage_keys: storageKeys,
+                  error: storageErr instanceof Error ? storageErr.message : String(storageErr)
+                });
+                Sentry.captureException(
+                  storageErr instanceof Error ? storageErr : new Error(String(storageErr)),
+                  scope
+                );
+                throw new UserVisibleError(
+                  `Failed to clean up previous submission files from storage. Please retry.`,
+                  500
+                );
+              }
             }
           }
 
@@ -1266,14 +1289,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
           // Binary file detection by extension
           const BINARY_EXTENSIONS = new Set([
-            // Images
+            // Images (SVG excluded — text-based XML, stored inline for markdown image resolution)
             ".png",
             ".jpg",
             ".jpeg",
             ".gif",
             ".bmp",
             ".ico",
-            ".svg",
             ".webp",
             ".tiff",
             ".tif",
@@ -1397,46 +1419,48 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
           }
 
-          // Insert binary files: store content in Supabase Storage, metadata in DB
+          // Insert binary files: store content in Supabase Storage, metadata in DB (parallelized)
           if (binaryFiles.length > 0) {
             const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
-            for (const file of binaryFiles) {
-              const ext = getFileExtension(file.name);
-              const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-              const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${file.name}`;
+            await Promise.all(
+              binaryFiles.map(async (file) => {
+                const ext = getFileExtension(file.name);
+                const mimeType = MIME_TYPES[ext] || "application/octet-stream";
+                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${file.name}`;
 
-              // Upload to Supabase Storage
-              const { error: storageError } = await adminSupabase.storage
-                .from("submission-files")
-                .upload(storageKey, file.contents, {
-                  contentType: mimeType,
-                  upsert: true
+                // Upload to Supabase Storage
+                const { error: storageError } = await adminSupabase.storage
+                  .from("submission-files")
+                  .upload(storageKey, file.contents, {
+                    contentType: mimeType,
+                    upsert: true
+                  });
+                if (storageError) {
+                  throw new UserVisibleError(
+                    `Internal error: Failed to upload binary file "${file.name}" to storage: ${storageError.message}`
+                  );
+                }
+
+                // Insert DB record (no inline contents for binary)
+                const { error: dbError } = await adminSupabase.from("submission_files").insert({
+                  submission_id: submission_id,
+                  name: file.name,
+                  profile_id: repoData.profile_id,
+                  assignment_group_id: repoData.assignment_group_id,
+                  contents: null,
+                  class_id: repoData.assignments.class_id!,
+                  is_binary: true,
+                  file_size: file.contents.length,
+                  mime_type: mimeType,
+                  storage_key: storageKey
                 });
-              if (storageError) {
-                throw new UserVisibleError(
-                  `Internal error: Failed to upload binary file "${file.name}" to storage: ${storageError.message}`
-                );
-              }
-
-              // Insert DB record (no inline contents for binary)
-              const { error: dbError } = await adminSupabase.from("submission_files").insert({
-                submission_id: submission_id,
-                name: file.name,
-                profile_id: repoData.profile_id,
-                assignment_group_id: repoData.assignment_group_id,
-                contents: null,
-                class_id: repoData.assignments.class_id!,
-                is_binary: true,
-                file_size: file.contents.length,
-                mime_type: mimeType,
-                storage_key: storageKey
-              });
-              if (dbError) {
-                throw new UserVisibleError(
-                  `Internal error: Failed to insert binary file record for "${file.name}": ${dbError.message}`
-                );
-              }
-            }
+                if (dbError) {
+                  throw new UserVisibleError(
+                    `Internal error: Failed to insert binary file record for "${file.name}": ${dbError.message}`
+                  );
+                }
+              })
+            );
           }
         }
         if (isE2ERun) {
