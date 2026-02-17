@@ -10,7 +10,7 @@ import {
   OutputVisibility,
   RepositoryCheckRun
 } from "../_shared/FunctionTypes.d.ts";
-import { resolveRef, updateCheckRun, validateOIDCTokenOrAllowE2E } from "../_shared/GitHubWrapper.ts";
+import { resolveRef, updateCheckRun, validateOIDCTokenOrAllowE2E, END_TO_END_REPO_PREFIX } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -329,6 +329,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     throw new UserVisibleError("No token provided", 400);
   }
   const decoded = await validateOIDCTokenOrAllowE2E(token);
+  const isE2ERun = decoded.repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
   // Find the corresponding submission
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
@@ -764,7 +765,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
 
     // Update the check run status to completed
     // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
-    if (submission_id && !isRegressionRerun) {
+    if (submission_id && !isRegressionRerun && !isE2ERun) {
       if (checkRun) {
         const newStatus: CheckRunStatus = {
           ...(checkRun.status as CheckRunStatus),

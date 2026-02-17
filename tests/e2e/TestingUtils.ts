@@ -1656,7 +1656,7 @@ export function createSampleGradingResult(overrides?: Partial<GradingScriptResul
     execution_time: 5000,
     grader_sha: "abc123gradersha",
     action_ref: "main",
-    action_repository: "pawtograder-playground/grader-action",
+    action_repository: "pawtograder/assignment-action",
     feedback: {
       score: 85,
       max_score: 100,
