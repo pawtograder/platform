@@ -55,7 +55,9 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
 
     // Validate target has GitHub org for repo operations
     if (!args.skipRepos && !targetClass.github_org) {
-      throw new CLIError("Target class must have a GitHub organization configured (use --skip-repos to skip repo operations)");
+      throw new CLIError(
+        "Target class must have a GitHub organization configured (use --skip-repos to skip repo operations)"
+      );
     }
 
     // 2. Determine assignments to copy
@@ -410,7 +412,9 @@ async function copyRubricTree(
       checkCount += criteria.rubric_checks?.length || 0;
     }
   }
-  logger.info(`    Source rubric "${sourceRubric.name}": ${partCount} parts, ${criteriaCount} criteria, ${checkCount} checks`);
+  logger.info(
+    `    Source rubric "${sourceRubric.name}": ${partCount} parts, ${criteriaCount} criteria, ${checkCount} checks`
+  );
 
   let targetRubricId: number;
 
@@ -569,7 +573,9 @@ async function copyRubricTree(
       const newReferencingId = checkIdMap.get(ref.referencing_rubric_check_id);
 
       if (!newReferencedId || !newReferencingId) {
-        logger.warning(`    Warning: Could not map check reference IDs (${ref.referenced_rubric_check_id} -> ${ref.referencing_rubric_check_id})`);
+        logger.warning(
+          `    Warning: Could not map check reference IDs (${ref.referenced_rubric_check_id} -> ${ref.referencing_rubric_check_id})`
+        );
         continue;
       }
 
@@ -587,7 +593,9 @@ async function copyRubricTree(
     }
   }
 
-  logger.info(`    Copied ${partCount} parts, ${criteriaCount} criteria, ${checkCount} checks -> rubric ID ${targetRubricId}`);
+  logger.info(
+    `    Copied ${partCount} parts, ${criteriaCount} criteria, ${checkCount} checks -> rubric ID ${targetRubricId}`
+  );
   return targetRubricId;
 }
 

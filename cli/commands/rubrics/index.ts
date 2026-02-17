@@ -224,9 +224,7 @@ export const builder = (yargs: Argv) => {
           };
 
           // Generate output filename
-          const outputFile =
-            (args.output as string) ||
-            `${assignment.slug}-${rubricType}-rubric.yml`;
+          const outputFile = (args.output as string) || `${assignment.slug}-${rubricType}-rubric.yml`;
 
           // Write YAML file
           const yamlContent = YAML.stringify(rubricYml, {
@@ -484,7 +482,9 @@ async function importRubricFromYml(
         .single();
 
       if (criteriaError || !newCriteria) {
-        throw new CLIError(`Failed to create criteria '${criteria.name}': ${criteriaError?.message || "Unknown error"}`);
+        throw new CLIError(
+          `Failed to create criteria '${criteria.name}': ${criteriaError?.message || "Unknown error"}`
+        );
       }
 
       // Insert checks
