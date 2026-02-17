@@ -63,6 +63,10 @@ const additionalStyles = `
   .wmde-markdown i {
     color: inherit !important;
   }
+  .wmde-markdown a {
+    color: inherit !important;
+    text-decoration: underline !important;
+  }
 `;
 
 export default function Markdown(props: MarkdownProps) {

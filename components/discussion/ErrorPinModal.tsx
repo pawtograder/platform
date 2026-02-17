@@ -1,7 +1,6 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import { Json } from "@/utils/supabase/SupabaseTypes";
@@ -93,7 +92,6 @@ export function ErrorPinModal({
 }: ErrorPinModalProps) {
   const { course_id } = useParams();
   const assignments = useAssignments();
-  const { private_profile_id } = useClassProfiles();
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [previewSubmissions, setPreviewSubmissions] = useState<
@@ -253,10 +251,10 @@ export function ErrorPinModal({
         match_value_max: r.match_value_max?.trim() || null
       }));
       const { data, error } = await supabase.rpc("preview_error_pin_matches", {
-        p_assignment_id: isClassLevel ? null : assignmentId,
+        p_assignment_id: (isClassLevel ? undefined : assignmentId) as number,
         p_rules: sanitizedRules as unknown as Json,
         p_rule_logic: watch("rule_logic"),
-        p_class_id: isClassLevel ? Number(course_id) : null
+        p_class_id: isClassLevel ? Number(course_id) : undefined
       });
 
       if (error) throw error;
@@ -297,22 +295,15 @@ export function ErrorPinModal({
       return;
     }
 
-    if (!private_profile_id) {
-      toaster.error({
-        title: "Error",
-        description: "User profile not found"
-      });
-      return;
-    }
-
     try {
       const supabase = createClient();
+      // Note: created_by is handled by the server-side save_error_pin function
+      // which looks up the user's private_profile_id from user_privileges
       const pinData = {
         id: existingPinId || undefined,
         discussion_thread_id,
         assignment_id: data.is_class_level ? null : data.assignment_id,
         class_id: Number(course_id),
-        created_by: private_profile_id,
         rule_logic: data.rule_logic,
         enabled: data.enabled
       };

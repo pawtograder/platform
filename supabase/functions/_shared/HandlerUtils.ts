@@ -1,5 +1,5 @@
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "./SupabaseTypes.d.ts";
 

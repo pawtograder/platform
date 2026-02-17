@@ -155,6 +155,8 @@ export default function TestInsightsPage() {
               onCreateErrorPin={handleCreateErrorPin}
               onViewSubmissions={handleViewSubmissions}
               onRegradeSubmissions={handleRegradeSubmissions}
+              assignmentId={validAssignmentId}
+              classId={validCourseId}
             />
           </Box>
         </Tabs.Content>

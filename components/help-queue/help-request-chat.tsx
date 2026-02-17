@@ -35,6 +35,8 @@ import useModalManager from "@/hooks/useModalManager";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import HelpRequestFeedbackModal from "./help-request-feedback-modal";
+import HelpRequestResolutionModal from "./help-request-resolution-modal";
+import type { HelpRequestResolutionStatus } from "@/utils/supabase/DatabaseTypes";
 import VideoCallControls from "./video-call-controls";
 import WorkSessionHistory from "./work-session-history";
 
@@ -56,6 +58,7 @@ import NotificationPermissionWarning, {
   useShowNotificationWarning
 } from "@/components/notifications/notification-permission-warning";
 import { formatDistanceToNow } from "date-fns";
+import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
 
 /**
  * Office hours form and UI helper types
@@ -1048,10 +1051,11 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
     return isInstructorOrGrader || studentIds.includes(private_profile_id!);
   }, [isInstructorOrGrader, studentIds, private_profile_id]);
 
-  // Modal management for moderation, karma, and feedback actions
+  // Modal management for moderation, karma, feedback, and resolution actions
   const moderationModal = useModalManager();
   const karmaModal = useModalManager();
   const feedbackModal = useModalManager<{ action: "resolve" | "close" }>();
+  const resolutionModal = useModalManager();
 
   // Generate title based on number of students - memoized to prevent recalculation
   const requestTitle = useMemo(() => {
@@ -1084,43 +1088,51 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   }, [karmaModal]);
 
   /**
-   * Handle feedback submission and complete the resolve/close action
+   * Handle feedback submission (for resolved/closed requests that need feedback after the fact)
    */
   const handleFeedbackSuccess = useCallback(async () => {
-    const action = feedbackModal.modalData?.action;
-    if (!action || !request) return;
+    feedbackModal.closeModal();
+  }, [feedbackModal]);
 
-    try {
-      // Only update request status if it's not already resolved/closed
-      if (request.status !== "resolved" && request.status !== "closed") {
-        if (action === "resolve") {
-          await helpRequests.update(request.id, {
-            resolved_by: private_profile_id,
-            resolved_at: new Date().toISOString(),
-            status: "resolved"
-          });
-          await logActivityForAllStudents("request_resolved", "Request resolved by student");
-        } else if (action === "close") {
-          await helpRequests.update(request.id, {
-            status: "closed"
-          });
-          await logActivityForAllStudents("request_updated", "Request closed by student");
-        }
+  /**
+   * Handle resolution modal submission with status and optional feedback
+   */
+  const handleResolutionSuccess = useCallback(
+    async (resolutionStatus: HelpRequestResolutionStatus, _feedback?: unknown, notes?: string) => {
+      if (!request) return;
+
+      try {
+        // Update the help request with resolution status
+        await helpRequests.update(request.id, {
+          status: "resolved",
+          resolved_by: private_profile_id,
+          resolved_at: new Date().toISOString(),
+          resolution_status: resolutionStatus,
+          resolution_notes: notes || null
+        });
+
+        await logActivityForAllStudents("request_resolved", `Request resolved by student (${resolutionStatus})`);
+
+        resolutionModal.closeModal();
+
+        toaster.success({
+          title: "Help Request Resolved",
+          description: "Your help request has been resolved."
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Action Failed",
+          description: `Failed to resolve the request: ${error instanceof Error ? error.message : String(error)}`
+        });
       }
-
-      feedbackModal.closeModal();
-    } catch (error) {
-      toaster.error({
-        title: "Action Failed",
-        description: `Failed to ${action} the request: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
-  }, [feedbackModal, helpRequests, request, private_profile_id, logActivityForAllStudents]);
+    },
+    [helpRequests, request, private_profile_id, logActivityForAllStudents, resolutionModal]
+  );
 
   const resolveRequest = useCallback(async () => {
-    // For students, show feedback modal first
+    // For students, show resolution modal with status selection
     if (role.role === "student") {
-      feedbackModal.openModal({ action: "resolve" });
+      resolutionModal.openModal();
       return;
     }
 
@@ -1131,7 +1143,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       status: "resolved"
     });
     await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
-  }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
+  }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, role.role, resolutionModal]);
 
   /**
    * Open feedback modal for closed/resolved requests without existing feedback from the currently-logged in student
@@ -1282,6 +1294,12 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
             {/* Staff-only actions */}
             {isInstructorOrGrader && request && (
               <>
+                <AIHelpIconButton
+                  contextType="help_request"
+                  resourceId={request.id}
+                  classId={request.class_id}
+                  submissionId={request.referenced_submission_id ?? undefined}
+                />
                 <DiscordMessageLink resourceType="help_request" resourceId={request.id} size="sm" variant="ghost" />
                 <Tooltip content="Moderation" showArrow>
                   <IconButton
@@ -1393,14 +1411,28 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       )}
 
       {role.role === "student" && (
-        <HelpRequestFeedbackModal
-          isOpen={feedbackModal.isOpen}
-          onClose={feedbackModal.closeModal}
-          onSuccess={handleFeedbackSuccess}
-          helpRequestId={request_id}
-          classId={Number(params.course_id)}
-          studentProfileId={private_profile_id!}
-        />
+        <>
+          {/* Feedback modal for providing feedback on already resolved/closed requests */}
+          <HelpRequestFeedbackModal
+            isOpen={feedbackModal.isOpen}
+            onClose={feedbackModal.closeModal}
+            onSuccess={handleFeedbackSuccess}
+            helpRequestId={request_id}
+            classId={Number(params.course_id)}
+            studentProfileId={private_profile_id!}
+          />
+          {/* Resolution modal for resolving active requests with status selection */}
+          <HelpRequestResolutionModal
+            isOpen={resolutionModal.isOpen}
+            onClose={resolutionModal.closeModal}
+            onSuccess={handleResolutionSuccess}
+            helpRequestId={request_id}
+            classId={Number(params.course_id)}
+            studentProfileId={private_profile_id!}
+            showFeedback={true}
+            title="Resolve Help Request"
+          />
+        </>
       )}
     </Flex>
   );

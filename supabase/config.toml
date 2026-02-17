@@ -306,7 +306,7 @@ entrypoint = "./functions/github-repo-webhook/index.ts"
 
 [functions.github-repo-configure-webhook]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/github-repo-configure-webhook/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -721,3 +721,14 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/discord-discussion-stats-update/deno.json"
 entrypoint = "./functions/discord-discussion-stats-update/index.ts"
+
+[functions.mcp-server]
+enabled = true
+verify_jwt = false
+import_map = "./functions/mcp-server/deno.json"
+entrypoint = "./functions/mcp-server/index.ts"
+
+[functions.mcp-tokens]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/mcp-tokens/index.ts"

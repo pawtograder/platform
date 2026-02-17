@@ -59,7 +59,7 @@ const ProtectedLayout = async ({
               <DynamicCourseNav />
               {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
               {/* mobilenav */}
-              <Box pt="0" ml="0" mr="0">
+              <Box pt="0" ml="0" mr="0" pb="80px">
                 {children}
               </Box>
               <FloatingHelpRequestWidget />

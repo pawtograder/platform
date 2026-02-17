@@ -3,7 +3,7 @@ import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as canvas from "../_shared/CanvasWrapper.ts";
 import { UserVisibleError } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 
 import { assertUserIsInstructor } from "../_shared/HandlerUtils.ts";
 import { createUserInClass } from "../_shared/EnrollmentUtils.ts";

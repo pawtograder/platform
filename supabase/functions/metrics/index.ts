@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -31,6 +31,8 @@ async function generatePrometheusMetrics(): Promise<Response> {
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
     const dlqQueueCount = queueSizes?.[0]?.dlq_queue_size || 0;
     const gradebookRowRecalculateQueueCount = queueSizes?.[0]?.gradebook_row_recalculate_queue_size || 0;
+    const discordQueueCount = queueSizes?.[0]?.discord_queue_size || 0;
+    const discordDlqQueueCount = queueSizes?.[0]?.discord_dlq_queue_size || 0;
 
     // Generate Prometheus metrics format
     const timestamp = Date.now(); // Unix timestamp in milliseconds
@@ -49,17 +51,25 @@ async function generatePrometheusMetrics(): Promise<Response> {
 # TYPE pawtograder_info gauge
 pawtograder_info{version="1.0.0"} 1 ${timestamp}
 
-# HELP pawtograder_async_queue_size Current number of messages in the async worker queue
+# HELP pawtograder_async_queue_size Current number of messages in the github async worker queue
 # TYPE pawtograder_async_queue_size gauge
 pawtograder_async_queue_size ${asyncQueueCount} ${timestamp}
 
-# HELP pawtograder_async_dlq_size Current number of messages in the async worker dead letter queue
+# HELP pawtograder_async_dlq_size Current number of messages in the github async worker dead letter queue
 # TYPE pawtograder_async_dlq_size gauge
 pawtograder_async_dlq_size ${dlqQueueCount} ${timestamp}
 
 # HELP pawtograder_gradebook_row_recalculate_queue_size Current number of messages in the gradebook row recalculate queue
 # TYPE pawtograder_gradebook_row_recalculate_queue_size gauge
 pawtograder_gradebook_row_recalculate_queue_size ${gradebookRowRecalculateQueueCount} ${timestamp}
+
+# HELP pawtograder_discord_queue_size Current number of messages in the discord async worker queue
+# TYPE pawtograder_discord_queue_size gauge
+pawtograder_discord_queue_size ${discordQueueCount} ${timestamp}
+
+# HELP pawtograder_discord_dlq_size Current number of messages in the discord async worker dead letter queue
+# TYPE pawtograder_discord_dlq_size gauge
+pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
 
 # HELP pawtograder_circuit_breaker_open Whether a circuit breaker is currently open (1 = open, 0 = closed)
 # TYPE pawtograder_circuit_breaker_open gauge

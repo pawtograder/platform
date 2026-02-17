@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
 import type { Notification } from "../_shared/FunctionTypes.d.ts";

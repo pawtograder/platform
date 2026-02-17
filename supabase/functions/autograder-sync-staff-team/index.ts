@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { syncStaffTeam } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
