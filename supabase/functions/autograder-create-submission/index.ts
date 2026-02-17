@@ -574,6 +574,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // This can happen when GitHub retries the workflow run
       if (workflowRunErrorError.code === "23505") {
         console.log(`Workflow run error already exists, ignoring duplicate: ${name}`);
+      } else if (workflowRunErrorError.code === "23503" && workflowRunErrorError.details?.includes("submission_id")) {
+        // FK violation on submission_id: submission was already deleted (e.g. empty submission rejected).
+        // Log but don't throw - caller should propagate the original user-visible error.
+        console.log(`Cannot record workflow run error: submission no longer exists (${workflowRunErrorError.message})`);
+        Sentry.captureException(workflowRunErrorError, scope);
       } else {
         console.error(workflowRunErrorError);
         Sentry.captureException(workflowRunErrorError, scope);
@@ -1335,71 +1340,61 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           // Empty submission detection:
           // If the submitted expected files match ANY recorded handout version for the assignment,
           // mark the submission as empty.
-          try {
-            const { data: match, error: matchError } = await adminSupabase
-              .from("assignment_handout_file_hashes")
-              .select("id")
-              .eq("assignment_id", repoData.assignment_id)
-              .eq("combined_hash", submissionCombinedHash)
-              .limit(1)
-              .maybeSingle();
-            if (matchError) {
-              Sentry.captureException(matchError, scope);
-            }
-            const isEmpty = !!match;
-            const { error: updateError } = await adminSupabase
-              .from("submissions")
-              .update({ is_empty_submission: isEmpty })
-              .eq("id", submission_id);
-            if (updateError) {
-              Sentry.captureException(updateError, scope);
-            }
-
-            // If the assignment prohibits empty submissions, reject after determining emptiness.
-            // (Allow graders/instructors to bypass to avoid breaking staff workflows.)
-            const isGraderOrInstructor =
-              checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
-            if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
-              if (!isE2ERun) {
-                await handleGitHubApiCall(
-                  () =>
-                    updateCheckRun({
-                      owner: repository.split("/")[0],
-                      repo: repository.split("/")[1],
-                      check_run_id: checkRun.check_run_id,
-                      status: "completed",
-                      conclusion: "failure",
-                      output: {
-                        title: "Empty submission rejected",
-                        summary: "This assignment does not permit empty submissions.",
-                        text: "Your submission appears to match the handout (starter) files exactly. Please make sure you have committed your changes before submitting."
-                      }
-                    }),
-                  org,
-                  "updateCheckRun",
-                  adminSupabase,
-                  scope
-                );
-              }
-              try {
-                await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
-              } catch (cleanupErr) {
-                Sentry.captureException(cleanupErr, scope);
-              }
-              throw new UserVisibleError(
-                "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
-                400
-              );
-            }
-          } catch (e) {
-            // Do not fail submission creation over DB read/update issues,
-            // but DO preserve user-facing rejections we intentionally throw.
-            if (e instanceof UserVisibleError) {
-              throw e;
-            }
-            Sentry.captureException(e, scope);
+          const { data: match, error: matchError } = await adminSupabase
+            .from("assignment_handout_file_hashes")
+            .select("id")
+            .eq("assignment_id", repoData.assignment_id)
+            .eq("combined_hash", submissionCombinedHash)
+            .limit(1)
+            .maybeSingle();
+          if (matchError) {
+            Sentry.captureException(matchError, scope);
+          }
+          const isEmpty = !!match;
+          const { error: updateError } = await adminSupabase
+            .from("submissions")
+            .update({ is_empty_submission: isEmpty })
+            .eq("id", submission_id);
+          if (updateError) {
+            Sentry.captureException(updateError, scope);
           }
 
+          // If the assignment prohibits empty submissions, reject after determining emptiness.
+          // (Allow graders/instructors to bypass to avoid breaking staff workflows.)
+          const isGraderOrInstructor =
+            checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
+          if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
+            if (!isE2ERun) {
+              await handleGitHubApiCall(
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "completed",
+                    conclusion: "failure",
+                    output: {
+                      title: "Empty submission rejected",
+                      summary: "This assignment does not permit empty submissions.",
+                      text: "Your submission appears to match the handout (starter) files exactly. Please make sure you have committed your changes before submitting."
+                    }
+                  }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
+            }
+            try {
+              await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+            } catch (cleanupErr) {
+              Sentry.captureException(cleanupErr, scope);
+            }
+            throw new UserVisibleError(
+              "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
+              400
+            );
+          }
           if (isE2ERun) {
             return {
               grader_url: "not-a-real-url",
