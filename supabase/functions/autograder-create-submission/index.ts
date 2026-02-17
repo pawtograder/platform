@@ -1267,29 +1267,80 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           // Binary file detection by extension
           const BINARY_EXTENSIONS = new Set([
             // Images
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff", ".tif",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".ico",
+            ".svg",
+            ".webp",
+            ".tiff",
+            ".tif",
             // Documents
-            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
             // Archives
-            ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+            ".zip",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".7z",
+            ".rar",
             // Media
-            ".mp3", ".mp4", ".wav", ".avi", ".mov", ".webm",
+            ".mp3",
+            ".mp4",
+            ".wav",
+            ".avi",
+            ".mov",
+            ".webm",
             // Fonts
-            ".woff", ".woff2", ".ttf", ".otf", ".eot",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".otf",
+            ".eot",
             // Other binary
-            ".class", ".jar", ".exe", ".dll", ".so", ".dylib", ".o", ".pyc",
-            ".sqlite", ".db", ".bin", ".dat"
+            ".class",
+            ".jar",
+            ".exe",
+            ".dll",
+            ".so",
+            ".dylib",
+            ".o",
+            ".pyc",
+            ".sqlite",
+            ".db",
+            ".bin",
+            ".dat"
           ]);
 
           const MIME_TYPES: Record<string, string> = {
-            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-            ".gif": "image/gif", ".bmp": "image/bmp", ".ico": "image/x-icon",
-            ".svg": "image/svg+xml", ".webp": "image/webp", ".tiff": "image/tiff",
-            ".tif": "image/tiff", ".pdf": "application/pdf",
-            ".zip": "application/zip", ".gz": "application/gzip",
-            ".mp3": "audio/mpeg", ".mp4": "video/mp4", ".wav": "audio/wav",
-            ".woff": "font/woff", ".woff2": "font/woff2",
-            ".ttf": "font/ttf", ".otf": "font/otf",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+            ".ico": "image/x-icon",
+            ".svg": "image/svg+xml",
+            ".webp": "image/webp",
+            ".tiff": "image/tiff",
+            ".tif": "image/tiff",
+            ".pdf": "application/pdf",
+            ".zip": "application/zip",
+            ".gz": "application/gzip",
+            ".mp3": "audio/mpeg",
+            ".mp4": "video/mp4",
+            ".wav": "audio/wav",
+            ".woff": "font/woff",
+            ".woff2": "font/woff2",
+            ".ttf": "font/ttf",
+            ".otf": "font/otf"
           };
 
           const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB per file
@@ -1322,8 +1373,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           }
 
           // Separate text and binary files
-          const textFiles = submittedFilesWithContents.filter(f => !f.binary);
-          const binaryFiles = submittedFilesWithContents.filter(f => f.binary);
+          const textFiles = submittedFilesWithContents.filter((f) => !f.binary);
+          const binaryFiles = submittedFilesWithContents.filter((f) => f.binary);
 
           // Insert text files as before (inline contents)
           if (textFiles.length > 0) {
@@ -1336,11 +1387,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 contents: file.contents.toString("utf-8"),
                 class_id: repoData.assignments.class_id!,
                 is_binary: false,
-                file_size: file.contents.length,
+                file_size: file.contents.length
               }))
             );
             if (textFileError) {
-              throw new UserVisibleError(`Internal error: Failed to insert text submission files: ${textFileError.message}`);
+              throw new UserVisibleError(
+                `Internal error: Failed to insert text submission files: ${textFileError.message}`
+              );
             }
           }
 
@@ -1357,7 +1410,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 .from("submission-files")
                 .upload(storageKey, file.contents, {
                   contentType: mimeType,
-                  upsert: true,
+                  upsert: true
                 });
               if (storageError) {
                 throw new UserVisibleError(
@@ -1376,7 +1429,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 is_binary: true,
                 file_size: file.contents.length,
                 mime_type: mimeType,
-                storage_key: storageKey,
+                storage_key: storageKey
               });
               if (dbError) {
                 throw new UserVisibleError(

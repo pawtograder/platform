@@ -129,7 +129,9 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
         {loading ? (
           <Flex justify="center" align="center" py={8}>
             <Spinner size="md" />
-            <Text ml={3} color="fg.muted">Loading file...</Text>
+            <Text ml={3} color="fg.muted">
+              Loading file...
+            </Text>
           </Flex>
         ) : error ? (
           <Box p={4} bg="bg.error" borderRadius="md">
@@ -145,7 +147,7 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
                 maxWidth: "100%",
                 height: "auto",
                 display: "block",
-                borderRadius: "0.375rem",
+                borderRadius: "0.375rem"
               }}
             />
           </Flex>
@@ -160,9 +162,7 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
         ) : (
           <Flex direction="column" align="center" py={8} gap={3}>
             <Icon as={FaFile} boxSize={12} color="fg.muted" />
-            <Text color="fg.muted">
-              No preview available for this file type
-            </Text>
+            <Text color="fg.muted">No preview available for this file type</Text>
             {downloadUrl && (
               <DownloadLink href={downloadUrl} filename={file.name}>
                 <HStack gap={1}>
