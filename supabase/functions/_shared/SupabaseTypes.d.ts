@@ -55,6 +55,47 @@ export type Database = {
   };
   public: {
     Tables: {
+      ai_help_feedback: {
+        Row: {
+          class_id: number;
+          comment: string | null;
+          context_type: string;
+          created_at: string;
+          id: string;
+          rating: string;
+          resource_id: number;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          comment?: string | null;
+          context_type: string;
+          created_at?: string;
+          id?: string;
+          rating: string;
+          resource_id: number;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          comment?: string | null;
+          context_type?: string;
+          created_at?: string;
+          id?: string;
+          rating?: string;
+          resource_id?: number;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "ai_help_feedback_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       api_gateway_calls: {
         Row: {
           class_id: number | null;
@@ -95,6 +136,42 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      api_tokens: {
+        Row: {
+          created_at: string;
+          expires_at: string;
+          id: string;
+          last_used_at: string | null;
+          name: string;
+          revoked_at: string | null;
+          scopes: string[];
+          token_id: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          expires_at: string;
+          id?: string;
+          last_used_at?: string | null;
+          name: string;
+          revoked_at?: string | null;
+          scopes?: string[];
+          token_id: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          expires_at?: string;
+          id?: string;
+          last_used_at?: string | null;
+          name?: string;
+          revoked_at?: string | null;
+          scopes?: string[];
+          token_id?: string;
+          user_id?: string;
+        };
+        Relationships: [];
       };
       assignment_due_date_exceptions: {
         Row: {
@@ -861,6 +938,7 @@ export type Database = {
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
+          handout_url: string | null;
           has_autograder: boolean;
           has_handgrader: boolean;
           id: number;
@@ -896,6 +974,7 @@ export type Database = {
           grading_rubric_id?: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
+          handout_url?: string | null;
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
@@ -931,6 +1010,7 @@ export type Database = {
           grading_rubric_id?: number | null;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
+          handout_url?: string | null;
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
@@ -1091,7 +1171,7 @@ export type Database = {
           }
         ];
       };
-      audit_20260123: {
+      audit_20260131: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1124,7 +1204,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260124: {
+      audit_20260201: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1157,7 +1237,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260125: {
+      audit_20260202: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1190,7 +1270,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260126: {
+      audit_20260203: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1223,7 +1303,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260127: {
+      audit_20260204: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1256,7 +1336,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260128: {
+      audit_20260205: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1289,7 +1369,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260129: {
+      audit_20260206: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1322,7 +1402,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260130: {
+      audit_20260207: {
         Row: {
           class_id: number;
           created_at: string;
@@ -6378,6 +6458,21 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      revoked_token_ids: {
+        Row: {
+          revoked_at: string;
+          token_id: string;
+        };
+        Insert: {
+          revoked_at?: string;
+          token_id: string;
+        };
+        Update: {
+          revoked_at?: string;
+          token_id?: string;
+        };
+        Relationships: [];
       };
       rubric_check_references: {
         Row: {
@@ -11573,7 +11668,12 @@ export type Database = {
         Returns: number;
       };
       preview_error_pin_matches: {
-        Args: { p_assignment_id: number | null; p_class_id?: number | null; p_rule_logic?: string; p_rules: Json };
+        Args: {
+          p_assignment_id: number;
+          p_class_id?: number;
+          p_rule_logic?: string;
+          p_rules: Json;
+        };
         Returns: Json;
       };
       process_calendar_announcements: { Args: never; Returns: Json };
@@ -11671,6 +11771,16 @@ export type Database = {
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
+      };
+      submit_ai_help_feedback: {
+        Args: {
+          p_class_id: number;
+          p_comment?: string;
+          p_context_type: string;
+          p_rating: string;
+          p_resource_id: number;
+        };
+        Returns: Json;
       };
       sync_calendar_events: {
         Args: {

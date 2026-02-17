@@ -29,6 +29,7 @@ import {
   FaUsers
 } from "react-icons/fa";
 import { ErrorFilterPanel, DEFAULT_ERROR_FILTERS } from "./ErrorFilterPanel";
+import { AIHelpTestErrorButton } from "./AIHelpTestErrorButton";
 import type { CommonErrorGroup, CommonErrorsResponse, ErrorExplorerFilters, TestStatistics } from "./types";
 
 interface CommonErrorsExplorerProps {
@@ -41,6 +42,10 @@ interface CommonErrorsExplorerProps {
   onCreateErrorPin?: (errorGroup: CommonErrorGroup) => void;
   onViewSubmissions?: (submissionIds: number[]) => void;
   onRegradeSubmissions?: (errorGroup: CommonErrorGroup) => void;
+  /** Assignment ID for AI help context */
+  assignmentId?: number;
+  /** Class ID for AI help context */
+  classId?: number;
 }
 
 /**
@@ -55,7 +60,9 @@ export function CommonErrorsExplorer({
   onFiltersChange,
   onCreateErrorPin,
   onViewSubmissions,
-  onRegradeSubmissions
+  onRegradeSubmissions,
+  assignmentId,
+  classId
 }: CommonErrorsExplorerProps) {
   const [expandedError, setExpandedError] = useState<string | null>(null);
 
@@ -160,6 +167,8 @@ export function CommonErrorsExplorer({
               onCreateErrorPin={onCreateErrorPin}
               onViewSubmissions={onViewSubmissions}
               onRegradeSubmissions={onRegradeSubmissions}
+              assignmentId={assignmentId}
+              classId={classId}
             />
           ))}
         </VStack>
@@ -175,6 +184,8 @@ interface ErrorGroupCardProps {
   onCreateErrorPin?: (errorGroup: CommonErrorGroup) => void;
   onViewSubmissions?: (submissionIds: number[]) => void;
   onRegradeSubmissions?: (errorGroup: CommonErrorGroup) => void;
+  assignmentId?: number;
+  classId?: number;
 }
 
 function ErrorGroupCard({
@@ -183,7 +194,9 @@ function ErrorGroupCard({
   onToggle,
   onCreateErrorPin,
   onViewSubmissions,
-  onRegradeSubmissions
+  onRegradeSubmissions,
+  assignmentId,
+  classId
 }: ErrorGroupCardProps) {
   return (
     <Card.Root
@@ -269,6 +282,15 @@ function ErrorGroupCard({
 
                 {/* Actions */}
                 <HStack justify="flex-end" gap={2} flexWrap="wrap">
+                  {assignmentId && classId && (
+                    <AIHelpTestErrorButton
+                      errorGroup={errorGroup}
+                      assignmentId={assignmentId}
+                      classId={classId}
+                      size="sm"
+                      variant="outline"
+                    />
+                  )}
                   {onViewSubmissions && (
                     <Button
                       size="sm"

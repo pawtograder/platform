@@ -360,3 +360,135 @@ export class EdgeFunctionError extends Error {
     this.recoverable = recoverable;
   }
 }
+
+// MCP Token types
+export type MCPScope = "mcp:read" | "mcp:write";
+
+export interface MCPToken {
+  id: string;
+  token_id: string;
+  name: string;
+  scopes: MCPScope[];
+  expires_at: string;
+  revoked_at: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface MCPTokenCreateRequest {
+  name: string;
+  scopes?: MCPScope[];
+  expires_in_days?: number;
+}
+
+export interface MCPTokenCreateResponse {
+  token: string;
+  metadata: MCPToken;
+  message: string;
+}
+
+/**
+ * List all MCP tokens for the current user
+ */
+export async function mcpTokensList(supabase: SupabaseClient<Database>): Promise<{ tokens: MCPToken[] }> {
+  const { data } = await supabase.functions.invoke("mcp-tokens", {
+    method: "GET"
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    const normalizedError = typeof error === "string" ? { message: error, details: "", recoverable: false } : error;
+    throw new EdgeFunctionError(normalizedError);
+  }
+  return data as { tokens: MCPToken[] };
+}
+
+/**
+ * Create a new MCP token
+ */
+export async function mcpTokensCreate(
+  params: MCPTokenCreateRequest,
+  supabase: SupabaseClient<Database>
+): Promise<MCPTokenCreateResponse> {
+  const { data } = await supabase.functions.invoke("mcp-tokens", {
+    body: params
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    const normalizedError = typeof error === "string" ? { message: error, details: "", recoverable: false } : error;
+    throw new EdgeFunctionError(normalizedError);
+  }
+  return data as MCPTokenCreateResponse;
+}
+
+/**
+ * Revoke an MCP token
+ */
+export async function mcpTokensRevoke(
+  params: { token_id: string },
+  supabase: SupabaseClient<Database>
+): Promise<{ success: boolean; message: string }> {
+  const { data } = await supabase.functions.invoke("mcp-tokens", {
+    method: "DELETE",
+    body: params
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    const normalizedError = typeof error === "string" ? { message: error, details: "", recoverable: false } : error;
+    throw new EdgeFunctionError(normalizedError);
+  }
+  return data as { success: boolean; message: string };
+}
+
+// AI Help Feedback types
+export type AIHelpContextType = "help_request" | "discussion_thread" | "test_failure" | "build_error" | "test_insights";
+
+export interface AIHelpFeedbackRequest {
+  class_id: number;
+  context_type: AIHelpContextType;
+  resource_id: number;
+  rating: "thumbs_up" | "thumbs_down";
+  comment?: string;
+}
+
+export interface AIHelpFeedbackResponse {
+  success: boolean;
+  feedback_id: string;
+  message: string;
+  error?: string;
+}
+
+/**
+ * Submit AI help feedback via RPC
+ */
+export async function aiHelpFeedbackSubmit(
+  params: AIHelpFeedbackRequest,
+  supabase: SupabaseClient<Database>
+): Promise<AIHelpFeedbackResponse> {
+  // Use type assertion since the RPC function may not be in generated types yet
+  const { data, error } = await (supabase.rpc as CallableFunction)("submit_ai_help_feedback", {
+    p_class_id: params.class_id,
+    p_context_type: params.context_type,
+    p_resource_id: params.resource_id,
+    p_rating: params.rating,
+    p_comment: params.comment ?? null
+  });
+
+  if (error) {
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: error.message,
+      recoverable: false
+    });
+  }
+
+  const result = data as unknown as AIHelpFeedbackResponse;
+  if (result.error) {
+    throw new EdgeFunctionError({
+      details: result.error,
+      message: result.error,
+      recoverable: false
+    });
+  }
+
+  return result;
+}
