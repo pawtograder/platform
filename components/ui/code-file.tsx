@@ -403,7 +403,7 @@ export function starryNightGutter(
  *
  * Allows inline editing of the comment for graders and instructors. If the user is a student and the comment affects their score, provides a dialog to request a regrade, with special handling for group submissions. Shows relevant UI elements based on comment visibility, release status, and regrade request state.
  */
-function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
+export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const commentAuthor = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
@@ -536,7 +536,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
  * @param comment_id - The ID of the comment to display.
  * @param submissionReviewId - Optional ID of the submission review, used for context.
  */
-function CodeLineComment({ comment_id }: { comment_id: number }) {
+export function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
   const isStaff = useIsGraderOrInstructor();

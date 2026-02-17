@@ -1,8 +1,41 @@
 "use client";
 
-import { SubmissionFile } from "@/utils/supabase/DatabaseTypes";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  PopoverArrow,
+  PopoverBody,
+  PopoverCloseTrigger,
+  PopoverContent,
+  PopoverRoot,
+  PopoverTitle,
+  PopoverTrigger
+} from "@/components/ui/popover";
+import {
+  useGraderPseudonymousMode,
+  useReviewAssignmentRubricParts,
+  useRubricChecksByRubric,
+  useRubricCriteriaByRubric,
+  useRubricWithParts
+} from "@/hooks/useAssignment";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import {
+  useSubmission,
+  useSubmissionController,
+  useSubmissionFileComments
+} from "@/hooks/useSubmission";
+import {
+  useActiveReviewAssignmentId,
+  useActiveSubmissionReview
+} from "@/hooks/useSubmissionReview";
+import {
+  RubricCheck,
+  RubricChecksDataType,
+  SubmissionFile,
+  SubmissionFileComment
+} from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import { Box, Flex, Heading, HStack, Spinner, Text } from "@chakra-ui/react";
+import { Box, Button, Flex, Heading, HStack, Separator, Spinner, Text, VStack } from "@chakra-ui/react";
+import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -10,6 +43,21 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkGemoji from "remark-gemoji";
+import {
+  CodeLineComment,
+  formatPoints,
+  isRubricCheckDataWithOptions,
+  LineCheckAnnotation,
+  RubricCheckSelectOption,
+  RubricCheckSubOptions,
+  RubricCriteriaSelectGroupOption
+} from "./code-file";
+import LineCommentForm from "./line-comments-form";
+import MessageInput from "./message-input";
+import { toaster } from "./toaster";
+
+// Use line 0 as convention for file-level comments on markdown files
+const MARKDOWN_FILE_COMMENT_LINE = 0;
 
 // Types for file resolution
 type ResolvedImageMap = Record<string, string>;
@@ -149,6 +197,295 @@ async function fetchBinaryFileAsDataUri(storageKey: string, mimeType: string): P
   return `data:${mimeType};base64,${base64}`;
 }
 
+/**
+ * Displays file-level comments on a markdown file preview.
+ * Uses line=0 as convention for file-level comments.
+ */
+function MarkdownFileComments({ file }: { file: SubmissionFile }) {
+  const submission = useSubmission();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const submissionReview = useActiveSubmissionReview();
+  const allComments = useSubmissionFileComments({ file_id: file.id });
+
+  const commentsToDisplay = useMemo(() => {
+    const ret = allComments.filter((comment: SubmissionFileComment) => {
+      if (!isGraderOrInstructor && submission.released !== null) {
+        return comment.eventually_visible === true;
+      }
+      return true;
+    });
+    ret.sort((a, b) => {
+      if (a.rubric_check_id && !b.rubric_check_id) return -1;
+      if (!a.rubric_check_id && b.rubric_check_id) return 1;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+    return ret;
+  }, [allComments, isGraderOrInstructor, submission.released]);
+
+  return (
+    <Box>
+      {commentsToDisplay.map((comment) =>
+        comment.rubric_check_id ? (
+          <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
+        ) : (
+          <CodeLineComment key={comment.id} comment_id={comment.id} />
+        )
+      )}
+      <LineCommentForm
+        lineNumber={MARKDOWN_FILE_COMMENT_LINE}
+        submission={submission}
+        file={file}
+        submissionReviewId={submissionReview?.id}
+      />
+    </Box>
+  );
+}
+
+/**
+ * Popover for adding rubric check annotations on a markdown file.
+ * Modeled after ArtifactCheckPopover but uses submission_file_comments with line=0.
+ */
+function MarkdownAnnotationPopover({ file }: { file: SubmissionFile }) {
+  const submission = useSubmission();
+  const submissionReview = useActiveSubmissionReview();
+  const rubric = useRubricWithParts(submissionReview?.rubric_id);
+  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
+  const rubricChecks = useRubricChecksByRubric(rubric?.id);
+
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const assignedPartIds = useMemo(
+    () => new Set(assignedRubricParts.map((part) => part.rubric_part_id)),
+    [assignedRubricParts]
+  );
+
+  const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
+  const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
+  const submissionController = useSubmissionController();
+
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
+  const [eventuallyVisible, setEventuallyVisible] = useState(true);
+  const [isOpen, setIsOpen] = useState(false);
+
+  const existingComments = useSubmissionFileComments({ file_id: file.id });
+
+  useEffect(() => {
+    if (isOpen && messageInputRef.current && selectedCheckOption) {
+      messageInputRef.current.focus();
+    }
+  }, [isOpen, selectedCheckOption]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSelectedCheckOption(null);
+      setSelectedSubOption(null);
+    }
+  }, [isOpen]);
+
+  // Filter criteria that have file annotation checks
+  const criteriaOptions: RubricCriteriaSelectGroupOption[] = useMemo(() => {
+    if (!rubricCriteria || !rubricChecks) return [];
+
+    const annotationCheckCriteriaIds = rubricChecks
+      .filter(
+        (check: RubricCheck) =>
+          check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+      )
+      .map((check: RubricCheck) => check.rubric_criteria_id);
+
+    const criteriaWithAnnotationChecks = rubricCriteria
+      .filter((criteria) => annotationCheckCriteriaIds.includes(criteria.id))
+      .sort((a, b) => {
+        const aAssigned = assignedPartIds.has(a.rubric_part_id ?? -1);
+        const bAssigned = assignedPartIds.has(b.rubric_part_id ?? -1);
+        if (aAssigned !== bAssigned) return aAssigned ? -1 : 1;
+        return a.ordinal - b.ordinal;
+      });
+
+    return criteriaWithAnnotationChecks.map((criteria) => ({
+      label: criteria.name,
+      value: criteria.id.toString(),
+      criteria,
+      options: rubricChecks
+        .filter(
+          (check) =>
+            check.is_annotation &&
+            (check.annotation_target === "file" || check.annotation_target === null) &&
+            check.rubric_criteria_id === criteria.id
+        )
+        .sort((a, b) => a.ordinal - b.ordinal)
+        .map((check) => {
+          const existingAnnotationsForCheck = existingComments.filter(
+            (comment) => comment.rubric_check_id === check.id
+          ).length;
+          const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
+
+          const option: RubricCheckSelectOption = {
+            label: check.name,
+            value: check.id.toString(),
+            check: check as RubricCheck,
+            criteria,
+            options: [],
+            isDisabled
+          };
+          if (isRubricCheckDataWithOptions(check.data)) {
+            option.options = check.data.options.map((subOption, index) => ({
+              label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
+              comment: subOption.label,
+              index: index.toString(),
+              value: index.toString(),
+              points: subOption.points,
+              check: option,
+              isDisabled
+            }));
+          }
+          return option;
+        })
+    })) as RubricCriteriaSelectGroupOption[];
+  }, [rubricCriteria, rubricChecks, assignedPartIds, existingComments]);
+
+  if (!criteriaOptions || criteriaOptions.length === 0) {
+    return null;
+  }
+
+  const selectComponentsConfig: SelectComponentsConfig<
+    RubricCheckSelectOption,
+    false,
+    RubricCriteriaSelectGroupOption
+  > = {
+    GroupHeading: (props) => (
+      <chakraComponents.GroupHeading {...props}>
+        {props.data.criteria ? `Criteria: ${props.data.label}` : <Separator />}
+      </chakraComponents.GroupHeading>
+    ),
+    Option: (props) => (
+      <chakraComponents.Option {...props}>
+        {props.data.label} {props.data.check && `(${formatPoints(props.data.check)})`}
+      </chakraComponents.Option>
+    )
+  };
+
+  return (
+    <PopoverRoot open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm">
+          Annotate File
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent w="lg" p={4}>
+        <PopoverArrow />
+        <PopoverCloseTrigger />
+        <PopoverTitle fontWeight="semibold">Annotate {file.name}</PopoverTitle>
+        <PopoverBody>
+          <VStack gap={3} align="stretch">
+            <Select<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>
+              options={criteriaOptions}
+              value={selectedCheckOption}
+              onChange={(e) => setSelectedCheckOption(e)}
+              placeholder="Select a rubric check..."
+              components={selectComponentsConfig}
+              isClearable
+            />
+
+            {selectedCheckOption?.check?.data &&
+              typeof selectedCheckOption.check.data === "object" &&
+              "options" in selectedCheckOption.check.data &&
+              Array.isArray((selectedCheckOption.check.data as RubricChecksDataType).options) &&
+              (selectedCheckOption.check.data as RubricChecksDataType).options.length > 0 && (
+                <Select<RubricCheckSubOptions, false>
+                  options={(selectedCheckOption.check.data as RubricChecksDataType).options.map((option, index) => ({
+                    label: option.label,
+                    comment: option.label,
+                    value: index.toString(),
+                    index: index.toString(),
+                    points: option.points,
+                    check: selectedCheckOption
+                  }))}
+                  value={selectedSubOption}
+                  onChange={(e: RubricCheckSubOptions | null) => setSelectedSubOption(e)}
+                  placeholder="Select an option..."
+                  isClearable
+                />
+              )}
+
+            {selectedCheckOption && (
+              <>
+                <Text fontSize="sm" color="fg.muted">
+                  {selectedCheckOption.check?.description || "No description."}
+                </Text>
+                {isGraderOrInstructor && (
+                  <Checkbox
+                    checked={eventuallyVisible}
+                    onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
+                  >
+                    Visible to student when submission is released
+                  </Checkbox>
+                )}
+                <MessageInput
+                  textAreaRef={messageInputRef}
+                  placeholder={
+                    selectedCheckOption.check?.is_comment_required ? "Comment (required)..." : "Optional comment..."
+                  }
+                  allowEmptyMessage={!selectedCheckOption.check?.is_comment_required}
+                  defaultSingleLine={true}
+                  sendButtonText="Add Annotation"
+                  sendMessage={async (message) => {
+                    let points = selectedCheckOption.check?.points;
+                    if (selectedSubOption) {
+                      points = selectedSubOption.points;
+                    }
+                    let commentText = message || "";
+                    if (selectedSubOption) {
+                      commentText = selectedSubOption.comment + (commentText ? "\n" + commentText : "");
+                    }
+
+                    const values = {
+                      comment: commentText,
+                      line: MARKDOWN_FILE_COMMENT_LINE,
+                      rubric_check_id: selectedCheckOption.check?.id ?? null,
+                      class_id: file.class_id!,
+                      submission_file_id: file.id,
+                      submission_id: submission.id,
+                      author: authorProfileId!,
+                      released: submissionReview ? submissionReview.released : true,
+                      points: points ?? null,
+                      submission_review_id: submissionReview?.id ?? null,
+                      eventually_visible:
+                        selectedCheckOption.check?.student_visibility !== "never"
+                          ? eventuallyVisible
+                          : false,
+                      regrade_request_id: null
+                    };
+
+                    try {
+                      await submissionController.submission_file_comments.create(
+                        values as Omit<
+                          SubmissionFileComment,
+                          "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by"
+                        >
+                      );
+                      setIsOpen(false);
+                    } catch (e) {
+                      toaster.error({
+                        title: "Error saving annotation",
+                        description: e instanceof Error ? e.message : "Unknown error"
+                      });
+                    }
+                  }}
+                />
+              </>
+            )}
+          </VStack>
+        </PopoverBody>
+      </PopoverContent>
+    </PopoverRoot>
+  );
+}
+
 interface MarkdownFilePreviewProps {
   file: SubmissionFile;
   allFiles: SubmissionFile[];
@@ -159,6 +496,8 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
   const [resolvedImages, setResolvedImages] = useState<ResolvedImageMap>({});
   const [loading, setLoading] = useState(true);
   const content = file.contents || "";
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const comments = useSubmissionFileComments({ file_id: file.id });
 
   // Build a lookup map of all files by their name/path
   const fileMap = useMemo(() => {
@@ -421,7 +760,13 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
               Preview
             </Text>
           </Box>
+          {comments.length > 0 && (
+            <Text fontSize="xs" color="text.subtle">
+              {comments.length} {comments.length === 1 ? "comment" : "comments"}
+            </Text>
+          )}
         </HStack>
+        {isGraderOrInstructor && <MarkdownAnnotationPopover file={file} />}
       </Flex>
       <Box p={6} className="markdown-file-preview" css={markdownPreviewStyles}>
         <ReactMarkdown
@@ -431,6 +776,13 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
         >
           {content}
         </ReactMarkdown>
+      </Box>
+      <Box
+        borderTop="1px solid"
+        borderColor="border.emphasized"
+        p={4}
+      >
+        <MarkdownFileComments file={file} />
       </Box>
     </Box>
   );
