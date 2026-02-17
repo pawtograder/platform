@@ -84,53 +84,82 @@ function computeCombinedHashFromFileHashes(file_hashes: Record<string, string>):
   return sha256Hex(Buffer.from(combinedInput, "utf-8"));
 }
 
+/** Cache key for commit+tree (templateRepo, commitSha). */
+const commitTreeCacheKey = (templateRepo: string, commitSha: string) => `${templateRepo}:${commitSha}`;
+
+/** Cache key for blob hash (owner, repo, blobSha). */
+const blobCacheKey = (owner: string, repo: string, blobSha: string) => `${owner}:${repo}:${blobSha}`;
+
+/** Per-webhook caches to avoid duplicate GitHub API calls across assignments sharing a template repo. */
+type HandoutHashCaches = {
+  commitTree: Map<string, { treeSha: string; tree: { path?: string; sha?: string; type?: string }[] }>;
+  blobHash: Map<string, string>;
+};
+
 async function computeHandoutFileHashesForCommit(params: {
   templateRepo: string;
   commitSha: string;
   expectedFiles: string[];
   scope: Sentry.Scope;
+  caches?: HandoutHashCaches;
 }): Promise<{ file_hashes: Record<string, string>; combined_hash: string }> {
-  const { templateRepo, commitSha, expectedFiles, scope } = params;
+  const { templateRepo, commitSha, expectedFiles, scope, caches } = params;
   const octokit = await getOctoKit(templateRepo, scope);
   if (!octokit) {
     throw new Error(`No octokit found for repository ${templateRepo}`);
   }
   const [owner, repo] = templateRepo.split("/");
 
-  // Resolve commit -> tree sha
-  const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
-    owner,
-    repo,
-    commit_sha: commitSha
-  });
-  const treeSha = commit.tree.sha;
+  const ctKey = commitTreeCacheKey(templateRepo, commitSha);
+  let treeSha: string;
+  let tree: { path?: string; sha?: string; type?: string }[];
 
-  // List all files in tree
-  const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
-    owner,
-    repo,
-    tree_sha: treeSha,
-    recursive: "true"
-  });
+  if (caches?.commitTree?.has(ctKey)) {
+    const cached = caches.commitTree.get(ctKey)!;
+    treeSha = cached.treeSha;
+    tree = cached.tree;
+  } else {
+    const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+      owner,
+      repo,
+      commit_sha: commitSha
+    });
+    treeSha = commit.tree.sha;
 
-  const wantedPaths = (tree.tree || [])
+    const { data: treeData } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+      owner,
+      repo,
+      tree_sha: treeSha,
+      recursive: "true"
+    });
+    tree = treeData.tree || [];
+
+    caches?.commitTree?.set(ctKey, { treeSha, tree });
+  }
+
+  const wantedPaths = tree
     .filter((item) => item.type === "blob" && !!item.path && !!item.sha)
     .map((item) => ({ path: item.path!, sha: item.sha! }))
     .filter(({ path }) => expectedFiles.some((pattern) => micromatch.isMatch(path, pattern)));
 
-  // Hash file contents for all wanted paths
   const file_hashes: Record<string, string> = {};
   for (const { path, sha } of wantedPaths) {
-    const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
-      owner,
-      repo,
-      file_sha: sha
-    });
-    if (blob.encoding !== "base64") {
-      throw new Error(`Unexpected blob encoding for ${path}: ${blob.encoding}`);
+    const bKey = blobCacheKey(owner, repo, sha);
+    let hash: string | undefined = caches?.blobHash?.get(bKey);
+    if (hash === undefined) {
+      const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
+        owner,
+        repo,
+        file_sha: sha
+      });
+      if (blob.encoding !== "base64") {
+        throw new Error(`Unexpected blob encoding for ${path}: ${blob.encoding}`);
+      }
+      const bytes = Buffer.from(blob.content, "base64");
+      hash = sha256Hex(bytes);
+      caches?.blobHash?.set(bKey, hash);
     }
-    const bytes = Buffer.from(blob.content, "base64");
-    file_hashes[path] = sha256Hex(bytes);
+    file_hashes[path] = hash;
   }
 
   const combined_hash = computeCombinedHashFromFileHashes(file_hashes);
@@ -554,6 +583,14 @@ async function handlePushToTemplateRepo(
     scope.setTag("handout_hashes_skipped", "no_commit_sha");
     return;
   }
+
+  // Cache commit/tree and blob fetches within this webhook to avoid duplicate GitHub API calls
+  // when multiple assignments share the same template repo (common for multi-section courses).
+  const handoutHashCaches: HandoutHashCaches = {
+    commitTree: new Map(),
+    blobHash: new Map()
+  };
+
   for (const assignment of assignments) {
     try {
       const { data: graderConfig, error: graderConfigError } = await adminSupabase
@@ -577,7 +614,8 @@ async function handlePushToTemplateRepo(
         templateRepo: assignment.template_repo,
         commitSha,
         expectedFiles,
-        scope
+        scope,
+        caches: handoutHashCaches
       });
 
       const { error: upsertError } = await adminSupabase.from("assignment_handout_file_hashes").upsert(
