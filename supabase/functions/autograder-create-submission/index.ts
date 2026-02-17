@@ -1005,7 +1005,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             data: { submission_id: existingSubmission.id }
           });
 
-          // Delete related data
+          // Delete related data - first clean up any binary files from storage
+          const { data: existingFiles } = await adminSupabase
+            .from("submission_files")
+            .select("storage_key")
+            .eq("submission_id", existingSubmission.id)
+            .eq("is_binary", true);
+          if (existingFiles && existingFiles.length > 0) {
+            const storageKeys = existingFiles
+              .map((f: { storage_key: string | null }) => f.storage_key)
+              .filter((k: string | null): k is string => k !== null);
+            if (storageKeys.length > 0) {
+              await adminSupabase.storage.from("submission-files").remove(storageKeys);
+            }
+          }
+
           const { error: deleteSubmissionFilesError } = await adminSupabase
             .from("submission_files")
             .delete()
@@ -1250,25 +1264,126 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             );
           }
 
+          // Binary file detection by extension
+          const BINARY_EXTENSIONS = new Set([
+            // Images
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff", ".tif",
+            // Documents
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            // Archives
+            ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+            // Media
+            ".mp3", ".mp4", ".wav", ".avi", ".mov", ".webm",
+            // Fonts
+            ".woff", ".woff2", ".ttf", ".otf", ".eot",
+            // Other binary
+            ".class", ".jar", ".exe", ".dll", ".so", ".dylib", ".o", ".pyc",
+            ".sqlite", ".db", ".bin", ".dat"
+          ]);
+
+          const MIME_TYPES: Record<string, string> = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".bmp": "image/bmp", ".ico": "image/x-icon",
+            ".svg": "image/svg+xml", ".webp": "image/webp", ".tiff": "image/tiff",
+            ".tif": "image/tiff", ".pdf": "application/pdf",
+            ".zip": "application/zip", ".gz": "application/gzip",
+            ".mp3": "audio/mpeg", ".mp4": "video/mp4", ".wav": "audio/wav",
+            ".woff": "font/woff", ".woff2": "font/woff2",
+            ".ttf": "font/ttf", ".otf": "font/otf",
+          };
+
+          const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB per file
+
+          function getFileExtension(name: string): string {
+            const lastDot = name.lastIndexOf(".");
+            return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
+          }
+
+          function isBinaryFile(name: string): boolean {
+            return BINARY_EXTENSIONS.has(getFileExtension(name));
+          }
+
           const submittedFilesWithContents = await Promise.all(
             submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
               const contents = await file.buffer();
-              return { name: stripTopDir(file.path), contents };
+              const name = stripTopDir(file.path);
+              return { name, contents, binary: isBinaryFile(name) };
             })
           );
-          // Add files to supabase
-          const { error: fileError } = await adminSupabase.from("submission_files").insert(
-            submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
-              submission_id: submission_id,
-              name: file.name,
-              profile_id: repoData.profile_id,
-              assignment_group_id: repoData.assignment_group_id,
-              contents: file.contents.toString("utf-8"),
-              class_id: repoData.assignments.class_id!
-            }))
-          );
-          if (fileError) {
-            throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
+
+          // Enforce 15 MB per-file size limit
+          for (const file of submittedFilesWithContents) {
+            if (file.contents.length > MAX_FILE_SIZE) {
+              throw new UserVisibleError(
+                `File "${file.name}" exceeds the 15 MB size limit (${(file.contents.length / (1024 * 1024)).toFixed(1)} MB).`,
+                400
+              );
+            }
+          }
+
+          // Separate text and binary files
+          const textFiles = submittedFilesWithContents.filter(f => !f.binary);
+          const binaryFiles = submittedFilesWithContents.filter(f => f.binary);
+
+          // Insert text files as before (inline contents)
+          if (textFiles.length > 0) {
+            const { error: textFileError } = await adminSupabase.from("submission_files").insert(
+              textFiles.map((file) => ({
+                submission_id: submission_id,
+                name: file.name,
+                profile_id: repoData.profile_id,
+                assignment_group_id: repoData.assignment_group_id,
+                contents: file.contents.toString("utf-8"),
+                class_id: repoData.assignments.class_id!,
+                is_binary: false,
+                file_size: file.contents.length,
+              }))
+            );
+            if (textFileError) {
+              throw new UserVisibleError(`Internal error: Failed to insert text submission files: ${textFileError.message}`);
+            }
+          }
+
+          // Insert binary files: store content in Supabase Storage, metadata in DB
+          if (binaryFiles.length > 0) {
+            const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
+            for (const file of binaryFiles) {
+              const ext = getFileExtension(file.name);
+              const mimeType = MIME_TYPES[ext] || "application/octet-stream";
+              const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${file.name}`;
+
+              // Upload to Supabase Storage
+              const { error: storageError } = await adminSupabase.storage
+                .from("submission-files")
+                .upload(storageKey, file.contents, {
+                  contentType: mimeType,
+                  upsert: true,
+                });
+              if (storageError) {
+                throw new UserVisibleError(
+                  `Internal error: Failed to upload binary file "${file.name}" to storage: ${storageError.message}`
+                );
+              }
+
+              // Insert DB record (no inline contents for binary)
+              const { error: dbError } = await adminSupabase.from("submission_files").insert({
+                submission_id: submission_id,
+                name: file.name,
+                profile_id: repoData.profile_id,
+                assignment_group_id: repoData.assignment_group_id,
+                contents: null,
+                class_id: repoData.assignments.class_id!,
+                is_binary: true,
+                file_size: file.contents.length,
+                mime_type: mimeType,
+                storage_key: storageKey,
+              });
+              if (dbError) {
+                throw new UserVisibleError(
+                  `Internal error: Failed to insert binary file record for "${file.name}": ${dbError.message}`
+                );
+              }
+            }
           }
         }
         if (isE2ERun) {

@@ -10,6 +10,8 @@ import CodeFile, {
 import DownloadLink from "@/components/ui/download-link";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
+import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
+import BinaryFilePreview from "@/components/ui/binary-file-preview";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -122,16 +124,28 @@ function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId:
           {submission.submission_files.map((file, idx) => (
             <Table.Row key={file.id}>
               <Table.Cell>
-                <Link
-                  variant={curFile === idx ? "underline" : undefined}
-                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onSelect(file.id);
-                  }}
-                >
-                  {file.name}
-                </Link>
+                <HStack gap={1}>
+                  <Link
+                    variant={curFile === idx ? "underline" : undefined}
+                    href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onSelect(file.id);
+                    }}
+                  >
+                    {file.name}
+                  </Link>
+                  {isMarkdownFile(file.name) && (
+                    <Tag.Root size="sm" colorPalette="green" variant="surface">
+                      <Tag.Label>MD</Tag.Label>
+                    </Tag.Root>
+                  )}
+                  {file.is_binary && (
+                    <Tag.Root size="sm" colorPalette="purple" variant="surface">
+                      <Tag.Label>BIN</Tag.Label>
+                    </Tag.Root>
+                  )}
+                </HStack>
               </Table.Cell>
               {showCommentsFeature && (
                 <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>
@@ -1267,7 +1281,18 @@ export default function FilesView() {
             </Box>
           ) : selectedFile ? (
             <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
-              <CodeFile key={selectedFile.id} file={selectedFile} />
+              {isMarkdownFile(selectedFile.name) ? (
+                <MarkdownFilePreview
+                  key={selectedFile.id}
+                  file={selectedFile}
+                  allFiles={submission.submission_files}
+                  onNavigateToFile={handleSelectFile}
+                />
+              ) : selectedFile.is_binary ? (
+                <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
+              ) : (
+                <CodeFile key={selectedFile.id} file={selectedFile} />
+              )}
             </Box>
           ) : (
             <Text>Select a file or artifact to view.</Text>

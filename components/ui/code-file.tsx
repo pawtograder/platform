@@ -170,7 +170,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   if (!starryNight || !file) {
     return <Skeleton />;
   }
-  const tree = starryNight.highlight(file.contents, "source.java");
+  const tree = starryNight.highlight(file.contents || "", "source.java");
   starryNightGutter(tree, setLineActionPopupProps);
   const reactNode = toJsxRuntime(tree, {
     Fragment,
