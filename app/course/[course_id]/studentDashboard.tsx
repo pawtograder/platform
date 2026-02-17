@@ -23,9 +23,11 @@ import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-sum
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TZDate } from "@date-fns/tz";
 import { headers } from "next/headers";
 import Link from "next/link";
+import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
 
 export default async function StudentDashboard({
@@ -38,7 +40,9 @@ export default async function StudentDashboard({
   const supabase = await createClient();
   const { data: assignments } = await supabase
     .from("assignments_with_effective_due_dates")
-    .select("*, submissions!submissio_assignment_id_fkey(*, grader_results(*)), classes(time_zone)")
+    .select(
+      "*, submissions!submissio_assignment_id_fkey(*, grader_results!grader_results_submission_id_fkey(*)), classes(time_zone)"
+    )
     .eq("class_id", course_id)
     .eq("submissions.is_active", true)
     .eq("student_profile_id", private_profile_id)
@@ -75,13 +79,6 @@ export default async function StudentDashboard({
   for (const r of surveyResponses) {
     responsesBySurveyId.set(r.survey_id, r);
   }
-
-  const { data: helpRequests } = await supabase
-    .from("help_requests")
-    .select("*")
-    .eq("class_id", course_id)
-    .eq("status", "open")
-    .order("created_at", { ascending: true });
 
   // Query 5 most recent regrade requests for the student
   const { data: regradeRequests } = await supabase
@@ -407,21 +404,27 @@ export default async function StudentDashboard({
         )}
       </Box>
 
-      <Box>
-        <Heading size="lg" mb={4}>
-          Open Office Hours
-        </Heading>
-        <Stack spaceY={4}>
-          {helpRequests?.map((request) => (
-            <CardRoot key={request.id}>
-              <CardHeader>
-                <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
-              </CardHeader>
-              <CardBody>Requested: {new Date(request.created_at).toLocaleString()}</CardBody>
-            </CardRoot>
-          ))}
-        </Stack>
-      </Box>
+      {/* Only show OfficeHoursStatusCard when no calendar is configured - serves as fallback */}
+      {!hasCalendar && (
+        <Box>
+          <Suspense
+            fallback={
+              <Box>
+                <Heading size="lg" mb={4}>
+                  Office Hours
+                </Heading>
+                <CardRoot>
+                  <CardBody>
+                    <Text color="fg.muted">Loading office hours...</Text>
+                  </CardBody>
+                </CardRoot>
+              </Box>
+            }
+          >
+            <OfficeHoursStatusCard />
+          </Suspense>
+        </Box>
+      )}
     </VStack>
   );
 }

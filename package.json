@@ -25,7 +25,6 @@
     "seed": "npx tsx scripts/SeedDB.ts",
     "seed:course-assignments": "npx tsx scripts/SeedCourseAssignments.ts",
     "audit:student-repos": "npx tsx scripts/AuditStudentRepos.ts",
-    "grade:reflections": "npx tsx scripts/GradeReflections.ts",
     "typecheck:functions": "cd supabase/functions && deno install && echo 'Type checking Deno functions...' && deno check **/*.ts || echo 'Type checking completed with errors. See above for details.'",
     "lint": "next lint && prettier --check .",
     "format": "prettier --write ."
@@ -125,6 +124,7 @@
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "rehype-mermaid": "^3.0.0",
+    "rehype-sanitize": "^6.0.0",
     "remark-breaks": "^4.0.0",
     "remark-gemoji": "^8.0.0",
     "remark-gfm": "^4.0.1",

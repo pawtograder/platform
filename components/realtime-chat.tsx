@@ -7,6 +7,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useMessageNotifications } from "@/hooks/useMessageNotifications";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
 import {
   useHelpRequestMessages,
@@ -145,6 +146,13 @@ export const RealtimeChat = ({
       enableChat: true
     });
 
+  // Enable message notifications for this chat
+  useMessageNotifications({
+    helpRequestId: request_id,
+    enabled: !readOnly,
+    titlePrefix: "New message"
+  });
+
   // Helper function to get timestamp from either message type
   const getMessageTimestamp = (msg: UnifiedMessage): string => {
     if ("created_at" in msg && msg.created_at) {
@@ -236,11 +244,7 @@ export const RealtimeChat = ({
   const handleSendMessage = useCallback(
     async (message: string) => {
       if (!isConnected) {
-        toaster.error({
-          title: "Not connected to chat",
-          description: "Please wait for the chat to connect before sending messages."
-        });
-        return;
+        throw new Error("Please wait for the chat to connect before sending messages.");
       }
       if (!message.trim() || !sendMessage || moderationStatus.isBanned) return;
 
@@ -544,6 +548,7 @@ export const RealtimeChat = ({
               uploadFolder="office-hours"
               ariaLabel="Type your message"
               defaultSingleLine={true}
+              inlineFileUpload={false}
             />
           </Box>
         </Box>

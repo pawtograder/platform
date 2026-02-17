@@ -2,10 +2,11 @@ import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Redis } from "./Redis.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import * as Sentry from "npm:@sentry/deno";
+import { SecurityError } from "./HandlerUtils.ts";
 
 // Structured error used to signal Octokit secondary rate limit back to callers
 export class SecondaryRateLimitError extends Error {
@@ -621,6 +622,57 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
   return verified as GitHubOIDCToken;
 }
 
+// E2E testing constants and helper
+export const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
+// Read END_TO_END_SECRET strictly - no fallback to prevent security bypass
+const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET");
+// Explicit opt-in flag for E2E testing
+const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
+
+/**
+ * Validates an OIDC token, or allows E2E test tokens that use the special prefix.
+ * For E2E runs, we don't validate the signature but check that the secret matches.
+ *
+ * SECURITY: E2E bypass is only enabled if both E2E_ENABLE=true and END_TO_END_SECRET
+ * are explicitly set. This prevents accidental use in production.
+ */
+export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHubOIDCToken> {
+  const decoded = decode(token);
+  const payload = decoded[1] as GitHubOIDCToken;
+  if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
+    // Fail closed: require explicit opt-in and secret configuration
+    if (!E2E_ENABLE) {
+      console.error(
+        "E2E token detected but E2E_ENABLE is not set to 'true'. " +
+          "E2E bypass is disabled for security. Set E2E_ENABLE=true and END_TO_END_SECRET to enable."
+      );
+      throw new SecurityError(
+        "E2E testing is not enabled. E2E bypass requires explicit opt-in via E2E_ENABLE=true and END_TO_END_SECRET environment variables."
+      );
+    }
+    if (!END_TO_END_SECRET || END_TO_END_SECRET.trim() === "") {
+      console.error(
+        "E2E token detected but END_TO_END_SECRET is missing or empty. " +
+          "E2E bypass requires a non-empty secret to prevent unauthorized access."
+      );
+      throw new SecurityError(
+        "E2E testing secret is not configured. END_TO_END_SECRET must be set to a non-empty value to enable E2E bypass."
+      );
+    }
+
+    const header = decoded[0] as {
+      alg: string;
+      typ: string;
+      kid: string;
+    };
+    if (header.kid !== END_TO_END_SECRET) {
+      throw new SecurityError("E2E repo provided, but secret is incorrect");
+    }
+    return payload;
+  }
+  return await validateOIDCToken(token);
+}
+
 export async function getRepos(org: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_repos");
   scope?.setTag("org", org);
@@ -706,6 +758,18 @@ export async function createRepo(
       scope
     );
     scope?.setTag("head_sha", heads.data.object.sha);
+
+    // Create branch protection ruleset to prevent force pushes
+    scope?.setTag("github_operation", "create_branch_protection_ruleset");
+    try {
+      await createBranchProtectionRuleset(org, repoName, scope);
+    } catch (rulesetError) {
+      // Log but don't fail repo creation if ruleset creation fails
+      console.error("Error creating branch protection ruleset", rulesetError);
+      scope?.setTag("ruleset_creation_failed", "true");
+      Sentry.captureException(rulesetError, scope);
+    }
+
     return heads.data.object.sha as string;
   } catch (e) {
     console.error("Error creating repo", e);
@@ -732,6 +796,109 @@ export async function createRepo(
     } else {
       throw e;
     }
+  }
+}
+
+/**
+ * Checks if a RequestError indicates a duplicate ruleset (by ID/name or "already exists" message)
+ */
+function checkIfDuplicateRulesetError(e: RequestError): boolean {
+  // Check error message for duplicate indicators
+  const message = e.message?.toLowerCase() || "";
+  if (message.includes("already exists") || message.includes("duplicate") || message.includes("name already")) {
+    return true;
+  }
+
+  // Check response.errors array for duplicate indicators
+  const errors = e.response?.data?.errors;
+  if (Array.isArray(errors)) {
+    for (const error of errors) {
+      const errorMessage =
+        typeof error === "string" ? error.toLowerCase() : (error?.message || error?.field || "").toLowerCase();
+
+      if (
+        errorMessage.includes("already exists") ||
+        errorMessage.includes("duplicate") ||
+        errorMessage.includes("name already") ||
+        errorMessage.includes("id already")
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // Check response.data.message for duplicate indicators
+  const responseMessage = e.response?.data?.message?.toLowerCase() || "";
+  if (
+    responseMessage.includes("already exists") ||
+    responseMessage.includes("duplicate") ||
+    responseMessage.includes("name already")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Creates a branch protection ruleset to prevent force pushes on the default branch
+ * Uses GitHub's repository rulesets API (newer approach)
+ */
+export async function createBranchProtectionRuleset(
+  org: string,
+  repoName: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  scope?.setTag("github_operation", "create_branch_protection_ruleset");
+  scope?.setTag("org", org);
+  scope?.setTag("repo_name", repoName);
+
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new UserVisibleError("No GitHub installation found for organization " + org);
+  }
+
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("POST /repos/{owner}/{repo}/rulesets", {
+          owner: org,
+          repo: repoName,
+          name: "Protect main branch",
+          target: "branch",
+          enforcement: "active",
+          bypass_actors: [],
+          conditions: {
+            ref_name: {
+              include: ["~DEFAULT_BRANCH"],
+              exclude: []
+            }
+          },
+          rules: [
+            {
+              type: "non_fast_forward"
+            }
+          ]
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+    scope?.setTag("ruleset_created", "true");
+  } catch (e) {
+    if (e instanceof RequestError) {
+      // Only suppress if this is explicitly a duplicate ruleset error
+      if (e.status === 422 || e.status === 409) {
+        const isDuplicateRuleset = checkIfDuplicateRulesetError(e);
+        if (isDuplicateRuleset) {
+          scope?.setTag("ruleset_already_exists", "true");
+          console.log(`Branch protection ruleset may already exist for ${org}/${repoName}`);
+          return;
+        }
+        // If it's 422/409 but not a duplicate error, rethrow so callers can handle it
+      }
+    }
+    throw e;
   }
 }
 async function listFilesInRepoDirectory(

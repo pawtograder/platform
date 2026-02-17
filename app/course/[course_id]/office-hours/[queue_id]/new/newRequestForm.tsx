@@ -5,12 +5,14 @@ import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import Markdown from "@/components/ui/markdown";
 import {
   useHelpRequests,
   useHelpRequestStudents,
   useHelpRequestTemplates,
   useHelpQueues,
-  useHelpQueueAssignments,
+  useActiveHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import {
@@ -28,6 +30,7 @@ import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
 import { X } from "lucide-react";
+import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
@@ -47,6 +50,7 @@ export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { course } = useCourseController();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
@@ -119,12 +123,20 @@ export default function HelpRequestForm() {
   const isLoadingQueues = false; // Individual hooks don't expose loading state
   const connectionError = null; // Will be handled by connection status if needed
 
-  // Get help queue assignments to check for active staff
-  const allHelpQueueAssignments = useHelpQueueAssignments();
+  // Get active help queue assignments to check for active staff
+  // Uses useActiveHelpQueueAssignments which subscribes to individual item changes
+  // for proper reactivity when staff starts/stops working
+  const activeHelpQueueAssignments = useActiveHelpQueueAssignments();
   const queueIdsWithActiveStaff = useMemo(() => {
-    const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
-    return new Set(activeAssignments.map((a) => a.help_queue_id));
-  }, [allHelpQueueAssignments]);
+    const activeStaffSet = new Set(activeHelpQueueAssignments.map((a) => a.help_queue_id));
+    // Demo queues don't require active staff - add all demo queues to the set
+    allHelpQueues.forEach((queue) => {
+      if (queue.is_demo) {
+        activeStaffSet.add(queue.id);
+      }
+    });
+    return activeStaffSet;
+  }, [activeHelpQueueAssignments, allHelpQueues]);
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -310,28 +322,72 @@ export default function HelpRequestForm() {
     ).length;
   }, [selectedHelpQueue, allHelpRequests]);
 
-  // Validate that selected queue has active staff
+  // Watch is_private for conflict detection
+  const is_private = watch("is_private");
+
+  // Check if the selected queue would conflict with current requests (moved up for use in effects)
+  const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
+  const wouldConflict = useMemo(() => {
+    return Boolean(
+      selectedHelpQueue &&
+        isCreatingSoloRequest &&
+        userActiveRequests.some(
+          (request) =>
+            Number(request.help_queue) === Number(selectedHelpQueue) &&
+            request.student_count === 1 &&
+            Boolean(request.is_private) === Boolean(is_private)
+        )
+    );
+  }, [selectedHelpQueue, isCreatingSoloRequest, userActiveRequests, is_private]);
+
+  // Clear conflict error when conflict is resolved
+  useEffect(() => {
+    if (!wouldConflict && errors.root?.conflict) {
+      clearErrors("root.conflict");
+    }
+  }, [wouldConflict, errors.root?.conflict, clearErrors]);
+
+  // Validate that selected queue is available and has active staff (skip for demo queues)
   useEffect(() => {
     if (selectedHelpQueue) {
       const selectedQueue = helpQueues.find((q) => q.id === selectedHelpQueue);
-      if (selectedQueue && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
+
+      // Check if queue exists in available queues list
+      if (!selectedQueue) {
+        // Queue is not available (available === false) or doesn't exist
+        const queueFromAll = allHelpQueues.find((q) => q.id === selectedHelpQueue);
+        if (queueFromAll) {
+          setError("help_queue", {
+            type: "manual",
+            message: "This queue is not currently accepting new requests. Please select a different queue."
+          });
+        }
+      } else if (!selectedQueue.is_demo && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
+        // Demo queues don't require active staff
         setError("help_queue", {
           type: "manual",
           message: "This queue is not currently staffed. Please select a queue with active staff members."
         });
       } else {
-        // Clear the error if queue has active staff
+        // Clear any manual queue errors if queue is available and staffed (or is demo)
         const errorMessage = errors.help_queue?.message;
         if (
           errors.help_queue?.type === "manual" &&
           typeof errorMessage === "string" &&
-          errorMessage.includes("not currently staffed")
+          (errorMessage.includes("not currently staffed") || errorMessage.includes("not currently accepting"))
         ) {
           clearErrors("help_queue");
         }
       }
     }
-  }, [selectedHelpQueue, helpQueues, queueIdsWithActiveStaff, setError, clearErrors, errors.help_queue]);
+  }, [selectedHelpQueue, helpQueues, allHelpQueues, queueIdsWithActiveStaff, setError, clearErrors, errors.help_queue]);
+
+  // Clear students error when students are selected
+  useEffect(() => {
+    if (selectedStudents.length > 0 && errors.root?.students) {
+      clearErrors("root.students");
+    }
+  }, [selectedStudents.length, errors.root?.students, clearErrors]);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
@@ -356,6 +412,10 @@ export default function HelpRequestForm() {
             title: "Error",
             description: "At least one student must be selected for the help request."
           });
+          setError("root.students", {
+            type: "manual",
+            message: "At least one student must be selected for the help request."
+          });
           return;
         }
 
@@ -375,9 +435,10 @@ export default function HelpRequestForm() {
           }
         }
 
-        // Check if selected queue has active staff
+        // Check if selected queue has active staff (skip for demo queues)
         const selectedQueueId = getValues("help_queue");
-        if (selectedQueueId && !queueIdsWithActiveStaff.has(selectedQueueId)) {
+        const selectedQueue = helpQueues.find((q) => q.id === selectedQueueId);
+        if (selectedQueueId && !selectedQueue?.is_demo && !queueIdsWithActiveStaff.has(selectedQueueId)) {
           toaster.error({
             title: "Error",
             description: "This queue is not currently staffed. Please select a queue with active staff members."
@@ -402,9 +463,14 @@ export default function HelpRequestForm() {
           );
 
           if (hasSoloRequestInQueue) {
+            const conflictMessage = `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`;
             toaster.error({
               title: "Error",
-              description: `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`
+              description: conflictMessage
+            });
+            setError("root.conflict", {
+              type: "manual",
+              message: conflictMessage
             });
             return;
           }
@@ -628,19 +694,11 @@ export default function HelpRequestForm() {
       </Box>
     );
   }
-  const is_private = watch("is_private");
 
-  // Check if the selected queue would conflict with current requests
-  const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
-  const wouldConflict = Boolean(
-    selectedHelpQueue &&
-      isCreatingSoloRequest &&
-      userActiveRequests.some(
-        (request) =>
-          Number(request.help_queue) === Number(selectedHelpQueue) &&
-          request.student_count === 1 &&
-          Boolean(request.is_private) === Boolean(is_private)
-      )
+  // Compute hasErrors, ignoring empty root object left by React Hook Form
+  const hasErrors = Object.keys(errors).some(
+    (key) =>
+      key !== "root" || (key === "root" && Object.keys((errors as Record<string, unknown>).root || {}).length > 0)
   );
 
   return (
@@ -649,12 +707,43 @@ export default function HelpRequestForm() {
       <Stack spaceY={4}>
         <Box>
           <Heading>Request Live Help</Heading>
-          <Text>Submit a request to get help synchronously from a TA via text or video chat.</Text>
+          <Text mt={2}>Get real-time help from course staff via text chat or video call.</Text>
+          <Text fontSize="sm" color="fg.muted" mt={2}>
+            Once you submit a request, you&apos;ll be added to the queue and a staff member will join your chat as soon
+            as they&apos;re available. You can continue browsing the site while you wait — we&apos;ll notify you when
+            someone joins. Please stay available to respond promptly.
+          </Text>
           {selectedHelpQueue && openRequestsAhead > 0 && (
-            <Text color="blue.600" mt={2} fontSize="sm">
-              There are currently {openRequestsAhead} open request{openRequestsAhead !== 1 ? "s" : ""} in the help
-              queue. We will help you as soon as possible, and help students in a first-come, first-served basis.
+            <Text color="blue.600" mt={3} fontSize="sm" fontWeight="medium">
+              📋 There {openRequestsAhead === 1 ? "is" : "are"} currently {openRequestsAhead} request
+              {openRequestsAhead !== 1 ? "s" : ""} ahead of you. We help students first-come, first-served.
             </Text>
+          )}
+          <Box mt={4} p={3} bg="bg.subtle" borderRadius="md" borderWidth="1px" borderColor="border.muted">
+            <Text fontSize="sm" color="fg.muted">
+              <Text as="span" fontWeight="medium" color="fg.default">
+                💡 Not urgent?
+              </Text>{" "}
+              Consider posting on the{" "}
+              <Link
+                href={`/course/${course_id}/discussion`}
+                style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}
+              >
+                Discussion Forum
+              </Link>{" "}
+              instead. You can post publicly to get help from classmates and staff, or privately to reach only the
+              course staff. It&apos;s a great option for questions that don&apos;t need an immediate response.
+            </Text>
+          </Box>
+          {course?.office_hours_description && (
+            <Box mt={3} p={3} bg="bg.subtle" borderRadius="md" borderWidth="1px" borderColor="border.muted">
+              <Text fontSize="sm" fontWeight="medium" color="fg.muted" mb={1}>
+                📌 About Office Hours in {course?.name}
+              </Text>
+              <Box fontSize="sm" color="fg.muted">
+                <Markdown>{course.office_hours_description}</Markdown>
+              </Box>
+            </Box>
           )}
         </Box>
         <OfficeHoursDiscussionBrowser />
@@ -706,15 +795,16 @@ export default function HelpRequestForm() {
                       const queueId = val === "" ? undefined : Number.parseInt(val);
                       field.onChange(queueId);
 
-                      // Immediately validate if selected queue has active staff
-                      if (queueId && !queueIdsWithActiveStaff.has(queueId)) {
+                      // Immediately validate if selected queue has active staff (skip for demo queues)
+                      const selectedQueue = helpQueues.find((q) => q.id === queueId);
+                      if (queueId && !selectedQueue?.is_demo && !queueIdsWithActiveStaff.has(queueId)) {
                         setError("help_queue", {
                           type: "manual",
                           message:
                             "This queue is not currently staffed. Please select a queue with active staff members."
                         });
-                      } else if (queueId && queueIdsWithActiveStaff.has(queueId)) {
-                        // Clear any existing error if queue has active staff
+                      } else if (queueId && (selectedQueue?.is_demo || queueIdsWithActiveStaff.has(queueId))) {
+                        // Clear any existing error if queue has active staff or is demo
                         const errorMessage = errors.help_queue?.message;
                         if (
                           errors.help_queue?.type === "manual" &&
@@ -1145,13 +1235,7 @@ export default function HelpRequestForm() {
         <Button
           type="submit"
           loading={isSubmitting || isSubmittingGuard}
-          disabled={
-            isSubmitting ||
-            isSubmittingGuard ||
-            wouldConflict ||
-            selectedStudents.length === 0 ||
-            (templates.length > 0 && !watch("template_id"))
-          }
+          disabled={isSubmitting || isSubmittingGuard || hasErrors}
           mt={4}
         >
           Submit Request

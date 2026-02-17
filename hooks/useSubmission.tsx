@@ -545,7 +545,7 @@ function SubmissionControllerCreator({
       select: `
         *,
         submission_files(*),
-        grader_results(*, grader_result_tests(*), grader_result_output(*)),
+        grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*), grader_result_output(*)),
         submission_artifacts(*)
       `.trim()
     }

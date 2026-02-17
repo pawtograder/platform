@@ -1,7 +1,11 @@
 "use client";
 
 import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
-import TableController, { useTableControllerTableValues, useTableControllerValueById } from "@/lib/TableController";
+import TableController, {
+  useTableControllerTableValues,
+  useTableControllerValueById,
+  useListTableControllerValues
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HelpRequestMessage,
@@ -11,7 +15,7 @@ import {
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 
@@ -348,6 +352,7 @@ export class OfficeHoursController {
     }
 
     // Create new TableController for this specific help request
+    // Use minimal debounce settings for chat messages to ensure real-time responsiveness
     const controller = new TableController({
       client: this._client,
       table: "help_request_messages",
@@ -360,7 +365,10 @@ export class OfficeHoursController {
       realtimeFilter: {
         class_id: this.classId,
         help_request_id: helpRequestId
-      }
+      },
+      // Chat messages need real-time responsiveness - use minimal debounce and no jitter
+      debounceInterval: 50, // Small debounce to batch rapid messages
+      debounceJitter: 0 // No jitter - messages should appear immediately
     });
 
     this._helpRequestMessageControllers.set(helpRequestId, controller);
@@ -474,19 +482,28 @@ export function OfficeHoursControllerProvider({
   children: React.ReactNode;
 }) {
   const controller = useRef<OfficeHoursController | null>(null);
-  const client = createClient();
+  // Memoize client to prevent recreating on every render
+  const clientRef = useRef<SupabaseClient<Database> | null>(null);
+  if (!clientRef.current) {
+    clientRef.current = createClient();
+  }
+  const client = clientRef.current;
   const { classRealTimeController } = useCourseController();
   const [officeHoursRealTimeController, setOfficeHoursRealTimeController] =
     useState<OfficeHoursRealTimeController | null>(null);
   useEffect(() => {
-    setOfficeHoursRealTimeController(
-      new OfficeHoursRealTimeController({
-        client,
-        classId,
-        profileId,
-        isStaff: role === "instructor" || role === "grader"
-      })
-    );
+    const newController = new OfficeHoursRealTimeController({
+      client,
+      classId,
+      profileId,
+      isStaff: role === "instructor" || role === "grader"
+    });
+    setOfficeHoursRealTimeController(newController);
+
+    // Cleanup: close the controller when deps change or on unmount
+    return () => {
+      newController.close();
+    };
   }, [client, classId, profileId, role]);
 
   // Initialize controller with required dependencies
@@ -608,6 +625,18 @@ export function useHelpRequestStudents() {
 export function useHelpQueueAssignments() {
   const controller = useOfficeHoursController();
   return useTableControllerTableValues(controller.helpQueueAssignments);
+}
+
+/**
+ * Returns only active help queue assignments (is_active === true).
+ * Uses useListTableControllerValues which subscribes to individual item changes,
+ * ensuring the data stays fresh when assignments are activated/deactivated.
+ */
+export function useActiveHelpQueueAssignments() {
+  const controller = useOfficeHoursController();
+  // Memoize predicate to avoid re-subscribing on every render
+  const isActivePredicate = useCallback((assignment: { is_active: boolean }) => assignment.is_active === true, []);
+  return useListTableControllerValues(controller.helpQueueAssignments, isActivePredicate);
 }
 
 export function useStudentKarmaNotes() {

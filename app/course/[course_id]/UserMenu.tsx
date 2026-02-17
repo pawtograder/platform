@@ -41,6 +41,7 @@ import { RiChatSettingsFill } from "react-icons/ri";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import { signOutAction } from "../../actions";
 import { LuCopy, LuCheck } from "react-icons/lu";
+import MCPTokensMenu from "@/components/settings/MCPTokensMenu";
 
 function SupportMenu() {
   // Track whether the build number has been successfully copied
@@ -699,6 +700,7 @@ function UserSettingsMenu() {
                 </HStack>
                 <ProfileChangesMenu />
                 <NotificationPreferencesMenu />
+                <MCPTokensMenu />
                 <Button
                   variant="ghost"
                   onClick={signOutAction}

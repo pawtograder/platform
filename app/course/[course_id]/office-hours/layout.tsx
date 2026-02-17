@@ -5,6 +5,7 @@ import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { getNotificationManager } from "@/lib/notifications";
 import { Box } from "@chakra-ui/react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useMemo } from "react";
@@ -49,6 +50,26 @@ const OfficeHoursLayout = ({ children }: Readonly<{ children: React.ReactNode }>
       document.title = `${courseController.course.name} - Office Hours`;
     }
   }, [courseController?.course?.name]);
+
+  // Initialize notification manager and handle visibility changes
+  useEffect(() => {
+    const manager = getNotificationManager();
+
+    // Clear notifications when page becomes visible
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        manager.clearNotifications();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      // Clear any pending notifications when leaving office hours
+      manager.clearNotifications();
+    };
+  }, []);
 
   return (
     <ClassProfileProvider>

@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGemoji from "remark-gemoji";
 import remarkGfm from "remark-gfm";
@@ -62,13 +63,17 @@ const additionalStyles = `
   .wmde-markdown i {
     color: inherit !important;
   }
+  .wmde-markdown a {
+    color: inherit !important;
+    text-decoration: underline !important;
+  }
 `;
 
 export default function Markdown(props: MarkdownProps) {
   const { style, remarkPlugins, rehypePlugins, ...rest } = props;
 
   const combinedRemark = [remarkMath, remarkGfm, remarkBreaks, remarkGemoji, ...(remarkPlugins || [])];
-  const combinedRehype = [rehypeKatex, rehypeHighlight, ...(rehypePlugins || [])];
+  const combinedRehype = [rehypeSanitize, rehypeKatex, rehypeHighlight, ...(rehypePlugins || [])];
 
   return (
     <>

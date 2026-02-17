@@ -201,6 +201,9 @@
     }
   },
   "properties": {
+    "cap_score_to_assignment_points": {
+      "type": "boolean"
+    },
     "description": {
       "type": "string"
     },

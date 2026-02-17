@@ -742,14 +742,25 @@ export default function AssignmentForm({
               </Checkbox.Root>
             </Field>
           </Fieldset.Content>
-          {/* <Fieldset.Content>
+          <Fieldset.Content>
             <Field
-              label="Description URL"
-              helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"
+              label="Handout URL"
+              helperText="A link to the assignment handout or instructions document. This URL will be provided to AI assistants helping students with this assignment."
+              errorText={errors.handout_url?.message?.toString()}
+              invalid={!!errors.handout_url}
             >
-              <Input name="description" />
+              <Input
+                type="url"
+                placeholder="https://..."
+                {...register("handout_url", {
+                  pattern: {
+                    value: /^https?:\/\/.+/,
+                    message: "Please enter a valid URL starting with http:// or https://"
+                  }
+                })}
+              />
             </Field>
-          </Fieldset.Content> */}
+          </Fieldset.Content>
           <Fieldset.Content>
             <Field
               label="Points Possible"
@@ -815,6 +826,26 @@ export default function AssignmentForm({
                       <LuCheck />
                     </Checkbox.Control>
                     <Checkbox.Label>Anonymous grading (show grader pseudonyms to students)</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field helperText="When enabled, students can see a leaderboard showing top autograder scores using pseudonyms.">
+              <Controller
+                name="show_leaderboard"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value || false}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Show autograder leaderboard to students</Checkbox.Label>
                   </Checkbox.Root>
                 )}
               />

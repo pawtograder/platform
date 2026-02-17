@@ -30,9 +30,7 @@ export default function DiscordDiscussionMessageLink({
   showLabel = false
 }: DiscordDiscussionMessageLinkProps) {
   const course = useCourse();
-  // Note: 'discussion_thread' is added to discord_resource_type enum in migration
-  // TypeScript types need to be regenerated for full type safety
-  const message = useDiscordMessage("discussion_thread" as "help_request" | "regrade_request", threadId);
+  const message = useDiscordMessage("discussion_thread", threadId);
 
   const discordUrl = useMemo(() => {
     if (!message || !course?.discord_server_id) {

@@ -77,6 +77,9 @@ export type RerunAutograderArgs = {
   repository_check_run_id: number;
   triggered_by: string;
   repository_id: number;
+  grader_sha?: string;
+  auto_promote?: boolean;
+  target_submission_id: number;
 };
 
 export type SyncRepoToHandoutArgs = {

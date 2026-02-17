@@ -9,7 +9,9 @@ import {
   loginAsUser,
   supabase,
   TestingUser,
-  createUsersInClass
+  createUsersInClass,
+  submitFeedbackViaAPI,
+  createSampleGradingResult
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
 
@@ -294,5 +296,90 @@ test.describe("Create submission", () => {
       .eq("id", submission.submission_id)
       .single();
     expect(submissionRow?.is_empty_submission).toBe(false);
+  });
+
+  test("Submit feedback API creates grader_result and grader_result_tests", async () => {
+    // Create a submission first
+    const sha = "feedback" + Math.random().toString(36).substring(2, 8);
+    const submission = await insertSubmissionViaAPI({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignmentInFuture!.id,
+      sha: sha,
+      class_id: course.id
+    });
+    expect(submission).toBeDefined();
+    expect(submission.submission_id).toBeDefined();
+
+    // Submit feedback via the API
+    const gradingResult = createSampleGradingResult();
+    const response = await submitFeedbackViaAPI({
+      repository: submission.repository_name,
+      sha: sha,
+      feedback: gradingResult
+    });
+
+    // Assert valid response
+    expect(response).toBeDefined();
+    expect(response.is_ok).toBe(true);
+    expect(response.message).toContain("registered");
+    expect(response.details_url).toContain(`/submissions/${submission.submission_id}`);
+    expect(response.supabase_url).toBeDefined();
+    expect(response.supabase_anon_key).toBeDefined();
+
+    // Verify grader_result was created
+    const { data: graderResult, error: graderResultError } = await supabase
+      .from("grader_results")
+      .select("*")
+      .eq("submission_id", submission.submission_id)
+      .single();
+
+    expect(graderResultError).toBeNull();
+    expect(graderResult).toBeDefined();
+    expect(graderResult!.score).toBe(gradingResult.feedback.score);
+    expect(graderResult!.max_score).toBe(gradingResult.feedback.max_score);
+    expect(graderResult!.lint_passed).toBe(true);
+    expect(graderResult!.ret_code).toBe(0);
+
+    // Verify grader_result_tests were created
+    const { data: graderResultTests, error: testsError } = await supabase
+      .from("grader_result_tests")
+      .select("*")
+      .eq("grader_result_id", graderResult!.id)
+      .order("name");
+
+    expect(testsError).toBeNull();
+    expect(graderResultTests).toBeDefined();
+    expect(graderResultTests!.length).toBe(4); // We created 4 tests in createSampleGradingResult
+
+    // Verify individual test details
+    const test1 = graderResultTests!.find((t) => t.name === "Test 1 - Basic functionality");
+    expect(test1).toBeDefined();
+    expect(test1!.score).toBe(25);
+    expect(test1!.max_score).toBe(25);
+    expect(test1!.part).toBe("Part A");
+
+    const test2 = graderResultTests!.find((t) => t.name === "Test 2 - Edge cases");
+    expect(test2).toBeDefined();
+    expect(test2!.score).toBe(20);
+    expect(test2!.max_score).toBe(25);
+
+    const hiddenTest = graderResultTests!.find((t) => t.name === "Test 4 - Hidden test");
+    expect(hiddenTest).toBeDefined();
+    expect(hiddenTest!.is_released).toBe(false); // hide_until_released: true
+
+    // Verify grader_result_output was created
+    const { data: graderResultOutput, error: outputError } = await supabase
+      .from("grader_result_output")
+      .select("*")
+      .eq("grader_result_id", graderResult!.id);
+
+    expect(outputError).toBeNull();
+    expect(graderResultOutput).toBeDefined();
+    expect(graderResultOutput!.length).toBeGreaterThan(0);
+
+    // Check that visible output was stored
+    const visibleOutput = graderResultOutput!.find((o) => o.visibility === "visible");
+    expect(visibleOutput).toBeDefined();
+    expect(visibleOutput!.output).toBe("All visible tests passed!");
   });
 });

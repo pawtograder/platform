@@ -8,7 +8,7 @@ import type {
   PullRequestEvent
 } from "https://esm.sh/@octokit/webhooks-types";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { parse } from "jsr:@std/yaml";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createHash } from "node:crypto";
@@ -1059,7 +1059,7 @@ async function handleWorkflowCompletionErrors(
     const { data: submissions, error: submissionsError } = await adminSupabase
       .from("submissions")
       .select(
-        "id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs(check_run_id), profile_id, assignment_group_id, assignment_id"
+        "id, repository_check_run_id, run_number, run_attempt, sha, repository_id, repository_check_runs!submissions_repository_check_run_id_fkey(check_run_id), profile_id, assignment_group_id, assignment_id"
       )
       .eq("repository_id", repositoryId)
       .eq("sha", workflowRun.head_sha)
