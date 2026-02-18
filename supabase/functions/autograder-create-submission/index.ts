@@ -1367,6 +1367,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
           const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB per file
 
+          /** Returns a safe filename (basename, no path separators or traversal). Use for storage keys. */
+          function getSafeFileName(name: string): string {
+            const normalized = name.replace(/\\/g, "/");
+            const segments = normalized.split("/").filter((s) => s.length > 0);
+            const basename = segments.length > 0 ? segments[segments.length - 1] : "";
+            if (basename === "" || basename === "." || basename === "..") return "unnamed";
+            return basename;
+          }
+
           function getFileExtension(name: string): string {
             const lastDot = name.lastIndexOf(".");
             return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
@@ -1413,6 +1422,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               }))
             );
             if (textFileError) {
+              Sentry.captureException(textFileError, scope);
               throw new UserVisibleError(
                 `Internal error: Failed to insert text submission files: ${textFileError.message}`
               );
@@ -1424,9 +1434,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
             await Promise.all(
               binaryFiles.map(async (file) => {
-                const ext = getFileExtension(file.name);
+                const safeFileName = getSafeFileName(file.name);
+                const ext = getFileExtension(safeFileName);
                 const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${file.name}`;
+                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${safeFileName}`;
 
                 // Upload to Supabase Storage
                 const { error: storageError } = await adminSupabase.storage
@@ -1437,14 +1448,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                   });
                 if (storageError) {
                   throw new UserVisibleError(
-                    `Internal error: Failed to upload binary file "${file.name}" to storage: ${storageError.message}`
+                    `Internal error: Failed to upload binary file "${safeFileName}" to storage: ${storageError.message}`
                   );
                 }
 
                 // Insert DB record (no inline contents for binary)
                 const { error: dbError } = await adminSupabase.from("submission_files").insert({
                   submission_id: submission_id,
-                  name: file.name,
+                  name: safeFileName,
                   profile_id: repoData.profile_id,
                   assignment_group_id: repoData.assignment_group_id,
                   contents: null,
@@ -1455,8 +1466,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                   storage_key: storageKey
                 });
                 if (dbError) {
+                  const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
+                  if (removeErr.error) {
+                    Sentry.captureException(removeErr.error, scope);
+                  }
                   throw new UserVisibleError(
-                    `Internal error: Failed to insert binary file record for "${file.name}": ${dbError.message}`
+                    `Internal error: Failed to insert binary file record for "${safeFileName}": ${dbError.message}`
                   );
                 }
               })

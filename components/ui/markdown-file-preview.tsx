@@ -1,15 +1,5 @@
 "use client";
 
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  PopoverArrow,
-  PopoverBody,
-  PopoverCloseTrigger,
-  PopoverContent,
-  PopoverRoot,
-  PopoverTitle,
-  PopoverTrigger
-} from "@/components/ui/popover";
 import {
   useGraderPseudonymousMode,
   useReviewAssignmentRubricParts,
@@ -20,25 +10,23 @@ import {
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController, useSubmissionFileComments } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
-import {
-  RubricCheck,
-  RubricChecksDataType,
-  SubmissionFile,
-  SubmissionFileComment
-} from "@/utils/supabase/DatabaseTypes";
+import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
+import type { SubmissionWithGraderResultsAndFiles } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import { Box, Button, Flex, Heading, HStack, Separator, Spinner, Text, VStack } from "@chakra-ui/react";
-import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import rehypeSourcePositions from "@/lib/rehype-source-positions";
+import { Box, Badge, Button, Flex, Heading, HStack, Icon, Separator, Spinner, Text, VStack } from "@chakra-ui/react";
+import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
+import type { Element } from "hast";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkGemoji from "remark-gemoji";
-import {
+import { FaCode, FaComments, FaEye, FaRegComment } from "react-icons/fa";
+import CodeFile, {
   CodeLineComment,
-  formatPoints,
   isRubricCheckDataWithOptions,
   LineCheckAnnotation,
   RubricCheckSelectOption,
@@ -47,6 +35,8 @@ import {
 } from "./code-file";
 import LineCommentForm from "./line-comments-form";
 import MessageInput from "./message-input";
+import { StudentVisibilityIndicator } from "./rubric-sidebar";
+import { Tooltip } from "./tooltip";
 import { toaster } from "./toaster";
 
 // Use line 0 as convention for file-level comments on markdown files
@@ -54,6 +44,39 @@ const MARKDOWN_FILE_COMMENT_LINE = 0;
 
 // Types for file resolution
 type ResolvedImageMap = Record<string, string>;
+
+// Line action popup state
+type LineActionPopupProps = {
+  lineNumber: number;
+  top: number;
+  left: number;
+  visible: boolean;
+  onClose?: () => void;
+  close: () => void;
+};
+
+// Context for markdown line comments (similar to CodeLineCommentContext)
+type MarkdownLineCommentContextType = {
+  submission: SubmissionWithGraderResultsAndFiles;
+  comments: SubmissionFileComment[];
+  file: SubmissionFile;
+  expanded: number[];
+  close: (line: number) => void;
+  open: (line: number) => void;
+  showCommentsFeature: boolean;
+  submissionReviewId?: number;
+  setLineActionPopup: React.Dispatch<React.SetStateAction<LineActionPopupProps>>;
+};
+
+const MarkdownLineCommentContext = createContext<MarkdownLineCommentContextType | undefined>(undefined);
+
+function useMarkdownLineCommentContext() {
+  const context = useContext(MarkdownLineCommentContext);
+  if (!context) {
+    throw new Error("useMarkdownLineCommentContext must be used within MarkdownLineCommentContext");
+  }
+  return context;
+}
 
 // Mermaid diagram component - renders code blocks with language "mermaid"
 function MermaidDiagram({ code }: { code: string }) {
@@ -187,13 +210,23 @@ function resolveRelativePath(currentFilePath: string, relativePath: string): str
   return resolved.join("/");
 }
 
-// Fetch binary file content from Supabase Storage and return data URI.
-// Uses FileReader.readAsDataURL for O(n) base64 encoding (avoids quadratic reduce on large files).
+/** Max size (10MB) for inlining images as data URIs. Larger files return "" to avoid OOM. */
+const MAX_INLINE_IMAGE_SIZE = 10 * 1024 * 1024;
+
+/**
+ * Fetches binary file content from Supabase Storage and returns a data URI.
+ * Uses FileReader.readAsDataURL for O(n) base64 encoding (avoids quadratic reduce on large files).
+ * Returns "" if the file exceeds MAX_INLINE_IMAGE_SIZE to avoid OOM; callers should render a
+ * placeholder for oversized or failed images.
+ */
 async function fetchBinaryFileAsDataUri(storageKey: string, mimeType: string): Promise<string> {
   const client = createClient();
   const { data, error } = await client.storage.from("submission-files").download(storageKey);
   if (error || !data) {
-    console.error("Failed to fetch binary file from storage:", error);
+    return "";
+  }
+  const size = data.size ?? 0;
+  if (size > MAX_INLINE_IMAGE_SIZE) {
     return "";
   }
   const blob = new Blob([data], { type: mimeType });
@@ -215,11 +248,11 @@ async function fetchBinaryFileAsDataUri(storageKey: string, mimeType: string): P
 function MarkdownFileComments({ file }: { file: SubmissionFile }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const submissionReview = useActiveSubmissionReview();
   const allComments = useSubmissionFileComments({ file_id: file.id });
 
   const commentsToDisplay = useMemo(() => {
     const ret = allComments.filter((comment: SubmissionFileComment) => {
+      if (comment.line !== MARKDOWN_FILE_COMMENT_LINE) return false;
       if (!isGraderOrInstructor && submission.released !== null) {
         return comment.eventually_visible === true;
       }
@@ -242,272 +275,480 @@ function MarkdownFileComments({ file }: { file: SubmissionFile }) {
           <CodeLineComment key={comment.id} comment_id={comment.id} />
         )
       )}
-      <LineCommentForm
-        lineNumber={MARKDOWN_FILE_COMMENT_LINE}
-        submission={submission}
-        file={file}
-        submissionReviewId={submissionReview?.id}
-      />
     </Box>
   );
 }
 
 /**
- * Popover for adding rubric check annotations on a markdown file.
- * Modeled after ArtifactCheckPopover but uses submission_file_comments with line=0.
+ * Popup for annotating a line in the markdown preview on right-click.
+ * Duplicated logic from code-file.tsx LineActionPopup for markdown context.
  */
-function MarkdownAnnotationPopover({ file }: { file: SubmissionFile }) {
+function MarkdownLineActionPopup({
+  lineNumber,
+  top,
+  left,
+  visible,
+  close,
+  file
+}: LineActionPopupProps & { file: SubmissionFile }) {
+  const submissionController = useSubmissionController();
   const submission = useSubmission();
-  const submissionReview = useActiveSubmissionReview();
-  const rubric = useRubricWithParts(submissionReview?.rubric_id);
-  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
-  const rubricChecks = useRubricChecksByRubric(rubric?.id);
-
+  const review = useActiveSubmissionReview();
+  const rubric = useRubricWithParts(review?.rubric_id);
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const assignedPartIds = useMemo(
     () => new Set(assignedRubricParts.map((part) => part.rubric_part_id)),
     [assignedRubricParts]
   );
+  const [selectOpen, setSelectOpen] = useState(true);
+  const { private_profile_id, public_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const graderPseudonymousMode = useGraderPseudonymousMode();
+  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
-  const submissionController = useSubmissionController();
-
+  const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const { private_profile_id, public_profile_id } = useClassProfiles();
-  const graderPseudonymousMode = useGraderPseudonymousMode();
-  const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
-  const [eventuallyVisible, setEventuallyVisible] = useState(true);
-  const [isOpen, setIsOpen] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
 
   const existingComments = useSubmissionFileComments({ file_id: file.id });
+  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
+  const rubricChecks = useRubricChecksByRubric(rubric?.id);
 
-  useEffect(() => {
-    if (isOpen && messageInputRef.current && selectedCheckOption) {
-      messageInputRef.current.focus();
+  const criteria: RubricCriteriaSelectGroupOption[] = useMemo(() => {
+    let criteriaWithAnnotationChecks: RubricCriteria[] = [];
+    if (rubricCriteria && rubricChecks) {
+      const annotationChecks = rubricChecks
+        .filter(
+          (check: RubricCheck) =>
+            check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+        )
+        .map((check: RubricCheck) => check.rubric_criteria_id);
+      criteriaWithAnnotationChecks = rubricCriteria.filter((criteria: RubricCriteria) =>
+        annotationChecks.includes(criteria.id)
+      );
     }
-  }, [isOpen, selectedCheckOption]);
+    const sortedCriteria = [...criteriaWithAnnotationChecks].sort((a, b) => {
+      const aAssigned = assignedPartIds.has(a.rubric_part_id ?? -1);
+      const bAssigned = assignedPartIds.has(b.rubric_part_id ?? -1);
+      if (aAssigned !== bAssigned) return aAssigned ? -1 : 1;
+      return a.ordinal - b.ordinal;
+    });
+    const criteriaOptions: RubricCriteriaSelectGroupOption[] =
+      (sortedCriteria?.map((criteria) => ({
+        label: criteria.name,
+        value: criteria.id.toString(),
+        criteria: criteria as RubricCriteria,
+        options:
+          rubricChecks
+            ?.filter(
+              (check) =>
+                check.is_annotation &&
+                (check.annotation_target === "file" || check.annotation_target === null) &&
+                check.rubric_criteria_id === criteria.id
+            )
+            .sort((a, b) => a.ordinal - b.ordinal)
+            .map((check) => {
+              const existingAnnotationsForCheck = existingComments.filter(
+                (comment) => comment.rubric_check_id === check.id
+              ).length;
+              const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
+              const option: RubricCheckSelectOption = {
+                label: check.name,
+                value: check.id.toString(),
+                check,
+                criteria: criteria as RubricCriteria,
+                options: [],
+                isDisabled
+              };
+              if (isRubricCheckDataWithOptions(check.data)) {
+                option.options = check.data.options.map(
+                  (subOption: { label: string; points: number }, index: number) => ({
+                    label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
+                    comment: subOption.label,
+                    index: index.toString(),
+                    value: index.toString(),
+                    points: subOption.points,
+                    check: option,
+                    isDisabled
+                  })
+                );
+              }
+              return option;
+            }) ?? []
+      })) as RubricCriteriaSelectGroupOption[]) ?? [];
+    criteriaOptions.push({
+      label: "Leave a comment",
+      value: "comment",
+      options: [{ label: "Leave a comment", value: "comment" }]
+    });
+    return criteriaOptions;
+  }, [assignedPartIds, existingComments, rubricCriteria, rubricChecks]);
 
   useEffect(() => {
-    if (!isOpen) {
+    if (!visible) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (popupRef.current && !popupRef.current.contains(event.target as Node)) close();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    const timerId = setTimeout(() => {
+      document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKeyDown);
+    }, 0);
+    return () => {
+      clearTimeout(timerId);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [visible, close]);
+
+  useEffect(() => {
+    setSelectedCheckOption(null);
+    setSelectedSubOption(null);
+  }, [lineNumber]);
+  useEffect(() => setSelectedSubOption(null), [selectedCheckOption]);
+  useEffect(() => {
+    if (messageInputRef.current) messageInputRef.current.focus();
+  }, [selectedCheckOption]);
+  useEffect(() => {
+    if (selectRef.current && !selectedCheckOption) selectRef.current.focus();
+  }, [selectedCheckOption, lineNumber]);
+  useEffect(() => {
+    if (!visible) {
       setSelectedCheckOption(null);
       setSelectedSubOption(null);
+      setSelectOpen(true);
     }
-  }, [isOpen]);
+  }, [visible]);
 
-  // Filter criteria that have file annotation checks
-  const criteriaOptions: RubricCriteriaSelectGroupOption[] = useMemo(() => {
-    if (!rubricCriteria || !rubricChecks) return [];
+  const filterOption = useCallback((option: { label: string; data: RubricCheckSelectOption }, rawInput: string) => {
+    const search = rawInput.trim().toLowerCase();
+    if (!search) return true;
+    const optionLabel = option.label.toLowerCase();
+    const criteriaLabel = option.data.criteria?.name?.toLowerCase() ?? "";
+    return optionLabel.includes(search) || criteriaLabel.includes(search);
+  }, []);
 
-    const annotationCheckCriteriaIds = rubricChecks
-      .filter(
-        (check: RubricCheck) =>
-          check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-      )
-      .map((check: RubricCheck) => check.rubric_criteria_id);
+  if (!visible) return null;
+  const adjustedTop = top + 250 > window.innerHeight && window.innerHeight > 250 ? top - 250 : top;
 
-    const criteriaWithAnnotationChecks = rubricCriteria
-      .filter((criteria) => annotationCheckCriteriaIds.includes(criteria.id))
-      .sort((a, b) => {
-        const aAssigned = assignedPartIds.has(a.rubric_part_id ?? -1);
-        const bAssigned = assignedPartIds.has(b.rubric_part_id ?? -1);
-        if (aAssigned !== bAssigned) return aAssigned ? -1 : 1;
-        return a.ordinal - b.ordinal;
-      });
-
-    return criteriaWithAnnotationChecks.map((criteria) => ({
-      label: criteria.name,
-      value: criteria.id.toString(),
-      criteria,
-      options: rubricChecks
-        .filter(
-          (check) =>
-            check.is_annotation &&
-            (check.annotation_target === "file" || check.annotation_target === null) &&
-            check.rubric_criteria_id === criteria.id
-        )
-        .sort((a, b) => a.ordinal - b.ordinal)
-        .map((check) => {
-          const existingAnnotationsForCheck = existingComments.filter(
-            (comment) => comment.rubric_check_id === check.id
-          ).length;
-          const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
-
-          const option: RubricCheckSelectOption = {
-            label: check.name,
-            value: check.id.toString(),
-            check: check as RubricCheck,
-            criteria,
-            options: [],
-            isDisabled
-          };
-          if (isRubricCheckDataWithOptions(check.data)) {
-            option.options = check.data.options.map((subOption, index) => ({
-              label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
-              comment: subOption.label,
-              index: index.toString(),
-              value: index.toString(),
-              points: subOption.points,
-              check: option,
-              isDisabled
-            }));
-          }
-          return option;
-        })
-    })) as RubricCriteriaSelectGroupOption[];
-  }, [rubricCriteria, rubricChecks, assignedPartIds, existingComments]);
-
-  if (!criteriaOptions || criteriaOptions.length === 0) {
-    return null;
-  }
-
-  const selectComponentsConfig: SelectComponentsConfig<
-    RubricCheckSelectOption,
-    false,
-    RubricCriteriaSelectGroupOption
-  > = {
+  const selectComponents: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
     GroupHeading: (props) => (
       <chakraComponents.GroupHeading {...props}>
-        {props.data.criteria ? `Criteria: ${props.data.label}` : <Separator />}
+        {props.data.criteria ? <>Criteria: {props.data.label}</> : <Separator />}
       </chakraComponents.GroupHeading>
     ),
     Option: (props) => (
       <chakraComponents.Option {...props}>
-        {props.data.label} {props.data.check && `(${formatPoints(props.data.check)})`}
+        {props.data.label}{" "}
+        {props.data.check?.points ? `(${props.data.criteria?.is_additive ? "+" : "-"}${props.data.check.points})` : ""}
       </chakraComponents.Option>
     )
   };
 
   return (
-    <PopoverRoot open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm">
-          Annotate File
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent w="lg" p={4}>
-        <PopoverArrow />
-        <PopoverCloseTrigger />
-        <PopoverTitle fontWeight="semibold">Annotate {file.name}</PopoverTitle>
-        <PopoverBody>
-          <VStack gap={3} align="stretch">
-            <Select<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>
-              options={criteriaOptions}
-              value={selectedCheckOption}
-              onChange={(e) => setSelectedCheckOption(e)}
-              placeholder="Select a rubric check..."
-              components={selectComponentsConfig}
-              isClearable
+    <Box
+      zIndex={1000}
+      top={adjustedTop}
+      left={left}
+      position="fixed"
+      bg="bg.subtle"
+      w="md"
+      p={3}
+      border="1px solid"
+      borderColor="border.emphasized"
+      borderRadius="md"
+      boxShadow="lg"
+      ref={popupRef}
+    >
+      <VStack gap={2} align="stretch">
+        <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
+          {lineNumber === 0 ? "Annotate file" : `Annotate line ${lineNumber}`} with a check:
+        </Text>
+        <HStack>
+          <Select
+            aria-label="Select a rubric check or leave a comment"
+            ref={selectRef}
+            options={criteria}
+            menuIsOpen={selectOpen}
+            onMenuOpen={() => setSelectOpen(true)}
+            onMenuClose={() => setSelectOpen(false)}
+            escapeClearsValue={true}
+            components={selectComponents}
+            filterOption={filterOption}
+            value={selectedCheckOption}
+            onChange={(e: RubricCheckSelectOption | null) => e && setSelectedCheckOption(e)}
+            placeholder="Select a rubric check or leave a comment..."
+            size="sm"
+          />
+          {selectedCheckOption?.check && (
+            <StudentVisibilityIndicator
+              check={selectedCheckOption.check}
+              isApplied={true}
+              isReleased={review?.released ?? true}
             />
-
-            {selectedCheckOption?.check?.data &&
-              typeof selectedCheckOption.check.data === "object" &&
-              "options" in selectedCheckOption.check.data &&
-              Array.isArray((selectedCheckOption.check.data as RubricChecksDataType).options) &&
-              (selectedCheckOption.check.data as RubricChecksDataType).options.length > 0 && (
-                <Select<RubricCheckSubOptions, false>
-                  options={(selectedCheckOption.check.data as RubricChecksDataType).options.map((option, index) => ({
-                    label: option.label,
-                    comment: option.label,
-                    value: index.toString(),
-                    index: index.toString(),
-                    points: option.points,
-                    check: selectedCheckOption
-                  }))}
-                  value={selectedSubOption}
-                  onChange={(e: RubricCheckSubOptions | null) => setSelectedSubOption(e)}
-                  placeholder="Select an option..."
-                  isClearable
-                />
-              )}
-
-            {selectedCheckOption && (
-              <>
-                <Text fontSize="sm" color="fg.muted">
-                  {selectedCheckOption.check?.description || "No description."}
-                </Text>
-                {isGraderOrInstructor && (
-                  <Checkbox
-                    checked={eventuallyVisible}
-                    onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
-                  >
-                    Visible to student when submission is released
-                  </Checkbox>
+          )}
+        </HStack>
+        {selectedCheckOption && (
+          <>
+            {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
+              <Select
+                options={(selectedCheckOption.check.data.options ?? []).map(
+                  (option: { label: string; points: number }, index: number) =>
+                    ({
+                      label: option.label,
+                      comment: option.label,
+                      value: index.toString(),
+                      index: index.toString(),
+                      points: option.points,
+                      check: selectedCheckOption
+                    }) as RubricCheckSubOptions
                 )}
-                <MessageInput
-                  textAreaRef={messageInputRef}
-                  placeholder={
-                    selectedCheckOption.check?.is_comment_required ? "Comment (required)..." : "Optional comment..."
-                  }
-                  allowEmptyMessage={!selectedCheckOption.check?.is_comment_required}
-                  defaultSingleLine={true}
-                  sendButtonText="Add Annotation"
-                  sendMessage={async (message) => {
-                    if (file.class_id == null) {
-                      toaster.error({
-                        title: "Cannot add annotation",
-                        description: "File is not associated with a class."
-                      });
-                      return;
-                    }
-                    if (authorProfileId == null) {
-                      toaster.error({
-                        title: "Cannot add annotation",
-                        description: "Your profile is not available. Please refresh and try again."
-                      });
-                      return;
-                    }
-
-                    let points = selectedCheckOption.check?.points;
-                    if (selectedSubOption) {
-                      points = selectedSubOption.points;
-                    }
-                    let commentText = message || "";
-                    if (selectedSubOption) {
-                      commentText = selectedSubOption.comment + (commentText ? "\n" + commentText : "");
-                    }
-
-                    const values = {
-                      comment: commentText,
-                      line: MARKDOWN_FILE_COMMENT_LINE,
-                      rubric_check_id: selectedCheckOption.check?.id ?? null,
-                      class_id: file.class_id,
-                      submission_file_id: file.id,
-                      submission_id: submission.id,
-                      author: authorProfileId,
-                      released: submissionReview ? submissionReview.released : true,
-                      points: points ?? null,
-                      submission_review_id: submissionReview?.id ?? null,
-                      eventually_visible:
-                        selectedCheckOption.check?.student_visibility !== "never" ? eventuallyVisible : false,
-                      regrade_request_id: null
-                    };
-
-                    try {
-                      await submissionController.submission_file_comments.create(
-                        values as Omit<
-                          SubmissionFileComment,
-                          "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by"
-                        >
-                      );
-                      setIsOpen(false);
-                    } catch (e) {
-                      toaster.error({
-                        title: "Error saving annotation",
-                        description: e instanceof Error ? e.message : "Unknown error"
-                      });
-                    }
-                  }}
-                />
-              </>
+                value={selectedSubOption}
+                onChange={(e: RubricCheckSubOptions | null) => setSelectedSubOption(e)}
+                placeholder="Select an option for this check..."
+                size="sm"
+              />
             )}
-          </VStack>
-        </PopoverBody>
-      </PopoverContent>
-    </PopoverRoot>
+            <MessageInput
+              textAreaRef={messageInputRef}
+              enableGiphyPicker={true}
+              sendButtonText={selectedCheckOption.check ? "Add Check" : "Add Comment"}
+              placeholder={
+                !selectedCheckOption.check
+                  ? "Add a comment about this line and press enter to submit..."
+                  : selectedCheckOption.check.is_comment_required
+                    ? "Add a comment about this check and press enter to submit..."
+                    : "Optionally add a comment, or just press enter to submit..."
+              }
+              allowEmptyMessage={selectedCheckOption.check ? !selectedCheckOption.check.is_comment_required : true}
+              defaultSingleLine={true}
+              sendMessage={async (message) => {
+                let points = selectedCheckOption.check?.points;
+                if (selectedSubOption !== null) points = selectedSubOption.points;
+                let comment = message || "";
+                if (selectedSubOption) comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
+                const submissionReviewId = review?.id;
+                if (!submissionReviewId && selectedCheckOption.check?.id) {
+                  toaster.error({
+                    title: "Error saving comment",
+                    description: "Submission review ID is missing, cannot save rubric annotation."
+                  });
+                  return;
+                }
+                const values = {
+                  comment,
+                  line: lineNumber,
+                  rubric_check_id: selectedCheckOption.check?.id ?? null,
+                  class_id: file.class_id,
+                  submission_file_id: file.id,
+                  submission_id: submission.id,
+                  author: authorProfileId,
+                  released: review ? review.released : true,
+                  points: points ?? null,
+                  submission_review_id: submissionReviewId ?? null,
+                  eventually_visible: selectedCheckOption.check
+                    ? selectedCheckOption.check.student_visibility !== "never"
+                    : true,
+                  regrade_request_id: null
+                };
+                try {
+                  await submissionController.submission_file_comments.create(values);
+                  close();
+                } catch (e) {
+                  toaster.error({
+                    title: "Error saving annotation",
+                    description: e instanceof Error ? e.message : "Unknown error"
+                  });
+                }
+              }}
+            />
+          </>
+        )}
+      </VStack>
+    </Box>
   );
+}
+
+/**
+ * Renders comments for a specific line in the markdown preview.
+ */
+function MarkdownLineComments({ lineNumber }: { lineNumber: number }) {
+  const {
+    submission,
+    showCommentsFeature,
+    comments: allCommentsForFile,
+    file,
+    expanded,
+    submissionReviewId
+  } = useMarkdownLineCommentContext();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
+  const hasARegradeRequest = allCommentsForFile.some((comment) => comment.regrade_request_id !== null);
+  const [showReply, setShowReply] = useState(isReplyEnabled);
+
+  const commentsToDisplay = useMemo(() => {
+    const ret = allCommentsForFile.filter((comment) => {
+      if (comment.line !== lineNumber) return false;
+      if (!isGraderOrInstructor && submission.released !== null) {
+        return comment.eventually_visible === true;
+      }
+      return true;
+    });
+    ret.sort((a, b) => {
+      if (a.rubric_check_id && !b.rubric_check_id) return -1;
+      if (!a.rubric_check_id && b.rubric_check_id) return 1;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+    return ret;
+  }, [allCommentsForFile, lineNumber, isGraderOrInstructor, submission.released]);
+
+  if (!submission || !file || !showCommentsFeature || commentsToDisplay.length === 0) return null;
+  if (!expanded.includes(lineNumber)) return null;
+
+  return (
+    <Box
+      width="100%"
+      whiteSpace="normal"
+      position="relative"
+      m={0}
+      mt={2}
+      borderTop="1px solid"
+      borderBottom="1px solid"
+      borderColor="border.emphasized"
+    >
+      <Box
+        position="relative"
+        maxW="xl"
+        fontFamily="sans-serif"
+        m={2}
+        borderWidth="1px"
+        borderColor="border.emphasized"
+        borderRadius="md"
+        p={2}
+        backgroundColor="bg"
+        boxShadow="sm"
+      >
+        {commentsToDisplay.map((comment) =>
+          comment.rubric_check_id ? (
+            <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
+          ) : (
+            <CodeLineComment key={comment.id} comment_id={comment.id} />
+          )
+        )}
+        {showReply && !hasARegradeRequest && (
+          <LineCommentForm
+            lineNumber={lineNumber}
+            submission={submission}
+            file={file}
+            submissionReviewId={submissionReviewId}
+          />
+        )}
+        {!showReply && !hasARegradeRequest && (
+          <Box display="flex" justifyContent="flex-end">
+            <Button colorPalette="green" onClick={() => setShowReply(true)}>
+              Add Comment
+            </Button>
+          </Box>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+/** Wrapper for block elements that adds right-click handler and inline comments. */
+function createMarkdownBlockWrapper<P extends { node?: Element; children?: React.ReactNode } & Record<string, unknown>>(
+  Inner: React.ComponentType<P>,
+  baseProps?: Partial<P>
+) {
+  return function MarkdownBlockWrapper(props: P) {
+    const { node, children, ...rest } = props;
+    const {
+      setLineActionPopup,
+      comments: allComments,
+      open,
+      expanded,
+      showCommentsFeature
+    } = useMarkdownLineCommentContext();
+    const lineStart = node?.properties
+      ? Number((node.properties as Record<string, unknown>)["data-source-line-start"])
+      : null;
+    const lineEnd = node?.properties
+      ? Number((node.properties as Record<string, unknown>)["data-source-line-end"])
+      : null;
+    const effectiveLine = lineStart ?? lineEnd ?? 0;
+    const hasComments =
+      showCommentsFeature &&
+      effectiveLine > 0 &&
+      allComments.some((c) => c.line >= effectiveLine && c.line <= (lineEnd ?? lineStart ?? effectiveLine));
+    const isExpanded = expanded.includes(effectiveLine);
+
+    const handleContextMenu = (ev: React.MouseEvent) => {
+      if (!showCommentsFeature || effectiveLine <= 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const target = ev.currentTarget as HTMLElement;
+      target.classList.add("markdown-line-selected");
+      const closeAndCleanup = () => {
+        target.classList.remove("markdown-line-selected");
+        setLineActionPopup((prev) => ({ ...prev, visible: false, onClose: undefined }));
+      };
+      setLineActionPopup((prev) => ({
+        ...prev,
+        lineNumber: effectiveLine,
+        top: ev.clientY,
+        left: ev.clientX,
+        visible: true,
+        close: closeAndCleanup,
+        onClose: () => target.classList.remove("markdown-line-selected")
+      }));
+    };
+
+    const innerContent = (
+      <Inner {...(baseProps as P)} {...(rest as P)} node={node}>
+        {children}
+      </Inner>
+    );
+
+    if (showCommentsFeature && effectiveLine > 0) {
+      return (
+        <Box
+          onContextMenu={handleContextMenu}
+          className="markdown-block-with-comments"
+          css={{
+            "&:hover": { bg: "yellow.subtle" },
+            "&.markdown-line-selected": { bg: "yellow.subtle" }
+          }}
+        >
+          {innerContent}
+          {hasComments && !isExpanded && (
+            <HStack mt={1} gap={1}>
+              <Tooltip content="Click to expand comments">
+                <Badge
+                  cursor="pointer"
+                  variant="solid"
+                  colorPalette="blue"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    open(effectiveLine);
+                  }}
+                >
+                  <Icon as={FaRegComment} mr={1} />
+                  Comments
+                </Badge>
+              </Tooltip>
+            </HStack>
+          )}
+          {isExpanded && effectiveLine > 0 && <MarkdownLineComments lineNumber={effectiveLine} />}
+        </Box>
+      );
+    }
+    return <>{innerContent}</>;
+  };
 }
 
 interface MarkdownFilePreviewProps {
@@ -520,8 +761,36 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
   const [resolvedImages, setResolvedImages] = useState<ResolvedImageMap>({});
   const [loading, setLoading] = useState(true);
   const content = file.contents || "";
+  const submission = useSubmission();
+  const submissionReview = useActiveSubmissionReview();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const comments = useSubmissionFileComments({ file_id: file.id });
+  const showCommentsFeature = true;
+
+  const [viewMode, setViewMode] = useState<"preview" | "source">("preview");
+  const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupProps>(() => ({
+    lineNumber: 0,
+    top: 0,
+    left: 0,
+    visible: false,
+    close: () => {}
+  }));
+  const [expanded, setExpanded] = useState<number[]>([]);
+
+  const onCommentsEnter = useCallback(
+    (newlyEnteredComments: SubmissionFileComment[]) => {
+      if (showCommentsFeature) {
+        setExpanded((currentExpanded) => {
+          const linesFromNewComments = newlyEnteredComments.map((c) => c.line);
+          const linesToAdd = linesFromNewComments.filter((line) => !currentExpanded.includes(line));
+          return linesToAdd.length > 0 ? [...currentExpanded, ...linesToAdd] : currentExpanded;
+        });
+      }
+    },
+    [showCommentsFeature]
+  );
+
+  const allComments = useSubmissionFileComments({ file_id: file.id, onEnter: onCommentsEnter });
+  const comments = allComments;
 
   // Build a lookup map of all files by their name/path
   const fileMap = useMemo(() => {
@@ -562,7 +831,8 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
 
         if (matchingFile) {
           if (matchingFile.is_binary && matchingFile.storage_key) {
-            // Binary file - fetch from Supabase Storage
+            // Binary file - fetch from Supabase Storage. Returns "" if oversized (exceeds MAX_INLINE_IMAGE_SIZE)
+            // or on error; we skip adding to resolved so the img component renders its placeholder.
             const mime = matchingFile.mime_type || getMimeFromExtension(matchingFile.name);
             const dataUri = await fetchBinaryFileAsDataUri(matchingFile.storage_key, mime);
             if (dataUri) {
@@ -590,180 +860,225 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
     };
   }, [content, file.name, fileMap]);
 
-  // Custom components for ReactMarkdown
-  const components: Components = useMemo(
-    () => ({
-      // Custom image renderer that resolves paths
-      img: ({ src, alt, ...props }) => {
-        if (src && resolvedImages[src]) {
-          return (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={resolvedImages[src]} alt={alt || ""} style={{ maxWidth: "100%", height: "auto" }} {...props} />
-          );
-        }
-        // For external images, render normally
-        if (src && (src.startsWith("http://") || src.startsWith("https://"))) {
-          return (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt={alt || ""} style={{ maxWidth: "100%", height: "auto" }} {...props} />
-          );
-        }
-        // Unresolved local image - show placeholder
-        return (
-          <Box display="inline-block" borderWidth="1px" borderColor="border.emphasized" borderRadius="md" p={2} my={1}>
-            <Text fontSize="sm" color="fg.muted">
-              [Image: {alt || src || "unknown"}]
-            </Text>
-          </Box>
-        );
-      },
-
-      // Custom link renderer that handles internal file navigation
-      a: ({ href, children, ...props }) => {
-        if (href && !href.startsWith("http://") && !href.startsWith("https://") && !href.startsWith("#")) {
-          // Relative link - check if it points to another submission file
-          const resolvedPath = resolveRelativePath(file.name, href);
-          const matchingFile = fileMap.get(resolvedPath) || fileMap.get(href);
-
-          if (matchingFile && onNavigateToFile) {
-            return (
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onNavigateToFile(matchingFile.id);
-                }}
-                style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline", cursor: "pointer" }}
-                {...props}
-              >
-                {children}
-              </a>
-            );
-          }
-        }
-
-        // External link or anchor - render normally
-        return (
-          <a href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer" {...props}>
+  // Custom components for ReactMarkdown (block elements wrapped for line comments)
+  const components = useMemo(
+    () =>
+      ({
+        // Block elements with line comment support
+        p: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Box as="p" {...p}>
             {children}
-          </a>
-        );
-      },
-
-      // Custom code block renderer that handles mermaid
-      pre: ({ children, ...props }) => {
-        const childArray = React.Children.toArray(children);
-        const mermaidChild = childArray.find(
-          (child) =>
-            React.isValidElement(child) &&
-            (child.props as { className?: string }).className?.includes("language-mermaid")
-        );
-        if (mermaidChild && React.isValidElement(mermaidChild)) {
-          const childProps = mermaidChild.props as { children?: React.ReactNode };
-          const code =
-            typeof childProps.children === "string"
-              ? childProps.children
-              : Array.isArray(childProps.children)
-                ? childProps.children.join("")
-                : "";
-          if (code) {
-            return <MermaidDiagram code={code.trim()} />;
-          }
-        }
-        return <pre {...props}>{children}</pre>;
-      },
-
-      // Custom table renderer for better styling
-      table: ({ children, ...props }) => (
-        <Box overflowX="auto" my={2}>
-          <Box
-            as="table"
-            width="100%"
-            borderWidth="1px"
+          </Box>
+        )),
+        h1: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Heading as="h1" size="2xl" mt={6} mb={3} {...p}>
+            {children}
+          </Heading>
+        )),
+        h2: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Heading
+            as="h2"
+            size="xl"
+            mt={5}
+            mb={2}
+            borderBottomWidth="1px"
             borderColor="border.emphasized"
-            borderRadius="md"
-            {...props}
-            css={{
-              borderCollapse: "collapse",
-              "& th, & td": {
-                border: "1px solid var(--chakra-colors-border-emphasized)",
-                padding: "8px 12px",
-                textAlign: "left"
-              },
-              "& th": {
-                backgroundColor: "var(--chakra-colors-bg-subtle)",
-                fontWeight: "bold"
-              },
-              "& tr:nth-of-type(even)": {
-                backgroundColor: "var(--chakra-colors-bg-subtle)"
-              }
-            }}
+            pb={1}
+            {...p}
+          >
+            {children}
+          </Heading>
+        )),
+        h3: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Heading as="h3" size="lg" mt={4} mb={2} {...p}>
+            {children}
+          </Heading>
+        )),
+        h4: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Heading as="h4" size="md" mt={3} mb={1} {...p}>
+            {children}
+          </Heading>
+        )),
+        h5: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Heading as="h5" size="sm" mt={2} mb={1} {...p}>
+            {children}
+          </Heading>
+        )),
+        h6: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Heading as="h6" size="xs" mt={2} mb={1} {...p}>
+            {children}
+          </Heading>
+        )),
+        blockquote: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Box
+            as="blockquote"
+            borderLeftWidth="4px"
+            borderLeftColor="blue.300"
+            pl={4}
+            py={1}
+            my={2}
+            color="fg.muted"
+            {...p}
           >
             {children}
           </Box>
-        </Box>
-      ),
+        )),
+        ul: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Box as="ul" {...p}>
+            {children}
+          </Box>
+        )),
+        ol: createMarkdownBlockWrapper(({ children, ...p }) => (
+          <Box as="ol" {...p}>
+            {children}
+          </Box>
+        )),
 
-      // Custom checkbox rendering for task lists
-      input: ({ type, checked, ...props }) => {
-        if (type === "checkbox") {
-          return <input type="checkbox" checked={checked} readOnly style={{ marginRight: "6px" }} {...props} />;
-        }
-        return <input type={type} {...props} />;
-      },
+        // Custom image renderer that resolves paths
+        img: ({ src, alt, ...props }) => {
+          if (src && resolvedImages[src]) {
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={resolvedImages[src]} alt={alt || ""} style={{ maxWidth: "100%", height: "auto" }} {...props} />
+            );
+          }
+          // For external images, render normally
+          if (src && (src.startsWith("http://") || src.startsWith("https://"))) {
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={src} alt={alt || ""} style={{ maxWidth: "100%", height: "auto" }} {...props} />
+            );
+          }
+          // Unresolved local image - show placeholder
+          return (
+            <Box
+              display="inline-block"
+              borderWidth="1px"
+              borderColor="border.emphasized"
+              borderRadius="md"
+              p={2}
+              my={1}
+            >
+              <Text fontSize="sm" color="fg.muted">
+                [Image: {alt || src || "unknown"}]
+              </Text>
+            </Box>
+          );
+        },
 
-      // Styled blockquote - use native element to avoid Box/blockquote type mismatch
-      blockquote: ({ children }) => (
-        <Box as="blockquote" borderLeftWidth="4px" borderLeftColor="blue.300" pl={4} py={1} my={2} color="fg.muted">
-          {children}
-        </Box>
-      ),
+        // Custom link renderer that handles internal file navigation
+        a: ({ href, children, ...props }) => {
+          if (href && !href.startsWith("http://") && !href.startsWith("https://") && !href.startsWith("#")) {
+            // Relative link - check if it points to another submission file
+            const resolvedPath = resolveRelativePath(file.name, href);
+            const matchingFile = fileMap.get(resolvedPath) || fileMap.get(href);
 
-      // Styled headings with anchor links
-      h1: ({ children, ...props }) => (
-        <Heading as="h1" size="2xl" mt={6} mb={3} {...props}>
-          {children}
-        </Heading>
-      ),
-      h2: ({ children, ...props }) => (
-        <Heading
-          as="h2"
-          size="xl"
-          mt={5}
-          mb={2}
-          borderBottomWidth="1px"
-          borderColor="border.emphasized"
-          pb={1}
-          {...props}
-        >
-          {children}
-        </Heading>
-      ),
-      h3: ({ children, ...props }) => (
-        <Heading as="h3" size="lg" mt={4} mb={2} {...props}>
-          {children}
-        </Heading>
-      ),
-      h4: ({ children, ...props }) => (
-        <Heading as="h4" size="md" mt={3} mb={1} {...props}>
-          {children}
-        </Heading>
-      ),
-      h5: ({ children, ...props }) => (
-        <Heading as="h5" size="sm" mt={2} mb={1} {...props}>
-          {children}
-        </Heading>
-      ),
-      h6: ({ children, ...props }) => (
-        <Heading as="h6" size="xs" mt={2} mb={1} {...props}>
-          {children}
-        </Heading>
-      ),
+            if (matchingFile && onNavigateToFile) {
+              return (
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onNavigateToFile(matchingFile.id);
+                  }}
+                  style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline", cursor: "pointer" }}
+                  {...props}
+                >
+                  {children}
+                </a>
+              );
+            }
+          }
 
-      // Horizontal rule
-      hr: ({ ...props }) => <Box as="hr" my={4} borderColor="border.emphasized" {...props} />
-    }),
+          // External link or anchor - render normally
+          return (
+            <a href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer" {...props}>
+              {children}
+            </a>
+          );
+        },
+
+        // Custom code block renderer that handles mermaid (with line comment support)
+        pre: createMarkdownBlockWrapper(({ children, ...props }) => {
+          const childArray = React.Children.toArray(children);
+          const mermaidChild = childArray.find(
+            (child) =>
+              React.isValidElement(child) &&
+              (child.props as { className?: string }).className?.includes("language-mermaid")
+          );
+          if (mermaidChild && React.isValidElement(mermaidChild)) {
+            const childProps = mermaidChild.props as { children?: React.ReactNode };
+            const code =
+              typeof childProps.children === "string"
+                ? childProps.children
+                : Array.isArray(childProps.children)
+                  ? childProps.children.join("")
+                  : "";
+            if (code) {
+              return <MermaidDiagram code={code.trim()} />;
+            }
+          }
+          return <pre {...props}>{children}</pre>;
+        }),
+
+        // Custom table renderer for better styling (with line comment support)
+        table: createMarkdownBlockWrapper(({ children, ...props }) => (
+          <Box overflowX="auto" my={2}>
+            <Box
+              as="table"
+              width="100%"
+              borderWidth="1px"
+              borderColor="border.emphasized"
+              borderRadius="md"
+              {...props}
+              css={{
+                borderCollapse: "collapse",
+                "& th, & td": {
+                  border: "1px solid var(--chakra-colors-border-emphasized)",
+                  padding: "8px 12px",
+                  textAlign: "left"
+                },
+                "& th": {
+                  backgroundColor: "var(--chakra-colors-bg-subtle)",
+                  fontWeight: "bold"
+                },
+                "& tr:nth-of-type(even)": {
+                  backgroundColor: "var(--chakra-colors-bg-subtle)"
+                }
+              }}
+            >
+              {children}
+            </Box>
+          </Box>
+        )),
+
+        // Custom checkbox rendering for task lists
+        input: ({ type, checked, ...props }) => {
+          if (type === "checkbox") {
+            return <input type="checkbox" checked={checked} readOnly style={{ marginRight: "6px" }} {...props} />;
+          }
+          return <input type={type} {...props} />;
+        },
+
+        // Horizontal rule
+        hr: ({ ...props }) => <Box as="hr" my={4} borderColor="border.emphasized" {...props} />
+      }) as Components,
     [resolvedImages, file.name, fileMap, onNavigateToFile]
+  );
+
+  const contextValue: MarkdownLineCommentContextType = useMemo(
+    () => ({
+      submission: submission as SubmissionWithGraderResultsAndFiles,
+      comments: allComments,
+      file,
+      expanded,
+      open: (line) => setExpanded((prev) => (prev.includes(line) ? prev : [...prev, line])),
+      close: (line) => setExpanded((prev) => prev.filter((l) => l !== line)),
+      showCommentsFeature,
+      submissionReviewId: submissionReview?.id,
+      setLineActionPopup: setLineActionPopupProps
+    }),
+    [submission, allComments, file, expanded, showCommentsFeature, submissionReview?.id]
   );
 
   if (loading) {
@@ -778,46 +1093,131 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
   }
 
   return (
-    <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" m={2} w="100%">
-      <Flex
-        w="100%"
-        bg="bg.subtle"
-        p={2}
-        borderBottom="1px solid"
-        borderColor="border.emphasized"
-        alignItems="center"
-        justifyContent="space-between"
-      >
-        <HStack>
-          <Text fontSize="xs" color="text.subtle">
-            {file.name}
-          </Text>
-          <Box bg="green.subtle" px={2} py={0.5} borderRadius="full">
-            <Text fontSize="xs" color="green.fg" fontWeight="medium">
-              Preview
-            </Text>
-          </Box>
-          {comments.length > 0 && (
-            <Text fontSize="xs" color="text.subtle">
-              {comments.length} {comments.length === 1 ? "comment" : "comments"}
-            </Text>
-          )}
-        </HStack>
-        {isGraderOrInstructor && <MarkdownAnnotationPopover file={file} />}
-      </Flex>
-      <Box p={6} className="markdown-file-preview" css={markdownPreviewStyles}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, remarkGemoji]}
-          rehypePlugins={[rehypeKatex, rehypeHighlight]}
-          components={components}
+    <MarkdownLineCommentContext.Provider value={contextValue}>
+      <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" m={2} w="100%">
+        <Flex
+          w="100%"
+          bg="bg.subtle"
+          p={2}
+          borderBottom="1px solid"
+          borderColor="border.emphasized"
+          alignItems="center"
+          justifyContent="space-between"
         >
-          {content}
-        </ReactMarkdown>
+          <HStack>
+            <Text fontSize="xs" color="text.subtle">
+              {file.name}
+            </Text>
+            <HStack gap={0} role="group">
+              <Button
+                variant={viewMode === "preview" ? "solid" : "outline"}
+                size="xs"
+                colorPalette="green"
+                borderRadius="md"
+                borderRightRadius={0}
+                onClick={() => setViewMode("preview")}
+              >
+                <HStack gap={1} fontSize="xs">
+                  <Icon as={FaEye} />
+                  <Text>Preview</Text>
+                </HStack>
+              </Button>
+              <Button
+                variant={viewMode === "source" ? "solid" : "outline"}
+                size="xs"
+                colorPalette="green"
+                borderRadius="md"
+                borderLeftRadius={0}
+                onClick={() => setViewMode("source")}
+              >
+                <HStack gap={1} fontSize="xs">
+                  <Icon as={FaCode} />
+                  <Text>Source</Text>
+                </HStack>
+              </Button>
+            </HStack>
+            {comments.length > 0 && (
+              <>
+                <Text fontSize="xs" color="text.subtle">
+                  {comments.length} {comments.length === 1 ? "comment" : "comments"}
+                </Text>
+                {showCommentsFeature && (
+                  <Tooltip
+                    openDelay={300}
+                    closeDelay={100}
+                    content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
+                  >
+                    <Button
+                      variant={expanded.length > 0 ? "solid" : "outline"}
+                      size="xs"
+                      p={0}
+                      colorPalette="teal"
+                      onClick={() =>
+                        setExpanded((prev) =>
+                          prev.length === 0
+                            ? [...new Set(allComments.filter((c) => c.line > 0).map((c) => c.line))]
+                            : []
+                        )
+                      }
+                    >
+                      <Icon as={FaComments} m={0} />
+                    </Button>
+                  </Tooltip>
+                )}
+              </>
+            )}
+          </HStack>
+        </Flex>
+        <MarkdownLineActionPopup {...lineActionPopupProps} file={file} />
+        {viewMode === "preview" ? (
+          <Box
+            p={6}
+            className="markdown-file-preview"
+            css={markdownPreviewStyles}
+            onClick={(ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              lineActionPopupProps.onClose?.();
+              setLineActionPopupProps((prev) => ({ ...prev, visible: false, onClose: undefined }));
+            }}
+          >
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath, remarkGemoji]}
+              rehypePlugins={[rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
+              components={components}
+            >
+              {content}
+            </ReactMarkdown>
+          </Box>
+        ) : (
+          <CodeFile file={file} embedded language="text.md" />
+        )}
+        <Box
+          borderTop="1px solid"
+          borderColor="border.emphasized"
+          p={4}
+          onContextMenu={
+            isGraderOrInstructor
+              ? (e) => {
+                  e.preventDefault();
+                  setLineActionPopupProps((prev) => ({
+                    ...prev,
+                    lineNumber: MARKDOWN_FILE_COMMENT_LINE,
+                    top: e.clientY,
+                    left: e.clientX,
+                    visible: true,
+                    close: () => setLineActionPopupProps((p) => ({ ...p, visible: false, onClose: undefined })),
+                    onClose: undefined
+                  }));
+                }
+              : undefined
+          }
+          css={isGraderOrInstructor ? { cursor: "context-menu", "&:hover": { bg: "bg.subtle" } } : undefined}
+        >
+          <MarkdownFileComments file={file} />
+        </Box>
       </Box>
-      <Box borderTop="1px solid" borderColor="border.emphasized" p={4}>
-        <MarkdownFileComments file={file} />
-      </Box>
-    </Box>
+    </MarkdownLineCommentContext.Provider>
   );
 }
 

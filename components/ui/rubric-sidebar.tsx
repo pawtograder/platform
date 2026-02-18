@@ -1656,6 +1656,8 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(rubricId);
   const viewOnly = !isGrader && !reviewForThisRubric;
   const rubricParts = useRubricParts(rubricId);
+  console.log("rubricParts", rubricParts);
+  console.log(`Rubric: ${rubric?.name} has ${rubricParts?.length} parts`);
 
   if (!rubric) {
     return (

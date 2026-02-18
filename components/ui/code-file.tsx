@@ -113,7 +113,15 @@ type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
   file: SubmissionFile;
 };
 
-export default function CodeFile({ file }: { file: SubmissionFile }) {
+export type CodeFileProps = {
+  file: SubmissionFile;
+  /** When true, renders without outer border, margin, and header (for embedding in other components) */
+  embedded?: boolean;
+  /** Syntax highlighting language scope (e.g. "source.java", "text.md"). Default: "source.java" */
+  language?: string;
+};
+
+export default function CodeFile({ file, embedded = false, language = "source.java" }: CodeFileProps) {
   const submission = useSubmission();
   const submissionReview = useActiveSubmissionReview();
   const showCommentsFeature = true; //submission.released !== null || submissionReview !== undefined;
@@ -177,7 +185,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
       </Box>
     );
   }
-  const tree = starryNight.highlight(file.contents, "source.java");
+  const tree = starryNight.highlight(file.contents, language);
   starryNightGutter(tree, setLineActionPopupProps);
   const reactNode = toJsxRuntime(tree, {
     Fragment,
@@ -210,80 +218,55 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           flexDirection: "row"
         }
       };
-  return (
-    <Box
-      border="1px solid"
-      borderColor="border.emphasized"
-      p={0}
-      m={2}
-      w="100%"
-      css={{
-        ...commentsCSS,
-        "& .line-number": {
-          width: "40px",
-          minWidth: "40px",
-          flexShrink: 0,
-          textAlign: "right",
-          padding: "0 5px",
-          marginRight: "10px",
-          borderRight: "1px solid #ccc"
-        },
-        "& .source-code-line-container": {
-          width: "100%"
-        },
-        "& .source-code-line-content": {},
-        "& pre": {
-          whiteSpace: "pre-wrap",
-          wordWrap: "break-word"
-        }
-      }}
-    >
-      <Flex
-        w="100%"
-        bg="bg.subtle"
-        p={2}
-        borderBottom="1px solid"
-        borderColor="border.emphasized"
-        alignItems="center"
-        justifyContent="space-between"
-      >
-        <Text fontSize="xs" color="text.subtle">
-          {file.name}
-        </Text>
-        <HStack>
-          {showCommentsFeature && comments.length > 0 && (
-            <>
-              <Text fontSize="xs" color="text.subtle">
-                {comments.length} {comments.length === 1 ? "comment" : "comments"}
-              </Text>
+  const content = (
+    <>
+      {!embedded && (
+        <Flex
+          w="100%"
+          bg="bg.subtle"
+          p={2}
+          borderBottom="1px solid"
+          borderColor="border.emphasized"
+          alignItems="center"
+          justifyContent="space-between"
+        >
+          <Text fontSize="xs" color="text.subtle">
+            {file.name}
+          </Text>
+          <HStack>
+            {showCommentsFeature && comments.length > 0 && (
+              <>
+                <Text fontSize="xs" color="text.subtle">
+                  {comments.length} {comments.length === 1 ? "comment" : "comments"}
+                </Text>
 
-              <Tooltip
-                openDelay={300}
-                closeDelay={100}
-                content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
-              >
-                <Button
-                  variant={expanded.length > 0 ? "solid" : "outline"}
-                  size="xs"
-                  p={0}
-                  colorPalette="teal"
-                  onClick={() => {
-                    setExpanded((prev) => {
-                      if (prev.length === 0) {
-                        return comments.map((comment) => comment.line);
-                      }
-                      return [];
-                    });
-                  }}
+                <Tooltip
+                  openDelay={300}
+                  closeDelay={100}
+                  content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                 >
-                  <Icon as={FaComments} m={0} />
-                </Button>
-              </Tooltip>
-            </>
-          )}
-        </HStack>
-      </Flex>
-      {/* Pass dynamic props from state, and other props directly */}
+                  <Button
+                    variant={expanded.length > 0 ? "solid" : "outline"}
+                    size="xs"
+                    p={0}
+                    colorPalette="teal"
+                    onClick={() => {
+                      setExpanded((prev) => {
+                        if (prev.length === 0) {
+                          return comments.map((comment) => comment.line);
+                        }
+                        return [];
+                      });
+                    }}
+                  >
+                    <Icon as={FaComments} m={0} />
+                  </Button>
+                </Tooltip>
+              </>
+            )}
+          </HStack>
+        </Flex>
+      )}
       <LineActionPopup {...lineActionPopupProps} file={file} />
       <CodeLineCommentContext.Provider
         value={{
@@ -324,6 +307,40 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           {reactNode}
         </VStack>
       </CodeLineCommentContext.Provider>
+    </>
+  );
+
+  const containerCss = {
+    ...commentsCSS,
+    "& .line-number": {
+      width: "40px",
+      minWidth: "40px",
+      flexShrink: 0,
+      textAlign: "right",
+      padding: "0 5px",
+      marginRight: "10px",
+      borderRight: "1px solid #ccc"
+    },
+    "& .source-code-line-container": {
+      width: "100%"
+    },
+    "& .source-code-line-content": {},
+    "& pre": {
+      whiteSpace: "pre-wrap",
+      wordWrap: "break-word"
+    }
+  };
+
+  return (
+    <Box
+      border={embedded ? undefined : "1px solid"}
+      borderColor={embedded ? undefined : "border.emphasized"}
+      p={0}
+      m={embedded ? 0 : 2}
+      w="100%"
+      css={containerCss}
+    >
+      {content}
     </Box>
   );
 }

@@ -124,28 +124,16 @@ function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId:
           {submission.submission_files.map((file, idx) => (
             <Table.Row key={file.id}>
               <Table.Cell>
-                <HStack gap={1}>
-                  <Link
-                    variant={curFile === idx ? "underline" : undefined}
-                    href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onSelect(file.id);
-                    }}
-                  >
-                    {file.name}
-                  </Link>
-                  {isMarkdownFile(file.name) && (
-                    <Tag.Root size="sm" colorPalette="green" variant="surface">
-                      <Tag.Label>MD</Tag.Label>
-                    </Tag.Root>
-                  )}
-                  {file.is_binary && (
-                    <Tag.Root size="sm" colorPalette="purple" variant="surface">
-                      <Tag.Label>BIN</Tag.Label>
-                    </Tag.Root>
-                  )}
-                </HStack>
+                <Link
+                  variant={curFile === idx ? "underline" : undefined}
+                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onSelect(file.id);
+                  }}
+                >
+                  {file.name}
+                </Link>
               </Table.Cell>
               {showCommentsFeature && (
                 <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>
