@@ -1071,11 +1071,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           });
 
           // Delete related data - first clean up any binary files from storage
-          const { data: existingFiles } = await adminSupabase
+          const { data: existingFiles, error: existingFilesError } = await adminSupabase
             .from("submission_files")
             .select("storage_key")
             .eq("submission_id", existingSubmission.id)
             .eq("is_binary", true);
+          if (existingFilesError) {
+            console.error("Failed to fetch existing binary files for storage cleanup:", existingFilesError);
+            scope?.setTag("db_error", "existing_files_select_failed");
+            scope?.setContext("existing_files_select_failed", {
+              submission_id: existingSubmission.id,
+              error: existingFilesError.message
+            });
+            Sentry.captureException(existingFilesError, scope);
+            throw new UserVisibleError(`Failed to prepare cleanup of previous submission files. Please retry.`, 500);
+          }
           if (existingFiles && existingFiles.length > 0) {
             const storageKeys = existingFiles
               .map((f: { storage_key: string | null }) => f.storage_key)
@@ -1526,6 +1536,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                     upsert: true
                   });
                 if (storageError) {
+                  Sentry.captureException(storageError, scope);
                   throw new UserVisibleError(
                     `Internal error: Failed to upload binary file "${safePath}" to storage: ${storageError.message}`
                   );
@@ -1549,6 +1560,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                   if (removeErr.error) {
                     Sentry.captureException(removeErr.error, scope);
                   }
+                  Sentry.captureException(dbError, scope);
                   throw new UserVisibleError(
                     `Internal error: Failed to insert binary file record for "${safePath}": ${dbError.message}`
                   );
