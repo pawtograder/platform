@@ -251,10 +251,10 @@ export function ErrorPinModal({
         match_value_max: r.match_value_max?.trim() || null
       }));
       const { data, error } = await supabase.rpc("preview_error_pin_matches", {
-        p_assignment_id: isClassLevel ? null : assignmentId,
+        p_assignment_id: (isClassLevel ? undefined : assignmentId) as number,
         p_rules: sanitizedRules as unknown as Json,
         p_rule_logic: watch("rule_logic"),
-        p_class_id: isClassLevel ? Number(course_id) : null
+        p_class_id: isClassLevel ? Number(course_id) : undefined
       });
 
       if (error) throw error;
