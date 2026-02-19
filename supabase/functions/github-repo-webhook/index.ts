@@ -188,6 +188,69 @@ function maybeCrash(tag: string) {
   }
 }
 
+// Check if org-level or method-specific circuit breaker is open before making GitHub API calls
+async function checkCircuitBreakerOpen(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  method?: string,
+  scope?: Sentry.Scope
+): Promise<{ isOpen: boolean; reason?: string; openUntil?: string; circuitScope?: string }> {
+  try {
+    // Check org-level circuit breaker first (highest priority - blocks everything)
+    const orgCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+      p_scope: "org",
+      p_key: org
+    });
+    if (!orgCirc.error && Array.isArray(orgCirc.data) && orgCirc.data.length > 0) {
+      const row = orgCirc.data[0] as { state?: string; open_until?: string; reason?: string };
+      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+        scope?.setTag("circuit_state", "open");
+        scope?.setTag("circuit_scope", "org");
+        scope?.setContext("circuit_breaker_active", {
+          org,
+          reason: row.reason || "Circuit breaker active",
+          open_until: row.open_until
+        });
+        return { isOpen: true, reason: row.reason, openUntil: row.open_until, circuitScope: "org" };
+      }
+    }
+
+    // Check method-specific circuit breaker if method is provided
+    if (method) {
+      const circuitKey = `${org}:${method}`;
+      const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+        p_scope: "org_method",
+        p_key: circuitKey
+      });
+      if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
+        const row = methodCirc.data[0] as { state?: string; open_until?: string; reason?: string };
+        if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          scope?.setTag("circuit_state", "open");
+          scope?.setTag("circuit_scope", "org_method");
+          scope?.setTag("circuit_method", method);
+          scope?.setContext("circuit_breaker_active", {
+            org,
+            method,
+            reason: row.reason || "Circuit breaker active",
+            open_until: row.open_until
+          });
+          return { isOpen: true, reason: row.reason, openUntil: row.open_until, circuitScope: "org_method" };
+        }
+      }
+    }
+
+    return { isOpen: false };
+  } catch (e) {
+    scope?.setContext("circuit_check_warning", {
+      org,
+      method,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+    return { isOpen: false };
+  }
+}
+
 type GitHubCommit = PushEvent["commits"][number];
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
@@ -218,8 +281,25 @@ async function handlePushToStudentRepo(
   console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
   const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${studentRepo.class_id}/assignments/${studentRepo.assignment_id}`;
 
+  // Extract org for circuit breaker check
+  const org = repoName.split("/")[0];
+
   for (const commit of payload.commits) {
     maybeCrash("push.student.for_each_commit.before_lookup");
+
+    // Check circuit breaker before making GitHub API calls - fail fast if rate limited
+    // Check both org-level and create_repo method-specific circuit breakers
+    const circuitStatus = await checkCircuitBreakerOpen(adminSupabase, org, "create_repo", scope);
+    if (circuitStatus.isOpen) {
+      const openUntil = circuitStatus.openUntil ? new Date(circuitStatus.openUntil).toLocaleString() : "unknown";
+      const scopeInfo = circuitStatus.circuitScope === "org_method" ? ` (method: create_repo)` : "";
+      throw new Error(
+        `Circuit breaker open for org ${org}${scopeInfo}: GitHub API operations temporarily unavailable. ` +
+          `Reason: ${circuitStatus.reason || "Rate limit or error threshold exceeded"}. ` +
+          `Open until: ${openUntil}`
+      );
+    }
+
     // Idempotency: if a row already exists for this repo+sha, do not create a new check run
     const { data: existing, error: existingErr } = await adminSupabase
       .from("repository_check_runs")
