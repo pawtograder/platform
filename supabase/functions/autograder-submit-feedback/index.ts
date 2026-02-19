@@ -10,12 +10,7 @@ import {
   OutputVisibility,
   RepositoryCheckRun
 } from "../_shared/FunctionTypes.d.ts";
-import {
-  resolveRef,
-  updateCheckRun,
-  validateOIDCTokenOrAllowE2E,
-  END_TO_END_REPO_PREFIX
-} from "../_shared/GitHubWrapper.ts";
+import { resolveRef, validateOIDCTokenOrAllowE2E, END_TO_END_REPO_PREFIX } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -768,8 +763,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to insert feedback: ${(e as Error).message}`);
     }
 
-    // Update the check run status to completed
-    // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
+    // Update the repository_check_runs status to completed (DB state only)
     if (submission_id && !isRegressionRerun && !isE2ERun) {
       if (checkRun) {
         const newStatus: CheckRunStatus = {
@@ -782,19 +776,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
             status: newStatus
           })
           .eq("id", checkRun.id);
-        await updateCheckRun({
-          owner: repository.split("/")[0],
-          repo: repository.split("/")[1],
-          check_run_id: checkRun.check_run_id,
-          status: "completed",
-          conclusion: "success",
-          details_url: `https://${Deno.env.get("APP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
-          output: {
-            title: "Grading complete",
-            summary: "Pawtograder has finished grading the submission",
-            text: `Autograder score: ${score} / ${max_score}. See more details in Pawtograder.`
-          }
-        });
       }
     }
     if (submission_id) {

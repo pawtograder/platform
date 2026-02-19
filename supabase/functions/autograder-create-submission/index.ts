@@ -14,10 +14,7 @@ import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   cloneRepository,
-  createCheckRun,
-  getOctoKit,
   getRepoTarballURL,
-  updateCheckRun,
   validateOIDCTokenOrAllowE2E,
   END_TO_END_REPO_PREFIX,
   PrimaryRateLimitError,
@@ -604,185 +601,38 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .limit(1)
           .maybeSingle();
 
-        //Fetch the role of the user who triggered the check run, so that we can check if they are an instructor or grader
+        // Fetch the role of the user who triggered the workflow (decoded.actor = GitHub username)
         let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
-        if (initialCheckRun?.profile_id) {
-          const { data: userRolesData } = await adminSupabase
-            .from("user_roles")
-            .select("*")
-            .eq("private_profile_id", initialCheckRun.profile_id)
-            .eq("class_id", initialCheckRun.class_id)
+        const classId = initialCheckRun?.class_id ?? repoData.assignments.class_id;
+        if (classId && !isPawtograderTriggered) {
+          const { data: user } = await adminSupabase
+            .from("users")
+            .select("user_id")
+            .eq("github_username", decoded.actor)
             .maybeSingle();
-
-          if (!userRolesData) {
-            scope.setContext("user_roles_data", { user_roles_data: userRolesData });
-            Sentry.captureMessage("User roles data not found", scope);
-            throw new Error("User roles data not found");
+          if (user) {
+            const { data: userRolesData } = await adminSupabase
+              .from("user_roles")
+              .select("*")
+              .eq("user_id", user.user_id)
+              .eq("class_id", classId)
+              .maybeSingle();
+            userRoles = userRolesData ?? undefined;
           }
-          userRoles = userRolesData;
         }
         if (checkRunError) {
           Sentry.captureException(checkRunError, scope);
           throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError.message}`);
         }
 
-        let checkRun = initialCheckRun;
-
-        if (!checkRun) {
-          //We might have lost a webhook. Instead of bailing, we'll fetch the check run info from GitHub.
+        if (!initialCheckRun) {
           scope?.setTag("check_run_db_found", "false");
-          Sentry.addBreadcrumb({
-            category: "fallback",
-            level: "info",
-            message: "CheckRun missing in DB; fetching from GitHub",
-            data: { repository, sha }
-          });
-          const octokit = await handleGitHubApiCall(
-            () => getOctoKit(repository.split("/")[0], scope),
-            org,
-            "getOctoKit",
-            adminSupabase,
-            scope
+          throw new UserVisibleError(
+            `No push record found for ${repository}@${sha}. The webhook may not have processed yet. Please try again.`
           );
-          if (!octokit) {
-            throw new Error("No octokit found for organization " + repository.split("/")[0]);
-          }
-          //List check runs for reference from github
-          const fetchedCheckRuns = await handleGitHubApiCall(
-            () =>
-              octokit.rest.checks.listForRef({
-                owner: repository.split("/")[0],
-                repo: repository.split("/")[1],
-                ref: sha,
-                check_name: "pawtograder"
-              }),
-            org,
-            "listForRef",
-            adminSupabase,
-            scope
-          );
-          if (fetchedCheckRuns.status !== 200) {
-            scope?.setTag("check_run_fetch_error", "check_run_not_found");
-            throw new Error(`Check run returned error code ${fetchedCheckRuns.status}`);
-          }
-          scope?.setContext("fetched_check_runs", {
-            check_runs: fetchedCheckRuns.data.check_runs
-          });
-          Sentry.addBreadcrumb({
-            category: "fallback",
-            level: "info",
-            message: "Fetched check runs from GitHub",
-            data: { count: fetchedCheckRuns.data.check_runs.length }
-          });
-          //Take the most recent check run
-          let fetchedCheckRun = fetchedCheckRuns.data.check_runs.sort((a, b) => {
-            if (a.started_at && b.started_at) {
-              return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
-            }
-            return 0;
-          })[0];
-          if (!fetchedCheckRun) {
-            scope?.setTag("check_run_fetch_error", "check_run_not_found");
-            // If there are no check runs for this repo yet, we must have raced with the webhook. Create it here.
-            Sentry.addBreadcrumb({
-              category: "fallback",
-              level: "info",
-              message: "No GitHub check runs; creating check run",
-              data: { repository, sha }
-            });
-            const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}`;
-            fetchedCheckRun = await handleGitHubApiCall(
-              () => createCheckRun(repository, sha, detailsUrl, scope),
-              org,
-              "createCheckRun",
-              adminSupabase,
-              scope
-            );
-            Sentry.addBreadcrumb({
-              category: "fallback",
-              level: "info",
-              message: "Created GitHub check run",
-              data: { check_run_id: fetchedCheckRun.id }
-            });
-          }
-
-          // Try to insert repository_check_runs row if missing, then retrieve it
-          const owner = repository.split("/")[0];
-          const repoNameOnly = repository.split("/")[1];
-          // Fetch commit message/details for DB record
-          Sentry.addBreadcrumb({
-            category: "fallback",
-            level: "info",
-            message: "Fetching commit metadata",
-            data: { owner, repo: repoNameOnly, sha }
-          });
-          const commitResponse = await handleGitHubApiCall(
-            async () => {
-              const octokit = await getOctoKit(owner, scope);
-              if (!octokit) throw new Error(`No octokit found for organization ${owner}`);
-              return octokit.rest.repos.getCommit({
-                owner,
-                repo: repoNameOnly,
-                ref: sha
-              });
-            },
-            org,
-            "getCommit",
-            adminSupabase,
-            scope
-          );
-          const commitMessage = commitResponse.data.commit.message || "";
-          const commitAuthorName =
-            commitResponse.data.commit.author?.name || commitResponse.data.commit.committer?.name || "unknown";
-          const commitDate =
-            commitResponse.data.commit.author?.date ||
-            commitResponse.data.commit.committer?.date ||
-            new Date().toISOString();
-
-          Sentry.addBreadcrumb({
-            category: "fallback",
-            level: "info",
-            message: "Upserting repository_check_runs",
-            data: { repository_id: repoData.id, sha, check_run_id: fetchedCheckRun.id }
-          });
-          const upsertResult = await adminSupabase
-            .from("repository_check_runs")
-            .upsert(
-              {
-                repository_id: repoData.id,
-                check_run_id: fetchedCheckRun.id,
-                class_id: repoData.assignments.class_id!,
-                assignment_group_id: repoData.assignment_group_id,
-                commit_message: commitMessage,
-                sha,
-                profile_id: repoData.profile_id,
-                status: {
-                  created_at: new Date().toISOString(),
-                  commit_author: commitAuthorName,
-                  commit_date: commitDate,
-                  created_by: "autograder-create-submission fallback"
-                } as unknown as Json
-              },
-              { onConflict: "repository_id,check_run_id,sha" }
-            )
-            .select("*, user_roles(*), classes(time_zone), commit_message")
-            .single();
-
-          if (upsertResult.error) {
-            Sentry.captureException(upsertResult.error, scope);
-            throw new Error(
-              `Failed to upsert repository_check_runs for ${repoData.id}@${sha}: ${upsertResult.error.message}`
-            );
-          }
-          Sentry.addBreadcrumb({
-            category: "fallback",
-            level: "info",
-            message: "Upserted repository_check_runs successfully",
-            data: { id: upsertResult.data?.id }
-          });
-          checkRun = upsertResult.data;
         }
-        return { ...checkRun, user_roles: userRoles };
+
+        return { ...initialCheckRun, user_roles: userRoles };
       };
 
       const checkRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
@@ -849,57 +699,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         //Convert to course time zone for display purposes
         const finalDueDateInCourseTimeZone = new TZDate(finalDueDateResult, timeZone);
         console.log(`Final due date in course time zone: ${finalDueDateInCourseTimeZone.toLocaleString()}`);
-        const currentDate = TZDate.tz(timeZone);
+        // Use push timestamp (when webhook received the push) for late detection, not current time
+        const pushTime = checkRun?.created_at ? new TZDate(checkRun.created_at, timeZone) : TZDate.tz(timeZone);
 
-        if (isAfter(currentDate, finalDueDate)) {
+        if (isAfter(pushTime, finalDueDate)) {
           // Check if this is a NOT-GRADED submission and if the assignment allows it
           if (isNotGradedSubmission && repoData.assignments.allow_not_graded_submissions) {
             // Allow NOT-GRADED submissions after deadline
-
-            // Update check run to indicate this is a NOT-GRADED submission
-            if (!isE2ERun) {
-              await handleGitHubApiCall(
-                () =>
-                  updateCheckRun({
-                    owner: repository.split("/")[0],
-                    repo: repository.split("/")[1],
-                    check_run_id: checkRun.check_run_id,
-                    status: "in_progress",
-                    output: {
-                      title: "NOT-GRADED submission",
-                      summary: "This submission will not be graded but you can see feedback.",
-                      text: `You submitted with #NOT-GRADED in your commit message. This submission will not be graded and cannot become your active submission, but you can still see autograder feedback.`
-                    }
-                  }),
-                org,
-                "updateCheckRun",
-                adminSupabase,
-                scope
-              );
-            }
           } else if (isNotGradedSubmission && !repoData.assignments.allow_not_graded_submissions) {
-            // Student tried to use NOT-GRADED but assignment doesn't allow it
-            if (!isE2ERun) {
-              await handleGitHubApiCall(
-                () =>
-                  updateCheckRun({
-                    owner: repository.split("/")[0],
-                    repo: repository.split("/")[1],
-                    check_run_id: checkRun.check_run_id,
-                    status: "completed",
-                    conclusion: "failure",
-                    output: {
-                      title: "NOT-GRADED not allowed",
-                      summary: "This assignment does not allow NOT-GRADED submissions.",
-                      text: `You included #NOT-GRADED in your commit message, but this assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.`
-                    }
-                  }),
-                org,
-                "updateCheckRun",
-                adminSupabase,
-                scope
-              );
-            }
             throw new UserVisibleError(
               "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.",
               400
@@ -926,40 +733,15 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 `Internal error: Failed to find negative due date exceptions: ${negativeDueDateExceptionsError.message}`
               );
             }
-            let checkRunMessage = `The due date for this assignment was ${finalDueDateInCourseTimeZone.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`;
-            let checkRunSummary = "You cannot submit after the due date.";
-            let errorMessage = `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, current time: ${currentDate.toLocaleString()}`;
+            let errorMessage = `You cannot submit after the due date. Your due date: ${finalDueDateInCourseTimeZone.toLocaleString()}, push time: ${pushTime.toLocaleString()}`;
             if (negativeDueDateExceptions && negativeDueDateExceptions.length > 0) {
               const hasNegativeException = negativeDueDateExceptions.some(
                 (exception) => exception.hours < 0 || exception.minutes < 0
               );
               if (hasNegativeException) {
-                checkRunMessage = `You have already finalized your submission for this assignment by clicking the "Finalize Submission Early" button. You cannot submit additional code after finalization.`;
-                checkRunSummary = "You have already finalized your submission for this assignment.";
                 errorMessage =
                   "You have already finalized your submission for this assignment. You cannot submit additional code after finalization.";
               }
-            }
-            if (!isE2ERun) {
-              await handleGitHubApiCall(
-                () =>
-                  updateCheckRun({
-                    owner: repository.split("/")[0],
-                    repo: repository.split("/")[1],
-                    check_run_id: checkRun.check_run_id,
-                    status: "completed",
-                    conclusion: "failure",
-                    output: {
-                      title: "Submission failed",
-                      summary: checkRunSummary,
-                      text: checkRunMessage
-                    }
-                  }),
-                org,
-                "updateCheckRun",
-                adminSupabase,
-                scope
-              );
             }
             throw new UserVisibleError(errorMessage, 400);
           }
@@ -1000,35 +782,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               repoData.assignments.autograder.max_submissions_period_secs
             );
 
-            //Update the check run status
-            if (!isE2ERun) {
-              await handleGitHubApiCall(
-                () =>
-                  updateCheckRun({
-                    owner: repository.split("/")[0],
-                    repo: repository.split("/")[1],
-                    check_run_id: checkRun.check_run_id,
-                    status: "completed",
-                    conclusion: "failure",
-                    output: {
-                      title: "Submission limit reached",
-                      summary: `Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
-                      text: `Reached max limit (${repoData.assignments.autograder!.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder!.max_submissions_period_secs!)})`
-                    },
-                    actions: [
-                      {
-                        label: "Submit",
-                        description: "Try to submit again",
-                        identifier: "submit"
-                      }
-                    ]
-                  }),
-                org,
-                "updateCheckRun",
-                adminSupabase,
-                scope
-              );
-            }
             throw new UserVisibleError(
               `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
               400
@@ -1164,25 +917,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
           })
           .eq("id", checkRun.id);
-        await handleGitHubApiCall(
-          () =>
-            updateCheckRun({
-              owner: repository.split("/")[0],
-              repo: repository.split("/")[1],
-              check_run_id: checkRun.check_run_id,
-              status: "in_progress",
-              details_url: `https://${Deno.env.get("APP_URL")}/course/${repoData.assignments.class_id}/assignments/${repoData.assignment_id}/submissions/${submission_id}`,
-              output: {
-                title: "Grading in progress",
-                summary: "Autograder is running",
-                text: "Details may be available in the 'Submit and Grade Assignment' action."
-              }
-            }),
-          org,
-          "updateCheckRun",
-          adminSupabase,
-          scope
-        );
       }
 
       try {
@@ -1351,12 +1085,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             Sentry.captureException(matchError, scope);
           }
           const isEmpty = !!match;
-          const { error: updateError } = await adminSupabase
-            .from("submissions")
-            .update({ is_empty_submission: isEmpty })
-            .eq("id", submission_id);
-          if (updateError) {
-            Sentry.captureException(updateError, scope);
+          if (submission_id !== undefined) {
+            const { error: updateError } = await adminSupabase
+              .from("submissions")
+              .update({ is_empty_submission: isEmpty })
+              .eq("id", submission_id);
+            if (updateError) {
+              Sentry.captureException(updateError, scope);
+            }
           }
 
           // If the assignment prohibits empty submissions, reject after determining emptiness.
@@ -1364,26 +1100,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const isGraderOrInstructor =
             checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
           if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
-            if (!isE2ERun) {
-              await handleGitHubApiCall(
-                () =>
-                  updateCheckRun({
-                    owner: repository.split("/")[0],
-                    repo: repository.split("/")[1],
-                    check_run_id: checkRun.check_run_id,
-                    status: "completed",
-                    conclusion: "failure",
-                    output: {
-                      title: "Empty submission rejected",
-                      summary: "This assignment does not permit empty submissions.",
-                      text: "Your submission appears to match the handout (starter) files exactly. Please make sure you have committed your changes before submitting."
-                    }
-                  }),
-                org,
-                "updateCheckRun",
-                adminSupabase,
-                scope
-              );
+            if (submission_id === undefined) {
+              throw new Error("submission_id is undefined during empty submission rejection");
             }
             try {
               await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
@@ -1395,11 +1113,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               400
             );
           }
-          if (isE2ERun) {
+          if (isE2ERun && submission_id !== undefined) {
             return {
               grader_url: "not-a-real-url",
               grader_sha: "not-a-real-sha",
-              submission_id: submission_id
+              submission_id
             };
           }
         }

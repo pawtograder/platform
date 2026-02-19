@@ -15,13 +15,7 @@ import { createHash } from "node:crypto";
 import micromatch from "npm:micromatch";
 import { Buffer } from "node:buffer";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import {
-  createCheckRun,
-  getFileFromRepo,
-  getOctoKit,
-  triggerWorkflow,
-  updateCheckRun
-} from "../_shared/GitHubWrapper.ts";
+import { getFileFromRepo, getOctoKit, triggerWorkflow } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -279,7 +273,6 @@ async function handlePushToStudentRepo(
     return;
   }
   console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
-  const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${studentRepo.class_id}/assignments/${studentRepo.assignment_id}`;
 
   // Extract org for circuit breaker check
   const org = repoName.split("/")[0];
@@ -300,10 +293,10 @@ async function handlePushToStudentRepo(
       );
     }
 
-    // Idempotency: if a row already exists for this repo+sha, do not create a new check run
+    // Idempotency: if a row already exists for this repo+sha, skip
     const { data: existing, error: existingErr } = await adminSupabase
       .from("repository_check_runs")
-      .select("id, check_run_id, status")
+      .select("id")
       .eq("repository_id", studentRepo.id)
       .eq("sha", commit.id)
       .order("created_at", { ascending: false })
@@ -318,44 +311,18 @@ async function handlePushToStudentRepo(
     }
 
     if (existing && existing.id) {
-      // If the record exists but lacks a check_run_id (partial prior failure), create and update it
-      if (!existing.check_run_id) {
-        console.log(`Completing partial check run setup for ${commit.id}`);
-        maybeCrash("push.student.complete_partial.before_create_check_run");
-        const { id: checkRunId } = await createCheckRun(repoName, commit.id, detailsUrl);
-        const newStatus = {
-          ...(existing.status as ExtendedCheckRunStatus),
-          check_run_created_at: new Date().toISOString()
-        } as ExtendedCheckRunStatus;
-        const { error: updateErr } = await adminSupabase
-          .from("repository_check_runs")
-          .update({ check_run_id: checkRunId, status: newStatus as unknown as Json })
-          .eq("id", existing.id);
-        if (updateErr) {
-          console.error(updateErr);
-          scope.setTag("error_source", "repository_check_run_update_failed");
-          scope.setTag("error_context", "Could not update repository_check_run with check_run_id");
-          Sentry.captureException(updateErr, scope);
-          throw updateErr;
-        }
-      }
       continue;
     }
 
-    console.log(`Adding check run for ${commit.id}`);
-    maybeCrash("push.student.before_create_check_run");
-    const { id: checkRunId } = await createCheckRun(repoName, commit.id, detailsUrl);
-    console.log(`Check run created: ${checkRunId}`);
     const status: ExtendedCheckRunStatus = {
       created_at: new Date().toISOString(),
       commit_author: commit.author.name,
       commit_date: commit.timestamp,
-      created_by: "github push by " + payload.pusher.name,
-      check_run_created_at: new Date().toISOString()
+      created_by: "github push by " + payload.pusher.name
     };
     const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
       repository_id: studentRepo.id,
-      check_run_id: checkRunId,
+      check_run_id: null,
       class_id: studentRepo.class_id,
       assignment_group_id: studentRepo.assignment_group_id,
       commit_message: commit.message,
@@ -371,22 +338,9 @@ async function handlePushToStudentRepo(
       throw checkRunError;
     }
 
-    //Check that the workflow file has not been deleted in any commit
+    // If the workflow file was deleted in this commit, skip triggering - the workflow would fail anyway
     const removedInCommit = commit.removed.includes(GRADER_WORKFLOW_PATH);
     if (removedInCommit) {
-      // Fail the check run
-      await updateCheckRun({
-        owner: payload.repository.owner.login,
-        repo: payload.repository.name,
-        check_run_id: checkRunId,
-        status: "completed",
-        conclusion: "failure",
-        output: {
-          title: "Submission failed",
-          summary: "The autograder workflow file has been deleted",
-          text: `Commit ${commit.id.substring(0, 7)} removed the file ${GRADER_WORKFLOW_PATH} from the repository. This file is essential for the operation of the autograder. Please add it back and try again.`
-        }
-      });
       return;
     }
   }
@@ -865,7 +819,7 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
             maybeCrash("check_run.before_trigger_workflow");
             try {
               await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
-            } catch (err) {
+            } catch (_err) {
               //If we fail to trigger the workflow, mark the check run as failed. This is a non-critical path, so ignore the exception.
               await adminSupabase
                 .from("repository_check_runs")
@@ -888,27 +842,13 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
               .eq("id", checkRun.data.id);
           }
 
-          // Step 3: mark check run in progress once
+          // Step 3: mark check run in progress once (DB state only; no GitHub API call)
           const statusForCheckRun = (
             startedStatus.workflow_triggered_at
               ? startedStatus
               : { ...(startedStatus as ExtendedCheckRunStatus), workflow_triggered_at: new Date().toISOString() }
           ) as ExtendedCheckRunStatus;
           if (!statusForCheckRun.check_run_marked_in_progress_at) {
-            console.log(`[CHECK_RUN] Marking GitHub check run in_progress id=${payload.check_run.id}`);
-            maybeCrash("check_run.before_update_check_run_in_progress");
-            await updateCheckRun({
-              owner: payload.repository.owner.login,
-              repo: payload.repository.name,
-              check_run_id: payload.check_run.id,
-              status: "in_progress",
-              output: {
-                title: "Grading in progress",
-                summary: "Autograder is starting",
-                text: "Details may be available in the 'Submit and Grade Assignment' action."
-              },
-              actions: []
-            });
             const afterMark = {
               ...(statusForCheckRun as ExtendedCheckRunStatus),
               check_run_marked_in_progress_at: new Date().toISOString()
@@ -1252,28 +1192,6 @@ async function handleWorkflowCompletionErrors(
             Sentry.captureException(insertError, scope);
           } else {
             scope.setTag("workflow_run_error_created", "true");
-          }
-
-          // Update check run to failed if we have the check run ID
-          if (submission.repository_check_runs?.check_run_id) {
-            try {
-              await updateCheckRun({
-                owner: repository.owner.login,
-                repo: repository.name,
-                check_run_id: submission.repository_check_runs.check_run_id,
-                status: "completed",
-                conclusion: "failure",
-                output: {
-                  title: "Grading Failed",
-                  summary: userErrorMessage,
-                  text: "The autograder encountered an error during execution. This submission could not be graded automatically."
-                },
-                actions: []
-              });
-              scope.setTag("check_run_updated_to_failed", "true");
-            } catch (checkRunError) {
-              Sentry.captureException(checkRunError, scope);
-            }
           }
 
           const graderResultError: Json = {

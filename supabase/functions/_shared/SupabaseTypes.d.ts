@@ -6156,7 +6156,7 @@ export type Database = {
         Row: {
           assignment_group_id: number | null;
           auto_promote_result: boolean | null;
-          check_run_id: number;
+          check_run_id: number | null;
           class_id: number;
           commit_message: string;
           created_at: string;
@@ -6173,7 +6173,7 @@ export type Database = {
         Insert: {
           assignment_group_id?: number | null;
           auto_promote_result?: boolean | null;
-          check_run_id: number;
+          check_run_id?: number | null;
           class_id: number;
           commit_message: string;
           created_at?: string;
