@@ -601,9 +601,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           .limit(1)
           .maybeSingle();
 
+        if (checkRunError) {
+          Sentry.captureException(checkRunError, scope);
+          throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError.message}`);
+        }
+
+        if (!initialCheckRun) {
+          scope?.setTag("check_run_db_found", "false");
+          throw new UserVisibleError(
+            `No push record found for ${repository}@${sha}. The webhook may not have processed yet. Please try again.`
+          );
+        }
+
         // Fetch the role of the user who triggered the workflow (decoded.actor = GitHub username)
         let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
-        const classId = initialCheckRun?.class_id ?? repoData.assignments.class_id;
+        const classId = initialCheckRun.class_id ?? repoData.assignments.class_id;
         if (classId && !isPawtograderTriggered) {
           const { data: user } = await adminSupabase
             .from("users")
@@ -619,17 +631,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               .maybeSingle();
             userRoles = userRolesData ?? undefined;
           }
-        }
-        if (checkRunError) {
-          Sentry.captureException(checkRunError, scope);
-          throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError.message}`);
-        }
-
-        if (!initialCheckRun) {
-          scope?.setTag("check_run_db_found", "false");
-          throw new UserVisibleError(
-            `No push record found for ${repository}@${sha}. The webhook may not have processed yet. Please try again.`
-          );
         }
 
         return { ...initialCheckRun, user_roles: userRoles };
