@@ -72,11 +72,13 @@ async function retryWithBackoff<T>(
     } catch (error: unknown) {
       lastError = error as Error;
 
-      // Check if this is a 404 error that we should retry
+      // Check if this is an error we should retry (404 or "Git Repository is empty")
       const is404 = error instanceof RequestError && error.status === 404;
+      const isGitRepoEmpty = error instanceof Error && error.message?.toLowerCase().includes("git repository is empty");
+      const shouldRetry = is404 || isGitRepoEmpty;
 
-      if (!is404 || attempt === maxRetries) {
-        // Don't retry for non-404 errors or if we've exhausted retries
+      if (!shouldRetry || attempt === maxRetries) {
+        // Don't retry for non-retryable errors or if we've exhausted retries
         if (attempt > 0) {
           scope?.setContext("retry_failed", {
             final_attempt: attempt + 1,
@@ -89,7 +91,7 @@ async function retryWithBackoff<T>(
             tags: {
               operation: "github_api_retry_failed",
               attempts: attempt + 1,
-              error_type: is404 ? "404_not_found" : "other"
+              error_type: is404 ? "404_not_found" : isGitRepoEmpty ? "git_repo_empty" : "other"
             }
           });
         }
@@ -102,23 +104,25 @@ async function retryWithBackoff<T>(
       scope?.setContext("retry_attempt", {
         attempt: attempt + 1,
         next_delay_ms: delayMs,
-        error_status: 404,
+        error_status: error instanceof RequestError ? error.status : "unknown",
+        error_reason: is404 ? "404" : "git_repo_empty",
         operation: "github_api_retry"
       });
 
       Sentry.addBreadcrumb({
-        message: `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`,
+        message: `GitHub API ${is404 ? "404" : "Git Repository is empty"} error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`,
         level: "warning",
         data: {
           attempt: attempt + 1,
           delay_ms: delayMs,
-          error_status: 404,
+          error_status: error instanceof RequestError ? error.status : "unknown",
+          error_reason: is404 ? "404" : "git_repo_empty",
           error_message: error instanceof Error ? error.message : String(error)
         }
       });
 
       console.log(
-        `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1}):`,
+        `GitHub API ${is404 ? "404" : "Git Repository is empty"} error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1}):`,
         error instanceof Error ? error.message : String(error)
       );
 
@@ -753,8 +757,8 @@ export async function createRepo(
           owner: org,
           repo: repoName
         }),
-      3, // maxRetries
-      1000, // baseDelayMs
+      5, // maxRetries
+      3000, // baseDelayMs
       scope
     );
     scope?.setTag("head_sha", heads.data.object.sha);

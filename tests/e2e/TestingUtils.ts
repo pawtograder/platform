@@ -1143,6 +1143,7 @@ export async function insertAssignment({
   due_date,
   lab_due_date_offset,
   allow_not_graded_submissions,
+  permit_empty_submissions,
   class_id,
   rateLimitManager,
   name,
@@ -1154,6 +1155,7 @@ export async function insertAssignment({
   due_date: string;
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
+  permit_empty_submissions?: boolean;
   class_id: number;
   rateLimitManager?: RateLimitManager;
   name?: string;
@@ -1199,6 +1201,7 @@ export async function insertAssignment({
       slug: `assignment-${currentAssignmentIdx}`,
       group_config: "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
+      permit_empty_submissions: permit_empty_submissions ?? true,
       self_review_setting_id: self_review_setting_id,
       regrade_deadline: regrade_deadline,
       grader_pseudonymous_mode: grader_pseudonymous_mode || false,

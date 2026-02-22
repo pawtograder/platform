@@ -30,6 +30,66 @@ import { Buffer } from "node:buffer";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno";
 
+function sha256Hex(buf: Uint8Array): string {
+  const hash = createHash("sha256");
+  hash.update(buf);
+  return hash.digest("hex");
+}
+
+function computeCombinedFileHash(files: { name: string; contents: Buffer }[]): {
+  file_hashes: Record<string, string>;
+  combined_hash: string;
+} {
+  const file_hashes: Record<string, string> = {};
+  for (const f of files) {
+    file_hashes[f.name] = sha256Hex(f.contents);
+  }
+  const combinedInput = Object.keys(file_hashes)
+    .sort()
+    .map((name) => `${name}\0${file_hashes[name]}\n`)
+    .join("");
+  return {
+    file_hashes,
+    combined_hash: sha256Hex(Buffer.from(combinedInput, "utf-8"))
+  };
+}
+
+async function safeCleanupRejectedSubmission(params: {
+  adminSupabase: SupabaseClient<Database>;
+  submissionId: number;
+}) {
+  const { adminSupabase, submissionId } = params;
+  // Break circular-ish references: submissions.grading_review_id -> submission_reviews
+  const { error: updateErr } = await adminSupabase
+    .from("submissions")
+    .update({ grading_review_id: null, is_active: false })
+    .eq("id", submissionId);
+  if (updateErr) {
+    throw new Error(`Cleanup failed (update submissions): submission_id=${submissionId}: ${updateErr.message}`);
+  }
+
+  // Delete any auto-created review row(s) for this submission.
+  const { error: reviewsErr } = await adminSupabase
+    .from("submission_reviews")
+    .delete()
+    .eq("submission_id", submissionId);
+  if (reviewsErr) {
+    throw new Error(`Cleanup failed (delete submission_reviews): submission_id=${submissionId}: ${reviewsErr.message}`);
+  }
+
+  // Remove files (these are the only child rows we definitely created in this path).
+  const { error: filesErr } = await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
+  if (filesErr) {
+    throw new Error(`Cleanup failed (delete submission_files): submission_id=${submissionId}: ${filesErr.message}`);
+  }
+
+  // Finally, remove the submission row itself.
+  const { error: deleteErr } = await adminSupabase.from("submissions").delete().eq("id", submissionId);
+  if (deleteErr) {
+    throw new Error(`Cleanup failed (delete submission): submission_id=${submissionId}: ${deleteErr.message}`);
+  }
+}
+
 // Retry helper with exponential backoff
 async function retryWithExponentialBackoff<T>(
   operation: () => Promise<T>,
@@ -443,7 +503,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
-    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
+    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*))")
     .eq("repository", repository)
     .maybeSingle();
   if (repoError) {
@@ -514,6 +574,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // This can happen when GitHub retries the workflow run
       if (workflowRunErrorError.code === "23505") {
         console.log(`Workflow run error already exists, ignoring duplicate: ${name}`);
+      } else if (workflowRunErrorError.code === "23503" && workflowRunErrorError.details?.includes("submission_id")) {
+        // FK violation on submission_id: submission was already deleted (e.g. empty submission rejected).
+        // Log but don't throw - caller should propagate the original user-visible error.
+        console.log(`Cannot record workflow run error: submission no longer exists (${workflowRunErrorError.message})`);
+        Sentry.captureException(workflowRunErrorError, scope);
       } else {
         console.error(workflowRunErrorError);
         Sentry.captureException(workflowRunErrorError, scope);
@@ -1005,7 +1070,54 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             data: { submission_id: existingSubmission.id }
           });
 
-          // Delete related data
+          // Delete related data - first clean up any binary files from storage
+          const { data: existingFiles, error: existingFilesError } = await adminSupabase
+            .from("submission_files")
+            .select("storage_key")
+            .eq("submission_id", existingSubmission.id)
+            .eq("is_binary", true);
+          if (existingFilesError) {
+            console.error("Failed to fetch existing binary files for storage cleanup:", existingFilesError);
+            scope?.setTag("db_error", "existing_files_select_failed");
+            scope?.setContext("existing_files_select_failed", {
+              submission_id: existingSubmission.id,
+              error: existingFilesError.message
+            });
+            Sentry.captureException(existingFilesError, scope);
+            throw new UserVisibleError(`Failed to prepare cleanup of previous submission files. Please retry.`, 500);
+          }
+          if (existingFiles && existingFiles.length > 0) {
+            const storageKeys = existingFiles
+              .map((f: { storage_key: string | null }) => f.storage_key)
+              .filter((k: string | null): k is string => k !== null);
+            if (storageKeys.length > 0) {
+              try {
+                const { error: storageRemoveError } = await adminSupabase.storage
+                  .from("submission-files")
+                  .remove(storageKeys);
+                if (storageRemoveError) {
+                  throw storageRemoveError;
+                }
+              } catch (storageErr) {
+                console.error("Failed to remove binary files from storage:", storageErr);
+                scope?.setTag("storage_cleanup_error", "remove_failed");
+                scope?.setContext("storage_remove_failed", {
+                  submission_id: existingSubmission.id,
+                  storage_keys: storageKeys,
+                  error: storageErr instanceof Error ? storageErr.message : String(storageErr)
+                });
+                Sentry.captureException(
+                  storageErr instanceof Error ? storageErr : new Error(String(storageErr)),
+                  scope
+                );
+                throw new UserVisibleError(
+                  `Failed to clean up previous submission files from storage. Please retry.`,
+                  500
+                );
+              }
+            }
+          }
+
           const { error: deleteSubmissionFilesError } = await adminSupabase
             .from("submission_files")
             .delete()
@@ -1250,33 +1362,278 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             );
           }
 
+          // Binary file detection by extension
+          const BINARY_EXTENSIONS = new Set([
+            // Images (SVG excluded — text-based XML, stored inline for markdown image resolution)
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".ico",
+            ".webp",
+            ".tiff",
+            ".tif",
+            // Documents
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            // Archives
+            ".zip",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".7z",
+            ".rar",
+            // Media
+            ".mp3",
+            ".mp4",
+            ".wav",
+            ".avi",
+            ".mov",
+            ".webm",
+            // Fonts
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".otf",
+            ".eot",
+            // Other binary
+            ".class",
+            ".jar",
+            ".exe",
+            ".dll",
+            ".so",
+            ".dylib",
+            ".o",
+            ".pyc",
+            ".sqlite",
+            ".db",
+            ".bin",
+            ".dat"
+          ]);
+
+          const MIME_TYPES: Record<string, string> = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+            ".ico": "image/x-icon",
+            ".svg": "image/svg+xml",
+            ".webp": "image/webp",
+            ".tiff": "image/tiff",
+            ".tif": "image/tiff",
+            ".pdf": "application/pdf",
+            ".zip": "application/zip",
+            ".gz": "application/gzip",
+            ".mp3": "audio/mpeg",
+            ".mp4": "video/mp4",
+            ".wav": "audio/wav",
+            ".woff": "font/woff",
+            ".woff2": "font/woff2",
+            ".ttf": "font/ttf",
+            ".otf": "font/otf"
+          };
+
+          const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB per file
+
+          /**
+           * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
+           * no leading/trailing slashes. Preserves safe subpaths for storage keys and DB name.
+           */
+          function getSafePath(name: string): string {
+            const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+            const segments = normalized.split("/").filter((s) => s.length > 0);
+            const resolved: string[] = [];
+            for (const seg of segments) {
+              if (seg === ".") continue;
+              if (seg === "..") {
+                if (resolved.length > 0) resolved.pop();
+                continue;
+              }
+              resolved.push(seg);
+            }
+            const result = resolved.join("/");
+            if (result === "") return "unnamed";
+            return result;
+          }
+
+          function getFileExtension(name: string): string {
+            const lastDot = name.lastIndexOf(".");
+            return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
+          }
+
+          function isBinaryFile(name: string): boolean {
+            return BINARY_EXTENSIONS.has(getFileExtension(name));
+          }
+
           const submittedFilesWithContents = await Promise.all(
             submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
               const contents = await file.buffer();
-              return { name: stripTopDir(file.path), contents };
+              const name = stripTopDir(file.path);
+              return { name, contents, binary: isBinaryFile(name) };
             })
           );
-          // Add files to supabase
-          const { error: fileError } = await adminSupabase.from("submission_files").insert(
-            submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
-              submission_id: submission_id,
-              name: file.name,
-              profile_id: repoData.profile_id,
-              assignment_group_id: repoData.assignment_group_id,
-              contents: file.contents.toString("utf-8"),
-              class_id: repoData.assignments.class_id!
-            }))
-          );
-          if (fileError) {
-            throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
+          // Compute combined hash for empty submission detection (before any file insert)
+          const { combined_hash: submissionCombinedHash } = computeCombinedFileHash(submittedFilesWithContents);
+
+          // Enforce 15 MB per-file size limit
+          for (const file of submittedFilesWithContents) {
+            if (file.contents.length > MAX_FILE_SIZE) {
+              throw new UserVisibleError(
+                `File "${file.name}" exceeds the 15 MB size limit (${(file.contents.length / (1024 * 1024)).toFixed(1)} MB).`,
+                400
+              );
+            }
           }
-        }
-        if (isE2ERun) {
-          return {
-            grader_url: "not-a-real-url",
-            grader_sha: "not-a-real-sha",
-            submission_id: submission_id
-          };
+
+          // Separate text and binary files
+          const textFiles = submittedFilesWithContents.filter((f) => !f.binary);
+          const binaryFiles = submittedFilesWithContents.filter((f) => f.binary);
+
+          // Insert text files as before (inline contents)
+          if (textFiles.length > 0) {
+            const { error: textFileError } = await adminSupabase.from("submission_files").insert(
+              textFiles.map((file) => ({
+                submission_id: submission_id,
+                name: file.name,
+                profile_id: repoData.profile_id,
+                assignment_group_id: repoData.assignment_group_id,
+                contents: file.contents.toString("utf-8"),
+                class_id: repoData.assignments.class_id!,
+                is_binary: false,
+                file_size: file.contents.length
+              }))
+            );
+            if (textFileError) {
+              Sentry.captureException(textFileError, scope);
+              throw new UserVisibleError(
+                `Internal error: Failed to insert text submission files: ${textFileError.message}`
+              );
+            }
+          }
+
+          // Insert binary files: store content in Supabase Storage, metadata in DB (parallelized)
+          if (binaryFiles.length > 0) {
+            const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
+            await Promise.all(
+              binaryFiles.map(async (file) => {
+                const safePath = getSafePath(file.name);
+                const ext = getFileExtension(safePath);
+                const mimeType = MIME_TYPES[ext] || "application/octet-stream";
+                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${safePath}`;
+
+                // Upload to Supabase Storage
+                const { error: storageError } = await adminSupabase.storage
+                  .from("submission-files")
+                  .upload(storageKey, file.contents, {
+                    contentType: mimeType,
+                    upsert: true
+                  });
+                if (storageError) {
+                  Sentry.captureException(storageError, scope);
+                  throw new UserVisibleError(
+                    `Internal error: Failed to upload binary file "${safePath}" to storage: ${storageError.message}`
+                  );
+                }
+
+                // Insert DB record (no inline contents for binary)
+                const { error: dbError } = await adminSupabase.from("submission_files").insert({
+                  submission_id: submission_id,
+                  name: safePath,
+                  profile_id: repoData.profile_id,
+                  assignment_group_id: repoData.assignment_group_id,
+                  contents: null,
+                  class_id: repoData.assignments.class_id!,
+                  is_binary: true,
+                  file_size: file.contents.length,
+                  mime_type: mimeType,
+                  storage_key: storageKey
+                });
+                if (dbError) {
+                  const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
+                  if (removeErr.error) {
+                    Sentry.captureException(removeErr.error, scope);
+                  }
+                  Sentry.captureException(dbError, scope);
+                  throw new UserVisibleError(
+                    `Internal error: Failed to insert binary file record for "${safePath}": ${dbError.message}`
+                  );
+                }
+              })
+            );
+          }
+
+          // Empty submission detection:
+          // If the submitted expected files match ANY recorded handout version for the assignment,
+          // mark the submission as empty.
+          const { data: match, error: matchError } = await adminSupabase
+            .from("assignment_handout_file_hashes")
+            .select("id")
+            .eq("assignment_id", repoData.assignment_id)
+            .eq("combined_hash", submissionCombinedHash)
+            .limit(1)
+            .maybeSingle();
+          if (matchError) {
+            Sentry.captureException(matchError, scope);
+          }
+          const isEmpty = !!match;
+          const { error: updateError } = await adminSupabase
+            .from("submissions")
+            .update({ is_empty_submission: isEmpty })
+            .eq("id", submission_id);
+          if (updateError) {
+            Sentry.captureException(updateError, scope);
+          }
+
+          // If the assignment prohibits empty submissions, reject after determining emptiness.
+          // (Allow graders/instructors to bypass to avoid breaking staff workflows.)
+          const isGraderOrInstructor =
+            checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
+          if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
+            if (!isE2ERun) {
+              await handleGitHubApiCall(
+                () =>
+                  updateCheckRun({
+                    owner: repository.split("/")[0],
+                    repo: repository.split("/")[1],
+                    check_run_id: checkRun.check_run_id,
+                    status: "completed",
+                    conclusion: "failure",
+                    output: {
+                      title: "Empty submission rejected",
+                      summary: "This assignment does not permit empty submissions.",
+                      text: "Your submission appears to match the handout (starter) files exactly. Please make sure you have committed your changes before submitting."
+                    }
+                  }),
+                org,
+                "updateCheckRun",
+                adminSupabase,
+                scope
+              );
+            }
+            try {
+              await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+            } catch (cleanupErr) {
+              Sentry.captureException(cleanupErr, scope);
+            }
+            throw new UserVisibleError(
+              "Empty submissions are not permitted for this assignment. Please commit your changes before submitting.",
+              400
+            );
+          }
+          if (isE2ERun) {
+            return {
+              grader_url: "not-a-real-url",
+              grader_sha: "not-a-real-sha",
+              submission_id: submission_id
+            };
+          }
         }
         if (!config.grader_repo) {
           throw new UserVisibleError(

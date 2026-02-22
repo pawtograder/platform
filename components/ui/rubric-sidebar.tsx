@@ -305,7 +305,7 @@ export function CommentActions({
   setIsEditing: (isEditing: boolean) => void;
 }) {
   const submissionController = useSubmissionController();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const isStudent = useIsStudent();
@@ -317,7 +317,7 @@ export function CommentActions({
   // 1. Instructors can edit all comments
   // 2. Graders can only edit their own comments
   // 3. Students can edit their own comments IF the review is not completed (or no review exists)
-  const isCommentAuthor = comment.author === private_profile_id;
+  const isCommentAuthor = comment.author === private_profile_id || comment.author === public_profile_id;
   const isReviewCompleted = comment.submission_review_id ? submissionReview?.completed_at != null : false;
 
   const canEditComment =
