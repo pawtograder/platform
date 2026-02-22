@@ -5,14 +5,36 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { mcpTokensList, mcpTokensCreate, mcpTokensRevoke, MCPToken } from "@/lib/edgeFunctions";
+import { mcpTokensList, mcpTokensCreate, mcpTokensRevoke, MCPToken, MCPScope } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Dialog, Flex, HStack, IconButton, Portal, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useCallback, useEffect, useState } from "react";
 import { LuCopy, LuCheck, LuKey, LuTrash2, LuPlus } from "react-icons/lu";
 
+type TokenType = "mcp" | "cli" | "both";
+
+const TOKEN_TYPE_SCOPES: Record<TokenType, MCPScope[]> = {
+  mcp: ["mcp:read", "mcp:write"],
+  cli: ["cli:read", "cli:write"],
+  both: ["mcp:read", "mcp:write", "cli:read", "cli:write"]
+};
+
+const TOKEN_TYPE_LABELS: Record<TokenType, string> = {
+  mcp: "MCP (AI Assistants)",
+  cli: "CLI (Command Line)",
+  both: "MCP + CLI"
+};
+
+function getScopeLabel(scopes: string[]): string {
+  const hasMcp = scopes.some((s) => s.startsWith("mcp:"));
+  const hasCli = scopes.some((s) => s.startsWith("cli:"));
+  if (hasMcp && hasCli) return "MCP + CLI";
+  if (hasCli) return "CLI";
+  return "MCP";
+}
+
 /**
- * Dialog component for managing MCP API tokens.
+ * Dialog component for managing API tokens (MCP and CLI).
  * Only available to instructors and graders.
  */
 export default function MCPTokensMenu() {
@@ -22,6 +44,7 @@ export default function MCPTokensMenu() {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTokenName, setNewTokenName] = useState("");
+  const [newTokenType, setNewTokenType] = useState<TokenType>("mcp");
   const [newlyCreatedToken, setNewlyCreatedToken] = useState<string | null>(null);
   const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
 
@@ -62,7 +85,7 @@ export default function MCPTokensMenu() {
       const data = await mcpTokensCreate(
         {
           name: newTokenName.trim(),
-          scopes: ["mcp:read", "mcp:write"],
+          scopes: TOKEN_TYPE_SCOPES[newTokenType],
           expires_in_days: 90
         },
         supabase
@@ -161,7 +184,7 @@ export default function MCPTokensMenu() {
           <Dialog.Positioner>
             <Dialog.Content maxHeight="80vh" overflowY="auto">
               <Dialog.Header>
-                <Dialog.Title>MCP API Tokens</Dialog.Title>
+                <Dialog.Title>API Tokens</Dialog.Title>
               </Dialog.Header>
               <Dialog.Body>
                 <VStack gap={6} alignItems="stretch">
@@ -170,31 +193,47 @@ export default function MCPTokensMenu() {
                     <Text fontWeight="bold" mb={3}>
                       Create New Token
                     </Text>
-                    <HStack gap={3}>
-                      <Box flex={1}>
+                    <VStack gap={3} alignItems="stretch">
+                      <Box>
                         <Label htmlFor="token-name">Token Name</Label>
                         <Input
                           id="token-name"
                           value={newTokenName}
                           onChange={(e) => setNewTokenName(e.target.value)}
-                          placeholder="e.g., Claude Desktop, VS Code"
+                          placeholder="e.g., Claude Desktop, VS Code, My CLI"
                           onKeyDown={(e) => {
                             if (e.key === "Enter") createToken();
                           }}
                         />
                       </Box>
+                      <Box>
+                        <Label htmlFor="token-type">Token Type</Label>
+                        <HStack gap={2} mt={1}>
+                          {(Object.keys(TOKEN_TYPE_LABELS) as TokenType[]).map((type) => (
+                            <Button
+                              key={type}
+                              size="sm"
+                              variant={newTokenType === type ? "solid" : "outline"}
+                              colorPalette={newTokenType === type ? "blue" : "gray"}
+                              onClick={() => setNewTokenType(type)}
+                            >
+                              {TOKEN_TYPE_LABELS[type]}
+                            </Button>
+                          ))}
+                        </HStack>
+                      </Box>
                       <Button
                         colorPalette="green"
                         onClick={createToken}
                         disabled={creating || !newTokenName.trim()}
-                        mt={6}
                       >
                         {creating ? <Spinner size="sm" /> : <LuPlus />}
-                        Create
+                        Create Token
                       </Button>
-                    </HStack>
+                    </VStack>
                     <Text fontSize="sm" color="fg.muted" mt={2}>
-                      Tokens are valid for 90 days and grant access to MCP tools for AI assistants.
+                      Tokens are valid for 90 days. MCP tokens grant access to AI assistant tools. CLI tokens grant
+                      access to the command-line interface API.
                     </Text>
                   </Box>
 
@@ -241,6 +280,7 @@ export default function MCPTokensMenu() {
                         <Table.Header>
                           <Table.Row>
                             <Table.ColumnHeader>Name</Table.ColumnHeader>
+                            <Table.ColumnHeader>Type</Table.ColumnHeader>
                             <Table.ColumnHeader>Status</Table.ColumnHeader>
                             <Table.ColumnHeader>Created</Table.ColumnHeader>
                             <Table.ColumnHeader>Expires</Table.ColumnHeader>
@@ -252,6 +292,11 @@ export default function MCPTokensMenu() {
                           {tokens.map((token) => (
                             <Table.Row key={token.id}>
                               <Table.Cell fontWeight="medium">{token.name}</Table.Cell>
+                              <Table.Cell>
+                                <Badge colorPalette="blue" variant="subtle">
+                                  {getScopeLabel(token.scopes)}
+                                </Badge>
+                              </Table.Cell>
                               <Table.Cell>
                                 {token.revoked_at ? (
                                   <Badge colorPalette="red">Revoked</Badge>
@@ -289,12 +334,16 @@ export default function MCPTokensMenu() {
                     <Text fontWeight="bold" mb={2}>
                       How to Use
                     </Text>
-                    <Text fontSize="sm" color="fg.muted">
-                      Add your token to your MCP client configuration. For Claude Desktop, add to your
-                      claude_desktop_config.json:
+                    <Text fontSize="sm" color="fg.muted" mb={3}>
+                      MCP tokens are used with AI assistants (Claude Desktop, etc). CLI tokens are used with the
+                      Pawtograder CLI API.
+                    </Text>
+                    <Text fontSize="sm" fontWeight="semibold" mb={1}>
+                      MCP Client Configuration (Claude Desktop):
                     </Text>
                     <Box
-                      mt={2}
+                      mt={1}
+                      mb={3}
                       p={2}
                       bg="bg.emphasized"
                       borderRadius="sm"
@@ -313,6 +362,24 @@ export default function MCPTokensMenu() {
     }
   }
 }`}
+                    </Box>
+                    <Text fontSize="sm" fontWeight="semibold" mb={1}>
+                      CLI API Usage:
+                    </Text>
+                    <Box
+                      mt={1}
+                      p={2}
+                      bg="bg.emphasized"
+                      borderRadius="sm"
+                      fontFamily="mono"
+                      fontSize="xs"
+                      whiteSpace="pre-wrap"
+                      overflowX="auto"
+                    >
+                      {`curl -X POST ${typeof window !== "undefined" ? window.location.origin : ""}/functions/v1/cli \\
+  -H "Authorization: Bearer mcp_YOUR_TOKEN_HERE" \\
+  -H "Content-Type: application/json" \\
+  -d '{"command": "classes.list", "params": {}}'`}
                     </Box>
                   </Box>
                 </VStack>

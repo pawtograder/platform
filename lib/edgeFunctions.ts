@@ -361,8 +361,8 @@ export class EdgeFunctionError extends Error {
   }
 }
 
-// MCP Token types
-export type MCPScope = "mcp:read" | "mcp:write";
+// API Token types (MCP and CLI scopes)
+export type MCPScope = "mcp:read" | "mcp:write" | "cli:read" | "cli:write";
 
 export interface MCPToken {
   id: string;
@@ -437,6 +437,53 @@ export async function mcpTokensRevoke(
     throw new EdgeFunctionError(normalizedError);
   }
   return data as { success: boolean; message: string };
+}
+
+// CLI Edge Function types
+
+export interface CLIRequest {
+  command: string;
+  params: Record<string, unknown>;
+}
+
+export interface CLIResponse {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+/**
+ * Available CLI commands:
+ *   READ (cli:read):
+ *     - classes.list
+ *     - classes.show { identifier }
+ *     - assignments.list { class }
+ *     - assignments.show { class, identifier }
+ *     - rubrics.list { class, assignment }
+ *     - rubrics.export { class, assignment, type? }
+ *     - flashcards.list { class }
+ *
+ *   WRITE (cli:write):
+ *     - assignments.copy { source_class, target_class, assignment|all|schedule, skip_repos?, skip_rubrics?, dry_run? }
+ *     - assignments.delete { class, identifier }
+ *     - rubrics.import { class, assignment, rubric, type?, dry_run? }
+ *     - flashcards.copy { source_class, target_class, deck|all, dry_run? }
+ */
+export async function cliInvoke(
+  params: CLIRequest,
+  supabase: SupabaseClient<Database>
+): Promise<CLIResponse> {
+  const { data } = await supabase.functions.invoke("cli", {
+    body: params
+  });
+  if (data?.error) {
+    throw new EdgeFunctionError({
+      details: data.error,
+      message: data.error,
+      recoverable: false
+    });
+  }
+  return data as CLIResponse;
 }
 
 // AI Help Feedback types
