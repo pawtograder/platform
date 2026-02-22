@@ -98,6 +98,7 @@ export default function SurveyForm({
   // Student selector modal state
   const [isStudentSelectorOpen, setIsStudentSelectorOpen] = useState(false);
 
+  const assignments = useAssignments();
   const currentJson = watch("json");
   const currentStatus = watch("status");
   const assignedStudents = watch("assigned_students") || [];
@@ -433,27 +434,24 @@ export default function SurveyForm({
                   <Controller
                     name="assignment_id"
                     control={control}
-                    render={({ field }) => {
-                      const assignments = useAssignments();
-                      return (
-                        <NativeSelect.Root size="sm">
-                          <NativeSelect.Field
-                            value={field.value ?? ""}
-                            onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : null)}
-                            bg="bg.subtle"
-                            borderColor="border"
-                            color="fg"
-                          >
-                            <option value="">No linked assignment</option>
-                            {assignments.map((a) => (
-                              <option key={a.id} value={a.id}>
-                                {a.title}
-                              </option>
-                            ))}
-                          </NativeSelect.Field>
-                        </NativeSelect.Root>
-                      );
-                    }}
+                    render={({ field }) => (
+                      <NativeSelect.Root size="sm">
+                        <NativeSelect.Field
+                          value={field.value ?? ""}
+                          onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : null)}
+                          bg="bg.subtle"
+                          borderColor="border"
+                          color="fg"
+                        >
+                          <option value="">No linked assignment</option>
+                          {assignments.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.title}
+                            </option>
+                          ))}
+                        </NativeSelect.Field>
+                      </NativeSelect.Root>
+                    )}
                   />
                 </Field>
               </Fieldset.Content>
