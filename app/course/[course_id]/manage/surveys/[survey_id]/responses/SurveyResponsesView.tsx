@@ -10,6 +10,7 @@ import { useMemo, useCallback, useState, useEffect } from "react";
 import { FiX, FiFilter } from "react-icons/fi";
 import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
 import { useSurveyResponses } from "@/hooks/useCourseController";
+import SurveyAnalytics from "@/components/survey/SurveyAnalytics";
 
 type SurveyResponsesViewProps = {
   courseId: string;
@@ -503,6 +504,13 @@ export default function SurveyResponsesView({
           </Text>
         </Box>
       </HStack>
+
+      {/* Analytics - compare quantitative values across groups */}
+      <SurveyAnalytics
+        surveyId={surveyDbId}
+        surveyJson={surveyJson}
+        classId={Number(courseId)}
+      />
 
       {/* Responses Table */}
       <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">

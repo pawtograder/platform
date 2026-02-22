@@ -3,6 +3,7 @@ import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import { useGradersAndInstructors } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
@@ -523,6 +524,22 @@ function TableByGroups({
   groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
 }) {
   const { modProfiles, movesToFulfill } = useGroupManagement();
+  const graders = useGradersAndInstructors();
+  const supabase = createClient();
+  const invalidate = useInvalidate();
+
+  const updateMentor = async (groupId: number, mentorProfileId: string | null) => {
+    const { error } = await supabase
+      .from("assignment_groups")
+      .update({ mentor_profile_id: mentorProfileId })
+      .eq("id", groupId);
+    if (error) {
+      toaster.create({ title: "Error updating mentor", description: error.message, type: "error" });
+    } else {
+      toaster.create({ title: "Mentor updated", type: "success" });
+      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+    }
+  };
 
   /**
    * Export groups data to CSV
@@ -620,6 +637,7 @@ function TableByGroups({
           <Table.Row>
             <Table.ColumnHeader>Group</Table.ColumnHeader>
             <Table.ColumnHeader>Members</Table.ColumnHeader>
+            <Table.ColumnHeader>Mentor</Table.ColumnHeader>
             <Table.ColumnHeader>Actions</Table.ColumnHeader>
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
@@ -675,6 +693,23 @@ function TableByGroups({
                     }
                   })}
                   {newProfilesForGroup(group.id)}
+                </Table.Cell>
+                <Table.Cell>
+                  <NativeSelect.Root size="sm">
+                    <NativeSelect.Field
+                      value={group.mentor_profile_id ?? ""}
+                      onChange={(e) => {
+                        updateMentor(group.id, e.target.value || null);
+                      }}
+                    >
+                      <option value="">No mentor</option>
+                      {graders.map((grader) => (
+                        <option key={grader.id} value={grader.id}>
+                          {grader.name}
+                        </option>
+                      ))}
+                    </NativeSelect.Field>
+                  </NativeSelect.Root>
                 </Table.Cell>
                 <Table.Cell>
                   <BulkModifyGroup

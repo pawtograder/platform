@@ -20,6 +20,8 @@ type SurveyFormData = {
   json: string;
   status: "draft" | "published";
   due_date?: string;
+  available_at?: string;
+  assignment_id?: number | null;
   allow_response_editing: boolean;
   assigned_to_all: boolean;
   assigned_students?: string[];
@@ -133,8 +135,13 @@ export default function EditSurveyPage() {
         // Convert due_date from ISO string to datetime-local format in course timezone
         let dueDateFormatted = "";
         if (data.due_date) {
-          // Convert ISO timestamp to datetime-local format in course timezone
           dueDateFormatted = formatInTimeZone(new Date(data.due_date), timezone, "yyyy-MM-dd'T'HH:mm");
+        }
+
+        // Convert available_at from ISO string to datetime-local format in course timezone
+        let availableAtFormatted = "";
+        if (data.available_at) {
+          availableAtFormatted = formatInTimeZone(new Date(data.available_at), timezone, "yyyy-MM-dd'T'HH:mm");
         }
 
         // Load existing survey assignments
@@ -152,6 +159,8 @@ export default function EditSurveyPage() {
           json: toJsonString(data.json),
           status: data.status || "draft",
           due_date: dueDateFormatted,
+          available_at: availableAtFormatted,
+          assignment_id: data.assignment_id ?? null,
           allow_response_editing: Boolean(data.allow_response_editing),
           assigned_to_all: data.assigned_to_all !== undefined ? data.assigned_to_all : true,
           assigned_students: assignedStudents
@@ -211,6 +220,8 @@ export default function EditSurveyPage() {
               status: "draft",
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: convertDueDateToISO(values.due_date as string),
+              available_at: convertDueDateToISO(values.available_at as string),
+              assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
               validation_errors: null, // No validation errors for draft saves
               assigned_to_all: Boolean(values.assigned_to_all)
             })
@@ -336,6 +347,8 @@ export default function EditSurveyPage() {
               status: validationErrors ? "draft" : (values.status as SurveyFormData["status"]), // Force to draft if validation errors
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: convertDueDateToISO(values.due_date as string),
+              available_at: convertDueDateToISO(values.available_at as string),
+              assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
               validation_errors: validationErrors,
               assigned_to_all: Boolean(values.assigned_to_all)
             })

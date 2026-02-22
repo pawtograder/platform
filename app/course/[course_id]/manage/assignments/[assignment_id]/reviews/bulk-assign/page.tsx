@@ -109,7 +109,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       value: Tag;
     }>
   >([]);
-  const [assignmentMode, setAssignmentMode] = useState<"by_submission" | "by_rubric_part" | "by_lab_leaders">(
+  const [assignmentMode, setAssignmentMode] = useState<"by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors">(
     "by_submission"
   );
   const [selectedRubricPartsForFilter, setSelectedRubricPartsForFilter] = useState<
@@ -167,23 +167,33 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   // Map of assignment_group_id -> member profile ids
   const [groupMembersByGroupId, setGroupMembersByGroupId] = useState<Map<number, string[]>>(new Map());
+  // Map of assignment_group_id -> mentor_profile_id (for grading by group mentors)
+  const [groupMentorByGroupId, setGroupMentorByGroupId] = useState<Map<number, string>>(new Map());
   useEffect(() => {
-    const buildMap = (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
-      const map = new Map<number, string[]>();
+    const buildMap = (rows: Array<{ id: number; mentor_profile_id?: string | null; assignment_groups_members?: { profile_id: string }[] }>) => {
+      const memberMap = new Map<number, string[]>();
+      const mentorMap = new Map<number, string>();
       for (const row of rows) {
         const members = row.assignment_groups_members?.map((m) => m.profile_id) ?? [];
-        map.set(row.id, members);
+        memberMap.set(row.id, members);
+        if (row.mentor_profile_id) {
+          mentorMap.set(row.id, row.mentor_profile_id);
+        }
       }
-      return map;
+      return { memberMap, mentorMap };
     };
     const { data, unsubscribe } = courseController.assignmentGroupsWithMembers.list(
-      (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
-        setGroupMembersByGroupId(buildMap(rows));
+      (rows: Array<{ id: number; mentor_profile_id?: string | null; assignment_groups_members?: { profile_id: string }[] }>) => {
+        const { memberMap, mentorMap } = buildMap(rows);
+        setGroupMembersByGroupId(memberMap);
+        setGroupMentorByGroupId(mentorMap);
       }
     );
-    setGroupMembersByGroupId(
-      buildMap(data as Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>)
+    const { memberMap, mentorMap } = buildMap(
+      data as Array<{ id: number; mentor_profile_id?: string | null; assignment_groups_members?: { profile_id: string }[] }>
     );
+    setGroupMembersByGroupId(memberMap);
+    setGroupMentorByGroupId(mentorMap);
     return unsubscribe;
   }, [courseController]);
 
@@ -802,6 +812,39 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       return;
     }
 
+    // Validation for group mentors mode
+    if (assignmentMode === "by_group_mentors") {
+      const submissionsWithoutMentor: SubmissionWithGrading[] = [];
+      const submissionsWithoutGroup: SubmissionWithGrading[] = [];
+
+      for (const submission of submissionsToDo) {
+        if (!submission.assignment_group_id) {
+          submissionsWithoutGroup.push(submission);
+          continue;
+        }
+        const mentorId = groupMentorByGroupId.get(submission.assignment_group_id);
+        if (!mentorId) {
+          submissionsWithoutMentor.push(submission);
+        }
+      }
+
+      if (submissionsWithoutGroup.length > 0) {
+        toaster.create({
+          title: "Warning: Submissions without groups",
+          description: `${submissionsWithoutGroup.length} submission(s) are not associated with any group. These will be skipped.`,
+          type: "warning"
+        });
+      }
+
+      if (submissionsWithoutMentor.length > 0) {
+        toaster.create({
+          title: "Warning: Groups without mentors",
+          description: `${submissionsWithoutMentor.length} submission(s) are from groups without assigned mentors. These will be skipped.`,
+          type: "warning"
+        });
+      }
+    }
+
     // Validation for lab leaders mode
     if (assignmentMode === "by_lab_leaders") {
       const studentsWithoutLab: SubmissionWithGrading[] = [];
@@ -871,6 +914,21 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     // Handle lab leaders mode separately
     if (assignmentMode === "by_lab_leaders") {
       const result = generateReviewsByLabLeaders();
+      setDraftReviews(result.draftAssignments);
+      setIsGeneratingReviews(false);
+      return;
+    }
+
+    // Handle group mentors mode separately
+    if (assignmentMode === "by_group_mentors") {
+      const result = generateReviewsByGroupMentors();
+      if (result.skippedSubmissions.length > 0) {
+        toaster.create({
+          title: `Skipped ${result.skippedSubmissions.length} submissions`,
+          description: `These submissions were skipped due to missing groups, mentors, or grading conflicts.`,
+          type: "warning"
+        });
+      }
       setDraftReviews(result.draftAssignments);
       setIsGeneratingReviews(false);
       return;
@@ -1154,6 +1212,108 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 part: part.value
               });
             }
+          }
+        }
+      }
+    }
+
+    return { draftAssignments, skippedSubmissions };
+  };
+
+  const generateReviewsByGroupMentors = (): {
+    draftAssignments: DraftReviewAssignment[];
+    skippedSubmissions: SubmissionWithGrading[];
+  } => {
+    const draftAssignments: DraftReviewAssignment[] = [];
+    const skippedSubmissions: SubmissionWithGrading[] = [];
+    const seenAssignments = new Set<string>();
+
+    if (!submissionsToDo) {
+      return { draftAssignments, skippedSubmissions };
+    }
+
+    // Treat empty selection as selecting all parts
+    const isAllPartsSelected =
+      selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === (rubricParts?.length || 0);
+
+    for (const submission of submissionsToDo) {
+      // Get the assignment group for this submission
+      const groupId = submission.assignment_group_id;
+
+      if (!groupId) {
+        // No group - skip
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Get the mentor for this group
+      const mentorProfileId = groupMentorByGroupId.get(groupId);
+      if (!mentorProfileId) {
+        // No mentor assigned to this group - skip
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Find the mentor's UserRoleWithConflictsAndName
+      const mentor = courseStaff.find((s) => s.private_profile_id === mentorProfileId);
+      if (!mentor) {
+        // Mentor not found in course staff
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Build submitters list
+      const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+        { profile_id: submission.profile_id }
+      ];
+      const submitters: UserRoleWithConflictsAndName[] = [];
+      for (const member of groupMembers) {
+        if (member.profile_id) {
+          const memberUserRole = userRoles.find((item) => item.private_profile_id === member.profile_id) as unknown as
+            | UserRoleWithConflictsAndName
+            | undefined;
+          if (memberUserRole) {
+            submitters.push(memberUserRole);
+          }
+        }
+      }
+
+      // Check for grading conflicts
+      const hasConflict = mentor.profiles?.grading_conflicts?.some((conflict) => {
+        return (
+          conflict.student_profile_id === submission.profile_id ||
+          groupMembers.some((member) => member.profile_id === conflict.student_profile_id)
+        );
+      });
+
+      if (hasConflict) {
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Create assignments
+      if (isAllPartsSelected) {
+        const assignmentKey = `${submission.id}:${mentor.private_profile_id}:null`;
+        if (!seenAssignments.has(assignmentKey)) {
+          seenAssignments.add(assignmentKey);
+          draftAssignments.push({
+            assignee: mentor,
+            submitters: submitters,
+            submission: submission,
+            part: undefined
+          });
+        }
+      } else {
+        for (const part of selectedRubricPartsForFilter) {
+          const assignmentKey = `${submission.id}:${mentor.private_profile_id}:${part.value.id}`;
+          if (!seenAssignments.has(assignmentKey)) {
+            seenAssignments.add(assignmentKey);
+            draftAssignments.push({
+              assignee: mentor,
+              submitters: submitters,
+              submission: submission,
+              part: part.value
+            });
           }
         }
       }
@@ -1538,18 +1698,21 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                         ? "Assign by rubric part"
                         : assignmentMode === "by_lab_leaders"
                           ? "Assign to lab leaders"
-                          : "Filter by rubric parts",
+                          : assignmentMode === "by_group_mentors"
+                            ? "Assign to group mentors"
+                            : "Filter by rubric parts",
                   value: assignmentMode
                 }}
                 onChange={(e) => {
                   if (e?.value) {
-                    setAssignmentMode(e.value as "by_submission" | "by_rubric_part" | "by_lab_leaders");
+                    setAssignmentMode(e.value as "by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors");
                   }
                 }}
                 options={[
                   { label: "By submission", value: "by_submission" },
                   { label: "By rubric part", value: "by_rubric_part" },
-                  { label: "Assign to lab leaders", value: "by_lab_leaders" }
+                  { label: "Assign to lab leaders", value: "by_lab_leaders" },
+                  { label: "Assign to group mentors", value: "by_group_mentors" }
                 ]}
               />
               <Field.HelperText>
@@ -1557,6 +1720,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 {assignmentMode === "by_rubric_part" && "Rubric parts are split between graders first"}
                 {assignmentMode === "by_lab_leaders" &&
                   "Each submission is assigned to all lab leaders of the student's lab section"}
+                {assignmentMode === "by_group_mentors" &&
+                  "Each group's submission is assigned to the group's mentor"}
               </Field.HelperText>
             </Field.Root>
             <Field.Root>
@@ -1661,16 +1826,20 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 ? submissionsToDo && submissionsToDo.length > 0
                   ? `There are ${submissionsToDo.length} active submissions that match your criteria. Each submission will be assigned to all lab leaders of the student's lab section.`
                   : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`
-                : submissionsToDo && submissionsToDo.length > 0
-                  ? `There are ${submissionsToDo.length} active submissions that match your criteria and are unassigned for at least one selected rubric part. Choose who to assign them to below.`
-                  : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`}
+                : assignmentMode === "by_group_mentors"
+                  ? submissionsToDo && submissionsToDo.length > 0
+                    ? `There are ${submissionsToDo.length} active submissions that match your criteria. Each group's submission will be assigned to the group's mentor.`
+                    : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`
+                  : submissionsToDo && submissionsToDo.length > 0
+                    ? `There are ${submissionsToDo.length} active submissions that match your criteria and are unassigned for at least one selected rubric part. Choose who to assign them to below.`
+                    : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`}
             </Alert>
           </VStack>
         </Fieldset.Content>
       </Fieldset.Root>
 
       {/* Assignee Selection Section */}
-      {assignmentMode === "by_lab_leaders" ? (
+      {assignmentMode === "by_lab_leaders" || assignmentMode === "by_group_mentors" ? (
         <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
           <Fieldset.Legend>
             <Heading size="md">Assignee Selection</Heading>
@@ -2045,7 +2214,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
               <Separator my={1} />
 
-              {(assignmentMode as string) !== "by_lab_leaders" && (
+              {(assignmentMode as string) !== "by_lab_leaders" && (assignmentMode as string) !== "by_group_mentors" && (
                 <>
                   <Heading size="sm">Load Balancing & Due Date</Heading>
                   <Field.Root>
@@ -2070,7 +2239,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 </>
               )}
 
-              {(assignmentMode as string) === "by_lab_leaders" && <Heading size="sm">Due Date</Heading>}
+              {((assignmentMode as string) === "by_lab_leaders" || (assignmentMode as string) === "by_group_mentors") && <Heading size="sm">Due Date</Heading>}
 
               <Field.Root>
                 <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
@@ -2128,7 +2297,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               disabled={
                 !dueDate ||
                 !selectedRubric ||
-                ((assignmentMode as string) !== "by_lab_leaders" && !role) ||
+                ((assignmentMode as string) !== "by_lab_leaders" && (assignmentMode as string) !== "by_group_mentors" && !role) ||
                 submissionsToDo?.length === 0
               }
               loading={isGeneratingReviews}

@@ -1,5 +1,6 @@
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import AssignmentGradingToolbar from "@/components/ui/assignment-grading-toolbar";
+import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, HStack, VStack } from "@chakra-ui/react";
@@ -36,6 +37,8 @@ export default async function SubmissionsLayout({
   }
 
   const instructorOrGrader = role.role === "instructor" || role.role === "grader";
+  const isStudent = role.role === "student";
+
   return (
     <VStack w="100%" gap={0} alignItems="flex-start">
       <HStack
@@ -53,6 +56,9 @@ export default async function SubmissionsLayout({
         )}
       </HStack>
       {instructorOrGrader && <AssignmentGradingToolbar />}
+      {isStudent && (
+        <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
+      )}
 
       <Box borderColor="border.muted" borderWidth="2px" w="100%" borderTopRadius={0} borderBottomRadius="md">
         {children}

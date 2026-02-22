@@ -21,6 +21,8 @@ type SurveyFormData = {
   json: string;
   status: "draft" | "published";
   due_date?: string;
+  available_at?: string;
+  assignment_id?: number | null;
   allow_response_editing: boolean;
   assigned_to_all: boolean;
   assigned_students?: string[];
@@ -286,6 +288,8 @@ export default function NewSurveyPage() {
           status: finalStatus,
           allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
           due_date: convertDueDateToISO(values.due_date as string),
+          available_at: convertDueDateToISO(values.available_at as string),
+          assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
           validation_errors: validationErrors,
           assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all),
           updated_at: new Date().toISOString()
@@ -316,6 +320,8 @@ export default function NewSurveyPage() {
           created_at: new Date().toISOString(),
           allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
           due_date: convertDueDateToISO(values.due_date as string),
+          available_at: convertDueDateToISO(values.available_at as string),
+          assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
           validation_errors: validationErrors,
           assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all)
         };

@@ -13,6 +13,7 @@ import { useCallback, useState, useMemo } from "react";
 import { useIsInstructor, useIsGrader } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import { useAssignments } from "@/hooks/useCourseController";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 
 type FilterType = "all" | "closed" | "active" | "draft";
@@ -29,6 +30,7 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
   const isGrader = useIsGrader();
+  const assignments = useAssignments();
 
   // Filter options for instructor view
   const filterOptions = useMemo(
@@ -354,6 +356,9 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
               <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 DUE DATE
               </Table.ColumnHeader>
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
+                LINKED ASSIGNMENT
+              </Table.ColumnHeader>
               <Table.ColumnHeader
                 color="fg.muted"
                 fontSize="xs"
@@ -407,6 +412,13 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                   <Text color={survey.due_date ? "fg" : "fg.muted"}>
                     {survey.due_date
                       ? formatInTimeZone(new TZDate(survey.due_date), timezone, "MMM d, yyyy h:mm a")
+                      : "—"}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell py={4}>
+                  <Text color={survey.assignment_id ? "fg" : "fg.muted"}>
+                    {survey.assignment_id
+                      ? assignments.find((a) => a.id === survey.assignment_id)?.title || `Assignment #${survey.assignment_id}`
                       : "—"}
                   </Text>
                 </Table.Cell>
