@@ -306,7 +306,8 @@ BEGIN
     UPDATE public.review_assignments ra
     SET submission_id = ura.new_submission_id,
         submission_review_id = ura.new_submission_review_id,
-        completed_at = NULL
+        completed_at = NULL,
+        completed_by = NULL
     FROM updated_ra ura
     WHERE ra.id = ura.review_assignment_id;
 
