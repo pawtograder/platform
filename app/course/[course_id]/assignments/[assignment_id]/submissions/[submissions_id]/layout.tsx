@@ -260,7 +260,7 @@ function SubmissionReviewScoreTweak() {
 }
 // Select query for full submission data with grader results, test outputs, and files
 const FULL_SUBMISSION_SELECT =
-  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)";
+  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents, is_binary, file_size, mime_type, storage_key)";
 
 // Type that matches the FULL_SUBMISSION_SELECT query result
 type FullSubmissionQueryResult = GetResult<
@@ -268,7 +268,7 @@ type FullSubmissionQueryResult = GetResult<
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents)"
+  "*, grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), submission_reviews!submissions_grading_review_id_fkey(*), repository_check_runs!submissions_repository_check_run_id_fkey(commit_message), submission_files(name, contents, is_binary, file_size, mime_type, storage_key)"
 >;
 
 // Use Omit to avoid implying assignments/workflow_run_error are populated (they aren't in our query)
