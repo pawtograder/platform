@@ -7,7 +7,7 @@
  */
 
 import type { Argv } from "yargs";
-import { listClasses, resolveClass } from "../../utils/db";
+import { callCLI } from "../../utils/api";
 import { logger, handleError } from "../../utils/logger";
 
 export const command = "classes <action>";
@@ -22,19 +22,19 @@ export const builder = (yargs: Argv) => {
       async () => {
         try {
           logger.step("Listing classes...");
-          const classes = await listClasses();
+          const data = await callCLI("classes.list");
 
-          if (classes.length === 0) {
+          if (!data.classes || data.classes.length === 0) {
             logger.info("No classes found.");
             return;
           }
 
           logger.tableHeader(["ID", "Slug", "Name", "GitHub Org"]);
-          for (const c of classes) {
+          for (const c of data.classes) {
             logger.tableRow([c.id, c.slug, c.name, c.github_org]);
           }
           logger.blank();
-          logger.info(`Total: ${classes.length} classes`);
+          logger.info(`Total: ${data.classes.length} classes`);
         } catch (error) {
           handleError(error);
         }
@@ -52,16 +52,19 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const classData = await resolveClass(args.identifier as string);
+          const data = await callCLI("classes.show", {
+            identifier: args.identifier as string
+          });
+          const c = data.class;
 
-          logger.step(`Class: ${classData.name}`);
-          logger.info(`ID: ${classData.id}`);
-          logger.info(`Slug: ${classData.slug}`);
-          logger.info(`Semester: ${classData.semester}`);
-          logger.info(`GitHub Org: ${classData.github_org || "(not set)"}`);
-          logger.info(`Timezone: ${classData.time_zone || "(not set)"}`);
-          logger.info(`Canvas ID: ${classData.canvas_id || "(not set)"}`);
-          logger.info(`Demo: ${classData.is_demo ? "Yes" : "No"}`);
+          logger.step(`Class: ${c.name}`);
+          logger.info(`ID: ${c.id}`);
+          logger.info(`Slug: ${c.slug}`);
+          logger.info(`Semester: ${c.semester}`);
+          logger.info(`GitHub Org: ${c.github_org || "(not set)"}`);
+          logger.info(`Timezone: ${c.time_zone || "(not set)"}`);
+          logger.info(`Canvas ID: ${c.canvas_id || "(not set)"}`);
+          logger.info(`Demo: ${c.is_demo ? "Yes" : "No"}`);
         } catch (error) {
           handleError(error);
         }

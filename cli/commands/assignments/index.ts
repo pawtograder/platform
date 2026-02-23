@@ -9,7 +9,7 @@
  */
 
 import type { Argv } from "yargs";
-import { resolveClass, fetchAssignmentsForClass, resolveAssignment } from "../../utils/db";
+import { callCLI } from "../../utils/api";
 import { logger, handleError } from "../../utils/logger";
 import { copyAssignmentsHandler } from "./copy";
 import { deleteAssignmentHandler } from "./delete";
@@ -32,23 +32,24 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const classData = await resolveClass(args.class as string);
-          logger.step(`Assignments for ${classData.name}`);
+          const data = await callCLI("assignments.list", {
+            class: args.class as string
+          });
 
-          const assignments = await fetchAssignmentsForClass(classData.id);
+          logger.step(`Assignments for ${data.class.name}`);
 
-          if (assignments.length === 0) {
+          if (!data.assignments || data.assignments.length === 0) {
             logger.info("No assignments found.");
             return;
           }
 
           logger.tableHeader(["ID", "Slug", "Title", "Due Date"]);
-          for (const a of assignments) {
+          for (const a of data.assignments) {
             const dueDate = a.due_date ? new Date(a.due_date).toLocaleDateString() : "-";
             logger.tableRow([a.id, a.slug, a.title, dueDate]);
           }
           logger.blank();
-          logger.info(`Total: ${assignments.length} assignments`);
+          logger.info(`Total: ${data.assignments.length} assignments`);
         } catch (error) {
           handleError(error);
         }
@@ -73,23 +74,26 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const classData = await resolveClass(args.class as string);
-          const assignment = await resolveAssignment(classData.id, args.identifier as string);
+          const data = await callCLI("assignments.show", {
+            class: args.class as string,
+            identifier: args.identifier as string
+          });
+          const a = data.assignment;
 
-          logger.step(`Assignment: ${assignment.title}`);
-          logger.info(`ID: ${assignment.id}`);
-          logger.info(`Slug: ${assignment.slug}`);
-          logger.info(`Class ID: ${assignment.class_id}`);
-          logger.info(`Description: ${assignment.description || "(none)"}`);
-          logger.info(`Release Date: ${assignment.release_date || "(not set)"}`);
-          logger.info(`Due Date: ${assignment.due_date || "(not set)"}`);
-          logger.info(`Latest Due Date: ${assignment.latest_due_date || "(not set)"}`);
-          logger.info(`Total Points: ${assignment.total_points || "(not set)"}`);
-          logger.info(`Has Autograder: ${assignment.has_autograder ? "Yes" : "No"}`);
-          logger.info(`Has Handgrader: ${assignment.has_handgrader ? "Yes" : "No"}`);
-          logger.info(`Template Repo: ${assignment.template_repo || "(not set)"}`);
-          logger.info(`Grading Rubric ID: ${assignment.grading_rubric_id || "(not set)"}`);
-          logger.info(`Self Review Rubric ID: ${assignment.self_review_rubric_id || "(not set)"}`);
+          logger.step(`Assignment: ${a.title}`);
+          logger.info(`ID: ${a.id}`);
+          logger.info(`Slug: ${a.slug}`);
+          logger.info(`Class ID: ${a.class_id}`);
+          logger.info(`Description: ${a.description || "(none)"}`);
+          logger.info(`Release Date: ${a.release_date || "(not set)"}`);
+          logger.info(`Due Date: ${a.due_date || "(not set)"}`);
+          logger.info(`Latest Due Date: ${a.latest_due_date || "(not set)"}`);
+          logger.info(`Total Points: ${a.total_points || "(not set)"}`);
+          logger.info(`Has Autograder: ${a.has_autograder ? "Yes" : "No"}`);
+          logger.info(`Has Handgrader: ${a.has_handgrader ? "Yes" : "No"}`);
+          logger.info(`Template Repo: ${a.template_repo || "(not set)"}`);
+          logger.info(`Grading Rubric ID: ${a.grading_rubric_id || "(not set)"}`);
+          logger.info(`Self Review Rubric ID: ${a.self_review_rubric_id || "(not set)"}`);
         } catch (error) {
           handleError(error);
         }

@@ -42,23 +42,37 @@ yargs(hideBin(process.argv))
   .command(authCommand)
   .command(
     "login",
-    "Sign in to Pawtograder via browser",
+    "Authenticate with a CLI API token",
     (yargs) => {
       return yargs
-        .option("email", {
-          alias: "e",
-          describe: "Email address for magic link",
+        .option("token", {
+          alias: "t",
+          describe: "CLI API token (generated from Pawtograder Settings → API Tokens)",
           type: "string"
         })
+        .option("url", {
+          alias: "u",
+          describe: "Pawtograder API URL (e.g., https://your-instance.supabase.co)",
+          type: "string"
+        })
+        .option("email", {
+          alias: "e",
+          describe: "(deprecated) Email address",
+          type: "string",
+          hidden: true
+        })
         .option("no-browser", {
-          describe: "Don't auto-open browser, show URL instead",
+          describe: "(deprecated)",
           type: "boolean",
-          default: false
+          default: false,
+          hidden: true
         });
     },
     async (args) => {
       try {
         await startLoginFlow({
+          token: args.token as string | undefined,
+          url: args.url as string | undefined,
           email: args.email as string | undefined,
           noBrowser: args["no-browser"] as boolean
         });
