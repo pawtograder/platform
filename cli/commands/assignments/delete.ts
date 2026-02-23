@@ -16,9 +16,8 @@
 
 import type { ArgumentsCamelCase } from "yargs";
 import * as readline from "readline";
-import { resolveClass, resolveAssignment, getSupabaseClient } from "../../utils/db";
-import { logger, handleError, CLIError } from "../../utils/logger";
-import { Assignment } from "../../types";
+import { apiCall } from "../../utils/api";
+import { logger, handleError } from "../../utils/logger";
 
 interface DeleteOptions {
   class: string;
@@ -31,12 +30,16 @@ interface DeleteOptions {
  */
 export async function deleteAssignmentHandler(args: ArgumentsCamelCase<DeleteOptions>) {
   try {
-    // 1. Resolve class and assignment
+    // 1. Fetch assignment details for confirmation
     logger.step("Resolving class and assignment...");
-    const classData = await resolveClass(args.class);
-    const assignment = await resolveAssignment(classData.id, args.identifier);
+    const showData = await apiCall("assignments.show", {
+      class: args.class,
+      identifier: args.identifier
+    });
+    const assignment = showData.assignment;
+    const classInfo = showData.class;
 
-    logger.info(`Class: ${classData.name} (${classData.slug})`);
+    logger.info(`Class: ${classInfo.name} (${classInfo.slug})`);
     logger.info(`Assignment: ${assignment.title} (${assignment.slug})`);
     logger.info(`Assignment ID: ${assignment.id}`);
     logger.blank();
@@ -46,7 +49,7 @@ export async function deleteAssignmentHandler(args: ArgumentsCamelCase<DeleteOpt
 
     // 3. Confirm deletion unless --force is specified
     if (!args.force) {
-      const confirmed = await confirmDeletion(assignment);
+      const confirmed = await confirmDeletion(assignment.title);
       if (!confirmed) {
         logger.info("Deletion cancelled.");
         return;
@@ -57,9 +60,12 @@ export async function deleteAssignmentHandler(args: ArgumentsCamelCase<DeleteOpt
 
     // 4. Call the edge function to delete the assignment
     logger.step("Deleting assignment...");
-    await deleteAssignmentViaEdgeFunction(assignment.id, classData.id);
+    const data = await apiCall("assignments.delete", {
+      class: args.class as string,
+      identifier: args.identifier as string
+    });
 
-    logger.success(`Assignment "${assignment.title}" has been successfully deleted.`);
+    logger.success(data.message || `Assignment "${assignment.title}" has been successfully deleted.`);
   } catch (error) {
     handleError(error);
   }
@@ -68,7 +74,7 @@ export async function deleteAssignmentHandler(args: ArgumentsCamelCase<DeleteOpt
 /**
  * Print warning information about what will be deleted
  */
-function printDeleteWarning(assignment: Assignment): void {
+function printDeleteWarning(assignment: { template_repo?: string; has_autograder?: boolean }): void {
   logger.warning("WARNING: This action is PERMANENT and CANNOT be undone!");
   logger.blank();
 
@@ -98,7 +104,7 @@ function printDeleteWarning(assignment: Assignment): void {
 /**
  * Prompt user for confirmation
  */
-async function confirmDeletion(assignment: Assignment): Promise<boolean> {
+async function confirmDeletion(assignmentTitle: string): Promise<boolean> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
@@ -106,7 +112,7 @@ async function confirmDeletion(assignment: Assignment): Promise<boolean> {
 
   return new Promise((resolve) => {
     rl.question(
-      `Are you sure you want to delete "${assignment.title}"? This action cannot be undone. [y/N] `,
+      `Are you sure you want to delete "${assignmentTitle}"? This action cannot be undone. [y/N] `,
       (answer) => {
         rl.close();
         const normalized = answer.trim().toLowerCase();
@@ -114,28 +120,4 @@ async function confirmDeletion(assignment: Assignment): Promise<boolean> {
       }
     );
   });
-}
-
-/**
- * Call edge function to delete the assignment
- */
-async function deleteAssignmentViaEdgeFunction(assignmentId: number, classId: number): Promise<void> {
-  const supabase = getSupabaseClient();
-
-  const { data, error } = await supabase.functions.invoke("assignment-delete", {
-    body: { assignment_id: assignmentId, class_id: classId }
-  });
-
-  if (error) {
-    throw new CLIError(`Failed to delete assignment: ${error.message}`);
-  }
-
-  if (data?.error) {
-    const errorDetail = data.error.details || data.error.message || "Unknown error";
-    throw new CLIError(`Failed to delete assignment: ${errorDetail}`);
-  }
-
-  if (data?.message) {
-    logger.info(data.message);
-  }
 }

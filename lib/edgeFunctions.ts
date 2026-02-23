@@ -469,10 +469,7 @@ export interface CLIResponse {
  *     - rubrics.import { class, assignment, rubric, type?, dry_run? }
  *     - flashcards.copy { source_class, target_class, deck|all, dry_run? }
  */
-export async function cliInvoke(
-  params: CLIRequest,
-  supabase: SupabaseClient<Database>
-): Promise<CLIResponse> {
+export async function cliInvoke(params: CLIRequest, supabase: SupabaseClient<Database>): Promise<CLIResponse> {
   const { data } = await supabase.functions.invoke("cli", {
     body: params
   });

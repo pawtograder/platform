@@ -9,7 +9,7 @@
  */
 
 import type { Argv } from "yargs";
-import { resolveClass, fetchAssignmentsForClass, resolveAssignment } from "../../utils/db";
+import { apiCall } from "../../utils/api";
 import { logger, handleError } from "../../utils/logger";
 import { copyAssignmentsHandler } from "./copy";
 import { deleteAssignmentHandler } from "./delete";
@@ -32,10 +32,10 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const classData = await resolveClass(args.class as string);
-          logger.step(`Assignments for ${classData.name}`);
+          const data = await apiCall("assignments.list", { class: args.class as string });
+          logger.step(`Assignments for ${data.class.name}`);
 
-          const assignments = await fetchAssignmentsForClass(classData.id);
+          const assignments = data.assignments;
 
           if (assignments.length === 0) {
             logger.info("No assignments found.");
@@ -73,8 +73,11 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const classData = await resolveClass(args.class as string);
-          const assignment = await resolveAssignment(classData.id, args.identifier as string);
+          const data = await apiCall("assignments.show", {
+            class: args.class as string,
+            identifier: args.identifier as string
+          });
+          const assignment = data.assignment;
 
           logger.step(`Assignment: ${assignment.title}`);
           logger.info(`ID: ${assignment.id}`);
@@ -83,7 +86,6 @@ export const builder = (yargs: Argv) => {
           logger.info(`Description: ${assignment.description || "(none)"}`);
           logger.info(`Release Date: ${assignment.release_date || "(not set)"}`);
           logger.info(`Due Date: ${assignment.due_date || "(not set)"}`);
-          logger.info(`Latest Due Date: ${assignment.latest_due_date || "(not set)"}`);
           logger.info(`Total Points: ${assignment.total_points || "(not set)"}`);
           logger.info(`Has Autograder: ${assignment.has_autograder ? "Yes" : "No"}`);
           logger.info(`Has Handgrader: ${assignment.has_handgrader ? "Yes" : "No"}`);

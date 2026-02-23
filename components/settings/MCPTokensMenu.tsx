@@ -222,11 +222,7 @@ export default function MCPTokensMenu() {
                           ))}
                         </HStack>
                       </Box>
-                      <Button
-                        colorPalette="green"
-                        onClick={createToken}
-                        disabled={creating || !newTokenName.trim()}
-                      >
+                      <Button colorPalette="green" onClick={createToken} disabled={creating || !newTokenName.trim()}>
                         {creating ? <Spinner size="sm" /> : <LuPlus />}
                         Create Token
                       </Button>

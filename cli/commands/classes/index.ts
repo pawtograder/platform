@@ -7,7 +7,7 @@
  */
 
 import type { Argv } from "yargs";
-import { listClasses, resolveClass } from "../../utils/db";
+import { apiCall } from "../../utils/api";
 import { logger, handleError } from "../../utils/logger";
 
 export const command = "classes <action>";
@@ -22,7 +22,8 @@ export const builder = (yargs: Argv) => {
       async () => {
         try {
           logger.step("Listing classes...");
-          const classes = await listClasses();
+          const data = await apiCall("classes.list");
+          const classes = data.classes;
 
           if (classes.length === 0) {
             logger.info("No classes found.");
@@ -52,15 +53,15 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const classData = await resolveClass(args.identifier as string);
+          const data = await apiCall("classes.show", { identifier: args.identifier as string });
+          const classData = data.class;
 
           logger.step(`Class: ${classData.name}`);
           logger.info(`ID: ${classData.id}`);
           logger.info(`Slug: ${classData.slug}`);
-          logger.info(`Semester: ${classData.semester}`);
+          logger.info(`Semester: ${classData.semester ?? "(not set)"}`);
           logger.info(`GitHub Org: ${classData.github_org || "(not set)"}`);
           logger.info(`Timezone: ${classData.time_zone || "(not set)"}`);
-          logger.info(`Canvas ID: ${classData.canvas_id || "(not set)"}`);
           logger.info(`Demo: ${classData.is_demo ? "Yes" : "No"}`);
         } catch (error) {
           handleError(error);

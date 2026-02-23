@@ -14,12 +14,8 @@
  *   npm run cli -- assignments copy --source-class cs3500-fall-2025 --target-class cs3500-spring-2026 --all
  */
 
-import dotenv from "dotenv";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-
-// Load environment variables before anything else
-dotenv.config({ path: ".env.local" });
 
 // Import command modules
 import * as authCommand from "./commands/auth";
@@ -42,25 +38,24 @@ yargs(hideBin(process.argv))
   .command(authCommand)
   .command(
     "login",
-    "Sign in to Pawtograder via browser",
+    "Authenticate with a Pawtograder API token",
     (yargs) => {
       return yargs
-        .option("email", {
-          alias: "e",
-          describe: "Email address for magic link",
+        .option("token", {
+          alias: "t",
+          describe: "API token (will prompt if not provided)",
           type: "string"
         })
-        .option("no-browser", {
-          describe: "Don't auto-open browser, show URL instead",
-          type: "boolean",
-          default: false
+        .option("url", {
+          describe: "API URL (default: https://pawtograder.com/functions/v1/cli)",
+          type: "string"
         });
     },
     async (args) => {
       try {
         await startLoginFlow({
-          email: args.email as string | undefined,
-          noBrowser: args["no-browser"] as boolean
+          token: args.token as string | undefined,
+          url: args.url as string | undefined
         });
       } catch (error) {
         handleError(error);

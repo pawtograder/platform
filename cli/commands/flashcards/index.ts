@@ -7,30 +7,11 @@
  */
 
 import type { Argv } from "yargs";
-import { resolveClass, getSupabaseClient } from "../../utils/db";
-import { logger, handleError, CLIError } from "../../utils/logger";
+import { apiCall } from "../../utils/api";
+import { logger, handleError } from "../../utils/logger";
 
 export const command = "flashcards <action>";
 export const describe = "Manage flashcard decks";
-
-interface FlashcardDeck {
-  id: number;
-  name: string;
-  description: string | null;
-  class_id: number;
-  creator_id: string;
-  created_at: string;
-}
-
-interface Flashcard {
-  id: number;
-  deck_id: number;
-  class_id: number;
-  title: string;
-  prompt: string;
-  answer: string;
-  order: number | null;
-}
 
 export const builder = (yargs: Argv) => {
   return yargs
@@ -47,45 +28,21 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          const classData = await resolveClass(args.class as string);
-          logger.step(`Flashcard decks for ${classData.name}`);
+          const data = await apiCall("flashcards.list", { class: args.class as string });
 
-          const supabase = getSupabaseClient();
-          const { data: decks, error } = await supabase
-            .from("flashcard_decks")
-            .select("id, name, description, created_at")
-            .eq("class_id", classData.id)
-            .is("deleted_at", null)
-            .order("created_at", { ascending: true });
+          logger.step(`Flashcard decks for ${data.class.name}`);
 
-          if (error) {
-            throw new CLIError(`Failed to fetch flashcard decks: ${error.message}`);
-          }
+          const decks = data.decks;
 
           if (!decks || decks.length === 0) {
             logger.info("No flashcard decks found.");
             return;
           }
 
-          // Get card counts for each deck
-          const { data: cardCounts, error: countError } = await supabase
-            .from("flashcards")
-            .select("deck_id")
-            .eq("class_id", classData.id)
-            .is("deleted_at", null);
-
-          const countMap = new Map<number, number>();
-          if (cardCounts) {
-            for (const card of cardCounts) {
-              countMap.set(card.deck_id, (countMap.get(card.deck_id) || 0) + 1);
-            }
-          }
-
           logger.tableHeader(["ID", "Name", "Cards", "Created"]);
           for (const deck of decks) {
-            const cardCount = countMap.get(deck.id) || 0;
             const created = new Date(deck.created_at).toLocaleDateString();
-            logger.tableRow([deck.id, deck.name, cardCount.toString(), created]);
+            logger.tableRow([deck.id, deck.name, deck.card_count.toString(), created]);
           }
           logger.blank();
           logger.info(`Total: ${decks.length} deck(s)`);
@@ -135,133 +92,55 @@ export const builder = (yargs: Argv) => {
       },
       async (args) => {
         try {
-          // 1. Resolve classes
-          logger.step("Resolving classes...");
-          const sourceClass = await resolveClass(args.sourceClass as string);
-          const targetClass = await resolveClass(args.targetClass as string);
+          logger.step("Copying flashcard decks...");
 
-          logger.info(`Source: ${sourceClass.name} (${sourceClass.slug})`);
-          logger.info(`Target: ${targetClass.name} (${targetClass.slug})`);
-
-          if (sourceClass.id === targetClass.id) {
-            throw new CLIError("Source and target classes must be different");
-          }
-
-          const supabase = getSupabaseClient();
-
-          // 2. Fetch decks to copy
-          let decksQuery = supabase
-            .from("flashcard_decks")
-            .select("*")
-            .eq("class_id", sourceClass.id)
-            .is("deleted_at", null);
+          const params: Record<string, unknown> = {
+            source_class: args.sourceClass,
+            target_class: args.targetClass,
+            dry_run: args.dryRun
+          };
 
           if (args.deck) {
-            // Try to parse as ID first
-            const deckId = parseInt(args.deck as string, 10);
-            if (!isNaN(deckId)) {
-              decksQuery = decksQuery.eq("id", deckId);
-            } else {
-              decksQuery = decksQuery.eq("name", args.deck);
-            }
+            params.deck = args.deck;
+          } else if (args.all) {
+            params.all = true;
           }
 
-          const { data: sourceDecks, error: decksError } = await decksQuery;
+          const data = await apiCall("flashcards.copy", params);
 
-          if (decksError) {
-            throw new CLIError(`Failed to fetch source decks: ${decksError.message}`);
-          }
-
-          if (!sourceDecks || sourceDecks.length === 0) {
-            logger.warning("No flashcard decks found to copy.");
-            return;
-          }
-
-          logger.info(`Found ${sourceDecks.length} deck(s) to copy`);
-
-          // 3. Dry run - show what would be copied
-          if (args.dryRun) {
+          if (data.dry_run) {
             logger.step("DRY RUN - No changes will be made");
+            logger.info(`Source: ${data.source_class.name} (${data.source_class.slug})`);
+            logger.info(`Target: ${data.target_class.name} (${data.target_class.slug})`);
             logger.blank();
+
             logger.tableHeader(["Deck Name", "Description"]);
-            for (const deck of sourceDecks) {
+            for (const deck of data.decks_to_copy) {
               logger.tableRow([deck.name, deck.description || "(none)"]);
             }
             return;
           }
 
-          // 4. Get the creator_id (current user from service role, use first deck's creator as fallback)
-          // Since we're using service role, we'll use the source deck's creator_id
-          const creatorId = sourceDecks[0].creator_id;
+          // Show results
+          logger.info(`Source: ${data.source_class.name} (${data.source_class.slug})`);
+          logger.info(`Target: ${data.target_class.name} (${data.target_class.slug})`);
+          logger.blank();
 
-          // 5. Copy each deck
-          let successCount = 0;
-          for (const sourceDeck of sourceDecks) {
-            logger.step(`Copying deck: ${sourceDeck.name}`);
-
-            try {
-              // Create new deck
-              const { data: newDeck, error: createError } = await supabase
-                .from("flashcard_decks")
-                .insert({
-                  class_id: targetClass.id,
-                  creator_id: creatorId,
-                  name: sourceDeck.name,
-                  description: sourceDeck.description
-                })
-                .select("id")
-                .single();
-
-              if (createError || !newDeck) {
-                throw new CLIError(`Failed to create deck: ${createError?.message || "Unknown error"}`);
-              }
-
-              // Fetch source cards
-              const { data: sourceCards, error: cardsError } = await supabase
-                .from("flashcards")
-                .select("*")
-                .eq("deck_id", sourceDeck.id)
-                .is("deleted_at", null)
-                .order("order", { ascending: true, nullsFirst: false });
-
-              if (cardsError) {
-                throw new CLIError(`Failed to fetch cards: ${cardsError.message}`);
-              }
-
-              // Copy cards
-              if (sourceCards && sourceCards.length > 0) {
-                const newCards = sourceCards.map((card) => ({
-                  deck_id: newDeck.id,
-                  class_id: targetClass.id,
-                  title: card.title,
-                  prompt: card.prompt,
-                  answer: card.answer,
-                  order: card.order
-                }));
-
-                const { error: insertError } = await supabase.from("flashcards").insert(newCards);
-
-                if (insertError) {
-                  throw new CLIError(`Failed to copy cards: ${insertError.message}`);
-                }
-
-                logger.success(`  Copied ${sourceCards.length} card(s)`);
-              } else {
-                logger.info("  No cards to copy");
-              }
-
-              successCount++;
-              logger.success(`  Deck created with ID ${newDeck.id}`);
-            } catch (error) {
-              const errorMsg = error instanceof Error ? error.message : String(error);
-              logger.error(`  Failed: ${errorMsg}`);
+          for (const r of data.results) {
+            if (r.success) {
+              logger.success(`Copied: ${r.deck} -> ID ${r.new_deck_id} (${r.cards_copied} cards)`);
+            } else {
+              logger.error(`Failed: ${r.deck} - ${r.error}`);
             }
           }
 
-          // 6. Summary
+          // Summary
           logger.blank();
           logger.step("Copy Summary");
-          logger.info(`Successfully copied: ${successCount}/${sourceDecks.length} deck(s)`);
+          logger.info(`Successfully copied: ${data.summary.succeeded}/${data.summary.total} deck(s)`);
+          if (data.summary.failed > 0) {
+            logger.warning(`Failed: ${data.summary.failed}`);
+          }
         } catch (error) {
           handleError(error);
         }

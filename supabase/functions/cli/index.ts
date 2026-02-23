@@ -55,10 +55,7 @@ const corsHeaders = {
 // ─── Admin Supabase client ───────────────────────────────────────────────────
 
 function getAdminClient(): SupabaseClient<Database> {
-  return createClient<Database>(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  return createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -76,26 +73,15 @@ interface CLIResponse {
 
 // ─── Helper: Resolve class by ID, slug, or name ─────────────────────────────
 
-async function resolveClass(
-  supabase: SupabaseClient<Database>,
-  identifier: string | number
-) {
+async function resolveClass(supabase: SupabaseClient<Database>, identifier: string | number) {
   // Try by ID first
   if (typeof identifier === "number" || /^\d+$/.test(String(identifier))) {
-    const { data, error } = await supabase
-      .from("classes")
-      .select("*")
-      .eq("id", Number(identifier))
-      .single();
+    const { data, error } = await supabase.from("classes").select("*").eq("id", Number(identifier)).single();
     if (!error && data) return data;
   }
 
   // Try by slug
-  const { data: bySlug } = await supabase
-    .from("classes")
-    .select("*")
-    .eq("slug", String(identifier))
-    .single();
+  const { data: bySlug } = await supabase.from("classes").select("*").eq("slug", String(identifier)).single();
   if (bySlug) return bySlug;
 
   // Try by name (partial match)
@@ -112,11 +98,7 @@ async function resolveClass(
 
 // ─── Helper: Resolve assignment by ID or slug within a class ─────────────────
 
-async function resolveAssignment(
-  supabase: SupabaseClient<Database>,
-  classId: number,
-  identifier: string | number
-) {
+async function resolveAssignment(supabase: SupabaseClient<Database>, classId: number, identifier: string | number) {
   // Try by ID first
   if (typeof identifier === "number" || /^\d+$/.test(String(identifier))) {
     const { data } = await supabase
@@ -142,13 +124,11 @@ async function resolveAssignment(
 
 // ─── Helper: Fetch rubric with full hierarchy ────────────────────────────────
 
-async function fetchRubricWithHierarchy(
-  supabase: SupabaseClient<Database>,
-  rubricId: number
-) {
+async function fetchRubricWithHierarchy(supabase: SupabaseClient<Database>, rubricId: number) {
   const { data, error } = await supabase
     .from("rubrics")
-    .select(`
+    .select(
+      `
       *,
       rubric_parts (
         *,
@@ -157,7 +137,8 @@ async function fetchRubricWithHierarchy(
           rubric_checks (*)
         )
       )
-    `)
+    `
+    )
     .eq("id", rubricId)
     .single();
 
@@ -184,17 +165,11 @@ class CLICommandError extends Error {
 // READ commands require cli:read scope
 // WRITE commands require cli:write scope
 
-async function handleClassesList(
-  ctx: MCPAuthContext,
-  _params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleClassesList(ctx: MCPAuthContext, _params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:read");
   const supabase = getAdminClient();
 
-  const { data: classes, error } = await supabase
-    .from("classes")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const { data: classes, error } = await supabase.from("classes").select("*").order("created_at", { ascending: false });
 
   if (error) throw new CLICommandError(`Failed to list classes: ${error.message}`);
 
@@ -215,10 +190,7 @@ async function handleClassesList(
   };
 }
 
-async function handleClassesShow(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleClassesShow(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:read");
   const supabase = getAdminClient();
 
@@ -244,10 +216,7 @@ async function handleClassesShow(
   };
 }
 
-async function handleAssignmentsList(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:read");
   const supabase = getAdminClient();
 
@@ -288,10 +257,7 @@ async function handleAssignmentsList(
   };
 }
 
-async function handleAssignmentsShow(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleAssignmentsShow(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:read");
   const supabase = getAdminClient();
 
@@ -330,10 +296,7 @@ async function handleAssignmentsShow(
   };
 }
 
-async function handleAssignmentsDelete(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleAssignmentsDelete(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:write");
   const supabase = getAdminClient();
 
@@ -368,10 +331,7 @@ async function handleAssignmentsDelete(
   };
 }
 
-async function handleRubricsList(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:read");
   const supabase = getAdminClient();
 
@@ -392,11 +352,7 @@ async function handleRubricsList(
   const rubrics = [];
   for (const rubric of rubricTypes) {
     if (rubric.id) {
-      const { data } = await supabase
-        .from("rubrics")
-        .select("id, name, description")
-        .eq("id", rubric.id)
-        .single();
+      const { data } = await supabase.from("rubrics").select("id, name, description").eq("id", rubric.id).single();
 
       rubrics.push({
         type: rubric.type,
@@ -419,10 +375,7 @@ async function handleRubricsList(
   };
 }
 
-async function handleRubricsExport(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:read");
   const supabase = getAdminClient();
 
@@ -502,10 +455,7 @@ async function handleRubricsExport(
   };
 }
 
-async function handleRubricsImport(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:write");
   const supabase = getAdminClient();
 
@@ -628,7 +578,9 @@ async function handleRubricsImport(
         .single();
 
       if (criteriaError || !newCriteria) {
-        throw new CLICommandError(`Failed to create criteria '${criteria.name}': ${criteriaError?.message || "Unknown"}`);
+        throw new CLICommandError(
+          `Failed to create criteria '${criteria.name}': ${criteriaError?.message || "Unknown"}`
+        );
       }
 
       for (const check of criteria.checks) {
@@ -670,10 +622,7 @@ async function handleRubricsImport(
   };
 }
 
-async function handleFlashcardsList(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:read");
   const supabase = getAdminClient();
 
@@ -720,10 +669,7 @@ async function handleFlashcardsList(
   };
 }
 
-async function handleFlashcardsCopy(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:write");
   const supabase = getAdminClient();
 
@@ -745,11 +691,7 @@ async function handleFlashcardsCopy(
   }
 
   // Fetch decks to copy
-  let decksQuery = supabase
-    .from("flashcard_decks")
-    .select("*")
-    .eq("class_id", sourceClass.id)
-    .is("deleted_at", null);
+  let decksQuery = supabase.from("flashcard_decks").select("*").eq("class_id", sourceClass.id).is("deleted_at", null);
 
   if (deckIdentifier) {
     const deckId = parseInt(deckIdentifier, 10);
@@ -849,10 +791,7 @@ async function handleFlashcardsCopy(
 
 // ─── Assignment Copy ─────────────────────────────────────────────────────────
 
-async function handleAssignmentsCopy(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   requireScope(ctx, "cli:write");
   const supabase = getAdminClient();
 
@@ -910,10 +849,7 @@ async function handleAssignmentsCopy(
     }
   } else if (schedule) {
     // Schedule is an array of objects with assignment_slug/assignment_title and date overrides
-    const { data: allAssignments } = await supabase
-      .from("assignments")
-      .select("*")
-      .eq("class_id", sourceClass.id);
+    const { data: allAssignments } = await supabase.from("assignments").select("*").eq("class_id", sourceClass.id);
 
     const bySlug = new Map<string, any>();
     const byTitle = new Map<string, any>();
@@ -967,19 +903,13 @@ async function handleAssignmentsCopy(
   const results = [];
   for (const spec of assignmentsToCopy) {
     try {
-      const result = await copySingleAssignment(
-        supabase,
-        spec.assignment,
-        sourceClass,
-        targetClass,
-        {
-          skipRepos,
-          skipRubrics,
-          releaseDateOverride: spec.releaseDateOverride,
-          dueDateOverride: spec.dueDateOverride,
-          latestDueDateOverride: spec.latestDueDateOverride
-        }
-      );
+      const result = await copySingleAssignment(supabase, spec.assignment, sourceClass, targetClass, {
+        skipRepos,
+        skipRubrics,
+        releaseDateOverride: spec.releaseDateOverride,
+        dueDateOverride: spec.dueDateOverride,
+        latestDueDateOverride: spec.latestDueDateOverride
+      });
       results.push({
         source_slug: spec.assignment.slug,
         source_title: spec.assignment.title,
@@ -1106,13 +1036,31 @@ async function copySingleAssignment(
   // Step 3: Copy rubrics
   if (!options.skipRubrics) {
     if (sourceAssignment.grading_rubric_id) {
-      await copyRubricTree(supabase, sourceAssignment.grading_rubric_id, newAssignment.id, targetClass.id, newAssignment.grading_rubric_id || undefined);
+      await copyRubricTree(
+        supabase,
+        sourceAssignment.grading_rubric_id,
+        newAssignment.id,
+        targetClass.id,
+        newAssignment.grading_rubric_id || undefined
+      );
     }
     if (sourceAssignment.self_review_rubric_id) {
-      await copyRubricTree(supabase, sourceAssignment.self_review_rubric_id, newAssignment.id, targetClass.id, newAssignment.self_review_rubric_id || undefined);
+      await copyRubricTree(
+        supabase,
+        sourceAssignment.self_review_rubric_id,
+        newAssignment.id,
+        targetClass.id,
+        newAssignment.self_review_rubric_id || undefined
+      );
     }
     if (sourceAssignment.meta_grading_rubric_id) {
-      const newMetaRubricId = await copyRubricTree(supabase, sourceAssignment.meta_grading_rubric_id, newAssignment.id, targetClass.id, newAssignment.meta_grading_rubric_id || undefined);
+      const newMetaRubricId = await copyRubricTree(
+        supabase,
+        sourceAssignment.meta_grading_rubric_id,
+        newAssignment.id,
+        targetClass.id,
+        newAssignment.meta_grading_rubric_id || undefined
+      );
       if (!newAssignment.meta_grading_rubric_id && newMetaRubricId) {
         await supabase
           .from("assignments")
@@ -1124,18 +1072,10 @@ async function copySingleAssignment(
 
   // Step 4: Copy autograder config
   if (sourceAssignment.has_autograder) {
-    const { data: sourceConfig } = await supabase
-      .from("autograder")
-      .select("*")
-      .eq("id", sourceAssignment.id)
-      .single();
+    const { data: sourceConfig } = await supabase.from("autograder").select("*").eq("id", sourceAssignment.id).single();
 
     if (sourceConfig) {
-      const { data: existing } = await supabase
-        .from("autograder")
-        .select("id")
-        .eq("id", newAssignment.id)
-        .single();
+      const { data: existing } = await supabase.from("autograder").select("id").eq("id", newAssignment.id).single();
 
       if (existing) {
         await supabase
@@ -1215,10 +1155,7 @@ async function copySingleAssignment(
 /**
  * Copy repo contents from source to target using GitHub API
  */
-async function copyRepoContentsViaGitHub(
-  sourceRepoFullName: string,
-  targetRepoFullName: string
-): Promise<void> {
+async function copyRepoContentsViaGitHub(sourceRepoFullName: string, targetRepoFullName: string): Promise<void> {
   const [sourceOrg, sourceRepo] = sourceRepoFullName.split("/");
   const [targetOrg, targetRepo] = targetRepoFullName.split("/");
 
@@ -1491,24 +1428,48 @@ async function copyRubricTree(
   return targetRubricId;
 }
 
+// ─── Token Info ─────────────────────────────────────────────────────────────
+
+async function handleTokenInfo(ctx: MCPAuthContext, _params: Record<string, unknown>): Promise<CLIResponse> {
+  const supabase = getAdminClient();
+
+  // Look up user email
+  const {
+    data: { user }
+  } = await supabase.auth.admin.getUserById(ctx.userId);
+
+  // Look up user profile
+  const { data: profile } = await supabase.from("profiles").select("name").eq("user_id", ctx.userId).single();
+
+  return {
+    success: true,
+    data: {
+      user_id: ctx.userId,
+      email: user?.email || null,
+      name: profile?.name || null,
+      scopes: ctx.scopes,
+      token_id: ctx.tokenId
+    }
+  };
+}
+
 // ─── Command Router ──────────────────────────────────────────────────────────
 
-const COMMAND_HANDLERS: Record<
-  string,
-  (ctx: MCPAuthContext, params: Record<string, unknown>) => Promise<CLIResponse>
-> = {
-  "classes.list": handleClassesList,
-  "classes.show": handleClassesShow,
-  "assignments.list": handleAssignmentsList,
-  "assignments.show": handleAssignmentsShow,
-  "assignments.copy": handleAssignmentsCopy,
-  "assignments.delete": handleAssignmentsDelete,
-  "rubrics.list": handleRubricsList,
-  "rubrics.export": handleRubricsExport,
-  "rubrics.import": handleRubricsImport,
-  "flashcards.list": handleFlashcardsList,
-  "flashcards.copy": handleFlashcardsCopy
-};
+const COMMAND_HANDLERS: Record<string, (ctx: MCPAuthContext, params: Record<string, unknown>) => Promise<CLIResponse>> =
+  {
+    "token.info": handleTokenInfo,
+    "classes.list": handleClassesList,
+    "classes.show": handleClassesShow,
+    "assignments.list": handleAssignmentsList,
+    "assignments.show": handleAssignmentsShow,
+    "assignments.copy": handleAssignmentsCopy,
+    "assignments.delete": handleAssignmentsDelete,
+    "rubrics.list": handleRubricsList,
+    "rubrics.export": handleRubricsExport,
+    "rubrics.import": handleRubricsImport,
+    "flashcards.list": handleFlashcardsList,
+    "flashcards.copy": handleFlashcardsCopy
+  };
 
 // ─── Main Handler ────────────────────────────────────────────────────────────
 
@@ -1537,10 +1498,10 @@ Deno.serve(async (req) => {
     const body: CLIRequest = await req.json();
 
     if (!body.command || typeof body.command !== "string") {
-      return new Response(
-        JSON.stringify({ error: "Missing or invalid 'command' field" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Missing or invalid 'command' field" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
     }
 
     const handler = COMMAND_HANDLERS[body.command];
@@ -1567,8 +1528,7 @@ Deno.serve(async (req) => {
 
     if (error instanceof MCPAuthError) {
       const status =
-        error.message === "Missing Authorization header" ||
-        error.message === "Invalid Authorization header format"
+        error.message === "Missing Authorization header" || error.message === "Invalid Authorization header format"
           ? 401
           : error.message.includes("Missing required scope")
             ? 403
