@@ -46,6 +46,19 @@ function parseEventTitle(title: string): { name: string; queue?: string } {
   return { name: title.trim() };
 }
 
+// Count non-null/non-undefined fields in a ParsedEvent for deduplication scoring
+function countNonNullFields(event: ParsedEvent): number {
+  let score = 0;
+  if (event.title) score++;
+  if (event.description) score++;
+  if (event.location) score++;
+  if (event.queue_name) score++;
+  if (event.organizer_name) score++;
+  if (event.start_time) score++;
+  if (event.end_time) score++;
+  return score;
+}
+
 // Check if a UID represents a recurring occurrence (has _YYYYMMDDTHHMMSS suffix)
 function isRecurringOccurrence(uid: string): boolean {
   return /_\d{8}T\d{6}$/.test(uid);
@@ -242,7 +255,7 @@ function convertToUTC(
       // Calculate total seconds difference in the timezone's local time representation
       const targetTotalSeconds = hour * 3600 + minute * 60 + second;
       const tzTotalSeconds = tzHour * 3600 + tzMinute * 60 + tzSecond;
-      let secondsDiff = targetTotalSeconds - tzTotalSeconds;
+      const secondsDiff = targetTotalSeconds - tzTotalSeconds;
 
       // Account for day differences (which can cause hour rollover)
       const targetDate = new Date(Date.UTC(year, month, day));
@@ -825,15 +838,23 @@ function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string
       modifiedDates.set(`${baseUid}_${dateKey}`, mod);
     }
 
-    // Replace or remove generated occurrences that have been modified
-    return expandedEvents.filter((event) => {
+    // Filter out generated occurrences that have been modified
+    const filteredEvents = expandedEvents.filter((event) => {
       if (event.recurrenceId) return true; // Keep modified occurrences
       const dateKey = event.dtstart.toISOString().split("T")[0];
-      // Check if this generated occurrence should be replaced by a modified one
-      // The modified occurrence has the original UID, our generated has UID_datetime
       const originalUid = getBaseUid(event.uid);
       const modKey = `${originalUid}_${dateKey}`;
       return !modifiedDates.has(modKey);
+    });
+
+    // Normalize modified occurrence UIDs to match generated UID format
+    // This ensures consistent UIDs and prevents base UID vs datetime UID mismatches
+    return filteredEvents.map((event) => {
+      if (event.recurrenceId) {
+        const dateStr = event.recurrenceId.toISOString().replace(/[-:]/g, "").split(".")[0];
+        return { ...event, uid: `${event.uid}_${dateStr}` };
+      }
+      return event;
     });
   }
 
@@ -842,20 +863,29 @@ function parseICS(icsContent: string, expandUntil: Date, defaultTimezone: string
 
 // Convert ICS event to ParsedEvent
 // Dates are converted to ISO strings (UTC) which Postgres will store as timestamptz
+// All text fields are trimmed to ensure consistent comparisons and avoid false change detection
 function convertToCalendarEvent(event: ICSEvent): ParsedEvent {
   const { name, queue } = parseEventTitle(event.summary);
 
+  // Normalize location: use ICS LOCATION if present, otherwise use queue_name from title
+  // This ensures consistent data even if ICS sometimes includes/excludes LOCATION field
+  const location = event.location?.trim() || queue || undefined;
+
+  // Trim all text fields to avoid whitespace-induced false changes
+  const title = event.summary?.trim();
+  const description = event.description?.trim() || undefined;
+
   return {
     uid: event.uid,
-    title: event.summary,
-    description: event.description,
+    title: title,
+    description: description,
     // toISOString() produces UTC ISO strings (e.g., "2024-12-10T10:00:00.000Z")
     // Postgres timestamptz will parse these correctly and store as UTC internally
     start_time: event.dtstart.toISOString(),
     end_time: event.dtend.toISOString(),
-    location: event.location,
-    queue_name: queue,
-    organizer_name: name,
+    location: location,
+    queue_name: queue,  // Already trimmed by parseEventTitle
+    organizer_name: name,  // Already trimmed by parseEventTitle
     raw_ics_data: {
       uid: event.uid,
       summary: event.summary,
@@ -965,7 +995,29 @@ async function syncCalendar(
   // Normalize timezone to IANA format (class timezone should already be IANA, but normalize to be safe)
   const defaultTimezone = normalizeTimezone(classData.time_zone || "UTC");
   const icsEvents = parseICS(content, expandUntil, defaultTimezone);
-  const parsedEvents = icsEvents.map(convertToCalendarEvent);
+  const parsedEventsRaw = icsEvents.map(convertToCalendarEvent);
+
+  // Deduplicate events by UID - if same UID appears multiple times, keep the one with most data
+  // This prevents duplicate updates when ICS has both base events and modified occurrences
+  const eventsByUid = new Map<string, ParsedEvent>();
+  for (const event of parsedEventsRaw) {
+    const existing = eventsByUid.get(event.uid);
+    if (!existing) {
+      eventsByUid.set(event.uid, event);
+    } else {
+      // Keep the event with more non-null fields (prefer event with location, description, etc.)
+      const existingScore = countNonNullFields(existing);
+      const newScore = countNonNullFields(event);
+      if (newScore > existingScore) {
+        eventsByUid.set(event.uid, event);
+      }
+    }
+  }
+  const parsedEvents = Array.from(eventsByUid.values());
+  
+  if (parsedEventsRaw.length !== parsedEvents.length) {
+    console.log(`[syncCalendar] Deduplicated ${parsedEventsRaw.length} -> ${parsedEvents.length} events (removed ${parsedEventsRaw.length - parsedEvents.length} duplicates)`);
+  }
 
   console.log(`[syncCalendar] Parsed ${parsedEvents.length} events from ICS (including expanded recurrences)`);
 
