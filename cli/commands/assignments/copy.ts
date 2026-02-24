@@ -51,12 +51,17 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
         assignment_slug: row.assignment_slug,
         assignment_title: row.assignment_title,
         release_date: normalizeDate(row.release_date, `Row ${i + 2} release_date`),
-        due_date: normalizeDate(row.due_date, `Row ${i + 2} due_date`),
-        latest_due_date: normalizeDate(row.latest_due_date, `Row ${i + 2} latest_due_date`)
+        due_date: normalizeDate(row.due_date, `Row ${i + 2} due_date`)
       }));
       params.schedule = schedule;
     }
 
+    const assignmentCount =
+      params.assignment ? 1 : params.schedule ? (params.schedule as unknown[]).length : undefined;
+    logger.info(
+      `Sending request to ${params.source_class} → ${params.target_class}${assignmentCount ? ` (${assignmentCount} assignment${assignmentCount > 1 ? "s" : ""})` : ""}...`
+    );
+    logger.info("   This may take several minutes (copying repos, rubrics, etc.). Please wait.");
     const data = await apiCall("assignments.copy", params);
 
     if (data.dry_run) {
@@ -79,10 +84,16 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
     logger.blank();
 
     for (const r of data.results) {
+      const existingLabel = r.was_existing ? " (existing, validated/fixed)" : "";
       if (r.success) {
-        logger.success(`Copied: ${r.source_title} -> ID ${r.new_assignment_id}`);
+        logger.success(`Copied: ${r.source_title} -> ID ${r.new_assignment_id}${existingLabel}`);
       } else {
         logger.error(`Failed: ${r.source_title} - ${r.error}`);
+        if (r.status?.errors?.length) {
+          for (const e of r.status.errors) {
+            logger.info(`  - ${e.step}: ${e.error}`);
+          }
+        }
       }
     }
 

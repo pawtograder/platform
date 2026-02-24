@@ -48,7 +48,7 @@ export async function startLoginFlow(options: LoginOptions): Promise<void> {
 
   if (!token) {
     logger.info("Enter your Pawtograder API token.");
-    logger.info("Create one at: https://pawtograder.com -> Settings -> API Tokens");
+    logger.info("Create one at: https://app.pawtograder.com -> User Menu -> API Tokens");
     logger.info('Choose "CLI" or "MCP + CLI" token type.');
     logger.blank();
 

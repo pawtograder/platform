@@ -10,7 +10,7 @@ import * as path from "path";
 import { getCredentialsPath } from "./credentials";
 import { CLIError } from "./logger";
 
-export const DEFAULT_API_URL = "https://pawtograder.com/functions/v1/cli";
+export const DEFAULT_API_URL = "https://api.pawtograder.com/functions/v1/cli";
 
 export interface Credentials {
   token: string;
@@ -75,6 +75,12 @@ export function requireCredentials(): Credentials {
 export async function apiCall(command: string, params: Record<string, unknown> = {}): Promise<any> {
   const creds = requireCredentials();
 
+  const verbose = !!process.env.DEBUG || process.env.PAWTOGRADER_VERBOSE === "1";
+  if (verbose) {
+    console.error(`[cli] POST ${creds.api_url} command=${command}`);
+  }
+
+  const start = Date.now();
   let response: Response;
   try {
     response = await fetch(creds.api_url, {
@@ -90,16 +96,44 @@ export async function apiCall(command: string, params: Record<string, unknown> =
     throw new CLIError(`Failed to connect to API at ${creds.api_url}: ${msg}`);
   }
 
+  const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  if (verbose) {
+    console.error(`[cli] Response HTTP ${response.status} in ${elapsed}s`);
+  }
+
+  const rawBody = await response.text();
   let body: CLIApiResponse;
   try {
-    body = await response.json();
+    body = rawBody ? (JSON.parse(rawBody) as CLIApiResponse) : { success: false };
   } catch {
-    throw new CLIError(`API returned invalid JSON (HTTP ${response.status})`);
+    if (response.status === 504) {
+      throw new CLIError(
+        `Request timed out (504 Gateway Timeout) after ${elapsed}s.\n` +
+          "   Assignment copy can take several minutes (copying repos, rubrics, etc.).\n" +
+          "   Try again or run with DEBUG=1 for more details."
+      );
+    }
+    if (response.status >= 500) {
+      throw new CLIError(
+        `Server error (HTTP ${response.status}) after ${elapsed}s.\n` +
+          `   Response body: ${rawBody.slice(0, 200)}${rawBody.length > 200 ? "..." : ""}\n` +
+          "   The server may be overloaded. Try again later."
+      );
+    }
+    throw new CLIError(`API returned invalid JSON (HTTP ${response.status}): ${rawBody.slice(0, 150)}`);
   }
 
   if (!response.ok || !body.success) {
     const errorMsg = body.error || `HTTP ${response.status}`;
 
+    if (response.status === 504) {
+      throw new CLIError(
+        `Request timed out (504 Gateway Timeout) after ${elapsed}s.\n` +
+          "   Assignment copy can take several minutes (copying repos, rubrics, etc.).\n" +
+          "   The operation may have partially completed. Run the command again to retry (it will validate/fix existing assignments).\n" +
+          "   Set DEBUG=1 for more details."
+      );
+    }
     if (response.status === 401) {
       throw new CLIError(
         `Authentication failed: ${errorMsg}\n` +
@@ -112,8 +146,17 @@ export async function apiCall(command: string, params: Record<string, unknown> =
           "   Your token may lack the required scopes (cli:read or cli:write)."
       );
     }
+    if (response.status >= 500) {
+      throw new CLIError(
+        `Server error: ${errorMsg}\n` +
+          `   Request took ${elapsed}s. The operation may have partially completed. Run again to retry.`
+      );
+    }
     throw new CLIError(`API error: ${errorMsg}`);
   }
 
+  if (verbose) {
+    console.error(`[cli] Success in ${elapsed}s`);
+  }
   return body.data;
 }

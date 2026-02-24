@@ -803,7 +803,7 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   const skipRepos = params.skip_repos === true;
   const skipRubrics = params.skip_rubrics === true;
 
-  // Schedule overrides: array of { assignment_slug, release_date, due_date, latest_due_date }
+  // Schedule overrides: array of { assignment_slug, release_date, due_date }
   const schedule = params.schedule as any[] | undefined;
 
   if (!sourceClassId) throw new CLICommandError("source_class is required");
@@ -830,7 +830,6 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
     assignment: any;
     releaseDateOverride?: string;
     dueDateOverride?: string;
-    latestDueDateOverride?: string;
   }
 
   const assignmentsToCopy: CopySpec[] = [];
@@ -854,8 +853,8 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
     const bySlug = new Map<string, any>();
     const byTitle = new Map<string, any>();
     for (const a of allAssignments || []) {
-      bySlug.set(a.slug, a);
-      byTitle.set(a.title, a);
+      if (a.slug) bySlug.set(a.slug, a);
+      if (a.title) byTitle.set(a.title, a);
     }
 
     for (const row of schedule) {
@@ -872,8 +871,7 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
       assignmentsToCopy.push({
         assignment,
         releaseDateOverride: row.release_date,
-        dueDateOverride: row.due_date,
-        latestDueDateOverride: row.latest_due_date
+        dueDateOverride: row.due_date
       });
     }
   }
@@ -907,20 +905,26 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
         skipRepos,
         skipRubrics,
         releaseDateOverride: spec.releaseDateOverride,
-        dueDateOverride: spec.dueDateOverride,
-        latestDueDateOverride: spec.latestDueDateOverride
+        dueDateOverride: spec.dueDateOverride
       });
+      const hasErrors = result.status.errors.length > 0;
       results.push({
         source_slug: spec.assignment.slug,
         source_title: spec.assignment.title,
-        success: true,
-        new_assignment_id: result.newAssignmentId
+        success: !hasErrors,
+        new_assignment_id: result.assignmentId,
+        was_existing: result.wasExisting,
+        status: result.status,
+        error: hasErrors ? result.status.errors.map((e) => `${e.step}: ${e.error}`).join("; ") : undefined
       });
     } catch (err) {
       results.push({
         source_slug: spec.assignment.slug,
         source_title: spec.assignment.title,
         success: false,
+        new_assignment_id: undefined,
+        was_existing: undefined,
+        status: undefined,
         error: err instanceof Error ? err.message : String(err)
       });
     }
@@ -941,8 +945,49 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   };
 }
 
+interface CopyStatus {
+  assignmentCreated: boolean;
+  selfReviewSettingsCopied: boolean;
+  rubricsCopied: boolean;
+  autograderConfigCopied: boolean;
+  handoutRepoCreated: boolean;
+  handoutRepoContentsCopied: boolean;
+  solutionRepoCreated: boolean;
+  solutionRepoContentsCopied: boolean;
+  errors: { step: string; error: string }[];
+}
+
+interface CopyResult {
+  assignmentId: number;
+  status: CopyStatus;
+  wasExisting: boolean;
+}
+
+async function getOrCreateDefaultSelfReviewSetting(
+  supabase: SupabaseClient<Database>,
+  classId: number
+): Promise<number> {
+  const { data: existing } = await supabase
+    .from("assignment_self_review_settings")
+    .select("id")
+    .eq("class_id", classId)
+    .limit(1)
+    .maybeSingle();
+  if (existing?.id) return existing.id;
+  const { data: created, error } = await supabase
+    .from("assignment_self_review_settings")
+    .insert({ class_id: classId, enabled: false })
+    .select("id")
+    .single();
+  if (error || !created?.id) {
+    throw new CLICommandError(`Failed to create default self-review setting: ${error?.message || "Unknown"}`);
+  }
+  return created.id;
+}
+
 /**
- * Copy a single assignment with all related data
+ * Copy a single assignment with all related data.
+ * Idempotent: if assignment already exists in target class, validates and fixes missing pieces.
  */
 async function copySingleAssignment(
   supabase: SupabaseClient<Database>,
@@ -954,151 +999,197 @@ async function copySingleAssignment(
     skipRubrics: boolean;
     releaseDateOverride?: string;
     dueDateOverride?: string;
-    latestDueDateOverride?: string;
   }
-): Promise<{ newAssignmentId: number }> {
-  // Step 1: Copy self-review settings if they exist
-  let newSelfReviewSettingId: number | null = null;
-  if (sourceAssignment.self_review_setting_id) {
-    const { data: sourceSettings } = await supabase
-      .from("assignment_self_review_settings")
-      .select("*")
-      .eq("id", sourceAssignment.self_review_setting_id)
-      .single();
-
-    if (sourceSettings) {
-      const { data: newSettings } = await supabase
-        .from("assignment_self_review_settings")
-        .insert({
-          class_id: targetClass.id,
-          enabled: sourceSettings.enabled,
-          allow_early: sourceSettings.allow_early,
-          deadline_offset: sourceSettings.deadline_offset
-        })
-        .select("id")
-        .single();
-
-      newSelfReviewSettingId = newSettings?.id || null;
-    }
-  }
-
-  // Step 2: Create assignment record
-  const newAssignmentData = {
-    class_id: targetClass.id,
-    title: sourceAssignment.title,
-    slug: sourceAssignment.slug,
-    description: sourceAssignment.description,
-    release_date: options.releaseDateOverride || sourceAssignment.release_date,
-    due_date: options.dueDateOverride || sourceAssignment.due_date,
-    latest_due_date: options.latestDueDateOverride || sourceAssignment.latest_due_date,
-    total_points: sourceAssignment.total_points,
-    max_late_tokens: sourceAssignment.max_late_tokens,
-    group_config: sourceAssignment.group_config,
-    min_group_size: sourceAssignment.min_group_size,
-    max_group_size: sourceAssignment.max_group_size,
-    allow_student_formed_groups: sourceAssignment.allow_student_formed_groups,
-    group_formation_deadline: sourceAssignment.group_formation_deadline,
-    has_autograder: sourceAssignment.has_autograder,
-    has_handgrader: sourceAssignment.has_handgrader,
-    grader_pseudonymous_mode: sourceAssignment.grader_pseudonymous_mode,
-    show_leaderboard: sourceAssignment.show_leaderboard,
-    allow_not_graded_submissions: sourceAssignment.allow_not_graded_submissions,
-    minutes_due_after_lab: sourceAssignment.minutes_due_after_lab,
-    self_review_setting_id: newSelfReviewSettingId,
-    grading_rubric_id: null,
-    self_review_rubric_id: null,
-    meta_grading_rubric_id: null,
-    template_repo: null,
-    student_repo_prefix: null
+): Promise<CopyResult> {
+  const status: CopyStatus = {
+    assignmentCreated: false,
+    selfReviewSettingsCopied: false,
+    rubricsCopied: false,
+    autograderConfigCopied: false,
+    handoutRepoCreated: false,
+    handoutRepoContentsCopied: false,
+    solutionRepoCreated: false,
+    solutionRepoContentsCopied: false,
+    errors: []
   };
 
-  const { data: newAssignmentInitial, error: assignmentError } = await supabase
-    .from("assignments")
-    .insert(newAssignmentData)
-    .select("*")
-    .single();
+  const addError = (step: string, err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    status.errors.push({ step, error: msg });
+  };
 
-  if (assignmentError || !newAssignmentInitial) {
-    throw new CLICommandError(`Failed to create assignment: ${assignmentError?.message || "Unknown"}`);
-  }
-
-  // Re-fetch to get auto-created rubric IDs
-  const { data: newAssignment } = await supabase
-    .from("assignments")
-    .select("*")
-    .eq("id", newAssignmentInitial.id)
-    .single();
-
-  if (!newAssignment) {
-    throw new CLICommandError("Failed to re-fetch assignment after creation");
-  }
-
-  // Step 3: Copy rubrics
-  if (!options.skipRubrics) {
-    if (sourceAssignment.grading_rubric_id) {
-      await copyRubricTree(
-        supabase,
-        sourceAssignment.grading_rubric_id,
-        newAssignment.id,
-        targetClass.id,
-        newAssignment.grading_rubric_id || undefined
-      );
-    }
-    if (sourceAssignment.self_review_rubric_id) {
-      await copyRubricTree(
-        supabase,
-        sourceAssignment.self_review_rubric_id,
-        newAssignment.id,
-        targetClass.id,
-        newAssignment.self_review_rubric_id || undefined
-      );
-    }
-    if (sourceAssignment.meta_grading_rubric_id) {
-      const newMetaRubricId = await copyRubricTree(
-        supabase,
-        sourceAssignment.meta_grading_rubric_id,
-        newAssignment.id,
-        targetClass.id,
-        newAssignment.meta_grading_rubric_id || undefined
-      );
-      if (!newAssignment.meta_grading_rubric_id && newMetaRubricId) {
-        await supabase
+  // Idempotency: check for existing assignment by slug in target class
+  const { data: existingAssignment } =
+    sourceAssignment.slug
+      ? await supabase
           .from("assignments")
-          .update({ meta_grading_rubric_id: newMetaRubricId })
-          .eq("id", newAssignment.id);
+          .select("*, autograder(*)")
+          .eq("class_id", targetClass.id)
+          .eq("slug", sourceAssignment.slug)
+          .maybeSingle()
+      : { data: null };
+
+  let newAssignment: any;
+  const wasExisting = !!existingAssignment;
+
+  if (existingAssignment) {
+    newAssignment = existingAssignment;
+    status.assignmentCreated = true; // Already exists
+  } else {
+    // Step 1: Copy self-review settings if they exist
+    let newSelfReviewSettingId: number;
+    if (sourceAssignment.self_review_setting_id) {
+      const { data: sourceSettings } = await supabase
+        .from("assignment_self_review_settings")
+        .select("*")
+        .eq("id", sourceAssignment.self_review_setting_id)
+        .single();
+
+      if (sourceSettings) {
+        const { data: newSettings } = await supabase
+          .from("assignment_self_review_settings")
+          .insert({
+            class_id: targetClass.id,
+            enabled: sourceSettings.enabled,
+            allow_early: sourceSettings.allow_early,
+            deadline_offset: sourceSettings.deadline_offset
+          })
+          .select("id")
+          .single();
+
+        if (newSettings?.id) {
+          newSelfReviewSettingId = newSettings.id;
+          status.selfReviewSettingsCopied = true;
+        } else {
+          newSelfReviewSettingId = await getOrCreateDefaultSelfReviewSetting(supabase, targetClass.id);
+        }
+      } else {
+        newSelfReviewSettingId = await getOrCreateDefaultSelfReviewSetting(supabase, targetClass.id);
       }
+    } else {
+      newSelfReviewSettingId = await getOrCreateDefaultSelfReviewSetting(supabase, targetClass.id);
+    }
+
+    // Step 2: Create assignment record
+    const newAssignmentData = {
+      class_id: targetClass.id,
+      title: sourceAssignment.title,
+      slug: sourceAssignment.slug,
+      description: sourceAssignment.description,
+      release_date: options.releaseDateOverride || sourceAssignment.release_date,
+      due_date: options.dueDateOverride || sourceAssignment.due_date,
+      total_points: sourceAssignment.total_points,
+      max_late_tokens: sourceAssignment.max_late_tokens,
+      group_config: sourceAssignment.group_config,
+      min_group_size: sourceAssignment.min_group_size,
+      max_group_size: sourceAssignment.max_group_size,
+      allow_student_formed_groups: sourceAssignment.allow_student_formed_groups,
+      group_formation_deadline: sourceAssignment.group_formation_deadline,
+      has_autograder: sourceAssignment.has_autograder,
+      has_handgrader: sourceAssignment.has_handgrader,
+      grader_pseudonymous_mode: sourceAssignment.grader_pseudonymous_mode,
+      show_leaderboard: sourceAssignment.show_leaderboard,
+      allow_not_graded_submissions: sourceAssignment.allow_not_graded_submissions,
+      minutes_due_after_lab: sourceAssignment.minutes_due_after_lab,
+      self_review_setting_id: newSelfReviewSettingId,
+      grading_rubric_id: null,
+      self_review_rubric_id: null,
+      meta_grading_rubric_id: null,
+      template_repo: null,
+      student_repo_prefix: null
+    };
+
+    const { data: newAssignmentInitial, error: assignmentError } = await supabase
+      .from("assignments")
+      .insert(newAssignmentData)
+      .select("*")
+      .single();
+
+    if (assignmentError || !newAssignmentInitial) {
+      throw new CLICommandError(`Failed to create assignment: ${assignmentError?.message || "Unknown"}`);
+    }
+
+    newAssignment = await supabase.from("assignments").select("*").eq("id", newAssignmentInitial.id).single();
+    newAssignment = newAssignment.data;
+    if (!newAssignment) {
+      throw new CLICommandError("Failed to re-fetch assignment after creation");
+    }
+    status.assignmentCreated = true;
+  }
+
+  // Step 3: Copy rubrics (works for both new and existing assignments)
+  if (!options.skipRubrics) {
+    try {
+      if (sourceAssignment.grading_rubric_id) {
+        await copyRubricTree(
+          supabase,
+          sourceAssignment.grading_rubric_id,
+          newAssignment.id,
+          targetClass.id,
+          newAssignment.grading_rubric_id || undefined
+        );
+      }
+      if (sourceAssignment.self_review_rubric_id) {
+        await copyRubricTree(
+          supabase,
+          sourceAssignment.self_review_rubric_id,
+          newAssignment.id,
+          targetClass.id,
+          newAssignment.self_review_rubric_id || undefined
+        );
+      }
+      if (sourceAssignment.meta_grading_rubric_id) {
+        const newMetaRubricId = await copyRubricTree(
+          supabase,
+          sourceAssignment.meta_grading_rubric_id,
+          newAssignment.id,
+          targetClass.id,
+          newAssignment.meta_grading_rubric_id || undefined
+        );
+        if (!newAssignment.meta_grading_rubric_id && newMetaRubricId) {
+          await supabase.from("assignments").update({ meta_grading_rubric_id: newMetaRubricId }).eq("id", newAssignment.id);
+        }
+      }
+      status.rubricsCopied = true;
+    } catch (err) {
+      addError("rubrics", err);
     }
   }
 
   // Step 4: Copy autograder config
   if (sourceAssignment.has_autograder) {
-    const { data: sourceConfig } = await supabase.from("autograder").select("*").eq("id", sourceAssignment.id).single();
+    try {
+      const { data: sourceConfig } = await supabase.from("autograder").select("*").eq("id", sourceAssignment.id).single();
 
-    if (sourceConfig) {
-      const { data: existing } = await supabase.from("autograder").select("id").eq("id", newAssignment.id).single();
+      if (sourceConfig) {
+        const { data: existing } = await supabase.from("autograder").select("id, grader_repo").eq("id", newAssignment.id).single();
 
-      if (existing) {
-        await supabase
-          .from("autograder")
-          .update({
+        if (existing) {
+          await supabase
+            .from("autograder")
+            .update({
+              config: sourceConfig.config,
+              max_submissions_count: sourceConfig.max_submissions_count,
+              max_submissions_period_secs: sourceConfig.max_submissions_period_secs
+            })
+            .eq("id", newAssignment.id);
+        } else {
+          await supabase.from("autograder").insert({
+            id: newAssignment.id,
+            class_id: targetClass.id,
             config: sourceConfig.config,
             max_submissions_count: sourceConfig.max_submissions_count,
-            max_submissions_period_secs: sourceConfig.max_submissions_period_secs
-          })
-          .eq("id", newAssignment.id);
-      } else {
-        await supabase.from("autograder").insert({
-          id: newAssignment.id,
-          class_id: targetClass.id,
-          config: sourceConfig.config,
-          max_submissions_count: sourceConfig.max_submissions_count,
-          max_submissions_period_secs: sourceConfig.max_submissions_period_secs,
-          grader_repo: null,
-          grader_commit_sha: null,
-          workflow_sha: null,
-          latest_autograder_sha: null
-        });
+            max_submissions_period_secs: sourceConfig.max_submissions_period_secs,
+            grader_repo: null,
+            grader_commit_sha: null,
+            workflow_sha: null,
+            latest_autograder_sha: null
+          });
+        }
+        status.autograderConfigCopied = true;
       }
+    } catch (err) {
+      addError("autograder_config", err);
     }
   }
 
@@ -1106,25 +1197,35 @@ async function copySingleAssignment(
   if (!options.skipRepos && targetClass.github_org) {
     // Copy handout repo
     if (sourceAssignment.template_repo) {
-      try {
-        // Create handout repo via edge function
-        const { data: handoutData } = await supabase.functions.invoke("assignment-create-handout-repo", {
-          body: { assignment_id: newAssignment.id, class_id: targetClass.id }
-        });
+      const needsHandout = !newAssignment.template_repo;
+      if (needsHandout) {
+        try {
+          const { data: handoutData } = await supabase.functions.invoke("assignment-create-handout-repo", {
+            body: { assignment_id: newAssignment.id, class_id: targetClass.id }
+          });
 
-        if (handoutData && !handoutData.error) {
-          const targetRepoFullName = `${handoutData.org_name}/${handoutData.repo_name}`;
-
-          // Copy repo contents via GitHub API
-          await copyRepoContentsViaGitHub(sourceAssignment.template_repo, targetRepoFullName);
+          if (handoutData?.error) {
+            addError("handout_repo_create", handoutData.error);
+          } else if (handoutData?.org_name && handoutData?.repo_name) {
+            status.handoutRepoCreated = true;
+            const targetRepoFullName = `${handoutData.org_name}/${handoutData.repo_name}`;
+            try {
+              await copyRepoContentsViaGitHub(sourceAssignment.template_repo, targetRepoFullName);
+              status.handoutRepoContentsCopied = true;
+            } catch (err) {
+              addError("handout_repo_contents", err);
+            }
+          }
+        } catch (err) {
+          addError("handout_repo_create", err);
         }
-      } catch (err) {
-        console.error("Failed to copy handout repo:", err);
-        // Don't fail the entire copy for repo issues
+      } else {
+        status.handoutRepoCreated = true;
+        status.handoutRepoContentsCopied = true; // Assume already copied
       }
     }
 
-    // Copy solution repo
+    // Copy solution repo - ensure grader_repo is always set when source has one
     if (sourceAssignment.has_autograder) {
       const { data: sourceAutograder } = await supabase
         .from("autograder")
@@ -1133,23 +1234,55 @@ async function copySingleAssignment(
         .single();
 
       if (sourceAutograder?.grader_repo) {
-        try {
-          const { data: solutionData } = await supabase.functions.invoke("assignment-create-solution-repo", {
-            body: { assignment_id: newAssignment.id, class_id: targetClass.id }
-          });
+        const { data: targetAutograder } = await supabase
+          .from("autograder")
+          .select("grader_repo")
+          .eq("id", newAssignment.id)
+          .single();
 
-          if (solutionData && !solutionData.error) {
-            const targetRepoFullName = `${solutionData.org_name}/${solutionData.repo_name}`;
-            await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetRepoFullName);
+        const needsSolution = !targetAutograder?.grader_repo;
+        if (needsSolution) {
+          try {
+            const { data: solutionData } = await supabase.functions.invoke("assignment-create-solution-repo", {
+              body: { assignment_id: newAssignment.id, class_id: targetClass.id }
+            });
+
+            if (solutionData?.error) {
+              addError("solution_repo_create", solutionData.error);
+            } else if (solutionData?.org_name && solutionData?.repo_name) {
+              const targetRepoFullName = `${solutionData.org_name}/${solutionData.repo_name}`;
+
+              // Verify grader_repo was set by edge function; fix if not
+              const { data: afterCreate } = await supabase
+                .from("autograder")
+                .select("grader_repo")
+                .eq("id", newAssignment.id)
+                .single();
+
+              if (!afterCreate?.grader_repo) {
+                await supabase.from("autograder").update({ grader_repo: targetRepoFullName }).eq("id", newAssignment.id);
+              }
+              status.solutionRepoCreated = true;
+
+              try {
+                await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetRepoFullName);
+                status.solutionRepoContentsCopied = true;
+              } catch (err) {
+                addError("solution_repo_contents", err);
+              }
+            }
+          } catch (err) {
+            addError("solution_repo_create", err);
           }
-        } catch (err) {
-          console.error("Failed to copy solution repo:", err);
+        } else {
+          status.solutionRepoCreated = true;
+          status.solutionRepoContentsCopied = true; // Assume already copied
         }
       }
     }
   }
 
-  return { newAssignmentId: newAssignment.id };
+  return { assignmentId: newAssignment.id, status, wasExisting };
 }
 
 /**
