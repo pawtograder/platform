@@ -899,7 +899,8 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
 
   // Copy each assignment
   const results = [];
-  for (const spec of assignmentsToCopy) {
+  for (let i = 0; i < assignmentsToCopy.length; i++) {
+    const spec = assignmentsToCopy[i];
     try {
       const result = await copySingleAssignment(supabase, spec.assignment, sourceClass, targetClass, {
         skipRepos,
@@ -1225,22 +1226,28 @@ async function copySingleAssignment(
       }
     }
 
-    // Copy solution repo - ensure grader_repo is always set when source has one
-    if (sourceAssignment.has_autograder) {
-      const { data: sourceAutograder } = await supabase
-        .from("autograder")
-        .select("grader_repo")
-        .eq("id", sourceAssignment.id)
-        .single();
+    // Copy solution repo - copy grader_repo if it exists, regardless of has_autograder
+    const { data: sourceAutograder } = await supabase
+      .from("autograder")
+      .select("grader_repo")
+      .eq("id", sourceAssignment.id)
+      .maybeSingle();
 
-      if (sourceAutograder?.grader_repo) {
+    if (sourceAutograder?.grader_repo) {
         const { data: targetAutograder } = await supabase
           .from("autograder")
           .select("grader_repo")
           .eq("id", newAssignment.id)
           .single();
 
-        const needsSolution = !targetAutograder?.grader_repo;
+        const targetRepoSet = !!targetAutograder?.grader_repo;
+        let targetRepoExists = false;
+        if (targetRepoSet && targetAutograder?.grader_repo) {
+          targetRepoExists = await repoExistsOnGitHub(targetAutograder.grader_repo);
+        }
+
+        // Need solution if not set, or if set but repo doesn't exist on GitHub
+        const needsSolution = !targetRepoSet || !targetRepoExists;
         if (needsSolution) {
           try {
             const { data: solutionData } = await supabase.functions.invoke("assignment-create-solution-repo", {
@@ -1278,11 +1285,25 @@ async function copySingleAssignment(
           status.solutionRepoCreated = true;
           status.solutionRepoContentsCopied = true; // Assume already copied
         }
-      }
     }
   }
 
   return { assignmentId: newAssignment.id, status, wasExisting };
+}
+
+/**
+ * Check if a repo exists on GitHub
+ */
+async function repoExistsOnGitHub(repoFullName: string): Promise<boolean> {
+  const [org, repo] = repoFullName.split("/");
+  const octokit = await getOctoKit(org);
+  if (!octokit) return false;
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}", { owner: org, repo });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
