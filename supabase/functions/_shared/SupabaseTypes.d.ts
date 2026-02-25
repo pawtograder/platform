@@ -7957,31 +7957,43 @@ export type Database = {
         Row: {
           assignment_group_id: number | null;
           class_id: number;
-          contents: string;
+          contents: string | null;
           created_at: string;
+          file_size: number | null;
           id: number;
+          is_binary: boolean;
+          mime_type: string | null;
           name: string;
           profile_id: string | null;
+          storage_key: string | null;
           submission_id: number;
         };
         Insert: {
           assignment_group_id?: number | null;
           class_id: number;
-          contents: string;
+          contents?: string | null;
           created_at?: string;
+          file_size?: number | null;
           id?: number;
+          is_binary?: boolean;
+          mime_type?: string | null;
           name: string;
           profile_id?: string | null;
+          storage_key?: string | null;
           submission_id: number;
         };
         Update: {
           assignment_group_id?: number | null;
           class_id?: number;
-          contents?: string;
+          contents?: string | null;
           created_at?: string;
+          file_size?: number | null;
           id?: number;
+          is_binary?: boolean;
+          mime_type?: string | null;
           name?: string;
           profile_id?: string | null;
+          storage_key?: string | null;
           submission_id?: number;
         };
         Relationships: [

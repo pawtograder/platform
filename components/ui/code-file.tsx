@@ -113,7 +113,15 @@ type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
   file: SubmissionFile;
 };
 
-export default function CodeFile({ file }: { file: SubmissionFile }) {
+export type CodeFileProps = {
+  file: SubmissionFile;
+  /** When true, renders without outer border, margin, and header (for embedding in other components) */
+  embedded?: boolean;
+  /** Syntax highlighting language scope (e.g. "source.java", "text.md"). Default: "source.java" */
+  language?: string;
+};
+
+export default function CodeFile({ file, embedded = false, language = "source.java" }: CodeFileProps) {
   const submission = useSubmission();
   const submissionReview = useActiveSubmissionReview();
   const showCommentsFeature = true; //submission.released !== null || submissionReview !== undefined;
@@ -170,7 +178,14 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   if (!starryNight || !file) {
     return <Skeleton />;
   }
-  const tree = starryNight.highlight(file.contents, "source.java");
+  if (file.contents === null || file.contents === undefined) {
+    return (
+      <Box border="1px solid" borderColor="border.emphasized" p={4} m={2} w="100%">
+        <Text color="fg.muted">This file has no text content to display.</Text>
+      </Box>
+    );
+  }
+  const tree = starryNight.highlight(file.contents, language);
   starryNightGutter(tree, setLineActionPopupProps);
   const reactNode = toJsxRuntime(tree, {
     Fragment,
@@ -203,80 +218,55 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           flexDirection: "row"
         }
       };
-  return (
-    <Box
-      border="1px solid"
-      borderColor="border.emphasized"
-      p={0}
-      m={2}
-      w="100%"
-      css={{
-        ...commentsCSS,
-        "& .line-number": {
-          width: "40px",
-          minWidth: "40px",
-          flexShrink: 0,
-          textAlign: "right",
-          padding: "0 5px",
-          marginRight: "10px",
-          borderRight: "1px solid #ccc"
-        },
-        "& .source-code-line-container": {
-          width: "100%"
-        },
-        "& .source-code-line-content": {},
-        "& pre": {
-          whiteSpace: "pre-wrap",
-          wordWrap: "break-word"
-        }
-      }}
-    >
-      <Flex
-        w="100%"
-        bg="bg.subtle"
-        p={2}
-        borderBottom="1px solid"
-        borderColor="border.emphasized"
-        alignItems="center"
-        justifyContent="space-between"
-      >
-        <Text fontSize="xs" color="text.subtle">
-          {file.name}
-        </Text>
-        <HStack>
-          {showCommentsFeature && comments.length > 0 && (
-            <>
-              <Text fontSize="xs" color="text.subtle">
-                {comments.length} {comments.length === 1 ? "comment" : "comments"}
-              </Text>
+  const content = (
+    <>
+      {!embedded && (
+        <Flex
+          w="100%"
+          bg="bg.subtle"
+          p={2}
+          borderBottom="1px solid"
+          borderColor="border.emphasized"
+          alignItems="center"
+          justifyContent="space-between"
+        >
+          <Text fontSize="xs" color="text.subtle">
+            {file.name}
+          </Text>
+          <HStack>
+            {showCommentsFeature && comments.length > 0 && (
+              <>
+                <Text fontSize="xs" color="text.subtle">
+                  {comments.length} {comments.length === 1 ? "comment" : "comments"}
+                </Text>
 
-              <Tooltip
-                openDelay={300}
-                closeDelay={100}
-                content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
-              >
-                <Button
-                  variant={expanded.length > 0 ? "solid" : "outline"}
-                  size="xs"
-                  p={0}
-                  colorPalette="teal"
-                  onClick={() => {
-                    setExpanded((prev) => {
-                      if (prev.length === 0) {
-                        return comments.map((comment) => comment.line);
-                      }
-                      return [];
-                    });
-                  }}
+                <Tooltip
+                  openDelay={300}
+                  closeDelay={100}
+                  content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                 >
-                  <Icon as={FaComments} m={0} />
-                </Button>
-              </Tooltip>
-            </>
-          )}
-        </HStack>
-      </Flex>
-      {/* Pass dynamic props from state, and other props directly */}
+                  <Button
+                    variant={expanded.length > 0 ? "solid" : "outline"}
+                    size="xs"
+                    p={0}
+                    colorPalette="teal"
+                    onClick={() => {
+                      setExpanded((prev) => {
+                        if (prev.length === 0) {
+                          return comments.map((comment) => comment.line);
+                        }
+                        return [];
+                      });
+                    }}
+                  >
+                    <Icon as={FaComments} m={0} />
+                  </Button>
+                </Tooltip>
+              </>
+            )}
+          </HStack>
+        </Flex>
+      )}
       <LineActionPopup {...lineActionPopupProps} file={file} />
       <CodeLineCommentContext.Provider
         value={{
@@ -317,6 +307,40 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           {reactNode}
         </VStack>
       </CodeLineCommentContext.Provider>
+    </>
+  );
+
+  const containerCss = {
+    ...commentsCSS,
+    "& .line-number": {
+      width: "40px",
+      minWidth: "40px",
+      flexShrink: 0,
+      textAlign: "right",
+      padding: "0 5px",
+      marginRight: "10px",
+      borderRight: "1px solid #ccc"
+    },
+    "& .source-code-line-container": {
+      width: "100%"
+    },
+    "& .source-code-line-content": {},
+    "& pre": {
+      whiteSpace: "pre-wrap",
+      wordWrap: "break-word"
+    }
+  };
+
+  return (
+    <Box
+      border={embedded ? undefined : "1px solid"}
+      borderColor={embedded ? undefined : "border.emphasized"}
+      p={0}
+      m={embedded ? 0 : 2}
+      w="100%"
+      css={containerCss}
+    >
+      {content}
     </Box>
   );
 }
@@ -403,7 +427,7 @@ export function starryNightGutter(
  *
  * Allows inline editing of the comment for graders and instructors. If the user is a student and the comment affects their score, provides a dialog to request a regrade, with special handling for group submissions. Shows relevant UI elements based on comment visibility, release status, and regrade request state.
  */
-function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
+export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const commentAuthor = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
@@ -536,7 +560,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
  * @param comment_id - The ID of the comment to display.
  * @param submissionReviewId - Optional ID of the submission review, used for context.
  */
-function CodeLineComment({ comment_id }: { comment_id: number }) {
+export function CodeLineComment({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
   const isStaff = useIsGraderOrInstructor();
