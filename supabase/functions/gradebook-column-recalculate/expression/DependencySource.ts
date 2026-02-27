@@ -991,8 +991,11 @@ export async function addDependencySourceFunctions({
         if (isArray(v)) {
           throw new Error("Unsupported nesting of arrays");
         }
+        if(v === undefined || v === null) {
+          return { score: undefined, max_score: undefined };
+        }
         throw new Error(
-          `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value. Got: ${JSON.stringify(v, null, 2)}`
+          `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value.` 
         );
       });
       const validValues = valuesToAverage.filter(
