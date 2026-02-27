@@ -1131,7 +1131,7 @@ export async function addDependencySourceFunctions({
       const ret: GradebookColumnStudentWithMaxScore[] = [];
       for (const v of value) {
         // Only exclude items that were chosen to drop AND have max_score > 0
-        if (!(toDrop.has(v)) && (v.max_score ?? 0) > 0 && v.score !== null) {
+        if (!toDrop.has(v) && (v.max_score ?? 0) > 0 && v.score !== null) {
           ret.push(v);
         }
       }
