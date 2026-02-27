@@ -959,7 +959,7 @@ export async function addDependencySourceFunctions({
     if (Array.isArray(value)) {
       // Log input to help diagnose issues
       console.log(
-        `Mean called with ${value.length} values (weighted=${weighted}):`,
+        `Mean called for student ${_context.student_id} with ${value.length} values (weighted=${weighted}):`,
         JSON.stringify(
           value.map((v) => ({
             score: isGradebookColumnStudent(v) ? v.score : "N/A",
