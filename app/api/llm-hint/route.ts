@@ -118,7 +118,7 @@ async function getChatModel({
   account
 }: {
   model: string;
-  provider: "openai" | "azure" | "anthropic";
+  provider: "openai" | "azure" | "anthropic" | "openrouter";
   temperature?: number;
   maxTokens?: number;
   maxRetries?: number;
@@ -185,8 +185,24 @@ async function getChatModel({
       maxTokens: maxTokens,
       maxRetries: maxRetries || 2
     });
+  } else if (provider === "openrouter") {
+    const key_env_name = account ? `OPENROUTER_API_KEY_${account}` : "OPENROUTER_API_KEY";
+    if (!process.env[key_env_name]) {
+      throw new UserVisibleError(`OpenRouter API key is required, must set env var ${key_env_name}`, 500);
+    }
+    return new ChatOpenAI({
+      model,
+      apiKey: process.env[key_env_name],
+      configuration: { baseURL: "https://openrouter.ai/api/v1" },
+      temperature: temperature || 0.85,
+      maxTokens: maxTokens,
+      maxRetries: maxRetries || 2
+    });
   }
-  throw new UserVisibleError(`Invalid provider: ${provider}. Supported providers are: openai, azure, anthropic`, 400);
+  throw new UserVisibleError(
+    `Invalid provider: ${provider}. Supported providers are: openai, azure, anthropic, openrouter`,
+    400
+  );
 }
 
 async function getPrompt(input: GraderResultTestExtraData["llm"]) {
@@ -355,8 +371,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const modelName = extraData.llm.model || process.env.OPENAI_MODEL || "gpt-4o-mini";
     const providerName = extraData.llm.provider || "openai";
+    const modelName =
+      extraData.llm.model ||
+      (providerName === "openrouter" ? "openai/gpt-4o-mini" : process.env.OPENAI_MODEL || "gpt-4o-mini");
     const accountName = extraData.llm.account;
 
     const chatModel = await getChatModel({

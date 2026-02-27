@@ -27,7 +27,7 @@ export type GraderResultTestExtraData = {
     result?: string;
     model?: string;
     account?: string;
-    provider?: "openai" | "azure" | "anthropic";
+    provider?: "openai" | "azure" | "anthropic" | "openrouter";
     temperature?: number;
     max_tokens?: number;
     rate_limit?: LLMRateLimitConfig;

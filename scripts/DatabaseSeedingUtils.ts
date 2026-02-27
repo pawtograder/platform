@@ -4566,7 +4566,7 @@ public class Entrypoint {
           );
         }
 
-        // Prepare grader result tests (5 per submission: 2 regular + 3 with LLM hints) for this chunk
+        // Prepare grader result tests (6 per submission: 2 regular + 4 with LLM hints) for this chunk
         const graderResultTestInserts = graderResultData.flatMap((graderResult: any, index) => [
           {
             score: 5,
@@ -4662,6 +4662,31 @@ public class Entrypoint {
                 model: "claude-3-haiku-20240307",
                 account: "e2e_test",
                 provider: "anthropic",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "OpenRouter test",
+            name_format: "text",
+            output: "This test uses OpenRouter for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                type: "v1",
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "openai/gpt-4o-mini",
+                account: "e2e_test",
+                provider: "openrouter",
                 temperature: 1,
                 max_tokens: 100
               }
