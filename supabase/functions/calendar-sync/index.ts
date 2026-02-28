@@ -884,8 +884,8 @@ function convertToCalendarEvent(event: ICSEvent): ParsedEvent {
     start_time: event.dtstart.toISOString(),
     end_time: event.dtend.toISOString(),
     location: location,
-    queue_name: queue,  // Already trimmed by parseEventTitle
-    organizer_name: name,  // Already trimmed by parseEventTitle
+    queue_name: queue, // Already trimmed by parseEventTitle
+    organizer_name: name, // Already trimmed by parseEventTitle
     raw_ics_data: {
       uid: event.uid,
       summary: event.summary,
@@ -1014,9 +1014,11 @@ async function syncCalendar(
     }
   }
   const parsedEvents = Array.from(eventsByUid.values());
-  
+
   if (parsedEventsRaw.length !== parsedEvents.length) {
-    console.log(`[syncCalendar] Deduplicated ${parsedEventsRaw.length} -> ${parsedEvents.length} events (removed ${parsedEventsRaw.length - parsedEvents.length} duplicates)`);
+    console.log(
+      `[syncCalendar] Deduplicated ${parsedEventsRaw.length} -> ${parsedEvents.length} events (removed ${parsedEventsRaw.length - parsedEvents.length} duplicates)`
+    );
   }
 
   console.log(`[syncCalendar] Parsed ${parsedEvents.length} events from ICS (including expanded recurrences)`);
