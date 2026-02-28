@@ -15,7 +15,13 @@ import { createHash } from "node:crypto";
 import micromatch from "npm:micromatch";
 import { Buffer } from "node:buffer";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { getFileFromRepo, getOctoKit, triggerWorkflow } from "../_shared/GitHubWrapper.ts";
+import {
+  getFileFromRepo,
+  getOctoKit,
+  triggerWorkflow,
+  SecondaryRateLimitError,
+  PrimaryRateLimitError
+} from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -23,6 +29,64 @@ import { Redis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
+
+function detectRateLimitType(error: unknown): {
+  type: "secondary" | "primary" | "extreme" | null;
+  retryAfter?: number;
+  installationId?: string;
+} {
+  const err = error as {
+    status?: number;
+    name?: string;
+    message?: string;
+    response?: {
+      status?: number;
+      headers?: Record<string, string>;
+    };
+  };
+  const status = err?.status ?? err?.response?.status;
+  const headers = err?.response?.headers;
+
+  // Handle AggregateError from Octokit - "API rate limit exceeded for installation ID XYZ"
+  if (
+    err?.name === "AggregateError" ||
+    (err?.message && err.message.toLowerCase().includes("api rate limit exceeded for installation id"))
+  ) {
+    const installationMatch = err.message?.match(/installation id (\d+)/i);
+    const installationId = installationMatch ? installationMatch[1] : undefined;
+    return { type: "secondary", retryAfter: 60, installationId };
+  }
+
+  if (error instanceof SecondaryRateLimitError) {
+    return { type: "secondary", retryAfter: error.retryAfter };
+  }
+  if (error instanceof PrimaryRateLimitError) {
+    return { type: "primary", retryAfter: error.retryAfter };
+  }
+
+  if (status === 403 || status === 429) {
+    const retryAfter = headers?.["retry-after"]
+      ? parseInt(headers["retry-after"], 10)
+      : undefined;
+    const remaining = headers?.["x-ratelimit-remaining"];
+    if (remaining === "0") {
+      return { type: "primary", retryAfter: retryAfter ?? 60 };
+    }
+    if (
+      err?.message?.toLowerCase().includes("secondary rate limit") ||
+      err?.message?.toLowerCase().includes("abuse detection")
+    ) {
+      return { type: "secondary", retryAfter: retryAfter ?? 60 };
+    }
+    const retryAfterVal = retryAfter ?? 60;
+    if (retryAfterVal >= 300 || status === 429) {
+      return { type: "extreme", retryAfter: retryAfterVal };
+    }
+    return { type: "secondary", retryAfter: retryAfterVal };
+  }
+
+  return { type: null };
+}
 
 // Redis client for webhook status tracking
 let redisClient: Redis | null = null;
@@ -369,7 +433,32 @@ async function handlePushToStudentRepo(
     const currentStatus = (headRow?.status || {}) as ExtendedCheckRunStatus;
     if (!currentStatus.workflow_triggered_at) {
       maybeCrash("push.student.before_trigger_workflow");
-      await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+      try {
+        await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+      } catch (triggerErr) {
+        console.error("Error triggering workflow:", triggerErr);
+        const rt = detectRateLimitType(triggerErr);
+        if (rt.type) {
+          Sentry.withScope((errorScope) => {
+            errorScope.setFingerprint(["github-rate-limit", rt.type!, org, "triggerWorkflow"]);
+            errorScope.setTag("rate_limit_type", rt.type);
+            errorScope.setTag("github_api_method", "triggerWorkflow");
+            if (rt.installationId) {
+              errorScope.setContext("rate_limit_installation", {
+                installation_id: rt.installationId,
+                note: "Installation ID excluded from fingerprint to prevent notification storms"
+              });
+            }
+            Sentry.captureException(triggerErr, errorScope);
+          });
+          console.warn(`GitHub rate limit (${rt.type}) hit during triggerWorkflow for ${repoName}`);
+        } else {
+          scope.setTag("error_source", "trigger_workflow_failed");
+          scope.setTag("error_context", "Failed to trigger grade workflow");
+          Sentry.captureException(triggerErr, scope);
+        }
+        throw triggerErr;
+      }
       const { error: statusUpdateErr } = await adminSupabase
         .from("repository_check_runs")
         .update({
@@ -819,8 +908,31 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
             maybeCrash("check_run.before_trigger_workflow");
             try {
               await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
-            } catch (_err) {
-              //If we fail to trigger the workflow, mark the check run as failed. This is a non-critical path, so ignore the exception.
+            } catch (triggerErr) {
+              // Log the error with proper fingerprinting to prevent notification storms
+              const repoName = payload.repository.full_name;
+              const org = repoName.split("/")[0];
+              const rt = detectRateLimitType(triggerErr);
+              if (rt.type) {
+                Sentry.withScope((errorScope) => {
+                  errorScope.setFingerprint(["github-rate-limit", rt.type!, org, "triggerWorkflow"]);
+                  errorScope.setTag("rate_limit_type", rt.type);
+                  errorScope.setTag("github_api_method", "triggerWorkflow");
+                  if (rt.installationId) {
+                    errorScope.setContext("rate_limit_installation", {
+                      installation_id: rt.installationId,
+                      note: "Installation ID excluded from fingerprint to prevent notification storms"
+                    });
+                  }
+                  Sentry.captureException(triggerErr, errorScope);
+                });
+                console.warn(`GitHub rate limit (${rt.type}) hit during triggerWorkflow (check_run) for ${repoName}`);
+              } else {
+                scope?.setTag("error_source", "trigger_workflow_failed_check_run");
+                scope?.setTag("error_context", "Failed to trigger grade workflow from check_run");
+                Sentry.captureException(triggerErr, scope);
+              }
+              // Mark the check run as triggered but failed so we don't retry endlessly
               await adminSupabase
                 .from("repository_check_runs")
                 .update({

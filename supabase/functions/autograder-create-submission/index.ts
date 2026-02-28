@@ -172,10 +172,11 @@ function getHeaders(error: unknown): Record<string, string> | undefined {
 function detectRateLimitType(error: unknown): {
   type: "secondary" | "primary" | "extreme" | null;
   retryAfter?: number;
+  installationId?: string;
 } {
   if (isSecondaryRateLimit(error)) return { type: "secondary", retryAfter: parseRetryAfterSeconds(error) };
   if (isPrimaryRateLimit(error)) return { type: "primary", retryAfter: parseRetryAfterSeconds(error) };
-  const err = error as { status?: number; message?: string };
+  const err = error as { status?: number; message?: string; name?: string };
   const status = typeof err?.status === "number" ? err.status : undefined;
   const headers = getHeaders(error);
   const retryAfter = headers ? parseInt(headers["retry-after"] || "", 10) : NaN;
@@ -185,6 +186,16 @@ function detectRateLimitType(error: unknown): {
   const untilResetSec = resetHeader
     ? Math.max(0, parseInt(resetHeader, 10) - Math.floor(Date.now() / 1000))
     : undefined;
+
+  // Handle AggregateError from Octokit - "API rate limit exceeded for installation ID XYZ"
+  if (
+    err?.name === "AggregateError" ||
+    (err?.message && err.message.toLowerCase().includes("api rate limit exceeded for installation id"))
+  ) {
+    const installationMatch = err.message?.match(/installation id (\d+)/i);
+    const installationId = installationMatch ? installationMatch[1] : undefined;
+    return { type: "secondary", retryAfter: 60, installationId };
+  }
 
   if (status === 429) return { type: "secondary", retryAfter: isNaN(retryAfter) ? undefined : retryAfter };
   if (status === 403) {
@@ -324,6 +335,18 @@ async function handleGitHubApiCall<T>(
     const rt = detectRateLimitType(error);
     scope.setTag("rate_limit_type", rt.type);
     scope.setTag("github_api_method", method);
+
+    // Use fingerprinting for rate limit errors to prevent notification storms
+    // Don't include installationId in fingerprint - it varies and would create unique errors
+    if (rt.type) {
+      scope.setFingerprint(["github-rate-limit", rt.type, org, method]);
+      if (rt.installationId) {
+        scope.setContext("rate_limit_installation", {
+          installation_id: rt.installationId,
+          note: "Installation ID excluded from fingerprint to prevent notification storms"
+        });
+      }
+    }
     Sentry.captureException(error, scope);
 
     // Handle rate limits with circuit breaker logic
