@@ -152,7 +152,7 @@ async function getChatModel({
     } else {
       return new AzureChatOpenAI({
         model,
-        temperature: temperature || 0.85,
+        temperature: temperature ?? 0.85,
         maxTokens: maxTokens,
         maxRetries: maxRetries || 2,
         azureOpenAIApiKey: process.env[key_env_name],
@@ -169,7 +169,7 @@ async function getChatModel({
     return new ChatOpenAI({
       model,
       apiKey: process.env[key_env_name],
-      temperature: temperature || 0.85,
+      temperature: temperature ?? 0.85,
       maxTokens: maxTokens,
       maxRetries: maxRetries || 2
     });
@@ -181,7 +181,7 @@ async function getChatModel({
     return new ChatAnthropic({
       model,
       apiKey: process.env[key_env_name],
-      temperature: temperature || 0.85,
+      temperature: temperature ?? 0.85,
       maxTokens: maxTokens,
       maxRetries: maxRetries || 2
     });
@@ -194,7 +194,7 @@ async function getChatModel({
       model,
       apiKey: process.env[key_env_name],
       configuration: { baseURL: "https://openrouter.ai/api/v1" },
-      temperature: temperature || 0.85,
+      temperature: temperature ?? 0.85,
       maxTokens: maxTokens,
       maxRetries: maxRetries || 2
     });
