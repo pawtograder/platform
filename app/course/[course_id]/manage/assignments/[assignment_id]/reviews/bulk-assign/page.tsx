@@ -1713,7 +1713,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                         0,
                         course.time_zone ?? "America/New_York"
                       );
-                      setDueDate(tzDate.toString());
+                      setDueDate(tzDate.toISOString());
                     } else {
                       setDueDate("");
                     }
@@ -2143,7 +2143,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                         0,
                         course.time_zone ?? "America/New_York"
                       );
-                      setDueDate(tzDate.toString());
+                      setDueDate(tzDate.toISOString());
                     } else {
                       setDueDate("");
                     }

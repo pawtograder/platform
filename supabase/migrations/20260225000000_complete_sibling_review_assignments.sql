@@ -19,6 +19,7 @@ CREATE OR REPLACE FUNCTION public.check_and_complete_submission_review()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 declare
     target_submission_review_id bigint;
