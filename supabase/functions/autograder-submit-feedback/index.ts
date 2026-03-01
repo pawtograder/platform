@@ -12,9 +12,10 @@ import {
 } from "../_shared/FunctionTypes.d.ts";
 import {
   resolveRef,
-  updateCheckRun,
   validateOIDCTokenOrAllowE2E,
-  END_TO_END_REPO_PREFIX
+  END_TO_END_REPO_PREFIX,
+  SecondaryRateLimitError,
+  PrimaryRateLimitError
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
@@ -23,6 +24,62 @@ import * as Sentry from "npm:@sentry/deno";
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
 const RESET_WINDOW_MS = 60_000;
+
+function detectRateLimitType(error: unknown): {
+  type: "secondary" | "primary" | "extreme" | null;
+  retryAfter?: number;
+  installationId?: string;
+} {
+  const err = error as {
+    status?: number;
+    name?: string;
+    message?: string;
+    response?: {
+      status?: number;
+      headers?: Record<string, string>;
+    };
+  };
+  const status = err?.status ?? err?.response?.status;
+  const headers = err?.response?.headers;
+
+  // Handle AggregateError from Octokit - "API rate limit exceeded for installation ID XYZ"
+  if (
+    err?.name === "AggregateError" ||
+    (err?.message && err.message.toLowerCase().includes("api rate limit exceeded for installation id"))
+  ) {
+    const installationMatch = err.message?.match(/installation id (\d+)/i);
+    const installationId = installationMatch ? installationMatch[1] : undefined;
+    return { type: "secondary", retryAfter: 60, installationId };
+  }
+
+  if (error instanceof SecondaryRateLimitError) {
+    return { type: "secondary", retryAfter: error.retryAfter };
+  }
+  if (error instanceof PrimaryRateLimitError) {
+    return { type: "primary", retryAfter: error.retryAfter };
+  }
+
+  if (status === 403 || status === 429) {
+    const retryAfter = headers?.["retry-after"] ? parseInt(headers["retry-after"], 10) : undefined;
+    const remaining = headers?.["x-ratelimit-remaining"];
+    if (remaining === "0") {
+      return { type: "primary", retryAfter: retryAfter ?? 60 };
+    }
+    if (
+      err?.message?.toLowerCase().includes("secondary rate limit") ||
+      err?.message?.toLowerCase().includes("abuse detection")
+    ) {
+      return { type: "secondary", retryAfter: retryAfter ?? 60 };
+    }
+    const retryAfterVal = retryAfter ?? 60;
+    if (retryAfterVal >= 300 || status === 429) {
+      return { type: "extreme", retryAfter: retryAfterVal };
+    }
+    return { type: "secondary", retryAfter: retryAfterVal };
+  }
+
+  return { type: null };
+}
 
 async function insertComments({
   adminSupabase,
@@ -502,6 +559,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
     } catch (e) {
       console.error(e);
+      const rt = detectRateLimitType(e);
+      if (rt.type) {
+        // Log rate limit errors with proper fingerprinting to prevent notification storms
+        Sentry.withScope((errorScope) => {
+          errorScope.setFingerprint(["github-rate-limit", rt.type!, "submit-feedback", "resolveRef"]);
+          errorScope.setTag("rate_limit_type", rt.type);
+          errorScope.setTag("github_api_method", "resolveRef");
+          if (rt.installationId) {
+            errorScope.setContext("rate_limit_installation", {
+              installation_id: rt.installationId,
+              note: "Installation ID excluded from fingerprint to prevent notification storms"
+            });
+          }
+          Sentry.captureException(e, errorScope);
+        });
+        console.warn(`GitHub rate limit (${rt.type}) hit during resolveRef for action SHA`);
+      } else {
+        Sentry.captureException(e, scope);
+      }
     }
     const score =
       requestBody.feedback.score ||
@@ -768,8 +844,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to insert feedback: ${(e as Error).message}`);
     }
 
-    // Update the check run status to completed
-    // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
+    // Update the repository_check_runs status to completed (DB state only)
     if (submission_id && !isRegressionRerun && !isE2ERun) {
       if (checkRun) {
         const newStatus: CheckRunStatus = {
@@ -782,19 +857,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
             status: newStatus
           })
           .eq("id", checkRun.id);
-        await updateCheckRun({
-          owner: repository.split("/")[0],
-          repo: repository.split("/")[1],
-          check_run_id: checkRun.check_run_id,
-          status: "completed",
-          conclusion: "success",
-          details_url: `https://${Deno.env.get("APP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
-          output: {
-            title: "Grading complete",
-            summary: "Pawtograder has finished grading the submission",
-            text: `Autograder score: ${score} / ${max_score}. See more details in Pawtograder.`
-          }
-        });
       }
     }
     if (submission_id) {
