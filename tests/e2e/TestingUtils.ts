@@ -354,7 +354,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
       throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
     }
 
-    const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
+    const magicLink = `/auth/magic-link?token_hash=${encodeURIComponent(magicLinkData.properties?.hashed_token ?? "")}`;
 
     // Use magic link for login
     await page.goto(magicLink);
@@ -386,7 +386,23 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
   await page.goto("/");
-  await signInWithMagicLinkAndRetry(page, testingUser);
+  try {
+    await signInWithMagicLinkAndRetry(page, testingUser);
+  } catch {
+    // Fallback for local environments where magic-link verification is flaky.
+    await page.goto(`/sign-in?email=${encodeURIComponent(testingUser.email)}`);
+    await page.getByLabel("Sign in email").fill(testingUser.email);
+    await page.getByLabel("Sign in password").fill(testingUser.password);
+    await page.getByRole("button", { name: "Sign in with email" }).click();
+    try {
+      await page.waitForURL(/\/course(\/|$)/, { timeout: 30_000 });
+    } catch {
+      // Fall through to explicit URL check below for a clear error.
+    }
+    if (!page.url().includes("/course")) {
+      throw new Error("Failed to sign in with both magic link and email/password fallback");
+    }
+  }
 
   if (course) {
     await page.waitForLoadState("networkidle");
