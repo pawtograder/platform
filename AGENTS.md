@@ -22,7 +22,7 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 
 - **Lint**: `npm run lint` (ESLint + Prettier). See `package.json` scripts.
 - **Unit tests**: `npm test` (Jest). Note: `jest.setup.ts` must exist (import `@testing-library/jest-dom`). The existing test has a pre-existing issue with `Request` not being defined in jsdom.
-- **E2E tests**: `SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_ANON_KEY=<anon_key> npx playwright test` — requires local Supabase running + dev server at `http://localhost:3000`. The tests use `createAdminClient` which reads `SUPABASE_SERVICE_ROLE_KEY` from `.env.local`. Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` as env vars (or export them) since `TestingUtils.ts` also reads them from process.env. Tests run against chromium and webkit.
+- **E2E tests**: `npm run test:e2e:local` — this sets `BASE_URL=http://localhost:3000` and runs Playwright. Requires local Supabase running + dev server at port 3000. Also needs `SUPABASE_URL` and `SUPABASE_ANON_KEY` exported (or in `.env.local`), since `TestingUtils.ts` reads them from `process.env`. Tests run against chromium and webkit.
 - **Build**: `npm run build` (requires ~8 GB memory via `NODE_OPTIONS=--max-old-space-size=8000`).
 - **Format**: `npm run format` (Prettier auto-fix).
 
