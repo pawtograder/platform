@@ -499,6 +499,7 @@ async function processRowsAll(
           upsertErrorScoped
         );
         Sentry.captureException(upsertErrorScoped, gbScope);
+        continue; // Abort this gradebook - do not run batch RPC/archive; messages will retry on visibility timeout
       } else {
         console.log(
           `[DEBUG] ${workerId} UPSERT (scoped): Successfully upserted ${rowEntries.length} rows for gradebook ${gradebook_id}`
