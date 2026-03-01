@@ -5,13 +5,19 @@
 --    rubric parts are a SUBSET of (or equal to) the completing assignment's parts
 -- 2. Marks those sibling assignments as complete (redundant grading support)
 -- 3. Checks if ALL review_assignments are now complete
--- 4. If so, marks the submission_review as complete
+-- 4. Validates that any rubric parts WITHOUT review_assignments have no blocking criteria
+--    (no required checks or min_checks_per_submission requirements unmet)
+-- 5. If both conditions are satisfied, marks the submission_review as complete
 --
 -- Example: If Grader A completes parts {A, B, C}, then:
 --   - Grader B with parts {A} gets marked complete (subset)
 --   - Grader C with parts {A, B} gets marked complete (subset)
 --   - Grader D with parts {A, B, C} gets marked complete (equal)
 --   - Grader E with parts {A, D} does NOT get marked complete (D not in {A,B,C})
+--
+-- Uncovered parts validation: If rubric has parts {A,B,C,D} but only review_assignment for {D}:
+--   - Parts A,B,C are "uncovered" (no review_assignment)
+--   - submission_review can only complete if A,B,C have no required checks or min_checks requirements
 --
 -- Uses pg_trigger_depth() to prevent redundant work in nested trigger executions.
 
@@ -27,6 +33,8 @@ declare
     completing_user_id uuid;
     completing_review_assignment_id bigint;
     current_assignment_part_ids bigint[];
+    covered_part_ids bigint[];
+    has_blocking_uncovered_parts boolean := false;
 begin
     -- Only proceed if completed_at was just set (not updated from one non-null value to another)
     if OLD.completed_at is not null or NEW.completed_at is null then
@@ -107,14 +115,101 @@ begin
         where ra.submission_review_id = target_submission_review_id
           and ra.completed_at is null
     ) then
-        -- All review assignments are complete, mark submission_review as complete
-        -- (only if not already completed)
-        update submission_reviews 
-        set 
-            completed_at = NEW.completed_at,
-            completed_by = completing_user_id
-        where id = target_submission_review_id
-          and completed_at is null;
+        -- STEP 3: Before marking complete, check that uncovered rubric parts have no blocking criteria
+        -- Get all rubric part IDs covered by ANY review_assignment for this submission_review
+        -- A NULL/empty array in review_assignment_rubric_parts means "entire rubric"
+        select case
+            when exists (
+                -- If any review_assignment has no specific parts, it covers the entire rubric
+                select 1 
+                from review_assignments ra
+                where ra.submission_review_id = target_submission_review_id
+                  and not exists (
+                      select 1 from review_assignment_rubric_parts rarp
+                      where rarp.review_assignment_id = ra.id
+                  )
+            ) then null  -- NULL means all parts are covered
+            else (
+                -- Otherwise, aggregate all specific parts from all review_assignments
+                select array_agg(distinct rarp.rubric_part_id)
+                from review_assignments ra
+                join review_assignment_rubric_parts rarp on rarp.review_assignment_id = ra.id
+                where ra.submission_review_id = target_submission_review_id
+            )
+        end into covered_part_ids;
+
+        -- Check for blocking criteria in uncovered parts (only if not all parts are covered)
+        if covered_part_ids is not null then
+            -- Check if any uncovered part has required checks that haven't been applied
+            select exists (
+                select 1
+                from rubric_checks rc
+                join rubric_criteria rcrit on rc.rubric_criteria_id = rcrit.id
+                where rc.rubric_id = target_rubric_id
+                  and rc.is_required = true
+                  and rcrit.rubric_part_id is not null
+                  and not (rcrit.rubric_part_id = any(covered_part_ids))
+                  and not exists (
+                      select 1 from submission_comments sc
+                      where sc.submission_review_id = target_submission_review_id
+                        and sc.rubric_check_id = rc.id
+                        and sc.deleted_at is null
+                      union
+                      select 1 from submission_file_comments sfc
+                      where sfc.submission_review_id = target_submission_review_id
+                        and sfc.rubric_check_id = rc.id
+                        and sfc.deleted_at is null
+                      union
+                      select 1 from submission_artifact_comments sac
+                      where sac.submission_review_id = target_submission_review_id
+                        and sac.rubric_check_id = rc.id
+                        and sac.deleted_at is null
+                  )
+            ) into has_blocking_uncovered_parts;
+
+            -- Also check if any uncovered part has min_checks_per_submission not met
+            if not has_blocking_uncovered_parts then
+                select exists (
+                    select 1
+                    from rubric_criteria rcrit
+                    where rcrit.rubric_id = target_rubric_id
+                      and rcrit.min_checks_per_submission is not null
+                      and rcrit.rubric_part_id is not null
+                      and not (rcrit.rubric_part_id = any(covered_part_ids))
+                      and (
+                          select count(distinct rc.id)
+                          from rubric_checks rc
+                          where rc.rubric_criteria_id = rcrit.id
+                            and exists (
+                                select 1 from submission_comments sc
+                                where sc.submission_review_id = target_submission_review_id
+                                  and sc.rubric_check_id = rc.id
+                                  and sc.deleted_at is null
+                                union
+                                select 1 from submission_file_comments sfc
+                                where sfc.submission_review_id = target_submission_review_id
+                                  and sfc.rubric_check_id = rc.id
+                                  and sfc.deleted_at is null
+                                union
+                                select 1 from submission_artifact_comments sac
+                                where sac.submission_review_id = target_submission_review_id
+                                  and sac.rubric_check_id = rc.id
+                                  and sac.deleted_at is null
+                            )
+                      ) < rcrit.min_checks_per_submission
+                ) into has_blocking_uncovered_parts;
+            end if;
+        end if;
+
+        -- Only mark submission_review complete if no blocking uncovered parts
+        if not has_blocking_uncovered_parts then
+            update submission_reviews 
+            set 
+                completed_at = NEW.completed_at,
+                completed_by = completing_user_id
+            where id = target_submission_review_id
+              and completed_at is null;
+        end if;
     end if;
 
     return NEW;
@@ -126,11 +221,18 @@ COMMENT ON FUNCTION public.check_and_complete_submission_review() IS
 1. When a review_assignment is marked complete, finds sibling assignments whose rubric parts
    are a SUBSET of (or equal to) the completing assignment''s parts
 2. Marks those siblings as complete (supports redundant grading where multiple graders review the same work)
-3. If ALL review_assignments for the submission_review are now complete, marks the submission_review as complete
-4. The complete_remaining_review_assignments trigger on submission_reviews handles any remaining stragglers
+3. If ALL review_assignments for the submission_review are now complete, validates that any
+   uncovered rubric parts have no blocking criteria (required checks or min_checks_per_submission)
+4. Only marks the submission_review as complete if both conditions are satisfied
+5. The complete_remaining_review_assignments trigger on submission_reviews handles any remaining stragglers
 
 Example: If grader completes parts {A,B,C}, siblings with {A}, {A,B}, or {A,B,C} are auto-completed.
 Siblings with {A,D} or {D} are NOT auto-completed (not subsets).
+
+Uncovered parts validation: If rubric has parts {A,B,C,D} but only review_assignments for {D}:
+- Parts A,B,C are "uncovered" (no review_assignment targets them)
+- submission_review will only complete if A,B,C have no required checks or min_checks requirements unmet
+- If A has a required check not applied, submission_review stays incomplete even though all review_assignments are done
 
 Uses pg_trigger_depth() = 1 to only perform sibling completion at the top level, avoiding redundant work 
 when nested triggers fire for the completed siblings.';
