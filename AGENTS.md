@@ -18,6 +18,10 @@ Pawtograder is a Next.js 15 + Supabase course operations platform (autograder, h
 
 Run `npm run seed` to create a test class with students, assignments, and login credentials. The output includes instructor/grader/student emails (all with password `change-it`). The instructor dashboard is at `/course/<class_id>`.
 
+### Before committing
+
+**Always** run `npm run format` before committing. This runs Prettier on the entire codebase. CI will reject unformatted code.
+
 ### Lint / Test / Build
 
 - **Lint**: `npm run lint` (ESLint + Prettier). See `package.json` scripts.
@@ -28,13 +32,13 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 
 ### Key ports
 
-| Service | Port |
-|---------|------|
-| Next.js dev server | 3000 |
-| Supabase API | 54321 |
+| Service                  | Port  |
+| ------------------------ | ----- |
+| Next.js dev server       | 3000  |
+| Supabase API             | 54321 |
 | Supabase DB (PostgreSQL) | 54322 |
-| Supabase Studio | 54323 |
-| Mailpit (email testing) | 54324 |
+| Supabase Studio          | 54323 |
+| Mailpit (email testing)  | 54324 |
 
 ### Notes
 
