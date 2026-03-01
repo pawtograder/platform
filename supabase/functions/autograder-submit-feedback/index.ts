@@ -60,9 +60,7 @@ function detectRateLimitType(error: unknown): {
   }
 
   if (status === 403 || status === 429) {
-    const retryAfter = headers?.["retry-after"]
-      ? parseInt(headers["retry-after"], 10)
-      : undefined;
+    const retryAfter = headers?.["retry-after"] ? parseInt(headers["retry-after"], 10) : undefined;
     const remaining = headers?.["x-ratelimit-remaining"];
     if (remaining === "0") {
       return { type: "primary", retryAfter: retryAfter ?? 60 };

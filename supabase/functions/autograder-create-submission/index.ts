@@ -640,18 +640,26 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
         const classId = initialCheckRun.class_id ?? repoData.assignments.class_id;
         if (classId && !isPawtograderTriggered) {
-          const { data: user } = await adminSupabase
+          const { data: user, error: userError } = await adminSupabase
             .from("users")
             .select("user_id")
-            .eq("github_username", decoded.actor)
+            .ilike("github_username", decoded.actor)
             .maybeSingle();
+          if (userError) {
+            Sentry.captureException(userError, scope);
+            throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
+          }
           if (user) {
-            const { data: userRolesData } = await adminSupabase
+            const { data: userRolesData, error: userRolesError } = await adminSupabase
               .from("user_roles")
               .select("*")
               .eq("user_id", user.user_id)
               .eq("class_id", classId)
               .maybeSingle();
+            if (userRolesError) {
+              Sentry.captureException(userRolesError, scope);
+              throw new UserVisibleError(`Failed to lookup user role: ${userRolesError.message}`);
+            }
             userRoles = userRolesData ?? undefined;
           }
         }

@@ -65,9 +65,7 @@ function detectRateLimitType(error: unknown): {
   }
 
   if (status === 403 || status === 429) {
-    const retryAfter = headers?.["retry-after"]
-      ? parseInt(headers["retry-after"], 10)
-      : undefined;
+    const retryAfter = headers?.["retry-after"] ? parseInt(headers["retry-after"], 10) : undefined;
     const remaining = headers?.["x-ratelimit-remaining"];
     if (remaining === "0") {
       return { type: "primary", retryAfter: retryAfter ?? 60 };
@@ -345,11 +343,11 @@ async function handlePushToStudentRepo(
     maybeCrash("push.student.for_each_commit.before_lookup");
 
     // Check circuit breaker before making GitHub API calls - fail fast if rate limited
-    // Check both org-level and create_repo method-specific circuit breakers
-    const circuitStatus = await checkCircuitBreakerOpen(adminSupabase, org, "create_repo", scope);
+    // Check both org-level and triggerWorkflow method-specific circuit breakers
+    const circuitStatus = await checkCircuitBreakerOpen(adminSupabase, org, "triggerWorkflow", scope);
     if (circuitStatus.isOpen) {
       const openUntil = circuitStatus.openUntil ? new Date(circuitStatus.openUntil).toLocaleString() : "unknown";
-      const scopeInfo = circuitStatus.circuitScope === "org_method" ? ` (method: create_repo)` : "";
+      const scopeInfo = circuitStatus.circuitScope === "org_method" ? ` (method: triggerWorkflow)` : "";
       throw new Error(
         `Circuit breaker open for org ${org}${scopeInfo}: GitHub API operations temporarily unavailable. ` +
           `Reason: ${circuitStatus.reason || "Rate limit or error threshold exceeded"}. ` +
