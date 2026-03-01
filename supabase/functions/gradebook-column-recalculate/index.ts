@@ -397,7 +397,6 @@ async function processRowsAll(
         );
       }
     } else {
-
       const studentIds = rowEntries.map((e) => e.msg.message.student_id);
       const { data: scopedGcs, error: scopedErr } = await adminSupabase
         .from("gradebook_column_students")
