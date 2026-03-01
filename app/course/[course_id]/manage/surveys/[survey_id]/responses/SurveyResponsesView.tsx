@@ -506,11 +506,7 @@ export default function SurveyResponsesView({
       </HStack>
 
       {/* Analytics - compare quantitative values across groups */}
-      <SurveyAnalytics
-        surveyId={surveyDbId}
-        surveyJson={surveyJson}
-        classId={Number(courseId)}
-      />
+      <SurveyAnalytics surveyId={surveyDbId} surveyJson={surveyJson} classId={Number(courseId)} />
 
       {/* Responses Table */}
       <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">

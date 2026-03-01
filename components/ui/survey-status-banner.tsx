@@ -18,13 +18,7 @@ type SurveyStatus = {
   available_at: string | null;
 };
 
-export function SurveyStatusBanner({
-  assignmentId,
-  courseId
-}: {
-  assignmentId: number;
-  courseId: number;
-}) {
+export function SurveyStatusBanner({ assignmentId, courseId }: { assignmentId: number; courseId: number }) {
   const { private_profile_id } = useClassProfiles();
   const [surveys, setSurveys] = useState<SurveyStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,10 +72,7 @@ export function SurveyStatusBanner({
                     <Text fontWeight="semibold" fontSize="sm">
                       Survey: {survey.survey_title}
                     </Text>
-                    <Badge
-                      colorPalette={survey.is_submitted ? "green" : isOverdue ? "red" : "yellow"}
-                      size="sm"
-                    >
+                    <Badge colorPalette={survey.is_submitted ? "green" : isOverdue ? "red" : "yellow"} size="sm">
                       {survey.is_submitted ? "Completed" : isOverdue ? "Overdue" : "Pending"}
                     </Badge>
                   </HStack>

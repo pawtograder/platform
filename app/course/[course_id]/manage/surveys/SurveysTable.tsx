@@ -418,7 +418,8 @@ export default function SurveysTable({ surveys, courseId, timezone }: SurveysTab
                 <Table.Cell py={4}>
                   <Text color={survey.assignment_id ? "fg" : "fg.muted"}>
                     {survey.assignment_id
-                      ? assignments.find((a) => a.id === survey.assignment_id)?.title || `Assignment #${survey.assignment_id}`
+                      ? assignments.find((a) => a.id === survey.assignment_id)?.title ||
+                        `Assignment #${survey.assignment_id}`
                       : "—"}
                   </Text>
                 </Table.Cell>

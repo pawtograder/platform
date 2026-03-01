@@ -43,19 +43,28 @@ function computeStats(values: number[]): { mean: number; median: number; min: nu
   if (values.length === 0) return { mean: 0, median: 0, min: 0, max: 0, count: 0 };
   const sorted = [...values].sort((a, b) => a - b);
   const sum = values.reduce((acc, v) => acc + v, 0);
-  const median = sorted.length % 2 === 0
-    ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
-    : sorted[Math.floor(sorted.length / 2)];
+  const median =
+    sorted.length % 2 === 0
+      ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+      : sorted[Math.floor(sorted.length / 2)];
   return {
     mean: sum / values.length,
     median,
     min: sorted[0],
     max: sorted[sorted.length - 1],
-    count: values.length,
+    count: values.length
   };
 }
 
-function StatsRow({ label, stats, colorPalette }: { label: string; stats: ReturnType<typeof computeStats>; colorPalette?: string }) {
+function StatsRow({
+  label,
+  stats,
+  colorPalette
+}: {
+  label: string;
+  stats: ReturnType<typeof computeStats>;
+  colorPalette?: string;
+}) {
   if (stats.count === 0) return null;
   return (
     <Table.Row>
@@ -76,7 +85,7 @@ function StatsRow({ label, stats, colorPalette }: { label: string; stats: Return
 export default function SurveyAnalytics({
   surveyId,
   surveyJson,
-  classId,
+  classId
 }: {
   surveyId: string;
   surveyJson: Json;
@@ -93,7 +102,7 @@ export default function SurveyAnalytics({
       const supabase = createClient();
       const { data, error } = await supabase.rpc("get_survey_responses_with_group_context", {
         p_survey_id: surveyId,
-        p_class_id: classId,
+        p_class_id: classId
       });
       if (!error && data) {
         setResponses(data as GroupContextResponse[]);
@@ -189,12 +198,11 @@ export default function SurveyAnalytics({
         </Text>
 
         <HStack gap={4} align="center">
-          <Text fontSize="sm" fontWeight="medium">Question:</Text>
+          <Text fontSize="sm" fontWeight="medium">
+            Question:
+          </Text>
           <NativeSelect.Root size="sm" maxW="400px">
-            <NativeSelect.Field
-              value={selectedQuestion}
-              onChange={(e) => setSelectedQuestion(e.target.value)}
-            >
+            <NativeSelect.Field value={selectedQuestion} onChange={(e) => setSelectedQuestion(e.target.value)}>
               {numericQuestions.map((q) => (
                 <option key={q.name} value={q.name}>
                   {q.title}

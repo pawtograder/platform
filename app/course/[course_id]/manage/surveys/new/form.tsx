@@ -1,6 +1,18 @@
 "use client";
 
-import { Box, Input, Textarea, Text, HStack, VStack, Button, Heading, Fieldset, Checkbox, NativeSelect } from "@chakra-ui/react";
+import {
+  Box,
+  Input,
+  Textarea,
+  Text,
+  HStack,
+  VStack,
+  Button,
+  Heading,
+  Fieldset,
+  Checkbox,
+  NativeSelect
+} from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 import { Button as UIButton } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -430,7 +442,10 @@ export default function SurveyForm({
 
               {/* Link to Assignment */}
               <Fieldset.Content>
-                <Field label="Link to Assignment" helperText="Optionally link this survey to an assignment. Students will see the survey status on their submission page.">
+                <Field
+                  label="Link to Assignment"
+                  helperText="Optionally link this survey to an assignment. Students will see the survey status on their submission page."
+                >
                   <Controller
                     name="assignment_id"
                     control={control}
@@ -458,7 +473,10 @@ export default function SurveyForm({
 
               {/* Available At */}
               <Fieldset.Content>
-                <Field label="Available At" helperText="When the survey becomes visible to students. Leave empty to make it available immediately upon publishing.">
+                <Field
+                  label="Available At"
+                  helperText="When the survey becomes visible to students. Leave empty to make it available immediately upon publishing."
+                >
                   <Controller
                     name="available_at"
                     control={control}

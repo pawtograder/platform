@@ -109,9 +109,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       value: Tag;
     }>
   >([]);
-  const [assignmentMode, setAssignmentMode] = useState<"by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors">(
-    "by_submission"
-  );
+  const [assignmentMode, setAssignmentMode] = useState<
+    "by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors"
+  >("by_submission");
   const [selectedRubricPartsForFilter, setSelectedRubricPartsForFilter] = useState<
     MultiValue<{
       label: string;
@@ -170,7 +170,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   // Map of assignment_group_id -> mentor_profile_id (for grading by group mentors)
   const [groupMentorByGroupId, setGroupMentorByGroupId] = useState<Map<number, string>>(new Map());
   useEffect(() => {
-    const buildMap = (rows: Array<{ id: number; mentor_profile_id?: string | null; assignment_groups_members?: { profile_id: string }[] }>) => {
+    const buildMap = (
+      rows: Array<{
+        id: number;
+        mentor_profile_id?: string | null;
+        assignment_groups_members?: { profile_id: string }[];
+      }>
+    ) => {
       const memberMap = new Map<number, string[]>();
       const mentorMap = new Map<number, string>();
       for (const row of rows) {
@@ -183,14 +189,24 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       return { memberMap, mentorMap };
     };
     const { data, unsubscribe } = courseController.assignmentGroupsWithMembers.list(
-      (rows: Array<{ id: number; mentor_profile_id?: string | null; assignment_groups_members?: { profile_id: string }[] }>) => {
+      (
+        rows: Array<{
+          id: number;
+          mentor_profile_id?: string | null;
+          assignment_groups_members?: { profile_id: string }[];
+        }>
+      ) => {
         const { memberMap, mentorMap } = buildMap(rows);
         setGroupMembersByGroupId(memberMap);
         setGroupMentorByGroupId(mentorMap);
       }
     );
     const { memberMap, mentorMap } = buildMap(
-      data as Array<{ id: number; mentor_profile_id?: string | null; assignment_groups_members?: { profile_id: string }[] }>
+      data as Array<{
+        id: number;
+        mentor_profile_id?: string | null;
+        assignment_groups_members?: { profile_id: string }[];
+      }>
     );
     setGroupMembersByGroupId(memberMap);
     setGroupMentorByGroupId(mentorMap);
@@ -1705,7 +1721,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 }}
                 onChange={(e) => {
                   if (e?.value) {
-                    setAssignmentMode(e.value as "by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors");
+                    setAssignmentMode(
+                      e.value as "by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors"
+                    );
                   }
                 }}
                 options={[
@@ -1720,8 +1738,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 {assignmentMode === "by_rubric_part" && "Rubric parts are split between graders first"}
                 {assignmentMode === "by_lab_leaders" &&
                   "Each submission is assigned to all lab leaders of the student's lab section"}
-                {assignmentMode === "by_group_mentors" &&
-                  "Each group's submission is assigned to the group's mentor"}
+                {assignmentMode === "by_group_mentors" && "Each group's submission is assigned to the group's mentor"}
               </Field.HelperText>
             </Field.Root>
             <Field.Root>
@@ -2239,7 +2256,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 </>
               )}
 
-              {((assignmentMode as string) === "by_lab_leaders" || (assignmentMode as string) === "by_group_mentors") && <Heading size="sm">Due Date</Heading>}
+              {((assignmentMode as string) === "by_lab_leaders" ||
+                (assignmentMode as string) === "by_group_mentors") && <Heading size="sm">Due Date</Heading>}
 
               <Field.Root>
                 <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
@@ -2297,7 +2315,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               disabled={
                 !dueDate ||
                 !selectedRubric ||
-                ((assignmentMode as string) !== "by_lab_leaders" && (assignmentMode as string) !== "by_group_mentors" && !role) ||
+                ((assignmentMode as string) !== "by_lab_leaders" &&
+                  (assignmentMode as string) !== "by_group_mentors" &&
+                  !role) ||
                 submissionsToDo?.length === 0
               }
               loading={isGeneratingReviews}

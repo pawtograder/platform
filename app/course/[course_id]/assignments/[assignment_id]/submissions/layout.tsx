@@ -56,9 +56,7 @@ export default async function SubmissionsLayout({
         )}
       </HStack>
       {instructorOrGrader && <AssignmentGradingToolbar />}
-      {isStudent && (
-        <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
-      )}
+      {isStudent && <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />}
 
       <Box borderColor="border.muted" borderWidth="2px" w="100%" borderTopRadius={0} borderBottomRadius="md">
         {children}
