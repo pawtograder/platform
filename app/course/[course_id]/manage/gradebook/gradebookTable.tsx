@@ -1842,14 +1842,17 @@ export default function GradebookTable() {
     const csv = gradebookController.exportGradebook(courseController, {
       useRenderExpressions: exportWithRenderExpressions
     });
-    const blob = new Blob(
-      [
-        csv
-          .map((row) => row.map((cell) => (typeof cell === "string" ? `"${cell.replace(/"/g, "")}"` : cell)).join(","))
-          .join("\n")
-      ],
-      { type: "text/csv" }
-    );
+    const csvText = csv
+      .map((row) =>
+        row
+          .map((cell) => {
+            const stringCell = cell === null || cell === undefined ? "" : String(cell);
+            return `"${stringCell.replace(/"/g, '""')}"`;
+          })
+          .join(",")
+      )
+      .join("\n");
+    const blob = new Blob([csvText], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

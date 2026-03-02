@@ -4,6 +4,7 @@ import type { Page, Locator } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { promises as fs } from "node:fs";
+import Papa from "papaparse";
 import {
   createClass,
   createUsersInClass,
@@ -51,10 +52,14 @@ async function readCellText(page: Page, rowName: string, columnName: string) {
 }
 
 function parseCsv(csvText: string) {
-  return csvText
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => line.split(",").map((cell) => cell.trim().replace(/^"(.*)"$/, "$1")));
+  const parsed = Papa.parse<string[]>(csvText, {
+    skipEmptyLines: true
+  });
+  if (parsed.errors.length > 0) {
+    const firstError = parsed.errors[0];
+    throw new Error(`Failed to parse CSV: ${firstError.message}`);
+  }
+  return parsed.data.map((row) => row.map((cell) => cell ?? ""));
 }
 
 function getCsvCellValue(csvRows: string[][], email: string, columnName: string) {

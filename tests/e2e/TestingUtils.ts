@@ -387,10 +387,8 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     }
     throw new Error(`Magic link sign-in did not complete (final URL: ${page.url()})`);
   } catch (error) {
-    if (retriesRemaining > 0 && (error as Error).message.includes("did not complete")) {
-      return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
-    }
-    throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to sign in with magic link: ${message}`);
   }
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
