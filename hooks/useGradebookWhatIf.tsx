@@ -67,6 +67,8 @@ class GradebookWhatIfController {
   public debugID: string = crypto.randomUUID();
   private _incompleteValues: GradebookWhatIfIncompleteValuesMap = {};
   private _subscribers: (() => void)[] = [];
+  // Tracks columns explicitly set by user input (vs derived what-if values).
+  private _userSetWhatIfColumns = new Set<number>();
   private _gradebookUnsubscribe: (() => void) | null = null;
   private _assignments: AssignmentForStudentDashboard[] = [];
   // Track shown errors to avoid spamming the user with duplicate toasts (scoped per controller instance)
@@ -240,6 +242,11 @@ class GradebookWhatIfController {
         what_if: value
       };
     }
+    if (value === undefined) {
+      this._userSetWhatIfColumns.delete(columnId);
+    } else {
+      this._userSetWhatIfColumns.add(columnId);
+    }
     this._incompleteValues[columnId] = incompleteValues;
     //Find everything that depends on this column
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
@@ -264,6 +271,7 @@ class GradebookWhatIfController {
         gradebook_score: existingGrade.gradebook_score
       };
     }
+    this._userSetWhatIfColumns.delete(columnId);
     delete this._incompleteValues[columnId];
     // Recalculate dependent columns
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
@@ -891,7 +899,7 @@ class GradebookWhatIfController {
 
         // Determine if we should show a what-if value
         const existingWhatIf = this._grades[columnId]?.what_if;
-        const hasUserSetWhatIf = existingWhatIf !== undefined;
+        const hasUserSetWhatIf = this._userSetWhatIfColumns.has(columnId);
 
         // Check if this column depends on other columns with user-set what-if values
         const hasWhatIfDependencies = this.hasWhatIfDependencies(columnId);
@@ -952,6 +960,7 @@ class GradebookWhatIfController {
     }
     // Clear error tracking Set when controller is cleaned up
     this._shownExpressionErrors.clear();
+    this._userSetWhatIfColumns.clear();
   }
 }
 

@@ -179,16 +179,16 @@ function WhatIfScoreCell({
   );
 }
 
-// function canEditColumn(column: GradebookColumn) {
-//   const deps = column.dependencies;
-//   return !(
-//     deps &&
-//     typeof deps === "object" &&
-//     "gradebook_columns" in deps &&
-//     Array.isArray((deps as { gradebook_columns?: number[] }).gradebook_columns) &&
-//     (deps as { gradebook_columns?: number[] }).gradebook_columns!.length > 0
-//   );
-// }
+function canEditColumn(column: GradebookColumn) {
+  const deps = column.dependencies;
+  return !(
+    deps &&
+    typeof deps === "object" &&
+    "gradebook_columns" in deps &&
+    Array.isArray((deps as { gradebook_columns?: number[] }).gradebook_columns) &&
+    (deps as { gradebook_columns?: number[] }).gradebook_columns!.length > 0
+  );
+}
 
 function IncompleteValuesAlert({
   incompleteValues,
@@ -299,7 +299,7 @@ function GradebookCard({
   const score = studentGrade?.score_override ?? studentGrade?.score;
   const isShowingWhatIf =
     studentGrade?.score_override == null && whatIfVal?.what_if !== undefined && whatIfVal?.what_if !== score;
-  const canEdit = false; //canEditColumn(column); TODO re-enable when fixing whatIf
+  const canEdit = canEditColumn(column);
   const whatIfController = useGradebookWhatIf();
   const whatIfIncompleteValues = whatIfController.getIncompleteValues(column.id);
   const incompleteValues = whatIfIncompleteValues ?? studentGrade?.incomplete_values;
