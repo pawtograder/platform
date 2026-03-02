@@ -359,26 +359,35 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     // Use magic link for login
     await page.goto(magicLink);
     await page.getByRole("button", { name: "Sign in with magic link" }).click();
-    await page.waitForLoadState("networkidle");
 
-    const currentUrl = page.url();
-    const isSuccessful = currentUrl.includes("/course");
-    // Check to see if we got the magic link expired notice
-    if (!isSuccessful) {
-      // Magic link expired, retry if we have retries remaining
-      if (retriesRemaining > 0) {
-        return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
-      } else {
-        throw new Error("Magic link expired and no retries remaining");
+    // On slower machines (especially in dev mode), redirect can lag after submit.
+    // Wait for either successful course navigation or explicit expired-link message.
+    let outcome: "success" | "expired" | "unknown" = "unknown";
+    try {
+      await page.waitForURL(/\/course(\/|$)/, { timeout: 30_000 });
+      outcome = "success";
+    } catch {
+      const expiredMessage = page.getByText(/Email link is invalid or has expired/i);
+      try {
+        await expiredMessage.waitFor({ state: "visible", timeout: 2_000 });
+        outcome = "expired";
+      } catch {
+        outcome = "unknown";
       }
     }
 
-    if (!isSuccessful) {
-      throw new Error("Failed to sign in - neither success nor expired state detected");
+    if (outcome === "success") {
+      return;
     }
+    if (retriesRemaining > 0) {
+      return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
+    }
+    if (outcome === "expired") {
+      throw new Error("Magic link expired and no retries remaining");
+    }
+    throw new Error(`Magic link sign-in did not complete (final URL: ${page.url()})`);
   } catch (error) {
-    if (retriesRemaining > 0 && (error as Error).message.includes("Failed to sign in")) {
-      console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
+    if (retriesRemaining > 0 && (error as Error).message.includes("did not complete")) {
       return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
     }
     throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
@@ -386,23 +395,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
   await page.goto("/");
-  try {
-    await signInWithMagicLinkAndRetry(page, testingUser);
-  } catch {
-    // Fallback for local environments where magic-link verification is flaky.
-    await page.goto(`/sign-in?email=${encodeURIComponent(testingUser.email)}`);
-    await page.getByLabel("Sign in email").fill(testingUser.email);
-    await page.getByLabel("Sign in password").fill(testingUser.password);
-    await page.getByRole("button", { name: "Sign in with email" }).click();
-    try {
-      await page.waitForURL(/\/course(\/|$)/, { timeout: 30_000 });
-    } catch {
-      // Fall through to explicit URL check below for a clear error.
-    }
-    if (!page.url().includes("/course")) {
-      throw new Error("Failed to sign in with both magic link and email/password fallback");
-    }
-  }
+  await signInWithMagicLinkAndRetry(page, testingUser);
 
   if (course) {
     await page.waitForLoadState("networkidle");
