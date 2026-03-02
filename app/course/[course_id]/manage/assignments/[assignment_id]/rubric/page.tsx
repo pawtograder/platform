@@ -41,7 +41,12 @@ import {
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import dynamic from "next/dynamic";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  clearRubricUnsavedChangesFlag,
+  RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE,
+  setRubricUnsavedChangesFlag
+} from "@/lib/rubricUnsavedChanges";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
@@ -532,6 +537,23 @@ function InnerRubricPage() {
       {} as Record<string, boolean>
     )
   );
+  const hasAnyUnsavedChanges = useMemo(
+    () => hasUnsavedChanges || Object.values(unsavedStatusPerTab).some(Boolean),
+    [hasUnsavedChanges, unsavedStatusPerTab]
+  );
+  const hasAnyUnsavedChangesRef = useRef(hasAnyUnsavedChanges);
+  const shouldSkipNextPopStateWarningRef = useRef(false);
+  const rubricPageRootRef = useRef<HTMLDivElement>(null);
+  const isRubricPageInstanceVisible = useCallback(() => {
+    const rootElement = rubricPageRootRef.current;
+    if (!rootElement) return true;
+    return rootElement.getClientRects().length > 0;
+  }, []);
+
+  useLayoutEffect(() => {
+    hasAnyUnsavedChangesRef.current = hasAnyUnsavedChanges;
+  }, [hasAnyUnsavedChanges]);
+
   const [stashedEditorStates, setStashedEditorStates] = useState<
     Record<
       string,
@@ -875,6 +897,81 @@ function InnerRubricPage() {
       setHasUnsavedChanges(!!value);
     }
   }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id]);
+
+  useLayoutEffect(() => {
+    if (!assignment_id) return;
+    if (!isRubricPageInstanceVisible()) return;
+
+    setRubricUnsavedChangesFlag(assignment_id, hasAnyUnsavedChanges);
+    return () => {
+      clearRubricUnsavedChangesFlag(assignment_id);
+    };
+  }, [assignment_id, hasAnyUnsavedChanges, isRubricPageInstanceVisible]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isRubricPageInstanceVisible()) return;
+      if (!hasAnyUnsavedChangesRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    const handlePopState = () => {
+      if (!isRubricPageInstanceVisible()) return;
+      if (shouldSkipNextPopStateWarningRef.current) {
+        shouldSkipNextPopStateWarningRef.current = false;
+        return;
+      }
+      if (!hasAnyUnsavedChangesRef.current) return;
+
+      const shouldLeave = window.confirm(RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE);
+      if (shouldLeave) return;
+
+      shouldSkipNextPopStateWarningRef.current = true;
+      window.history.go(1);
+    };
+
+    const handleDocumentClick = (event: MouseEvent) => {
+      if (!isRubricPageInstanceVisible()) return;
+      if (!hasAnyUnsavedChangesRef.current || event.defaultPrevented) return;
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      if (anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+
+      const currentUrl = new URL(window.location.href);
+      const nextUrl = new URL(href, window.location.href);
+      const isSameDocumentLocation =
+        currentUrl.origin === nextUrl.origin &&
+        currentUrl.pathname === nextUrl.pathname &&
+        currentUrl.search === nextUrl.search;
+
+      if (isSameDocumentLocation) return;
+
+      const shouldLeave = window.confirm(RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE);
+      if (shouldLeave) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("popstate", handlePopState);
+    document.addEventListener("click", handleDocumentClick, true);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handlePopState);
+      document.removeEventListener("click", handleDocumentClick, true);
+    };
+  }, [isRubricPageInstanceVisible]);
 
   const updatePartIfChanged = useCallback(
     async (part: HydratedRubricPart, existingPart: HydratedRubricPart) => {
@@ -1302,7 +1399,7 @@ function InnerRubricPage() {
   }
 
   return (
-    <Flex w="100%" minW="0" direction="column">
+    <Flex ref={rubricPageRootRef} w="100%" minW="0" direction="column">
       <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
         <Toaster />
         <VStack align="start">
