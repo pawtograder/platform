@@ -32,4 +32,9 @@ describe("rubric unsaved changes session state", () => {
     setRubricUnsavedChangesFlag("", true);
     expect(hasRubricUnsavedChangesFlag("")).toBe(false);
   });
+
+  it("ignores whitespace-only assignment ids", () => {
+    setRubricUnsavedChangesFlag("   ", true);
+    expect(hasRubricUnsavedChangesFlag("   ")).toBe(false);
+  });
 });

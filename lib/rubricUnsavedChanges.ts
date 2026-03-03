@@ -3,6 +3,33 @@ export const RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE =
 
 const STORAGE_KEY_PREFIX = "pawtograder:rubric-unsaved-changes";
 
+const safeSessionStorage = {
+  getItem(key: string): string | null {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem(key: string, value: string): void {
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch {
+      // No-op in restricted browsing contexts
+    }
+  },
+  removeItem(key: string): void {
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch {
+      // No-op in restricted browsing contexts
+    }
+  }
+};
+
 function getStorageKeyOrNull(assignmentId: string | number): string | null {
   const normalizedAssignmentId = String(assignmentId).trim();
   if (!normalizedAssignmentId) return null;
@@ -10,27 +37,24 @@ function getStorageKeyOrNull(assignmentId: string | number): string | null {
 }
 
 export function setRubricUnsavedChangesFlag(assignmentId: string | number, hasUnsavedChanges: boolean): void {
-  if (typeof window === "undefined") return;
   const storageKey = getStorageKeyOrNull(assignmentId);
   if (!storageKey) return;
 
   if (hasUnsavedChanges) {
-    window.sessionStorage.setItem(storageKey, "true");
+    safeSessionStorage.setItem(storageKey, "true");
     return;
   }
-  window.sessionStorage.removeItem(storageKey);
+  safeSessionStorage.removeItem(storageKey);
 }
 
 export function hasRubricUnsavedChangesFlag(assignmentId: string | number): boolean {
-  if (typeof window === "undefined") return false;
   const storageKey = getStorageKeyOrNull(assignmentId);
   if (!storageKey) return false;
-  return window.sessionStorage.getItem(storageKey) === "true";
+  return safeSessionStorage.getItem(storageKey) === "true";
 }
 
 export function clearRubricUnsavedChangesFlag(assignmentId: string | number): void {
-  if (typeof window === "undefined") return;
   const storageKey = getStorageKeyOrNull(assignmentId);
   if (!storageKey) return;
-  window.sessionStorage.removeItem(storageKey);
+  safeSessionStorage.removeItem(storageKey);
 }
