@@ -8,11 +8,13 @@ import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 import AssignmentDashboard from "./assignmentDashboard";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import TableController from "@/lib/TableController";
 import * as Sentry from "@sentry/nextjs";
+
+const VALID_TABS = ["assigned-grading", "all-submissions", "dashboard"] as const;
 
 export default function AssignmentHome() {
   const controller = useAssignmentController();
@@ -21,6 +23,13 @@ export default function AssignmentHome() {
   const hasReviewAssignments = myReviewAssignments.length > 0;
   const { course, classRealTimeController } = useCourseController();
   const { assignment_id } = useParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const tabFromUrl = VALID_TABS.includes(tabParam as (typeof VALID_TABS)[number])
+    ? (tabParam as (typeof VALID_TABS)[number])
+    : null;
   const supabase = useMemo(() => createClient(), []);
 
   const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
@@ -107,7 +116,15 @@ export default function AssignmentHome() {
         </HStack>
       </Box>
       <Tabs.Root
-        defaultValue={hasReviewAssignments ? "assigned-grading" : "all-submissions"}
+        value={tabFromUrl ?? (hasReviewAssignments ? "assigned-grading" : "all-submissions")}
+        onValueChange={(details) => {
+          const tab = details.value as (typeof VALID_TABS)[number];
+          if (VALID_TABS.includes(tab)) {
+            const params = new URLSearchParams(searchParams.toString());
+            params.set("tab", tab);
+            router.replace(`${pathname}?${params.toString()}`);
+          }
+        }}
         variant="enclosed"
         lazyMount
         unmountOnExit
