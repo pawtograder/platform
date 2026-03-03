@@ -1681,6 +1681,45 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 Submissions will be automatically assigned to all lab leaders of each student&apos;s lab section. No
                 manual grader selection is needed.
               </Alert>
+              <Field.Root>
+                <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
+                <Input
+                  type="datetime-local"
+                  value={
+                    dueDate
+                      ? new Date(dueDate)
+                          .toLocaleString("sv-SE", {
+                            timeZone: course.time_zone ?? "America/New_York"
+                          })
+                          .replace(" ", "T")
+                      : ""
+                  }
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value) {
+                      // Treat inputted date as course timezone regardless of user location
+                      const [date, time] = value.split("T");
+                      const [year, month, day] = date.split("-");
+                      const [hour, minute] = time.split(":");
+
+                      // Create TZDate with these exact values in course timezone
+                      const tzDate = new TZDate(
+                        parseInt(year),
+                        parseInt(month) - 1,
+                        parseInt(day),
+                        parseInt(hour),
+                        parseInt(minute),
+                        0,
+                        0,
+                        course.time_zone ?? "America/New_York"
+                      );
+                      setDueDate(tzDate.toISOString());
+                    } else {
+                      setDueDate("");
+                    }
+                  }}
+                />
+              </Field.Root>
             </VStack>
           </Fieldset.Content>
         </Fieldset.Root>
@@ -2104,7 +2143,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                         0,
                         course.time_zone ?? "America/New_York"
                       );
-                      setDueDate(tzDate.toString());
+                      setDueDate(tzDate.toISOString());
                     } else {
                       setDueDate("");
                     }
