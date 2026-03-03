@@ -9,6 +9,11 @@ import type {
   GradebookColumnStudent,
   GradebookColumnStudentWithMaxScore
 } from "./types.d.ts";
+import {
+  type IncompleteValuesAdvice,
+  pickPreferredGradebookValue,
+  pushMissingDependenciesToContext
+} from "./shared.ts";
 
 export type PrivateProfileId = string;
 
@@ -20,17 +25,6 @@ export type ExpressionContext = {
   scope: Sentry.Scope;
   class_id: number;
 };
-//TODO: Move this to a shared file
-//See also in hooks/useGradebookWhatIf.tsx
-export type IncompleteValuesAdvice = {
-  missing?: {
-    gradebook_columns?: string[];
-  };
-  not_released?: {
-    gradebook_columns?: string[];
-  };
-};
-
 export type ResolvedExprDependencyInstance = ExprDependencyInstance & {
   value: unknown;
   is_private: boolean;
@@ -369,63 +363,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
   }
   private gradebookColumnMap: Map<number, GradebookColumn> = new Map();
 
-  private _pushMissingIfNeeded(
-    context: ExpressionContext,
-    ret: GradebookColumnStudentWithMaxScore | GradebookColumnStudentWithMaxScore[]
-  ) {
-    const handleOne = (ret: GradebookColumnStudentWithMaxScore) => {
-      // Handle cases where THIS gradebook column is missing
-      if (!ret || ret.is_missing || (ret.score === null && ret.score_override === null)) {
-        if (!context.incomplete_values) {
-          context.incomplete_values = {
-            missing: {
-              gradebook_columns: []
-            }
-          };
-        }
-        if (!context.incomplete_values.missing) {
-          context.incomplete_values.missing = {
-            gradebook_columns: []
-          };
-        }
-        if (!context.incomplete_values.missing.gradebook_columns) {
-          context.incomplete_values.missing.gradebook_columns = [];
-        }
-        context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
-      }
-      // Handle cases where OUR DEPENDENCIES ARE MISSING
-      if (
-        ret &&
-        ret.incomplete_values !== null &&
-        typeof ret.incomplete_values === "object" &&
-        "missing" in ret.incomplete_values
-      ) {
-        const missing = ret.incomplete_values.missing as { gradebook_columns?: string[] };
-        if (!context.incomplete_values) {
-          context.incomplete_values = {
-            missing: {
-              gradebook_columns: []
-            }
-          };
-        }
-        if (!context.incomplete_values.missing) {
-          context.incomplete_values.missing = {
-            gradebook_columns: []
-          };
-        }
-        if (!context.incomplete_values.missing.gradebook_columns) {
-          context.incomplete_values.missing.gradebook_columns = [];
-        }
-        context.incomplete_values.missing.gradebook_columns.push(...(missing.gradebook_columns ?? []));
-      }
-    };
-    if (Array.isArray(ret)) {
-      ret.forEach(handleOne);
-    } else {
-      handleOne(ret);
-    }
-  }
-
   override execute({
     function_name,
     context,
@@ -447,22 +384,18 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         super.execute({ function_name, context, key: slug, class_id }) as
           | GradebookColumnStudentWithMaxScore
           | undefined;
+      const resolveValue = (slug: string) => {
+        const overrideVal = readOverride(slug);
+        const baseVal = readBase(slug);
+        return pickPreferredGradebookValue(overrideVal, baseVal);
+      };
       if (typeof key === "object") {
         if (Array.isArray(key)) {
           const values = key.map((k) => {
             if (typeof k !== "string") return undefined;
-            const overrideVal = readOverride(k);
-            const baseVal = readBase(k);
-            // If we have an override value but base has score_override, use base's score_override
-            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
-              return {
-                ...baseVal,
-                score: baseVal.score_override
-              };
-            }
-            return overrideVal ?? baseVal;
+            return resolveValue(k);
           });
-          this._pushMissingIfNeeded(
+          pushMissingDependenciesToContext(
             context,
             values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
           );
@@ -471,42 +404,18 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         if (isDenseMatrix(key)) {
           const values = (key as Matrix<string>).toArray().map((k) => {
             if (typeof k !== "string") return undefined;
-            const overrideVal = readOverride(k);
-            const baseVal = readBase(k);
-            // If we have an override value but base has score_override, use base's score_override
-            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
-              return {
-                ...baseVal,
-                score: baseVal.score_override
-              };
-            }
-            return overrideVal ?? baseVal;
+            return resolveValue(k);
           });
-          this._pushMissingIfNeeded(
+          pushMissingDependenciesToContext(
             context,
             values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
           );
           return values;
         }
       } else if (typeof key === "string") {
-        const overrideValue = readOverride(key);
-        const baseValue = readBase(key);
-
-        // If we have an override value (freshly calculated), but the base value has a score_override,
-        // we should use the base value's score_override instead of the calculated override value
-        let value: GradebookColumnStudentWithMaxScore | undefined;
-        if (overrideValue && baseValue && baseValue.score_override !== null && baseValue.score_override !== undefined) {
-          // Use base value with its score_override
-          value = {
-            ...baseValue,
-            score: baseValue.score_override
-          };
-        } else {
-          // Use override value if available, otherwise use base value
-          value = overrideValue ?? baseValue;
-        }
+        const value = resolveValue(key);
         if (value) {
-          this._pushMissingIfNeeded(context, value);
+          pushMissingDependenciesToContext(context, value);
           return value;
         }
       }
@@ -515,7 +424,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const ret = super.execute({ function_name, context, key, class_id }) as
       | GradebookColumnStudentWithMaxScore
       | GradebookColumnStudentWithMaxScore[];
-    this._pushMissingIfNeeded(context, ret);
+    pushMissingDependenciesToContext(context, ret);
 
     return ret;
   }

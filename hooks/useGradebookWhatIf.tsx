@@ -9,6 +9,11 @@ import { CourseController, useCourseController } from "./useCourseController";
 import { Spinner } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { toaster } from "@/components/ui/toaster";
+import {
+  dedupeIncompleteValues,
+  pushMissingDependenciesToContext
+} from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
+import type { IncompleteValuesAdvice } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
 
 const TRACE_WHAT_IF_CALCULATIONS = false;
 
@@ -23,15 +28,7 @@ export type ExpressionContext = {
 //These functions should be called with a context object as the first argument
 export const ContextFunctions = ["mean", "countif", "sum", "drop_lowest", "gradebook_columns"];
 
-//See also in supabase/functions/gradebook-column-recalculate/expression/DependencySource.ts
-export type IncompleteValuesAdvice = {
-  missing?: {
-    gradebook_columns?: string[];
-  };
-  not_released?: {
-    gradebook_columns?: string[];
-  };
-};
+export type { IncompleteValuesAdvice } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
 
 export type WhatIfGradeValue = {
   what_if: number | undefined;
@@ -420,7 +417,7 @@ class GradebookWhatIfController {
               }
             }
 
-            //Track not released values
+            // Track not-released values the same way as backend report_only behavior.
             if (!ret.released && !ret.is_private && (ret.score === null || ret.score === undefined)) {
               if (!context.incomplete_values) {
                 context.incomplete_values = {};
@@ -432,19 +429,8 @@ class GradebookWhatIfController {
                 context.incomplete_values.not_released.gradebook_columns = [];
               }
               context.incomplete_values.not_released.gradebook_columns.push(ret.column_slug!);
-            } else if (ret.is_missing) {
-              //Track missing values
-              if (!context.incomplete_values) {
-                context.incomplete_values = {};
-              }
-              if (!context.incomplete_values?.missing) {
-                context.incomplete_values.missing = {};
-              }
-              if (!context.incomplete_values.missing.gradebook_columns) {
-                context.incomplete_values.missing.gradebook_columns = [];
-              }
-              context.incomplete_values.missing.gradebook_columns.push(ret.column_slug!);
             }
+            pushMissingDependenciesToContext(context, ret);
             return ret;
           };
           if (matchingColumns.length === 1 && !slug.includes("*")) {
@@ -880,20 +866,7 @@ class GradebookWhatIfController {
           }
           scores[policy as "report_only" | "assume_max" | "assume_zero"] = score;
           if (policy === "report_only") {
-            //If there are any incomplete values, dedupliate them
-            if (context.incomplete_values) {
-              if (context.incomplete_values.missing?.gradebook_columns) {
-                context.incomplete_values.missing.gradebook_columns = [
-                  ...new Set(context.incomplete_values.missing.gradebook_columns)
-                ];
-              }
-              if (context.incomplete_values.not_released?.gradebook_columns) {
-                context.incomplete_values.not_released.gradebook_columns = [
-                  ...new Set(context.incomplete_values.not_released.gradebook_columns)
-                ];
-              }
-            }
-            this._incompleteValues[columnId] = context.incomplete_values;
+            this._incompleteValues[columnId] = dedupeIncompleteValues(context.incomplete_values) ?? null;
           }
         }
 
