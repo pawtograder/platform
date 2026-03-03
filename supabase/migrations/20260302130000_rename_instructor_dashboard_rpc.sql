@@ -53,7 +53,7 @@ BEGIN
     WHERE a.class_id = p_class_id
   ),
   active_students AS (
-    SELECT ur.private_profile_id
+    SELECT DISTINCT ur.private_profile_id
     FROM public.user_roles ur
     WHERE ur.class_id = p_class_id
       AND ur.role = 'student'::public.app_role
@@ -192,15 +192,39 @@ BEGIN
     GROUP BY srr.assignment_id
   ),
   extension_rollup AS (
+    WITH valid_extension_students AS (
+      -- Individual student exceptions.
+      SELECT
+        ade.assignment_id,
+        ade.student_id AS student_profile_id
+      FROM public.assignment_due_date_exceptions ade
+      INNER JOIN public.assignments a2 ON a2.id = ade.assignment_id
+      INNER JOIN active_students st ON st.private_profile_id = ade.student_id
+      WHERE a2.class_id = p_class_id
+        AND ade.student_id IS NOT NULL
+        AND (a2.due_date + make_interval(hours => ade.hours, mins => ade.minutes)) > p_now
+
+      UNION
+
+      -- Group exceptions expanded to active students in that assignment group.
+      SELECT
+        ade.assignment_id,
+        agm.profile_id AS student_profile_id
+      FROM public.assignment_due_date_exceptions ade
+      INNER JOIN public.assignments a2 ON a2.id = ade.assignment_id
+      INNER JOIN public.assignment_groups_members agm
+        ON agm.assignment_id = ade.assignment_id
+       AND agm.assignment_group_id = ade.assignment_group_id
+      INNER JOIN active_students st ON st.private_profile_id = agm.profile_id
+      WHERE a2.class_id = p_class_id
+        AND ade.assignment_group_id IS NOT NULL
+        AND (a2.due_date + make_interval(hours => ade.hours, mins => ade.minutes)) > p_now
+    )
     SELECT
-      ade.assignment_id,
-      COUNT(DISTINCT COALESCE('g:' || ade.assignment_group_id::text, 'p:' || ade.student_id::text))::bigint
-        AS students_with_valid_extensions
-    FROM public.assignment_due_date_exceptions ade
-    INNER JOIN public.assignments a2 ON a2.id = ade.assignment_id
-    WHERE a2.class_id = p_class_id
-      AND (a2.due_date + make_interval(hours => ade.hours, mins => ade.minutes)) > p_now
-    GROUP BY ade.assignment_id
+      ves.assignment_id,
+      COUNT(DISTINCT ves.student_profile_id)::bigint AS students_with_valid_extensions
+    FROM valid_extension_students ves
+    GROUP BY ves.assignment_id
   )
   SELECT
     CASE

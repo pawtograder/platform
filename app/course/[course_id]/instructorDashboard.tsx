@@ -196,7 +196,10 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   if (metricsError) {
     Sentry.captureException(metricsError);
   }
-  const metrics = (Array.isArray(metricsRaw) ? metricsRaw : []) as unknown as InstructorDashboardMetricRow[];
+  const metricsLoadFailed = Boolean(metricsError);
+  const metrics = (!metricsLoadFailed && Array.isArray(metricsRaw)
+    ? metricsRaw
+    : []) as unknown as InstructorDashboardMetricRow[];
   const needsAttention = metrics.filter(
     (m) => m.submission_reviews_incomplete > 0 || m.review_assignments_incomplete > 0 || m.open_regrade_requests > 0
   );
@@ -218,6 +221,8 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const fullyReleasedAssignments = metrics.filter((m) => m.grades_release_status === "fully_released").length;
   const partiallyReleasedAssignments = metrics.filter((m) => m.grades_release_status === "partially_released").length;
   const unreleasedAssignments = metrics.filter((m) => m.grades_release_status === "not_released").length;
+  const noSubmissionAssignments = metrics.filter((m) => m.grades_release_status === "no_submissions").length;
+  const releasableAssignments = metrics.length - noSubmissionAssignments;
 
   const { data: helpRequests, error: helpRequestsError } = await supabase
     .from("help_requests")
@@ -454,7 +459,8 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <Flex align="center" gap={2} wrap="wrap">
                         <Link href={assignmentRootHref}>
                           <Text>
-                            {metric.grades_released_count}/{metric.submission_reviews_total}
+                            {metric.grades_released_count}/
+                            {metric.grades_released_count + metric.grades_unreleased_count}
                           </Text>
                         </Link>
                         {metric.grades_release_status === "fully_released" && (
@@ -529,83 +535,96 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           tracked separately (review assignments may be higher when multiple graders are assigned to one submission).
           &nbsp;“Grading due” reflects the due date for grading work.
         </Text>
-        <Stack direction={{ base: "column", md: "row" }} spaceY={0} gap={3} mb={4}>
-          <CompactCardRoot flex={1}>
-            <CardHeader>
-              <Text fontWeight="semibold">Assignments Needing Attention</Text>
-            </CardHeader>
+        {metricsLoadFailed ? (
+          <CardRoot borderColor="red.200" borderWidth="1px">
             <CardBody>
-              <Text fontSize="2xl" fontWeight="bold">
-                {needsAttention.length}
+              <Text color="red.700" _dark={{ color: "red.200" }}>
+                Unable to load assignment metrics right now. Please refresh in a moment.
               </Text>
             </CardBody>
-          </CompactCardRoot>
-          <CompactCardRoot flex={1}>
-            <CardHeader>
-              <Text fontWeight="semibold">Incomplete Submission Reviews</Text>
-            </CardHeader>
-            <CardBody>
-              <Text fontSize="2xl" fontWeight="bold">
-                {totalIncompleteSubmissionReviews}
-              </Text>
-            </CardBody>
-          </CompactCardRoot>
-          <CompactCardRoot flex={1}>
-            <CardHeader>
-              <Text fontWeight="semibold">Incomplete Review Assignments</Text>
-            </CardHeader>
-            <CardBody>
-              <Text fontSize="2xl" fontWeight="bold">
-                {totalIncompleteReviewAssignments}
-              </Text>
-            </CardBody>
-          </CompactCardRoot>
-          <CompactCardRoot flex={1}>
-            <CardHeader>
-              <Text fontWeight="semibold">Grade Release Status</Text>
-            </CardHeader>
-            <CardBody>
-              <Text fontSize="2xl" fontWeight="bold">
-                {fullyReleasedAssignments}/{metrics.length}
-              </Text>
-              <Text fontSize="xs" color="fg.muted">
-                {partiallyReleasedAssignments} partial, {unreleasedAssignments} not released
-              </Text>
-            </CardBody>
-          </CompactCardRoot>
-          <CompactCardRoot flex={1}>
-            <CardHeader>
-              <Text fontWeight="semibold">Open Regrade Requests</Text>
-            </CardHeader>
-            <CardBody>
-              <Text fontSize="2xl" fontWeight="bold">
-                {totalOpenRegrades}
-              </Text>
-              {totalStudentsMissingSubmission > 0 && (
-                <Text fontSize="xs" color="fg.muted">
-                  {totalStudentsMissingSubmission} missing submissions across assignments
-                </Text>
+          </CardRoot>
+        ) : (
+          <>
+            <Stack direction={{ base: "column", md: "row" }} spaceY={0} gap={3} mb={4}>
+              <CompactCardRoot flex={1}>
+                <CardHeader>
+                  <Text fontWeight="semibold">Assignments Needing Attention</Text>
+                </CardHeader>
+                <CardBody>
+                  <Text fontSize="2xl" fontWeight="bold">
+                    {needsAttention.length}
+                  </Text>
+                </CardBody>
+              </CompactCardRoot>
+              <CompactCardRoot flex={1}>
+                <CardHeader>
+                  <Text fontWeight="semibold">Incomplete Submission Reviews</Text>
+                </CardHeader>
+                <CardBody>
+                  <Text fontSize="2xl" fontWeight="bold">
+                    {totalIncompleteSubmissionReviews}
+                  </Text>
+                </CardBody>
+              </CompactCardRoot>
+              <CompactCardRoot flex={1}>
+                <CardHeader>
+                  <Text fontWeight="semibold">Incomplete Review Assignments</Text>
+                </CardHeader>
+                <CardBody>
+                  <Text fontSize="2xl" fontWeight="bold">
+                    {totalIncompleteReviewAssignments}
+                  </Text>
+                </CardBody>
+              </CompactCardRoot>
+              <CompactCardRoot flex={1}>
+                <CardHeader>
+                  <Text fontWeight="semibold">Grade Release Status</Text>
+                </CardHeader>
+                <CardBody>
+                  <Text fontSize="2xl" fontWeight="bold">
+                    {fullyReleasedAssignments}/{releasableAssignments}
+                  </Text>
+                  <Text fontSize="xs" color="fg.muted">
+                    {partiallyReleasedAssignments} partial, {unreleasedAssignments} not released,{" "}
+                    {noSubmissionAssignments} no submissions
+                  </Text>
+                </CardBody>
+              </CompactCardRoot>
+              <CompactCardRoot flex={1}>
+                <CardHeader>
+                  <Text fontWeight="semibold">Open Regrade Requests</Text>
+                </CardHeader>
+                <CardBody>
+                  <Text fontSize="2xl" fontWeight="bold">
+                    {totalOpenRegrades}
+                  </Text>
+                  {totalStudentsMissingSubmission > 0 && (
+                    <Text fontSize="xs" color="fg.muted">
+                      {totalStudentsMissingSubmission} missing submissions across assignments
+                    </Text>
+                  )}
+                </CardBody>
+              </CompactCardRoot>
+            </Stack>
+            <Stack spaceY={4}>
+              {renderAssignmentOverviewTable(
+                "Needs attention",
+                needsAttention,
+                "No assignments currently have incomplete reviews, pending review assignments, or open regrade requests."
               )}
-            </CardBody>
-          </CompactCardRoot>
-        </Stack>
-        <Stack spaceY={4}>
-          {renderAssignmentOverviewTable(
-            "Needs attention",
-            needsAttention,
-            "No assignments currently have incomplete reviews, pending review assignments, or open regrade requests."
-          )}
-          {renderAssignmentOverviewTable(
-            "Upcoming with no blocking work",
-            upcomingNoBlockingWork,
-            "No upcoming assignments are currently in a clean state."
-          )}
-          {renderAssignmentOverviewTable(
-            "Complete or stable",
-            completeOrStable,
-            "No past-due/undated assignments are currently fully settled."
-          )}
-        </Stack>
+              {renderAssignmentOverviewTable(
+                "Upcoming with no blocking work",
+                upcomingNoBlockingWork,
+                "No upcoming assignments are currently in a clean state."
+              )}
+              {renderAssignmentOverviewTable(
+                "Complete or stable",
+                completeOrStable,
+                "No past-due/undated assignments are currently fully settled."
+              )}
+            </Stack>
+          </>
+        )}
       </Box>
 
       {/* Discussion Activity Summary */}
