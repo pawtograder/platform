@@ -182,6 +182,7 @@ describe("LLM Hint API Route", () => {
     process.env.AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://test.openai.azure.com/";
     process.env.AZURE_OPENAI_KEY = process.env.AZURE_OPENAI_KEY || "test-azure-key";
     process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "test-anthropic-key";
+    process.env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "test-openrouter-key";
   });
 
   describe("Authentication and Authorization", () => {
@@ -713,6 +714,72 @@ describe("LLM Hint API Route", () => {
       });
     });
 
+    describe("OpenRouter Provider", () => {
+      it("should use OpenRouter provider with ChatOpenAI and correct baseURL", async () => {
+        mockTestResult.extra_data.llm!.provider = "openrouter";
+        mockTestResult.extra_data.llm!.model = "anthropic/claude-3-haiku";
+
+        const request = new NextRequest("http://localhost:3000/api/llm-hint", {
+          method: "POST",
+          body: JSON.stringify({ testId: 1 })
+        });
+
+        const response = await POST(request);
+
+        expect(response.status).toBe(200);
+        expect(mockChatOpenAI).toHaveBeenCalledWith(
+          expect.objectContaining({
+            model: "anthropic/claude-3-haiku",
+            apiKey: "test-openrouter-key",
+            configuration: { baseURL: "https://openrouter.ai/api/v1" },
+            temperature: 0.85,
+            maxTokens: undefined,
+            maxRetries: 2
+          })
+        );
+      });
+
+      it("should use OPENROUTER_API_KEY_${account} when account is specified", async () => {
+        mockTestResult.extra_data.llm!.provider = "openrouter";
+        mockTestResult.extra_data.llm!.model = "openai/gpt-4o-mini";
+        mockTestResult.extra_data.llm!.account = "e2e_test";
+
+        process.env.OPENROUTER_API_KEY_e2e_test = "test-account-openrouter-key";
+
+        const request = new NextRequest("http://localhost:3000/api/llm-hint", {
+          method: "POST",
+          body: JSON.stringify({ testId: 1 })
+        });
+
+        const response = await POST(request);
+
+        expect(response.status).toBe(200);
+        expect(mockChatOpenAI).toHaveBeenCalledWith(
+          expect.objectContaining({
+            model: "openai/gpt-4o-mini",
+            apiKey: "test-account-openrouter-key",
+            configuration: { baseURL: "https://openrouter.ai/api/v1" }
+          })
+        );
+      });
+
+      it("should return 500 when OpenRouter API key is missing", async () => {
+        delete process.env.OPENROUTER_API_KEY;
+        mockTestResult.extra_data.llm!.provider = "openrouter";
+
+        const request = new NextRequest("http://localhost:3000/api/llm-hint", {
+          method: "POST",
+          body: JSON.stringify({ testId: 1 })
+        });
+
+        const response = await POST(request);
+        const data = await response.json();
+
+        expect(response.status).toBe(500);
+        expect(data.error).toBe("OpenRouter API key is required, must set env var OPENROUTER_API_KEY");
+      });
+    });
+
     it("should return 400 for invalid provider", async () => {
       mockTestResult.extra_data.llm!.provider = "invalid-provider";
 
@@ -725,7 +792,9 @@ describe("LLM Hint API Route", () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe("Invalid provider: invalid-provider. Supported providers are: openai, azure, anthropic");
+      expect(data.error).toBe(
+        "Invalid provider: invalid-provider. Supported providers are: openai, azure, anthropic, openrouter"
+      );
     });
   });
 
