@@ -117,7 +117,8 @@ BEGIN
       USING ERRCODE = 'insufficient_privilege';
   END IF;
 
-  -- Only grading reviews (s.grading_review_id = sr.id), not self-review or other rubric types
+  -- Only grading reviews (s.grading_review_id = sr.id), not self-review or other rubric types.
+  -- Only active submissions from non-dropped students (individual or group with enrolled member).
   FOR v_sr_id IN
     SELECT sr.id
     FROM public.submission_reviews sr
@@ -125,6 +126,26 @@ BEGIN
     WHERE s.assignment_id = p_assignment_id
       AND s.is_active = true
       AND sr.completed_at IS NULL
+      AND (
+        (s.profile_id IS NOT NULL AND EXISTS (
+          SELECT 1 FROM public.user_roles ur
+          WHERE ur.class_id = v_class_id
+            AND ur.role = 'student'::public.app_role
+            AND ur.disabled = false
+            AND ur.private_profile_id = s.profile_id
+        ))
+        OR
+        (s.assignment_group_id IS NOT NULL AND EXISTS (
+          SELECT 1 FROM public.assignment_groups_members agm
+          INNER JOIN public.user_roles ur
+            ON ur.private_profile_id = agm.profile_id
+            AND ur.class_id = v_class_id
+            AND ur.role = 'student'::public.app_role
+            AND ur.disabled = false
+          WHERE agm.assignment_group_id = s.assignment_group_id
+            AND agm.assignment_id = s.assignment_id
+        ))
+      )
   LOOP
     v_total := v_total + 1;
     IF public._submission_review_is_completable(v_sr_id) THEN
@@ -176,7 +197,8 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  -- Only grading reviews (s.grading_review_id = sr.id), not self-review or other rubric types
+  -- Only grading reviews (s.grading_review_id = sr.id), not self-review or other rubric types.
+  -- Only active submissions from non-dropped students (individual or group with enrolled member).
   UPDATE public.submission_reviews sr
   SET completed_at = now(),
       completed_by = v_profile_id
@@ -186,7 +208,27 @@ BEGIN
     AND s.assignment_id = p_assignment_id
     AND s.is_active = true
     AND sr.completed_at IS NULL
-    AND public._submission_review_is_completable(sr.id);
+    AND public._submission_review_is_completable(sr.id)
+    AND (
+      (s.profile_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM public.user_roles ur
+        WHERE ur.class_id = v_class_id
+          AND ur.role = 'student'::public.app_role
+          AND ur.disabled = false
+          AND ur.private_profile_id = s.profile_id
+      ))
+      OR
+      (s.assignment_group_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM public.assignment_groups_members agm
+        INNER JOIN public.user_roles ur
+          ON ur.private_profile_id = agm.profile_id
+          AND ur.class_id = v_class_id
+          AND ur.role = 'student'::public.app_role
+          AND ur.disabled = false
+        WHERE agm.assignment_group_id = s.assignment_group_id
+          AND agm.assignment_id = s.assignment_id
+      ))
+    );
 
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   RETURN affected_rows;
@@ -194,10 +236,10 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.check_grading_completion_eligibility(bigint) IS
-'Returns counts of incomplete submission reviews: total_incomplete, completable (all required checks applied), and missing_required_checks. Used by Mark All Complete UI.';
+'Returns counts of incomplete submission reviews: total_incomplete, completable (all required checks applied), and missing_required_checks. Only includes active submissions from non-dropped students. Used by Mark All Complete UI.';
 
 COMMENT ON FUNCTION public.complete_eligible_grading_reviews(bigint) IS
-'Marks only eligible submission reviews as complete (those with all required rubric checks applied). Skips reviews with missing required checks to avoid errors.';
+'Marks only eligible submission reviews as complete (those with all required rubric checks applied). Only affects active submissions from non-dropped students. Skips reviews with missing required checks to avoid errors.';
 
 GRANT EXECUTE ON FUNCTION public.check_grading_completion_eligibility(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_eligible_grading_reviews(bigint) TO authenticated;
