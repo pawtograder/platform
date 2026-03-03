@@ -125,7 +125,7 @@ BEGIN
     INNER JOIN public.submissions s ON s.id = sr.submission_id AND s.grading_review_id = sr.id
     WHERE s.assignment_id = p_assignment_id
       AND s.is_active = true
-      AND sr.completed_at IS NULL
+      AND (sr.completed_at IS NULL OR sr.completed_by IS NULL)
       AND (
         (s.profile_id IS NOT NULL AND EXISTS (
           SELECT 1 FROM public.user_roles ur
@@ -207,7 +207,7 @@ BEGIN
     AND s.grading_review_id = sr.id
     AND s.assignment_id = p_assignment_id
     AND s.is_active = true
-    AND sr.completed_at IS NULL
+    AND (sr.completed_at IS NULL OR sr.completed_by IS NULL)
     AND public._submission_review_is_completable(sr.id)
     AND (
       (s.profile_id IS NOT NULL AND EXISTS (
