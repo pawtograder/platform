@@ -11480,6 +11480,9 @@ export type Database = {
           closed_or_resolved_regrade_requests: number;
           due_date: string;
           graded_submissions: number;
+          grades_release_status: string;
+          grades_released_count: number;
+          grades_unreleased_count: number;
           open_regrade_requests: number;
           review_assignments_completed: number;
           review_assignments_incomplete: number;

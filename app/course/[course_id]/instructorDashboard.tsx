@@ -86,6 +86,9 @@ type InstructorDashboardMetricRow = {
   submission_reviews_total: number;
   submission_reviews_completed: number;
   submission_reviews_incomplete: number;
+  grades_released_count: number;
+  grades_unreleased_count: number;
+  grades_release_status: "no_submissions" | "not_released" | "partially_released" | "fully_released";
   class_student_count: number;
   students_without_submissions: number;
 };
@@ -129,6 +132,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const totalIncompleteReviewAssignments = metrics.reduce((acc, m) => acc + (m.review_assignments_incomplete ?? 0), 0);
   const totalOpenRegrades = metrics.reduce((acc, m) => acc + (m.open_regrade_requests ?? 0), 0);
   const totalStudentsMissingSubmission = metrics.reduce((acc, m) => acc + (m.students_without_submissions ?? 0), 0);
+  const fullyReleasedAssignments = metrics.filter((m) => m.grades_release_status === "fully_released").length;
+  const partiallyReleasedAssignments = metrics.filter((m) => m.grades_release_status === "partially_released").length;
+  const unreleasedAssignments = metrics.filter((m) => m.grades_release_status === "not_released").length;
 
   const { data: helpRequests, error: helpRequestsError } = await supabase
     .from("help_requests")
@@ -251,114 +257,191 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
             <Table.Header>
               <Table.Row>
                 <Table.ColumnHeader>Assignment</Table.ColumnHeader>
-                <Table.ColumnHeader>Due</Table.ColumnHeader>
+                <Table.ColumnHeader>Grading due</Table.ColumnHeader>
                 <Table.ColumnHeader>Submitted Students</Table.ColumnHeader>
                 <Table.ColumnHeader>Submission Reviews</Table.ColumnHeader>
                 <Table.ColumnHeader>Review Assignments</Table.ColumnHeader>
+                <Table.ColumnHeader>Grades released</Table.ColumnHeader>
                 <Table.ColumnHeader>Regrades / Extensions</Table.ColumnHeader>
               </Table.Row>
             </Table.Header>
             <Table.Body>
-              {rows.map((metric) => (
-                <Table.Row key={metric.assignment_id}>
-                  <Table.Cell>
-                    <Link href={`/course/${course_id}/manage/assignments/${metric.assignment_id}`}>
-                      <Text fontWeight="semibold">{metric.title}</Text>
-                    </Link>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Flex align="center" gap={2} wrap="wrap">
-                      <Text>{formatDashboardDueDate(metric)}</Text>
-                      {metric.section === "past_due" && (
-                        <Badge colorScheme="orange" size="sm">
-                          Past due
-                        </Badge>
-                      )}
-                      {metric.section === "upcoming" && (
-                        <Badge colorScheme="blue" size="sm">
-                          Upcoming
-                        </Badge>
-                      )}
-                      {metric.section === "undated" && (
-                        <Badge colorScheme="gray" size="sm">
-                          Undated
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Flex align="center" gap={2} wrap="wrap">
-                      <Text>
-                        {metric.total_submitters}/{metric.class_student_count}
-                      </Text>
-                      {metric.students_without_submissions > 0 ? (
-                        <Badge colorScheme="yellow" size="sm">
-                          {metric.students_without_submissions} missing
-                        </Badge>
-                      ) : (
-                        <Badge colorScheme="green" size="sm">
-                          All submitted
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Flex align="center" gap={2} wrap="wrap">
-                      <Text>
-                        {metric.submission_reviews_completed}/{metric.submission_reviews_total}
-                      </Text>
-                      {metric.submission_reviews_incomplete > 0 ? (
-                        <Badge colorScheme="orange" size="sm">
-                          {metric.submission_reviews_incomplete} incomplete
-                        </Badge>
-                      ) : (
-                        <Badge colorScheme="green" size="sm">
-                          Complete
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Flex align="center" gap={2} wrap="wrap">
-                      <Text>
-                        {metric.review_assignments_completed}/{metric.review_assignments_total}
-                      </Text>
-                      {metric.review_assignments_incomplete > 0 ? (
-                        <Badge colorScheme="red" size="sm">
-                          {metric.review_assignments_incomplete} incomplete
-                        </Badge>
-                      ) : (
-                        <Badge colorScheme="green" size="sm">
-                          Complete
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Flex align="center" gap={2} wrap="wrap">
-                      {metric.open_regrade_requests > 0 ? (
-                        <Badge colorScheme="red" size="sm">
-                          {metric.open_regrade_requests} open
-                        </Badge>
-                      ) : (
-                        <Badge colorScheme="green" size="sm">
-                          0 open
-                        </Badge>
-                      )}
-                      {metric.closed_or_resolved_regrade_requests > 0 && (
-                        <Badge colorScheme="green" size="sm">
-                          {metric.closed_or_resolved_regrade_requests} resolved
-                        </Badge>
-                      )}
-                      {metric.students_with_valid_extensions > 0 && (
-                        <Badge colorScheme="blue" size="sm">
-                          {metric.students_with_valid_extensions} with extensions
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Table.Cell>
-                </Table.Row>
-              ))}
+              {rows.map((metric) => {
+                const assignmentRootHref = `/course/${course_id}/manage/assignments/${metric.assignment_id}`;
+                const submissionsHref = assignmentRootHref;
+                const gradingDashboardHref = `${assignmentRootHref}/grading-progress`;
+                const reviewAssignmentsHref = `${assignmentRootHref}/reviews`;
+                const regradesHref = `${assignmentRootHref}/regrade-requests`;
+                const dueDateExceptionsHref = `${assignmentRootHref}/due-date-exceptions`;
+
+                return (
+                  <Table.Row key={metric.assignment_id}>
+                    <Table.Cell>
+                      <Stack gap={1}>
+                        <Link href={assignmentRootHref}>
+                          <Text fontWeight="semibold">{metric.title}</Text>
+                        </Link>
+                        <Flex gap={2} wrap="wrap">
+                          <Link href={gradingDashboardHref}>
+                            <Text fontSize="xs" color="blue.600">
+                              Grading dashboard
+                            </Text>
+                          </Link>
+                          <Link href={submissionsHref}>
+                            <Text fontSize="xs" color="blue.600">
+                              Submissions
+                            </Text>
+                          </Link>
+                          <Link href={regradesHref}>
+                            <Text fontSize="xs" color="blue.600">
+                              Regrade requests
+                            </Text>
+                          </Link>
+                          <Link href={dueDateExceptionsHref}>
+                            <Text fontSize="xs" color="blue.600">
+                              Due date exceptions
+                            </Text>
+                          </Link>
+                        </Flex>
+                      </Stack>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Flex align="center" gap={2} wrap="wrap">
+                        <Link href={dueDateExceptionsHref}>
+                          <Text>{formatDashboardDueDate(metric)}</Text>
+                        </Link>
+                        {metric.section === "past_due" && (
+                          <Badge colorScheme="orange" size="sm">
+                            Past grading due
+                          </Badge>
+                        )}
+                        {metric.section === "upcoming" && (
+                          <Badge colorScheme="blue" size="sm">
+                            Upcoming grading due
+                          </Badge>
+                        )}
+                        {metric.section === "undated" && (
+                          <Badge colorScheme="gray" size="sm">
+                            No grading due date
+                          </Badge>
+                        )}
+                      </Flex>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Flex align="center" gap={2} wrap="wrap">
+                        <Link href={submissionsHref}>
+                          <Text>
+                            {metric.total_submitters}/{metric.class_student_count}
+                          </Text>
+                        </Link>
+                        {metric.students_without_submissions > 0 ? (
+                          <Badge colorScheme="yellow" size="sm">
+                            {metric.students_without_submissions} missing
+                          </Badge>
+                        ) : (
+                          <Badge colorScheme="green" size="sm">
+                            All submitted
+                          </Badge>
+                        )}
+                      </Flex>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Flex align="center" gap={2} wrap="wrap">
+                        <Link href={gradingDashboardHref}>
+                          <Text>
+                            {metric.submission_reviews_completed}/{metric.submission_reviews_total}
+                          </Text>
+                        </Link>
+                        {metric.submission_reviews_incomplete > 0 ? (
+                          <Badge colorScheme="orange" size="sm">
+                            {metric.submission_reviews_incomplete} incomplete
+                          </Badge>
+                        ) : (
+                          <Badge colorScheme="green" size="sm">
+                            Complete
+                          </Badge>
+                        )}
+                      </Flex>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Flex align="center" gap={2} wrap="wrap">
+                        <Link href={reviewAssignmentsHref}>
+                          <Text>
+                            {metric.review_assignments_completed}/{metric.review_assignments_total}
+                          </Text>
+                        </Link>
+                        {metric.review_assignments_incomplete > 0 ? (
+                          <Badge colorScheme="red" size="sm">
+                            {metric.review_assignments_incomplete} incomplete
+                          </Badge>
+                        ) : (
+                          <Badge colorScheme="green" size="sm">
+                            Complete
+                          </Badge>
+                        )}
+                      </Flex>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Flex align="center" gap={2} wrap="wrap">
+                        <Link href={assignmentRootHref}>
+                          <Text>
+                            {metric.grades_released_count}/{metric.submission_reviews_total}
+                          </Text>
+                        </Link>
+                        {metric.grades_release_status === "fully_released" && (
+                          <Badge colorScheme="green" size="sm">
+                            Fully released
+                          </Badge>
+                        )}
+                        {metric.grades_release_status === "partially_released" && (
+                          <Badge colorScheme="orange" size="sm">
+                            Partial release
+                          </Badge>
+                        )}
+                        {metric.grades_release_status === "not_released" && (
+                          <Badge colorScheme="gray" size="sm">
+                            Not released
+                          </Badge>
+                        )}
+                        {metric.grades_release_status === "no_submissions" && (
+                          <Badge colorScheme="gray" size="sm">
+                            No submissions
+                          </Badge>
+                        )}
+                      </Flex>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Flex align="center" gap={2} wrap="wrap">
+                        <Link href={regradesHref}>
+                          {metric.open_regrade_requests > 0 ? (
+                            <Badge colorScheme="red" size="sm">
+                              {metric.open_regrade_requests} open
+                            </Badge>
+                          ) : (
+                            <Badge colorScheme="green" size="sm">
+                              0 open
+                            </Badge>
+                          )}
+                        </Link>
+                        {metric.closed_or_resolved_regrade_requests > 0 && (
+                          <Link href={regradesHref}>
+                            <Badge colorScheme="green" size="sm">
+                              {metric.closed_or_resolved_regrade_requests} resolved
+                            </Badge>
+                          </Link>
+                        )}
+                        {metric.students_with_valid_extensions > 0 && (
+                          <Link href={dueDateExceptionsHref}>
+                            <Badge colorScheme="blue" size="sm">
+                              {metric.students_with_valid_extensions} with extensions
+                            </Badge>
+                          </Link>
+                        )}
+                      </Flex>
+                    </Table.Cell>
+                  </Table.Row>
+                );
+              })}
             </Table.Body>
           </Table.Root>
         </Box>
@@ -387,6 +470,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
         <Text mb={4} color="fg.muted" fontSize="sm">
           One RPC now loads all assignment metrics. Incomplete submission reviews and incomplete review assignments are
           tracked separately (review assignments may be higher when multiple graders are assigned to one submission).
+          &nbsp;“Grading due” reflects the due date for grading work.
         </Text>
         <Stack direction={{ base: "column", md: "row" }} spaceY={0} gap={3} mb={4}>
           <CompactCardRoot flex={1}>
@@ -416,6 +500,19 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
             <CardBody>
               <Text fontSize="2xl" fontWeight="bold">
                 {totalIncompleteReviewAssignments}
+              </Text>
+            </CardBody>
+          </CompactCardRoot>
+          <CompactCardRoot flex={1}>
+            <CardHeader>
+              <Text fontWeight="semibold">Grade Release Status</Text>
+            </CardHeader>
+            <CardBody>
+              <Text fontSize="2xl" fontWeight="bold">
+                {fullyReleasedAssignments}/{metrics.length}
+              </Text>
+              <Text fontSize="xs" color="fg.muted">
+                {partiallyReleasedAssignments} partial, {unreleasedAssignments} not released
               </Text>
             </CardBody>
           </CompactCardRoot>

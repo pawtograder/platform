@@ -25,6 +25,9 @@ RETURNS TABLE (
   submission_reviews_total bigint,
   submission_reviews_completed bigint,
   submission_reviews_incomplete bigint,
+  grades_released_count bigint,
+  grades_unreleased_count bigint,
+  grades_release_status text,
   class_student_count bigint,
   students_without_submissions bigint
 )
@@ -135,7 +138,10 @@ BEGIN
         WHERE sr.id IS NULL
            OR sr.completed_at IS NULL
            OR sr.completed_by IS NULL
-      )::bigint AS submission_reviews_incomplete
+      )::bigint AS submission_reviews_incomplete,
+      COUNT(*) FILTER (
+        WHERE sr.released = true
+      )::bigint AS grades_released_count
     FROM active_submission_units asu
     INNER JOIN public.submissions s ON s.id = asu.submission_id
     LEFT JOIN public.submission_reviews sr ON sr.id = s.grading_review_id
@@ -217,6 +223,15 @@ BEGIN
     COALESCE(srv.submission_reviews_total, 0) AS submission_reviews_total,
     COALESCE(srv.submission_reviews_completed, 0) AS submission_reviews_completed,
     COALESCE(srv.submission_reviews_incomplete, 0) AS submission_reviews_incomplete,
+    COALESCE(srv.grades_released_count, 0) AS grades_released_count,
+    GREATEST(COALESCE(srv.submission_reviews_total, 0) - COALESCE(srv.grades_released_count, 0), 0)
+      AS grades_unreleased_count,
+    CASE
+      WHEN COALESCE(srv.submission_reviews_total, 0) = 0 THEN 'no_submissions'
+      WHEN COALESCE(srv.grades_released_count, 0) = 0 THEN 'not_released'
+      WHEN COALESCE(srv.grades_released_count, 0) < COALESCE(srv.submission_reviews_total, 0) THEN 'partially_released'
+      ELSE 'fully_released'
+    END AS grades_release_status,
     crc.student_count AS class_student_count,
     GREATEST(crc.student_count - COALESCE(ssr.students_with_active_submissions, 0), 0) AS students_without_submissions
   FROM assignment_scope a
@@ -239,6 +254,6 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.get_instructor_dashboard_overview_metrics(bigint, timestamptz)
-IS 'Returns one row per assignment for instructor/grader dashboard with accurate student submission counts plus separate submission-review and review-assignment completion metrics. review_assignments_incomplete may exceed submission_reviews_incomplete when multiple review assignments exist for a single submission review.';
+IS 'Returns one row per assignment for instructor/grader dashboard with accurate student submission counts plus separate submission-review and review-assignment completion metrics. Includes grade release counts/status. review_assignments_incomplete may exceed submission_reviews_incomplete when multiple review assignments exist for a single submission review.';
 
 GRANT EXECUTE ON FUNCTION public.get_instructor_dashboard_overview_metrics(bigint, timestamptz) TO authenticated;
