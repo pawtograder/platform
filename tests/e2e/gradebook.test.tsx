@@ -46,11 +46,6 @@ async function readCellNumber(page: Page, rowName: string, columnName: string) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-async function readCellText(page: Page, rowName: string, columnName: string) {
-  const cell = await getGridcellInRow(page, rowName, columnName);
-  return (await cell.innerText()).trim();
-}
-
 function parseCsv(csvText: string) {
   const parsed = Papa.parse<string[]>(csvText, {
     skipEmptyLines: true
@@ -887,7 +882,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
 
     const { error: setFinalGradePrivateError } = await supabase
       .from("gradebook_column_students")
-      .update({ score: 92, is_recalculating: false })
+      .update({ score_override: 92, is_recalculating: false })
       .eq("class_id", exportCourse.id)
       .eq("student_id", exportStudents[0].private_profile_id)
       .eq("gradebook_column_id", finalGradebookColumn.id)
@@ -897,7 +892,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
     }
     const { error: setFinalGradePublicError } = await supabase
       .from("gradebook_column_students")
-      .update({ score: 88, is_recalculating: false })
+      .update({ score_override: 88, is_recalculating: false })
       .eq("class_id", exportCourse.id)
       .eq("student_id", exportStudents[0].private_profile_id)
       .eq("gradebook_column_id", finalGradebookColumn.id)
@@ -942,7 +937,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
 
     const { error: setRenderExportScoreError } = await supabase
       .from("gradebook_column_students")
-      .update({ score: 92, released: true, is_recalculating: false })
+      .update({ score_override: 92, released: true, is_recalculating: false })
       .eq("class_id", exportCourse.id)
       .eq("student_id", exportStudents[0].private_profile_id)
       .eq("gradebook_column_id", renderExportColumn.id)
@@ -950,6 +945,23 @@ test.describe("Gradebook Page - CSV Render Export", () => {
     if (setRenderExportScoreError) {
       throw new Error(`Failed to set render export score for export test: ${setRenderExportScoreError.message}`);
     }
+
+    await expect(async () => {
+      const { data: renderRecord, error: renderError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", exportCourse.id)
+        .eq("student_id", exportStudents[0].private_profile_id)
+        .eq("gradebook_column_id", renderExportColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (renderError) {
+        throw new Error(`Failed to read stabilized render export record: ${renderError.message}`);
+      }
+      expect(renderRecord?.is_recalculating).toBe(false);
+      expect(renderRecord?.score_override ?? renderRecord?.score).toBe(92);
+      expect(renderRecord?.incomplete_values).toBeNull();
+    }).toPass();
   });
 
   test("Download Gradebook can export render expression values to CSV", async ({ page }) => {
@@ -965,10 +977,11 @@ test.describe("Gradebook Page - CSV Render Export", () => {
     });
     await waitForVirtualizerIdle(page);
 
-    await expect(async () => {
-      const renderedCell = await readCellText(page, student.private_profile_name, RENDER_EXPORT_COLUMN_NAME);
-      expect(renderedCell).toBe("A-");
-    }).toPass();
+    const renderedCell = await getGridcellInRow(page, student.private_profile_name, RENDER_EXPORT_COLUMN_NAME);
+    await expect(renderedCell).toHaveAttribute(
+      "aria-label",
+      new RegExp(`^Grade cell for ${escapeRegExp(RENDER_EXPORT_COLUMN_NAME)}: A-$`)
+    );
 
     await page.getByRole("button", { name: "Download Gradebook" }).click();
     const renderExpressionCheckbox = page.getByRole("checkbox", { name: "Use render expressions in CSV" });
