@@ -27,7 +27,9 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 - **Lint**: `npm run lint` (ESLint + Prettier). See `package.json` scripts.
 - **Unit tests**: `npm test` (Jest). Note: `jest.setup.ts` must exist (import `@testing-library/jest-dom`). The existing test has a pre-existing issue with `Request` not being defined in jsdom.
 - **E2E tests (default policy)**: **Always run E2E against a production build/server**, not `next dev`, for stable performance and fewer timing flakes.
-  - Build and serve: `npm run build` then `PORT=3001 npm run start`
+  - Never run `next dev` and `next start` at the same time in this environment. Stop all dev servers before prod E2E runs.
+  - Build from a clean output directory: `rm -rf .next && npm run build`
+  - Start only the prod server: `PORT=3001 npm run start`
   - Run Playwright against prod server: `BASE_URL=http://localhost:3001 npx playwright test ...`
   - Use `npm run test:e2e:local` / `next dev` only during tight local iteration **after** confirming the same test is already reliable in dev mode.
   - If a test is flaky in dev mode, switch back to prod-build runs immediately.
