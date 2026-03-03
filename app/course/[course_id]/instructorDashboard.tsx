@@ -104,7 +104,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   }
 
   // Get dashboard metrics via RPC
-  const { data: metricsRaw, error: metricsError } = await supabase.rpc("get_instructor_dashboard_metrics", {
+  const { data: metricsRaw, error: metricsError } = await supabase.rpc("get_instructor_dashboard_overview_metrics", {
     p_class_id: course_id
   });
   if (metricsError) {

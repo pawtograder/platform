@@ -1247,7 +1247,7 @@ export type Database = {
           }
         ];
       };
-      audit_20260131: {
+      audit_20260301: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1280,7 +1280,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260201: {
+      audit_20260302: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1313,7 +1313,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260202: {
+      audit_20260303: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1346,7 +1346,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260203: {
+      audit_20260304: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1379,7 +1379,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260204: {
+      audit_20260305: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1412,7 +1412,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260205: {
+      audit_20260306: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1445,7 +1445,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260206: {
+      audit_20260307: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1478,7 +1478,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260207: {
+      audit_20260308: {
         Row: {
           class_id: number;
           created_at: string;
@@ -4780,7 +4780,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           instructors_only: boolean;
-          is_system_message: boolean;
+          is_system_message: boolean | null;
           message: string;
           reply_to_message_id: number | null;
           updated_at: string;
@@ -4792,7 +4792,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           instructors_only?: boolean;
-          is_system_message?: boolean;
+          is_system_message?: boolean | null;
           message: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -4804,7 +4804,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           instructors_only?: boolean;
-          is_system_message?: boolean;
+          is_system_message?: boolean | null;
           message?: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -6190,7 +6190,7 @@ export type Database = {
         Update: {
           assignment_group_id?: number | null;
           auto_promote_result?: boolean | null;
-          check_run_id?: number;
+          check_run_id?: number | null;
           class_id?: number;
           commit_message?: string;
           created_at?: string;
@@ -10975,6 +10975,10 @@ export type Database = {
         Args: { poll_id: string; profile_id: string };
         Returns: boolean;
       };
+      can_access_submission_storage_path: {
+        Args: { path: string };
+        Returns: boolean;
+      };
       channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
       check_assignment_deadlines_passed: { Args: never; Returns: undefined };
       check_assignment_release_dates: { Args: never; Returns: undefined };
@@ -11355,10 +11359,10 @@ export type Database = {
         Args: never;
         Returns: {
           async_queue_size: number;
+          discord_dlq_queue_size: number;
+          discord_queue_size: number;
           dlq_queue_size: number;
           gradebook_row_recalculate_queue_size: number;
-          discord_queue_size: number;
-          discord_dlq_queue_size: number;
         }[];
       };
       get_circuit_breaker_statuses: {
@@ -11468,10 +11472,11 @@ export type Database = {
           submissions_with_comments: number;
         }[];
       };
-      get_instructor_dashboard_metrics: {
+      get_instructor_dashboard_overview_metrics: {
         Args: { p_class_id: number; p_now?: string };
         Returns: {
           assignment_id: number;
+          class_student_count: number;
           closed_or_resolved_regrade_requests: number;
           due_date: string;
           graded_submissions: number;
@@ -11481,6 +11486,10 @@ export type Database = {
           review_assignments_total: number;
           section: string;
           students_with_valid_extensions: number;
+          students_without_submissions: number;
+          submission_reviews_completed: number;
+          submission_reviews_incomplete: number;
+          submission_reviews_total: number;
           time_zone: string;
           title: string;
           total_submitters: number;
@@ -12055,8 +12064,8 @@ export type Database = {
         | "sync_repo_to_handout";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
-      help_request_status: "open" | "in_progress" | "resolved" | "closed";
       help_request_resolution_status: "self_solved" | "staff_helped" | "peer_helped" | "no_time" | "other";
+      help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
@@ -12246,8 +12255,8 @@ export const Constants = {
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],
-      help_request_status: ["open", "in_progress", "resolved", "closed"],
       help_request_resolution_status: ["self_solved", "staff_helped", "peer_helped", "no_time", "other"],
+      help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
