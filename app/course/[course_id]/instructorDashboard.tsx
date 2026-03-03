@@ -69,6 +69,89 @@ const CompactCardRoot = ({ children, ...props }: React.ComponentProps<typeof Car
   </CardRoot>
 );
 
+type DashboardBadgeTone = "success" | "warning" | "danger" | "info" | "neutral";
+
+const dashboardBadgeStyles: Record<
+  DashboardBadgeTone,
+  {
+    bg: string;
+    color: string;
+    borderColor: string;
+    darkBg: string;
+    darkColor: string;
+    darkBorderColor: string;
+  }
+> = {
+  success: {
+    bg: "green.100",
+    color: "green.800",
+    borderColor: "green.200",
+    darkBg: "green.900",
+    darkColor: "green.200",
+    darkBorderColor: "green.700"
+  },
+  warning: {
+    bg: "orange.100",
+    color: "orange.800",
+    borderColor: "orange.200",
+    darkBg: "orange.900",
+    darkColor: "orange.200",
+    darkBorderColor: "orange.700"
+  },
+  danger: {
+    bg: "red.100",
+    color: "red.800",
+    borderColor: "red.200",
+    darkBg: "red.900",
+    darkColor: "red.200",
+    darkBorderColor: "red.700"
+  },
+  info: {
+    bg: "blue.100",
+    color: "blue.800",
+    borderColor: "blue.200",
+    darkBg: "blue.900",
+    darkColor: "blue.200",
+    darkBorderColor: "blue.700"
+  },
+  neutral: {
+    bg: "gray.100",
+    color: "gray.800",
+    borderColor: "gray.200",
+    darkBg: "gray.800",
+    darkColor: "gray.200",
+    darkBorderColor: "gray.600"
+  }
+};
+
+const DashboardBadge = ({
+  tone,
+  children,
+  ...props
+}: { tone: DashboardBadgeTone; children: React.ReactNode } & Omit<
+  React.ComponentProps<typeof Badge>,
+  "colorScheme" | "colorPalette"
+>) => {
+  const style = dashboardBadgeStyles[tone];
+  return (
+    <Badge
+      {...props}
+      size={props.size ?? "sm"}
+      borderWidth="1px"
+      bg={style.bg}
+      color={style.color}
+      borderColor={style.borderColor}
+      _dark={{
+        bg: style.darkBg,
+        color: style.darkColor,
+        borderColor: style.darkBorderColor
+      }}
+    >
+      {children}
+    </Badge>
+  );
+};
+
 type InstructorDashboardMetricRow = {
   section: "past_due" | "upcoming" | "undated";
   assignment_id: number;
@@ -311,19 +394,13 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                           <Text>{formatDashboardDueDate(metric)}</Text>
                         </Link>
                         {metric.section === "past_due" && (
-                          <Badge colorScheme="orange" size="sm">
-                            Past grading due
-                          </Badge>
+                          <DashboardBadge tone="warning">Past grading due</DashboardBadge>
                         )}
                         {metric.section === "upcoming" && (
-                          <Badge colorScheme="blue" size="sm">
-                            Upcoming grading due
-                          </Badge>
+                          <DashboardBadge tone="info">Upcoming grading due</DashboardBadge>
                         )}
                         {metric.section === "undated" && (
-                          <Badge colorScheme="gray" size="sm">
-                            No grading due date
-                          </Badge>
+                          <DashboardBadge tone="neutral">No grading due date</DashboardBadge>
                         )}
                       </Flex>
                     </Table.Cell>
@@ -335,13 +412,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                           </Text>
                         </Link>
                         {metric.students_without_submissions > 0 ? (
-                          <Badge colorScheme="yellow" size="sm">
-                            {metric.students_without_submissions} missing
-                          </Badge>
+                          <DashboardBadge tone="warning">{metric.students_without_submissions} missing</DashboardBadge>
                         ) : (
-                          <Badge colorScheme="green" size="sm">
-                            All submitted
-                          </Badge>
+                          <DashboardBadge tone="success">All submitted</DashboardBadge>
                         )}
                       </Flex>
                     </Table.Cell>
@@ -353,13 +426,11 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                           </Text>
                         </Link>
                         {metric.submission_reviews_incomplete > 0 ? (
-                          <Badge colorScheme="orange" size="sm">
+                          <DashboardBadge tone="warning">
                             {metric.submission_reviews_incomplete} incomplete
-                          </Badge>
+                          </DashboardBadge>
                         ) : (
-                          <Badge colorScheme="green" size="sm">
-                            Complete
-                          </Badge>
+                          <DashboardBadge tone="success">Complete</DashboardBadge>
                         )}
                       </Flex>
                     </Table.Cell>
@@ -371,13 +442,11 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                           </Text>
                         </Link>
                         {metric.review_assignments_incomplete > 0 ? (
-                          <Badge colorScheme="red" size="sm">
+                          <DashboardBadge tone="danger">
                             {metric.review_assignments_incomplete} incomplete
-                          </Badge>
+                          </DashboardBadge>
                         ) : (
-                          <Badge colorScheme="green" size="sm">
-                            Complete
-                          </Badge>
+                          <DashboardBadge tone="success">Complete</DashboardBadge>
                         )}
                       </Flex>
                     </Table.Cell>
@@ -389,24 +458,16 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                           </Text>
                         </Link>
                         {metric.grades_release_status === "fully_released" && (
-                          <Badge colorScheme="green" size="sm">
-                            Fully released
-                          </Badge>
+                          <DashboardBadge tone="success">Fully released</DashboardBadge>
                         )}
                         {metric.grades_release_status === "partially_released" && (
-                          <Badge colorScheme="orange" size="sm">
-                            Partial release
-                          </Badge>
+                          <DashboardBadge tone="warning">Partial release</DashboardBadge>
                         )}
                         {metric.grades_release_status === "not_released" && (
-                          <Badge colorScheme="gray" size="sm">
-                            Not released
-                          </Badge>
+                          <DashboardBadge tone="neutral">Not released</DashboardBadge>
                         )}
                         {metric.grades_release_status === "no_submissions" && (
-                          <Badge colorScheme="gray" size="sm">
-                            No submissions
-                          </Badge>
+                          <DashboardBadge tone="neutral">No submissions</DashboardBadge>
                         )}
                       </Flex>
                     </Table.Cell>
@@ -414,27 +475,23 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <Flex align="center" gap={2} wrap="wrap">
                         <Link href={regradesHref}>
                           {metric.open_regrade_requests > 0 ? (
-                            <Badge colorScheme="red" size="sm">
-                              {metric.open_regrade_requests} open
-                            </Badge>
+                            <DashboardBadge tone="danger">{metric.open_regrade_requests} open</DashboardBadge>
                           ) : (
-                            <Badge colorScheme="green" size="sm">
-                              0 open
-                            </Badge>
+                            <DashboardBadge tone="success">0 open</DashboardBadge>
                           )}
                         </Link>
                         {metric.closed_or_resolved_regrade_requests > 0 && (
                           <Link href={regradesHref}>
-                            <Badge colorScheme="green" size="sm">
+                            <DashboardBadge tone="success">
                               {metric.closed_or_resolved_regrade_requests} resolved
-                            </Badge>
+                            </DashboardBadge>
                           </Link>
                         )}
                         {metric.students_with_valid_extensions > 0 && (
                           <Link href={dueDateExceptionsHref}>
-                            <Badge colorScheme="blue" size="sm">
+                            <DashboardBadge tone="info">
                               {metric.students_with_valid_extensions} with extensions
-                            </Badge>
+                            </DashboardBadge>
                           </Link>
                         )}
                       </Flex>
@@ -581,9 +638,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                 <Link href={`/course/${course_id}/manage/workflow-runs`}>
                   <Text fontWeight="semibold">Last Hour</Text>
                 </Link>
-                <Badge colorScheme={hourStats.errorCount > 0 ? "red" : "green"} size="sm">
+                <DashboardBadge tone={hourStats.errorCount > 0 ? "danger" : "success"}>
                   {hourStats.errorCount > 0 ? `${hourStats.errorCount} errors` : "No errors"}
-                </Badge>
+                </DashboardBadge>
               </Flex>
             </CardHeader>
             <CardBody>
@@ -636,9 +693,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                 <Link href={`/course/${course_id}/manage/workflow-runs`}>
                   <Text fontWeight="semibold">Last 24 Hours</Text>
                 </Link>
-                <Badge colorScheme={dayStats.errorCount > 0 ? "red" : "green"} size="sm">
+                <DashboardBadge tone={dayStats.errorCount > 0 ? "danger" : "success"}>
                   {dayStats.errorCount > 0 ? `${dayStats.errorCount} errors` : "No errors"}
-                </Badge>
+                </DashboardBadge>
               </Flex>
             </CardHeader>
             <CardBody>
@@ -698,9 +755,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                 <Flex justify="space-between" align="center">
                   <Text fontWeight="semibold">Recent Errors</Text>
                   <Link href={`/course/${course_id}/manage/workflow-runs/errors`}>
-                    <Badge colorScheme="orange" size="sm">
-                      View All
-                    </Badge>
+                    <DashboardBadge tone="warning">View All</DashboardBadge>
                   </Link>
                 </Flex>
               </CardHeader>
