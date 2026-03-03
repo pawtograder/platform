@@ -58,6 +58,9 @@ function parseCsv(csvText: string) {
 }
 
 function getCsvCellValue(csvRows: string[][], email: string, columnName: string) {
+  if (!Array.isArray(csvRows) || csvRows.length === 0) {
+    throw new Error("CSV parsing returned no rows");
+  }
   const [headers, ...dataRows] = csvRows;
   const emailIndex = headers.indexOf("Email");
   const columnIndex = headers.indexOf(columnName);
@@ -827,19 +830,23 @@ test.describe("Gradebook Page - CSV Render Export", () => {
     exportCourse = await createClass({
       name: "Gradebook Export Render Expression Course"
     });
+    const exportEmailSuffix = `${process.env.TEST_WORKER_INDEX || "0"}-${Math.random().toString(36).slice(2, 8)}`;
     const users = await createUsersInClass([
       {
         name: "Export Student One",
+        email: `export-student-one-${exportEmailSuffix}@pawtograder.net`,
         role: "student",
         class_id: exportCourse.id
       },
       {
         name: "Export Student Two",
+        email: `export-student-two-${exportEmailSuffix}@pawtograder.net`,
         role: "student",
         class_id: exportCourse.id
       },
       {
         name: "Export Instructor",
+        email: `export-instructor-${exportEmailSuffix}@pawtograder.net`,
         role: "instructor",
         class_id: exportCourse.id
       }

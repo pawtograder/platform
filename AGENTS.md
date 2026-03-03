@@ -26,7 +26,11 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 
 - **Lint**: `npm run lint` (ESLint + Prettier). See `package.json` scripts.
 - **Unit tests**: `npm test` (Jest). Note: `jest.setup.ts` must exist (import `@testing-library/jest-dom`). The existing test has a pre-existing issue with `Request` not being defined in jsdom.
-- **E2E tests**: `npm run test:e2e:local` — this sets `BASE_URL=http://localhost:3000` and runs Playwright. Requires local Supabase running + dev server at port 3000. Also needs `SUPABASE_URL` and `SUPABASE_ANON_KEY` exported (or in `.env.local`), since `TestingUtils.ts` reads them from `process.env`. Tests run against chromium and webkit.
+- **E2E tests (default policy)**: **Always run E2E against a production build/server**, not `next dev`, for stable performance and fewer timing flakes.
+  - Build and serve: `npm run build` then `PORT=3001 npm run start`
+  - Run Playwright against prod server: `BASE_URL=http://localhost:3001 npx playwright test ...`
+  - Use `npm run test:e2e:local` / `next dev` only during tight local iteration **after** confirming the same test is already reliable in dev mode.
+  - If a test is flaky in dev mode, switch back to prod-build runs immediately.
 - **Build**: `npm run build` (requires ~8 GB memory via `NODE_OPTIONS=--max-old-space-size=8000`).
 - **Format**: `npm run format` (Prettier auto-fix).
 
