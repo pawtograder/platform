@@ -11554,6 +11554,14 @@ export type Database = {
         };
         Returns: undefined;
       };
+      check_grading_completion_eligibility: {
+        Args: { p_assignment_id: number };
+        Returns: { total_incomplete: number; completable: number; missing_required_checks: number }[];
+      };
+      complete_eligible_grading_reviews: {
+        Args: { p_assignment_id: number };
+        Returns: number;
+      };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;

@@ -357,6 +357,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               {rows.map((metric) => {
                 const assignmentRootHref = `/course/${course_id}/manage/assignments/${metric.assignment_id}`;
                 const submissionsHref = assignmentRootHref;
+                const assignmentsTableHref = `${assignmentRootHref}?tab=all-submissions`;
                 const gradingDashboardHref = `${assignmentRootHref}/grading-progress`;
                 const reviewAssignmentsHref = `${assignmentRootHref}/reviews`;
                 const regradesHref = `${assignmentRootHref}/regrade-requests`;
@@ -425,15 +426,17 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                     </Table.Cell>
                     <Table.Cell>
                       <Flex align="center" gap={2} wrap="wrap">
-                        <Link href={gradingDashboardHref}>
+                        <Link href={assignmentsTableHref}>
                           <Text>
                             {metric.submission_reviews_completed}/{metric.submission_reviews_total}
                           </Text>
                         </Link>
                         {metric.submission_reviews_incomplete > 0 ? (
-                          <DashboardBadge tone="warning">
-                            {metric.submission_reviews_incomplete} incomplete
-                          </DashboardBadge>
+                          <Link href={assignmentsTableHref}>
+                            <DashboardBadge tone="warning">
+                              {metric.submission_reviews_incomplete} incomplete
+                            </DashboardBadge>
+                          </Link>
                         ) : (
                           <DashboardBadge tone="success">Complete</DashboardBadge>
                         )}
