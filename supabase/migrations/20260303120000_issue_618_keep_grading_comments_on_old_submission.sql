@@ -9,6 +9,7 @@ AS $$
 DECLARE
     new_active_submission_id bigint;
     moved_rubric_ids bigint[] := '{}'::bigint[];
+    blocking_conflicts_count integer := 0;
     deleted_conflicting_assignments integer := 0;
     updated_assignments_count integer := 0;
     updated_links_count integer := 0;
@@ -22,9 +23,11 @@ BEGIN
             FROM public.submissions
             WHERE assignment_id = OLD.assignment_id
               AND assignment_group_id = OLD.assignment_group_id
-              AND is_active = true
               AND id != OLD.id
-            ORDER BY id DESC
+            ORDER BY
+                CASE WHEN is_active THEN 0 ELSE 1 END,
+                created_at DESC,
+                id DESC
             LIMIT 1;
         ELSE
             SELECT id INTO new_active_submission_id
@@ -32,9 +35,11 @@ BEGIN
             WHERE assignment_id = OLD.assignment_id
               AND profile_id = OLD.profile_id
               AND assignment_group_id IS NULL
-              AND is_active = true
               AND id != OLD.id
-            ORDER BY id DESC
+            ORDER BY
+                CASE WHEN is_active THEN 0 ELSE 1 END,
+                created_at DESC,
+                id DESC
             LIMIT 1;
         END IF;
 
@@ -67,10 +72,74 @@ BEGIN
             WHERE ra.submission_id = OLD.id
             ON CONFLICT (submission_id, rubric_id) DO NOTHING;
 
-            -- Delete any conflicting target assignments to avoid unique violations
+            -- Detect conflicting target assignments with existing progress to avoid data loss.
+            -- "Progress" includes completion or authored rubric comments on the target submission_review.
+            SELECT COUNT(*)
+            INTO blocking_conflicts_count
+            FROM public.review_assignments ra_target
+            WHERE ra_target.submission_id = new_active_submission_id
+              AND EXISTS (
+                  SELECT 1
+                  FROM public.review_assignments ra_old
+                  WHERE ra_old.submission_id = OLD.id
+                    AND ra_old.assignee_profile_id = ra_target.assignee_profile_id
+                    AND ra_old.rubric_id = ra_target.rubric_id
+              )
+              AND (
+                  ra_target.completed_at IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM public.submission_comments sc
+                      WHERE sc.submission_review_id = ra_target.submission_review_id
+                        AND sc.author = ra_target.assignee_profile_id
+                        AND sc.deleted_at IS NULL
+                      UNION ALL
+                      SELECT 1
+                      FROM public.submission_file_comments sfc
+                      WHERE sfc.submission_review_id = ra_target.submission_review_id
+                        AND sfc.author = ra_target.assignee_profile_id
+                        AND sfc.deleted_at IS NULL
+                      UNION ALL
+                      SELECT 1
+                      FROM public.submission_artifact_comments sac
+                      WHERE sac.submission_review_id = ra_target.submission_review_id
+                        AND sac.author = ra_target.assignee_profile_id
+                        AND sac.deleted_at IS NULL
+                  )
+              );
+
+            IF blocking_conflicts_count > 0 THEN
+                RAISE EXCEPTION
+                    'Cannot move review assignments from submission % to %: % conflicting target assignment(s) already have progress.',
+                    OLD.id,
+                    new_active_submission_id,
+                    blocking_conflicts_count;
+            END IF;
+
+            -- Delete only unstarted conflicting target assignments to avoid unique violations
             -- when moving old assignments over.
             DELETE FROM public.review_assignments ra_target
             WHERE ra_target.submission_id = new_active_submission_id
+              AND ra_target.completed_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.submission_comments sc
+                  WHERE sc.submission_review_id = ra_target.submission_review_id
+                    AND sc.author = ra_target.assignee_profile_id
+                    AND sc.deleted_at IS NULL
+                  UNION ALL
+                  SELECT 1
+                  FROM public.submission_file_comments sfc
+                  WHERE sfc.submission_review_id = ra_target.submission_review_id
+                    AND sfc.author = ra_target.assignee_profile_id
+                    AND sfc.deleted_at IS NULL
+                  UNION ALL
+                  SELECT 1
+                  FROM public.submission_artifact_comments sac
+                  WHERE sac.submission_review_id = ra_target.submission_review_id
+                    AND sac.author = ra_target.assignee_profile_id
+                    AND sac.deleted_at IS NULL
+              )
               AND EXISTS (
                   SELECT 1
                   FROM public.review_assignments ra_old
@@ -130,3 +199,21 @@ COMMENT ON FUNCTION public.update_review_assignments_on_submission_deactivation(
 'Updates review_assignments to follow the newly active submission when a submission is deactivated.
 Always reopens moved review assignments and related submission_reviews by clearing completion fields.
 Does not move grading comments, file comments, or artifact comments; comments remain on the old submission.';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'trigger_update_review_assignments_on_submission_deactivation'
+          AND tgrelid = 'public.submissions'::regclass
+          AND NOT tgisinternal
+    ) THEN
+        CREATE CONSTRAINT TRIGGER trigger_update_review_assignments_on_submission_deactivation
+        AFTER UPDATE OF is_active ON public.submissions
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW
+        WHEN (OLD.is_active = true AND NEW.is_active = false)
+        EXECUTE FUNCTION public.update_review_assignments_on_submission_deactivation();
+    END IF;
+END $$;
