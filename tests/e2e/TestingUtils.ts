@@ -375,6 +375,50 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   return userSupabase;
 }
 
+const TIMEZONE_DIALOG_TITLE = "Choose Your Time Zone Preference";
+const TIMEZONE_PREFERENCE_KEY = "pawtograder-timezone-pref";
+const DEFAULT_TIMEZONE_PREFERENCE: "course" | "browser" = "course";
+
+export async function ensureTimeZonePreferenceInitialized(
+  page: Page,
+  preference: "course" | "browser" = DEFAULT_TIMEZONE_PREFERENCE
+) {
+  await page.addInitScript(
+    ({ key, value }) => {
+      try {
+        const existingPreference = localStorage.getItem(key);
+        if (!existingPreference) {
+          localStorage.setItem(key, value);
+        }
+      } catch {
+        // Ignore localStorage failures in test setup.
+      }
+    },
+    { key: TIMEZONE_PREFERENCE_KEY, value: preference }
+  );
+}
+
+export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 10000): Promise<boolean> {
+  const timezoneDialog = page.getByRole("dialog", { name: TIMEZONE_DIALOG_TITLE });
+  const isVisible = await timezoneDialog.isVisible({ timeout: timeoutMs }).catch(() => false);
+  if (!isVisible) {
+    return false;
+  }
+
+  const closeButton = timezoneDialog.getByRole("button", { name: /^Close$/ }).first();
+  const canClickCloseButton = await closeButton.isVisible({ timeout: 1000 }).catch(() => false);
+  if (canClickCloseButton) {
+    await closeButton.click({ timeout: 5000 }).catch(async () => {
+      await page.keyboard.press("Escape");
+    });
+  } else {
+    await page.keyboard.press("Escape");
+  }
+
+  await timezoneDialog.waitFor({ state: "hidden", timeout: timeoutMs });
+  return true;
+}
+
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
@@ -417,8 +461,16 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
   }
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
+  if (dismissTimezoneDialog) {
+    await ensureTimeZonePreferenceInitialized(page);
+  }
+
   await page.goto("/");
   await signInWithMagicLinkAndRetry(page, testingUser);
+
+  if (dismissTimezoneDialog) {
+    await dismissTimeZonePreferenceModal(page, 15000);
+  }
 
   if (course) {
     await page.waitForLoadState("networkidle");
@@ -426,16 +478,8 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
     await page.waitForLoadState("networkidle");
   }
 
-  // Only dismiss timezone dialog if requested
   if (dismissTimezoneDialog) {
-    // If timezone dialog appears, dismiss it with Escape (Close button is hard to target reliably)
-    const timezoneDialog = page.getByRole("dialog", { name: "Choose Your Time Zone Preference" });
-    const isVisible = await timezoneDialog.isVisible({ timeout: 2000 }).catch(() => false);
-
-    if (isVisible) {
-      await page.keyboard.press("Escape");
-      await timezoneDialog.waitFor({ state: "hidden", timeout: 3000 });
-    }
+    await dismissTimeZonePreferenceModal(page, 10000);
   }
 }
 
