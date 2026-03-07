@@ -830,7 +830,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
     exportCourse = await createClass({
       name: "Gradebook Export Render Expression Course"
     });
-    const exportEmailSuffix = `${process.env.TEST_WORKER_INDEX || "0"}-${Math.random().toString(36).slice(2, 8)}`;
+    const exportEmailSuffix = `${process.env.TEST_PARALLEL_INDEX || "0"}-${Math.random().toString(36).slice(2, 8)}`;
     const users = await createUsersInClass([
       {
         name: "Export Student One",
