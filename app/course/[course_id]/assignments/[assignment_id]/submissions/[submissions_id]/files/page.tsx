@@ -768,11 +768,15 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
   const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [textContent, setTextContent] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadArtifact() {
+      if (artifact.data.format === "plaintext" || artifact.data.format === "markdown") {
+        setTextContent(null);
+      }
       const client = createClient();
       if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
         const data = await client.functions.invoke("submission-serve-artifact", {
@@ -790,6 +794,10 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
 
       if (data.data) {
         setArtifactData(data.data);
+        if (artifact.data.format === "plaintext" || artifact.data.format === "markdown") {
+          const text = await data.data.text();
+          if (isMounted) setTextContent(text);
+        }
       }
       if (data.error && isMounted) {
         toaster.error({
@@ -885,6 +893,44 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
         return <Spinner />;
       }
     }
+  } else if (artifact.data.format === "plaintext") {
+    if (textContent !== null) {
+      return (
+        <Box
+          as="pre"
+          p={4}
+          overflowX="auto"
+          overflowY="auto"
+          maxH="70vh"
+          borderWidth="1px"
+          borderColor="border.emphasized"
+          borderRadius="md"
+          whiteSpace="pre-wrap"
+          wordBreak="break-word"
+          fontSize="sm"
+        >
+          {textContent}
+        </Box>
+      );
+    }
+    return <Spinner />;
+  } else if (artifact.data.format === "markdown") {
+    if (textContent !== null) {
+      return (
+        <Box
+          p={4}
+          overflowX="auto"
+          overflowY="auto"
+          maxH="70vh"
+          borderWidth="1px"
+          borderColor="border.emphasized"
+          borderRadius="md"
+        >
+          <Markdown>{textContent}</Markdown>
+        </Box>
+      );
+    }
+    return <Spinner />;
   } else {
     return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }
