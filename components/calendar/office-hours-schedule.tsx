@@ -3,10 +3,10 @@
 import { CalendarEvent, useWeekSchedule, useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
 import { Box, Button, Card, Grid, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
 import { addDays, format, isSameDay, parseISO, startOfWeek } from "date-fns";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
-import { isUrl, CalendarColorPalette } from "./calendar-utils";
-import { useCalendarColorsFromEvents } from "./CalendarColorContext";
+import { isUrl, CalendarColorPalette, isEventCurrentlyHappening } from "./calendar-utils";
+import { useCalendarColorsFromEvents, getResolvedQueueName } from "./CalendarColorContext";
 import { useParams } from "next/navigation";
 import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -46,6 +46,13 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
   const { private_profile_id: taProfileId } = useClassProfiles();
   const helpQueues = useHelpQueues();
   const allAssignments = useHelpQueueAssignments();
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if event is active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleQueueClick = async (queueName: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -138,7 +145,9 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
           </Text>
         ) : (
           events.map((event) => {
-            const colors = getOfficeHoursColor(event.queue_name);
+            const resolvedQueueName = getResolvedQueueName(event, helpQueues);
+            const colors = getOfficeHoursColor(resolvedQueueName);
+            const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
             return (
               <Box
                 key={event.id}
@@ -146,10 +155,11 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                 _dark={{ bg: colors.bgDark }}
                 borderRadius="md"
                 p={2}
-                borderWidth="1px"
-                borderColor={colors.border}
+                borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+                borderColor={isCurrentlyHappening ? "green.500" : colors.border}
                 borderLeftWidth="3px"
-                borderLeftColor={colors.accent}
+                borderLeftColor={isCurrentlyHappening ? "green.600" : colors.accent}
+                boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2)" : undefined}
               >
                 <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
                   {event.organizer_name || event.title}
@@ -180,17 +190,17 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
                       📍 {event.location}
                     </Text>
                   ))}
-                {event.queue_name && (
+                {resolvedQueueName && (
                   <Box
                     as="button"
                     fontSize="xs"
                     color={colors.accent}
                     fontWeight="medium"
-                    onClick={(e) => handleQueueClick(event.queue_name!, e)}
+                    onClick={(e) => handleQueueClick(resolvedQueueName, e)}
                     _hover={{ textDecoration: "underline" }}
                     cursor="pointer"
                   >
-                    {event.queue_name}
+                    {resolvedQueueName}
                   </Box>
                 )}
               </Box>

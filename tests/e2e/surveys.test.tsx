@@ -378,17 +378,21 @@ test.describe("Surveys Page", () => {
     await loginAsUser(page, studentA, course);
     await page.goto(`/course/${course.id}`);
 
-    await expect(page.getByRole("heading", { name: "Active Surveys" })).toBeVisible();
+    const activeSurveysHeading = page.getByRole("heading", { name: "Active Surveys" });
+    await expect(activeSurveysHeading).toBeVisible();
 
-    const startCard = page.locator("div").filter({ hasText: "Dashboard Start Survey" }).first();
+    // Find the surveys section by locating the parent Box that contains the heading
+    const surveysSection = activeSurveysHeading.locator("..");
+
+    const startCard = surveysSection.locator("div").filter({ hasText: "Dashboard Start Survey" }).first();
     await expect(startCard.getByRole("button", { name: "Start" })).toBeVisible();
     await expect(startCard.getByText("Not started")).toBeVisible();
 
-    const lockedCard = page.locator("div").filter({ hasText: "Dashboard Submitted Locked" }).first();
+    const lockedCard = surveysSection.locator("div").filter({ hasText: "Dashboard Submitted Locked" }).first();
     await expect(lockedCard.getByRole("button", { name: "View" })).toBeVisible();
     await expect(lockedCard.getByText("Submitted (locked)")).toBeVisible();
 
-    const editableCard = page.locator("div").filter({ hasText: "Dashboard Submitted Editable" }).first();
+    const editableCard = surveysSection.locator("div").filter({ hasText: "Dashboard Submitted Editable" }).first();
     await expect(editableCard.getByRole("button", { name: "Edit" })).toBeVisible();
     await expect(editableCard.getByText("Submitted (editable)")).toBeVisible();
   });

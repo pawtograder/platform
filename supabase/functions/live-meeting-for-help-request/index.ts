@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 
 import { ChimeSDKMeetings, CreateMeetingCommandOutput } from "npm:@aws-sdk/client-chime-sdk-meetings";
 import * as chimeUtils from "../_shared/ChimeWrapper.ts";

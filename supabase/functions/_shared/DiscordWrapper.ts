@@ -18,6 +18,9 @@ import type {
 // - Per-channel messages: 5 requests per 5 seconds per channel
 // - Per-route limits vary
 
+/** Default timeout for Discord API fetch calls (15 seconds) */
+const DISCORD_FETCH_TIMEOUT_MS = 15_000;
+
 const globalLimiters = new Map<string, Bottleneck>();
 const channelLimiters = new Map<string, Bottleneck>();
 
@@ -139,15 +142,35 @@ async function discordRequest(
   const globalLimiter = getGlobalLimiter();
 
   return await globalLimiter.schedule(async () => {
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bot ${token}`,
-        "Content-Type": "application/json",
-        "User-Agent": "Pawtograder-Discord-Bot/1.0"
-      },
-      body: body ? JSON.stringify(body) : undefined
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DISCORD_FETCH_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bot ${token}`,
+          "Content-Type": "application/json",
+          "User-Agent": "Pawtograder-Discord-Bot/1.0"
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      });
+    } catch (fetchError) {
+      clearTimeout(timer);
+      // Convert AbortError into a descriptive timeout error
+      if (fetchError instanceof DOMException && fetchError.name === "AbortError") {
+        const msg = `Discord API timeout after ${DISCORD_FETCH_TIMEOUT_MS}ms: ${method} ${endpoint}`;
+        console.error(`[discordRequest] ${msg}`);
+        scope?.setContext("discord_timeout", { endpoint, method, timeout_ms: DISCORD_FETCH_TIMEOUT_MS });
+        Sentry.addBreadcrumb({ message: msg, level: "error" });
+        throw new Error(msg);
+      }
+      throw fetchError;
+    } finally {
+      clearTimeout(timer);
+    }
 
     // Check rate limit headers
     const remaining = response.headers.get("X-RateLimit-Remaining");

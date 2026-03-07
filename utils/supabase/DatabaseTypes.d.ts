@@ -27,7 +27,7 @@ export type GraderResultTestExtraData = {
     result?: string;
     model?: string;
     account?: string;
-    provider?: "openai" | "azure" | "anthropic";
+    provider?: "openai" | "azure" | "anthropic" | "openrouter";
     temperature?: number;
     max_tokens?: number;
     rate_limit?: LLMRateLimitConfig;
@@ -402,6 +402,8 @@ export type HelpRequestMessageReadReceipt = GetResult<
 >;
 
 export type HelpRequestLocationType = Database["public"]["Enums"]["location_type"];
+
+export type HelpRequestResolutionStatus = Database["public"]["Enums"]["help_request_resolution_status"];
 
 export type HelpRequestTemplate = GetResult<
   Database["public"],

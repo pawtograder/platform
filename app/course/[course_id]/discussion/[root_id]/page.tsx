@@ -1,5 +1,6 @@
 "use client";
 
+import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
 import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
 import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
 import { KarmaBadge } from "@/components/discussion/KarmaBadge";
@@ -167,6 +168,15 @@ function ThreadActions({
       </Tooltip>
       {/* Discord link - shown if thread has a Discord message (staff only see it) */}
       <DiscordDiscussionMessageLink threadId={thread.id} />
+      {/* AI Help button for staff - component has internal tooltip */}
+      {canPin && (
+        <AIHelpIconButton
+          contextType="discussion_thread"
+          resourceId={thread.id}
+          classId={thread.class_id}
+          assignmentId={topicAssignmentId ?? undefined}
+        />
+      )}
       {/* <Tooltip content="Emote">
         <Button aria-label="Emote" variant="ghost" size="sm">
           <FaSmile />

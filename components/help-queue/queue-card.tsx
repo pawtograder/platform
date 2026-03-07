@@ -74,9 +74,16 @@ export function QueueCard({
         </Box>
         <Stack spaceY="0" flex="1" minW={0}>
           <HStack justify="space-between" align="flex-start" gap="2">
-            <Text fontWeight="semibold" truncate mb={0}>
-              {queue.name}
-            </Text>
+            <HStack gap="2" align="center">
+              <Text fontWeight="semibold" truncate mb={0}>
+                {queue.name}
+              </Text>
+              {queue.is_demo && (
+                <Badge colorPalette="orange" variant="solid" fontSize="xs">
+                  DEMO - NOT A REAL QUEUE
+                </Badge>
+              )}
+            </HStack>
             <HStack gap="1" align="center">
               {openRequestCount > 0 && (
                 <Badge colorPalette="blue" variant="solid">

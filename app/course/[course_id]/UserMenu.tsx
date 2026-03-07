@@ -46,6 +46,7 @@ import { PiSignOut } from "react-icons/pi";
 import { RiChatSettingsFill } from "react-icons/ri";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import { signOutAction } from "../../actions";
+import MCPTokensMenu from "@/components/settings/MCPTokensMenu";
 
 function SupportMenu() {
   // Track whether the build number has been successfully copied
@@ -755,7 +756,7 @@ function UserSettingsMenu() {
                 <ProfileChangesMenu />
                 <NotificationPreferencesMenu />
                 <SafeTimeZonePreferencesMenu />
-
+                <MCPTokensMenu />
                 <Button
                   variant="ghost"
                   onClick={signOutAction}

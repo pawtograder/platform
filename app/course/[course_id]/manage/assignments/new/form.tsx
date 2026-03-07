@@ -744,14 +744,45 @@ export default function AssignmentForm({
               </Checkbox.Root>
             </Field>
           </Fieldset.Content>
-          {/* <Fieldset.Content>
-            <Field
-              label="Description URL"
-              helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"
-            >
-              <Input name="description" />
+          <Fieldset.Content>
+            <Field helperText="When enabled, students can submit even if their files match the handout (starter) exactly. When disabled, such empty submissions are rejected with a message asking them to commit their changes.">
+              <Controller
+                name="permit_empty_submissions"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value !== false}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Permit empty submissions (match handout exactly)</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
             </Field>
-          </Fieldset.Content> */}
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field
+              label="Handout URL"
+              helperText="A link to the assignment handout or instructions document. This URL will be provided to AI assistants helping students with this assignment."
+              errorText={errors.handout_url?.message?.toString()}
+              invalid={!!errors.handout_url}
+            >
+              <Input
+                type="url"
+                placeholder="https://..."
+                {...register("handout_url", {
+                  pattern: {
+                    value: /^https?:\/\/.+/,
+                    message: "Please enter a valid URL starting with http:// or https://"
+                  }
+                })}
+              />
+            </Field>
+          </Fieldset.Content>
           <Fieldset.Content>
             <Field
               label="Points Possible"

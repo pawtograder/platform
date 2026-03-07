@@ -6,11 +6,13 @@ import { toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
+import { getNotificationManager, type ChatNotificationPreferences } from "@/lib/notifications";
 import type { NotificationPreferences } from "@/utils/supabase/DatabaseTypes";
-import { Box, Fieldset, Heading, NativeSelect, Stack } from "@chakra-ui/react";
+import { Box, Fieldset, Heading, HStack, NativeSelect, Slider, Stack, Switch, Text } from "@chakra-ui/react";
 import { useCreate, useList, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BsBell, BsVolumeUp } from "react-icons/bs";
 
 /**
  * Component for managing user notification preferences.
@@ -194,10 +196,217 @@ export default function NotificationPreferencesPanel({
     ? "You have Discord linked. Default is NO email notifications (you'll receive Discord notifications instead)."
     : "If you link Discord, the default will be NO email notifications.";
 
+  // Chat notification preferences (localStorage-based)
+  const [chatPrefs, setChatPrefs] = useState<ChatNotificationPreferences>(() => {
+    if (typeof window !== "undefined") {
+      return getNotificationManager().getPreferences();
+    }
+    return {
+      soundEnabled: true,
+      browserEnabled: true,
+      titleFlashEnabled: true,
+      faviconBadgeEnabled: true,
+      volume: 0.5
+    };
+  });
+
+  const [browserPermission, setBrowserPermission] = useState<NotificationPermission | "unsupported">("default");
+
+  // Load browser permission state
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setBrowserPermission(getNotificationManager().getPermissionState());
+    }
+  }, []);
+
+  const handleChatPrefChange = useCallback((key: keyof ChatNotificationPreferences, value: boolean | number) => {
+    setChatPrefs((prev) => {
+      const updated = { ...prev, [key]: value };
+      getNotificationManager().setPreferences(updated);
+      return updated;
+    });
+  }, []);
+
+  const handleRequestBrowserPermission = useCallback(async () => {
+    const permission = await getNotificationManager().requestPermission();
+    setBrowserPermission(permission);
+    if (permission === "granted") {
+      toaster.success({
+        title: "Notifications enabled",
+        description: "You will now receive browser notifications for new messages."
+      });
+    } else if (permission === "denied") {
+      toaster.error({
+        title: "Notifications blocked",
+        description: "Please enable notifications in your browser settings to receive alerts."
+      });
+    }
+  }, []);
+
+  const handleTestNotification = useCallback(() => {
+    getNotificationManager().testNotification();
+    toaster.info({
+      title: "Test notification sent",
+      description: "Check your browser for the notification."
+    });
+  }, []);
+
   return (
     <Box>
+      {/* Office Hours Chat Notifications Section */}
       <Heading size="md" mb={4}>
-        Notification Preferences
+        Office Hours Chat Notifications
+      </Heading>
+      <Text fontSize="sm" color="fg.muted" mb={4}>
+        These settings control how you&apos;re alerted when you receive new messages in office hours chats. All
+        notifications are enabled by default.
+      </Text>
+      <Fieldset.Root mb={8}>
+        <Fieldset.Content>
+          <Stack spaceY={4}>
+            {/* Browser Notifications */}
+            <Box p={4} borderWidth="1px" borderRadius="md" borderColor="border.subtle">
+              <HStack justify="space-between" align="start" mb={2}>
+                <Box flex={1}>
+                  <HStack mb={1}>
+                    <BsBell />
+                    <Text fontWeight="medium">Browser Notifications</Text>
+                  </HStack>
+                  <Text fontSize="sm" color="fg.muted">
+                    Show desktop notifications even when you&apos;re in a different tab or window.
+                  </Text>
+                </Box>
+                <Switch.Root
+                  checked={chatPrefs.browserEnabled}
+                  onCheckedChange={(e) => handleChatPrefChange("browserEnabled", e.checked)}
+                  disabled={browserPermission === "denied"}
+                >
+                  <Switch.HiddenInput />
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                </Switch.Root>
+              </HStack>
+              {browserPermission === "default" && chatPrefs.browserEnabled && (
+                <Button size="sm" colorPalette="blue" variant="outline" onClick={handleRequestBrowserPermission} mt={2}>
+                  Enable Browser Notifications
+                </Button>
+              )}
+              {browserPermission === "denied" && (
+                <Text fontSize="sm" color="fg.error" mt={2}>
+                  Browser notifications are blocked. Please enable them in your browser settings.
+                </Text>
+              )}
+              {browserPermission === "granted" && chatPrefs.browserEnabled && (
+                <Text fontSize="sm" color="fg.success" mt={2}>
+                  Browser notifications are enabled.
+                </Text>
+              )}
+            </Box>
+
+            {/* Sound Notifications */}
+            <Box p={4} borderWidth="1px" borderRadius="md" borderColor="border.subtle">
+              <HStack justify="space-between" align="start" mb={2}>
+                <Box flex={1}>
+                  <HStack mb={1}>
+                    <BsVolumeUp />
+                    <Text fontWeight="medium">Sound Notifications</Text>
+                  </HStack>
+                  <Text fontSize="sm" color="fg.muted">
+                    Play a sound when you receive a new message.
+                  </Text>
+                </Box>
+                <Switch.Root
+                  checked={chatPrefs.soundEnabled}
+                  onCheckedChange={(e) => handleChatPrefChange("soundEnabled", e.checked)}
+                >
+                  <Switch.HiddenInput />
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                </Switch.Root>
+              </HStack>
+              {chatPrefs.soundEnabled && (
+                <Box mt={3}>
+                  <Text fontSize="sm" mb={2}>
+                    Volume: {Math.round(chatPrefs.volume * 100)}%
+                  </Text>
+                  <Slider.Root
+                    value={[chatPrefs.volume * 100]}
+                    onValueChange={(e) => handleChatPrefChange("volume", e.value[0] / 100)}
+                    min={0}
+                    max={100}
+                    step={10}
+                    width="200px"
+                  >
+                    <Slider.Control>
+                      <Slider.Track>
+                        <Slider.Range />
+                      </Slider.Track>
+                      <Slider.Thumb index={0} />
+                    </Slider.Control>
+                  </Slider.Root>
+                </Box>
+              )}
+            </Box>
+
+            {/* Title Flash */}
+            <Box p={4} borderWidth="1px" borderRadius="md" borderColor="border.subtle">
+              <HStack justify="space-between" align="center">
+                <Box flex={1}>
+                  <Text fontWeight="medium" mb={1}>
+                    Title Flashing
+                  </Text>
+                  <Text fontSize="sm" color="fg.muted">
+                    Flash the browser tab title when you have unread messages.
+                  </Text>
+                </Box>
+                <Switch.Root
+                  checked={chatPrefs.titleFlashEnabled}
+                  onCheckedChange={(e) => handleChatPrefChange("titleFlashEnabled", e.checked)}
+                >
+                  <Switch.HiddenInput />
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                </Switch.Root>
+              </HStack>
+            </Box>
+
+            {/* Favicon Badge */}
+            <Box p={4} borderWidth="1px" borderRadius="md" borderColor="border.subtle">
+              <HStack justify="space-between" align="center">
+                <Box flex={1}>
+                  <Text fontWeight="medium" mb={1}>
+                    Favicon Badge
+                  </Text>
+                  <Text fontSize="sm" color="fg.muted">
+                    Show an unread count badge on the browser tab icon.
+                  </Text>
+                </Box>
+                <Switch.Root
+                  checked={chatPrefs.faviconBadgeEnabled}
+                  onCheckedChange={(e) => handleChatPrefChange("faviconBadgeEnabled", e.checked)}
+                >
+                  <Switch.HiddenInput />
+                  <Switch.Control>
+                    <Switch.Thumb />
+                  </Switch.Control>
+                </Switch.Root>
+              </HStack>
+            </Box>
+
+            {/* Test Button */}
+            <Button size="sm" variant="outline" onClick={handleTestNotification}>
+              Test Notification
+            </Button>
+          </Stack>
+        </Fieldset.Content>
+      </Fieldset.Root>
+
+      {/* Email Notification Preferences Section */}
+      <Heading size="md" mb={4}>
+        Email Notification Preferences
       </Heading>
       <Fieldset.Root>
         <Fieldset.Content>

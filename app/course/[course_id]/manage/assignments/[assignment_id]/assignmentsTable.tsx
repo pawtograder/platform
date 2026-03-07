@@ -47,6 +47,7 @@ import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { BsCheck, BsX } from "react-icons/bs";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
 function StudentNameCell({
@@ -123,6 +124,7 @@ export default function AssignmentsTable({
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
+  const [isMarkingAllComplete, setIsMarkingAllComplete] = useState(false);
 
   // Get sections and assignment data for default visibility logic
   const classSections = useClassSections();
@@ -137,7 +139,8 @@ export default function AssignmentsTable({
       late_due_date: false,
       created_at: false,
       gradername: false,
-      checkername: false
+      checkername: false,
+      grading_complete: false
     };
   });
 
@@ -365,6 +368,22 @@ export default function AssignmentsTable({
         }
       },
       {
+        id: "grading_complete",
+        accessorKey: "completed_at",
+        header: "Grading Complete",
+        enableColumnFilter: true,
+        cell: (props) => {
+          return props.getValue() ? <Icon as={FaCheck} /> : <Icon as={FaTimes} />;
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const isComplete = row.original.completed_at !== null;
+          const status = isComplete ? "Complete" : "Incomplete";
+          return values.includes(status);
+        }
+      },
+      {
         id: "released",
         accessorKey: "released",
         header: "Released",
@@ -530,6 +549,15 @@ export default function AssignmentsTable({
             >
               Unrelease All Submission Reviews
             </Button>
+            <MarkAllCompleteButton
+              assignment_id={Number(assignment_id)}
+              supabase={supabase}
+              tableController={tableController}
+              isReleasingAll={isReleasingAll}
+              isUnreleasingAll={isUnreleasingAll}
+              isMarkingAllComplete={isMarkingAllComplete}
+              setIsMarkingAllComplete={setIsMarkingAllComplete}
+            />
             <ExportGradesButton assignment_id={Number(assignment_id)} class_id={Number(course_id)} />
             <DownloadAllButton />
           </HStack>
@@ -578,6 +606,12 @@ export default function AssignmentsTable({
               onCheckedChange={() => toggleColumnVisibility("checkername")}
             >
               Checker
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.grading_complete}
+              onCheckedChange={() => toggleColumnVisibility("grading_complete")}
+            >
+              Grading Complete
             </Checkbox>
           </HStack>
         </Box>
@@ -750,6 +784,21 @@ export default function AssignmentsTable({
                                   { label: "Not assigned", value: "Not assigned" }
                                 ]}
                                 placeholder="Filter by checker..."
+                              />
+                            )}
+                            {header.id === "grading_complete" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Complete", value: "Complete" },
+                                  { label: "Incomplete", value: "Incomplete" }
+                                ]}
+                                placeholder="Filter by grading complete..."
                               />
                             )}
                             {header.id === "released" && (
@@ -1334,6 +1383,157 @@ async function exportGrades({
     URL.revokeObjectURL(url);
   }
 }
+
+type EligibilityData = {
+  total_incomplete: number;
+  completable: number;
+  missing_required_checks: number;
+};
+
+function MarkAllCompleteButton({
+  assignment_id,
+  supabase,
+  tableController,
+  isReleasingAll,
+  isUnreleasingAll,
+  isMarkingAllComplete,
+  setIsMarkingAllComplete
+}: {
+  assignment_id: number;
+  supabase: ReturnType<typeof createClient>;
+  tableController: TableController<"submissions"> | null;
+  isReleasingAll: boolean;
+  isUnreleasingAll: boolean;
+  isMarkingAllComplete: boolean;
+  setIsMarkingAllComplete: (v: boolean) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [eligibilityData, setEligibilityData] = useState<EligibilityData | null>(null);
+  const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      let cancelled = false;
+      const run = async () => {
+        setIsCheckingEligibility(true);
+        setEligibilityData(null);
+        try {
+          const { data, error } = await supabase.rpc("check_grading_completion_eligibility", {
+            p_assignment_id: assignment_id
+          });
+          if (cancelled) return;
+          if (error) {
+            toaster.error({ title: "Error", description: error.message });
+            return;
+          }
+          const row = Array.isArray(data) ? data[0] : null;
+          if (row && typeof row === "object" && "total_incomplete" in row) {
+            setEligibilityData({
+              total_incomplete: Number(row.total_incomplete ?? 0),
+              completable: Number(row.completable ?? 0),
+              missing_required_checks: Number(row.missing_required_checks ?? 0)
+            });
+          } else {
+            setEligibilityData({ total_incomplete: 0, completable: 0, missing_required_checks: 0 });
+          }
+        } finally {
+          if (!cancelled) setIsCheckingEligibility(false);
+        }
+      };
+      run();
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [isOpen, assignment_id, supabase]);
+
+  const handleConfirm = useCallback(async () => {
+    setIsMarkingAllComplete(true);
+    setIsOpen(false);
+    try {
+      const { data, error } = await supabase.rpc("complete_eligible_grading_reviews", {
+        p_assignment_id: assignment_id
+      });
+      if (error) throw new Error(error.message);
+      await tableController?.refetchAll();
+      const count = typeof data === "number" ? data : 0;
+      toaster.success({
+        title: "Success",
+        description:
+          count > 0 ? `${count} submission review(s) marked as complete` : "No reviews were eligible to mark complete"
+      });
+    } catch (error) {
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    } finally {
+      setIsMarkingAllComplete(false);
+    }
+  }, [assignment_id, supabase, tableController, setIsMarkingAllComplete]);
+
+  const canComplete = (eligibilityData?.completable ?? 0) > 0;
+  const isDisabled = isReleasingAll || isUnreleasingAll || isMarkingAllComplete;
+
+  return (
+    <Popover.Root open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
+      <Popover.Trigger asChild>
+        <Button colorPalette="blue" variant="subtle" loading={isMarkingAllComplete} disabled={isDisabled}>
+          Mark All Grading Complete
+        </Button>
+      </Popover.Trigger>
+      <Popover.Positioner>
+        <Popover.Content>
+          <Popover.Arrow>
+            <Popover.ArrowTip />
+          </Popover.Arrow>
+          <Popover.Header>Mark All Grading Complete</Popover.Header>
+          <Popover.Body>
+            {isCheckingEligibility ? (
+              <HStack gap={2}>
+                <Spinner size="sm" />
+                <Text>Checking which submissions can be marked complete...</Text>
+              </HStack>
+            ) : eligibilityData ? (
+              <VStack align="stretch" gap={3}>
+                <Text>
+                  {eligibilityData.total_incomplete === 0
+                    ? "All submission reviews are already complete."
+                    : eligibilityData.completable > 0
+                      ? `${eligibilityData.completable} of ${eligibilityData.total_incomplete} incomplete submission(s) can be marked complete.`
+                      : "No incomplete submissions can be marked complete."}
+                </Text>
+                {eligibilityData.missing_required_checks > 0 && (
+                  <Text color="fg.muted">
+                    {eligibilityData.missing_required_checks} submission(s) have missing required rubric checks.
+                  </Text>
+                )}
+                <HStack justify="flex-end" gap={2}>
+                  <IconButton aria-label="Cancel" variant="ghost" size="sm" onClick={() => setIsOpen(false)}>
+                    <Icon as={BsX} boxSize={5} />
+                  </IconButton>
+                  <IconButton
+                    aria-label="Confirm"
+                    variant="solid"
+                    size="sm"
+                    disabled={!canComplete}
+                    loading={isMarkingAllComplete}
+                    onClick={handleConfirm}
+                  >
+                    <Icon as={BsCheck} boxSize={5} />
+                  </IconButton>
+                </HStack>
+              </VStack>
+            ) : (
+              <Text>Unable to load eligibility.</Text>
+            )}
+          </Popover.Body>
+        </Popover.Content>
+      </Popover.Positioner>
+    </Popover.Root>
+  );
+}
+
 function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
   const supabase = useMemo(() => createClient(), []);
   const [includeScoreBreakdown, setIncludeScoreBreakdown] = useState(true);

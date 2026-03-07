@@ -21,8 +21,8 @@ import {
 } from "date-fns";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
-import { isUrl, CalendarColorPalette } from "./calendar-utils";
-import { useCalendarColorsFromEvents } from "./CalendarColorContext";
+import { isUrl, CalendarColorPalette, isEventCurrentlyHappening } from "./calendar-utils";
+import { useCalendarColorsFromEvents, getResolvedQueueName } from "./CalendarColorContext";
 import { useParams, useRouter } from "next/navigation";
 import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useIsStudent, useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
@@ -243,7 +243,18 @@ function TimelineEventBlock({
 }: TimelineEventBlockProps) {
   const { top, height, left, width } = layout;
   const isOfficeHours = event.calendar_type === "office_hours";
-  const colors = getEventColor(event.queue_name, isOfficeHours);
+  const helpQueues = useHelpQueues();
+  const resolvedQueueName = isOfficeHours ? getResolvedQueueName(event, helpQueues) : event.queue_name;
+  const colors = getEventColor(resolvedQueueName, isOfficeHours);
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if event is active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
 
   const bgColor = colors.bg || (isOfficeHours ? "blue.subtle" : "orange.subtle");
   const bgDarkColor = colors.bgDark || (isOfficeHours ? "blue.muted" : "orange.muted");
@@ -252,9 +263,8 @@ function TimelineEventBlock({
 
   const isVeryShort = height < 35;
   const isShort = height >= 35 && height < 50;
-  const isTall = height >= 75;
   const padding = isVeryShort ? 1 : isShort ? 1.5 : 2;
-  const hasQueueBadge = !!event.queue_name;
+  const hasQueueBadge = !!resolvedQueueName;
   const contentPaddingRight = hasQueueBadge && !isVeryShort ? "50px" : undefined;
 
   return (
@@ -267,23 +277,29 @@ function TimelineEventBlock({
       bg={bgColor}
       _dark={{ bg: bgDarkColor }}
       borderRadius="md"
-      borderWidth="1px"
-      borderColor={borderColor}
+      borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+      borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="4px"
-      borderLeftColor={accentColor}
+      borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 4px 6px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
-      _hover={{ opacity: 0.95, boxShadow: "sm" }}
-      zIndex={1}
+      _hover={{
+        opacity: 0.95,
+        boxShadow: isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 4px 6px -1px rgba(0, 0, 0, 0.15)" : "sm"
+      }}
+      zIndex={isCurrentlyHappening ? 2 : 1}
       display="flex"
       flexDirection="column"
       boxSizing="border-box"
-      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
+      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${resolvedQueueName ? `\n${resolvedQueueName}` : ""}${event.location ? `\n📍 ${event.location}` : ""}${isCurrentlyHappening ? "\n🟢 Happening now!" : ""}`}
     >
-      {event.queue_name && !isVeryShort && (
+      {resolvedQueueName && !isVeryShort && (
         <QueueButton
-          queueName={event.queue_name}
+          queueName={resolvedQueueName}
           accentColor={accentColor}
           isVeryShort={isVeryShort}
           context={context}
@@ -342,6 +358,20 @@ function TimelineEventBlock({
           >
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
+          {event.location && (
+            <Text
+              fontSize="2xs"
+              color="fg.muted"
+              overflow="hidden"
+              textOverflow="ellipsis"
+              whiteSpace="nowrap"
+              lineHeight="1.2"
+              width="100%"
+              flexShrink={0}
+            >
+              📍 {event.location}
+            </Text>
+          )}
         </VStack>
       ) : (
         <VStack align="stretch" gap={0.5} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
@@ -384,7 +414,6 @@ function TimelineEventBlock({
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
           {event.location &&
-            isTall &&
             (isUrl(event.location) ? (
               <Link
                 href={event.location}
@@ -475,6 +504,8 @@ interface CompactDayColumnProps {
   containerWidth?: number;
   eventLayouts?: Map<number, EventLayout>;
   showCurrentTime?: boolean;
+  helpQueues?: Array<{ id: number; name: string }>;
+  now?: Date;
 }
 
 // Compact timeline event block for week view
@@ -486,7 +517,18 @@ function CompactTimelineEventBlock({
 }: TimelineEventBlockProps) {
   const { top, height, left, width } = layout;
   const isOfficeHours = event.calendar_type === "office_hours";
-  const colors = getEventColor(event.queue_name, isOfficeHours);
+  const helpQueues = useHelpQueues();
+  const resolvedQueueName = isOfficeHours ? getResolvedQueueName(event, helpQueues) : event.queue_name;
+  const colors = getEventColor(resolvedQueueName, isOfficeHours);
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if event is active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
 
   const bgColor = colors.bg || (isOfficeHours ? "blue.subtle" : "orange.subtle");
   const bgDarkColor = colors.bgDark || (isOfficeHours ? "blue.muted" : "orange.muted");
@@ -496,7 +538,7 @@ function CompactTimelineEventBlock({
   const isVeryShort = height < 25;
   const isShort = height >= 25 && height < 40;
   const padding = isVeryShort ? 0.5 : isShort ? 1 : 1;
-  const hasQueueBadge = !!event.queue_name && !isVeryShort;
+  const hasQueueBadge = !!resolvedQueueName && !isVeryShort;
   const contentPaddingRight = hasQueueBadge ? "35px" : undefined;
 
   return (
@@ -509,23 +551,31 @@ function CompactTimelineEventBlock({
       bg={bgColor}
       _dark={{ bg: bgDarkColor }}
       borderRadius="sm"
-      borderWidth="1px"
-      borderColor={borderColor}
+      borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+      borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="3px"
-      borderLeftColor={accentColor}
+      borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
-      _hover={{ opacity: 0.95 }}
-      zIndex={1}
+      _hover={{
+        opacity: 0.95,
+        boxShadow: isCurrentlyHappening
+          ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.15)"
+          : undefined
+      }}
+      zIndex={isCurrentlyHappening ? 2 : 1}
       display="flex"
       flexDirection="column"
       boxSizing="border-box"
-      title={`${event.title}${event.organizer_name ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
+      title={`${event.title}${event.organizer_name ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${resolvedQueueName ? `\n${resolvedQueueName}` : ""}${event.location ? `\n📍 ${event.location}` : ""}${isCurrentlyHappening ? "\n🟢 Happening now!" : ""}`}
     >
-      {event.queue_name && !isVeryShort && (
+      {resolvedQueueName && !isVeryShort && (
         <QueueButton
-          queueName={event.queue_name}
+          queueName={resolvedQueueName}
           accentColor={accentColor}
           isVeryShort={isVeryShort}
           context={context}
@@ -683,7 +733,9 @@ function CompactDayColumn({
   useTimeline,
   containerWidth,
   eventLayouts,
-  showCurrentTime = false
+  showCurrentTime = false,
+  helpQueues,
+  now = new Date()
 }: CompactDayColumnProps) {
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
@@ -734,20 +786,24 @@ function CompactDayColumn({
             </Text>
           ) : (
             events.map((event) => {
-              const colors = getEventColor(event.queue_name, event.calendar_type === "office_hours");
+              const isOfficeHours = event.calendar_type === "office_hours";
+              const resolvedQueueName = isOfficeHours ? getResolvedQueueName(event, helpQueues) : event.queue_name;
+              const colors = getEventColor(resolvedQueueName, isOfficeHours);
               const start = parseISO(event.start_time);
               const end = parseISO(event.end_time);
               const accentColor = colors.accent || colors.border;
+              const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
 
               return (
                 <Box
                   key={event.id}
                   p={1.5}
                   borderRadius="sm"
-                  borderWidth="1px"
-                  borderColor={colors.border}
+                  borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+                  borderColor={isCurrentlyHappening ? "green.500" : colors.border}
                   borderLeftWidth="3px"
-                  borderLeftColor={accentColor}
+                  borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
+                  boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2)" : undefined}
                   bg={colors.bg}
                   _dark={{ bg: colors.bgDark }}
                   fontSize="2xs"
@@ -768,9 +824,9 @@ function CompactDayColumn({
                       📍 {event.location}
                     </Text>
                   )}
-                  {event.queue_name && (
+                  {resolvedQueueName && (
                     <QueueButton
-                      queueName={event.queue_name}
+                      queueName={resolvedQueueName}
                       accentColor={accentColor}
                       isVeryShort={false}
                       context="calendar-schedule-summary"
@@ -813,6 +869,14 @@ function EventsList({
   const containerRef = useRef<HTMLDivElement>(null);
   const weekContainerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
+  const helpQueues = useHelpQueues();
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if events are active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Update container width on resize - measure the scrollable container and account for padding/scrollbars
   useEffect(() => {
@@ -1143,6 +1207,8 @@ function EventsList({
                 containerWidth={weekDayColumnWidth}
                 eventLayouts={dayEventLayouts}
                 showCurrentTime={isViewingCurrentWeek}
+                helpQueues={helpQueues}
+                now={now}
               />
             );
           })}
@@ -1225,6 +1291,8 @@ function EventsList({
                       useTimeline={true}
                       containerWidth={dayColumnWidth}
                       eventLayouts={dayEventLayouts}
+                      helpQueues={helpQueues}
+                      now={now}
                     />
                   );
                 })}

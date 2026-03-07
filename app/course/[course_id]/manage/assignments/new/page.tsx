@@ -21,7 +21,8 @@ export default function NewAssignmentPage() {
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
-      allow_not_graded_submissions: true
+      allow_not_graded_submissions: true,
+      permit_empty_submissions: true
     }
   });
   const router = useRouter();
@@ -88,6 +89,7 @@ export default function NewAssignmentPage() {
             description: getValues("description"),
             max_late_tokens: getValues("max_late_tokens") || null,
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
+            permit_empty_submissions: getValues("permit_empty_submissions") !== false,
             total_points: getValues("total_points"),
             template_repo: getValues("template_repo"),
             submission_files: getValues("submission_files"),

@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -396,231 +396,232 @@ async function processRowsAll(
           `[DEBUG] ${workerId} BATCH_UPDATE SKIP: No students to process for gradebook ${gradebook_id} (this should not happen)`
         );
       }
-    }
-
-    const studentIds = rowEntries.map((e) => e.msg.message.student_id);
-    const { data: scopedGcs, error: scopedErr } = await adminSupabase
-      .from("gradebook_column_students")
-      .select(
-        "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
-      )
-      .eq("class_id", classId)
-      .eq("gradebook_id", gradebook_id)
-      .eq("is_private", is_private)
-      .in("student_id", studentIds);
-    if (scopedErr) {
-      Sentry.captureException(scopedErr, gbScope);
-      continue;
-    }
-
-    const groupedScoped: Map<string, NonNullable<typeof scopedGcs>> = new Map();
-    for (const r of scopedGcs ?? []) {
-      const arr = groupedScoped.get(r.student_id as string) ?? [];
-      arr.push(r);
-      groupedScoped.set(r.student_id as string, arr);
-    }
-
-    const rowsInputScoped = studentIds.map((sid) => ({
-      student_id: sid,
-      is_private,
-      gcsRows: groupedScoped.get(sid) ?? []
-    }));
-    const updatesByStudentScoped = await processGradebookRowsCalculation(adminSupabase, gbScope, {
-      class_id: classId,
-      gradebook_id,
-      rows: rowsInputScoped
-    });
-
-    const versionsByStudentScoped = new Map<string, number>();
-    {
-      const { data: verRows, error: verErr } = await adminSupabase
-        .from("gradebook_row_recalc_state")
-        .select("student_id, version")
+    } else {
+      const studentIds = rowEntries.map((e) => e.msg.message.student_id);
+      const { data: scopedGcs, error: scopedErr } = await adminSupabase
+        .from("gradebook_column_students")
+        .select(
+          "id, gradebook_column_id, is_missing, is_excused, is_droppable, score_override, score, released, score_override_note, incomplete_values, student_id"
+        )
         .eq("class_id", classId)
         .eq("gradebook_id", gradebook_id)
         .eq("is_private", is_private)
         .in("student_id", studentIds);
-      if (verErr) {
-        Sentry.captureException(verErr, gbScope);
+      if (scopedErr) {
+        Sentry.captureException(scopedErr, gbScope);
+        continue;
       }
-      for (const row of (verRows as unknown as Array<{ student_id: string; version: number }>) ?? []) {
-        versionsByStudentScoped.set(row.student_id, row.version);
-      }
-    }
 
-    // Track row keys being upserted for duplicate detection
-    const upsertRowKeysScoped = rowEntries.map((entry) => {
-      const key = rowKey(classId, gradebook_id, entry.msg.message.student_id, is_private);
-      return key;
-    });
-    const upsertRowKeyCountsScoped = new Map<string, number>();
-    for (const key of upsertRowKeysScoped) {
-      upsertRowKeyCountsScoped.set(key, (upsertRowKeyCountsScoped.get(key) ?? 0) + 1);
-    }
-    const duplicateUpsertsScoped = Array.from(upsertRowKeyCountsScoped.entries()).filter(([, count]) => count > 1);
-    if (duplicateUpsertsScoped.length > 0) {
-      console.log(
-        `[DEBUG] ${workerId} UPSERT (scoped): Found ${duplicateUpsertsScoped.length} duplicate row keys in upsert batch for gradebook ${gradebook_id}:`
-      );
-      for (const [rowKey, count] of duplicateUpsertsScoped) {
-        console.log(`[DEBUG] ${workerId} UPSERT (scoped): Row key ${rowKey} appears ${count} times in upsert`);
+      const groupedScoped: Map<string, NonNullable<typeof scopedGcs>> = new Map();
+      for (const r of scopedGcs ?? []) {
+        const arr = groupedScoped.get(r.student_id as string) ?? [];
+        arr.push(r);
+        groupedScoped.set(r.student_id as string, arr);
       }
-    }
-    console.log(
-      `[DEBUG] ${workerId} UPSERT (scoped): About to upsert ${rowEntries.length} rows for gradebook ${gradebook_id} (unique keys: ${new Set(upsertRowKeysScoped).size}): ${Array.from(new Set(upsertRowKeysScoped)).slice(0, 10).join(", ")}${upsertRowKeysScoped.length > 10 ? "..." : ""}`
-    );
 
-    // Batch upsert all rows in a single statement to trigger broadcast once
-    // Sort by primary key to prevent deadlocks when multiple workers process overlapping rows
-    const batchUpsertDataScoped = rowEntries
-      .map((entry) => ({
+      const rowsInputScoped = studentIds.map((sid) => ({
+        student_id: sid,
+        is_private,
+        gcsRows: groupedScoped.get(sid) ?? []
+      }));
+      const updatesByStudentScoped = await processGradebookRowsCalculation(adminSupabase, gbScope, {
         class_id: classId,
         gradebook_id,
-        student_id: entry.msg.message.student_id,
-        is_private,
-        dirty: true,
-        is_recalculating: true,
-        updated_at: new Date().toISOString()
-      }))
-      .sort((a, b) => {
-        // Sort by primary key columns: class_id, gradebook_id, student_id, is_private
-        if (a.class_id !== b.class_id) return a.class_id - b.class_id;
-        if (a.gradebook_id !== b.gradebook_id) return a.gradebook_id - b.gradebook_id;
-        if (a.student_id !== b.student_id) return a.student_id.localeCompare(b.student_id);
-        return a.is_private === b.is_private ? 0 : a.is_private ? 1 : -1;
+        rows: rowsInputScoped
       });
 
-    const { error: upsertErrorScoped } = await adminSupabase
-      .from("gradebook_row_recalc_state")
-      .upsert(batchUpsertDataScoped, { onConflict: "class_id,gradebook_id,student_id,is_private" });
-
-    if (upsertErrorScoped) {
-      console.error(
-        `[DEBUG] ${workerId} UPSERT ERROR (scoped): Failed to upsert rows for gradebook ${gradebook_id}:`,
-        upsertErrorScoped
-      );
-      Sentry.captureException(upsertErrorScoped, gbScope);
-    } else {
-      console.log(
-        `[DEBUG] ${workerId} UPSERT (scoped): Successfully upserted ${rowEntries.length} rows for gradebook ${gradebook_id}`
-      );
-    }
-
-    // Batch update all students in a single RPC call
-    // Group entries by student to collect message IDs
-    const entriesByStudentScoped = new Map<string, typeof rowEntries>();
-    for (const entry of rowEntries) {
-      const { student_id } = entry.msg.message;
-      const arr = entriesByStudentScoped.get(student_id) ?? [];
-      arr.push(entry);
-      entriesByStudentScoped.set(student_id, arr);
-    }
-
-    const batchUpdatesScoped = Array.from(entriesByStudentScoped.entries()).map(([student_id, entries]) => {
-      const updates = updatesByStudentScoped.get(student_id) ?? [];
-      const expectedVersion = versionsByStudentScoped.get(student_id) ?? 0;
-
-      // Collect all message IDs for this student (including duplicates)
-      const messageIds = entries.flatMap((entry) => [entry.msg.msg_id, ...entry.duplicateMsgIds]);
-
-      // Include students even with no updates - the RPC will clear state when version matches
-      return {
-        class_id: classId,
-        gradebook_id,
-        student_id,
-        is_private,
-        expected_version: expectedVersion,
-        message_ids: messageIds,
-        updates: updates
-      };
-    });
-
-    if (batchUpdatesScoped.length > 0) {
-      // Split into chunks of MAX_BATCH_UPDATE_SIZE to avoid timeouts
-      const chunksScoped: (typeof batchUpdatesScoped)[] = [];
-      for (let i = 0; i < batchUpdatesScoped.length; i += MAX_BATCH_UPDATE_SIZE) {
-        chunksScoped.push(batchUpdatesScoped.slice(i, i + MAX_BATCH_UPDATE_SIZE));
+      const versionsByStudentScoped = new Map<string, number>();
+      {
+        const { data: verRows, error: verErr } = await adminSupabase
+          .from("gradebook_row_recalc_state")
+          .select("student_id, version")
+          .eq("class_id", classId)
+          .eq("gradebook_id", gradebook_id)
+          .eq("is_private", is_private)
+          .in("student_id", studentIds);
+        if (verErr) {
+          Sentry.captureException(verErr, gbScope);
+        }
+        for (const row of (verRows as unknown as Array<{ student_id: string; version: number }>) ?? []) {
+          versionsByStudentScoped.set(row.student_id, row.version);
+        }
       }
 
+      // Track row keys being upserted for duplicate detection
+      const upsertRowKeysScoped = rowEntries.map((entry) => {
+        const key = rowKey(classId, gradebook_id, entry.msg.message.student_id, is_private);
+        return key;
+      });
+      const upsertRowKeyCountsScoped = new Map<string, number>();
+      for (const key of upsertRowKeysScoped) {
+        upsertRowKeyCountsScoped.set(key, (upsertRowKeyCountsScoped.get(key) ?? 0) + 1);
+      }
+      const duplicateUpsertsScoped = Array.from(upsertRowKeyCountsScoped.entries()).filter(([, count]) => count > 1);
+      if (duplicateUpsertsScoped.length > 0) {
+        console.log(
+          `[DEBUG] ${workerId} UPSERT (scoped): Found ${duplicateUpsertsScoped.length} duplicate row keys in upsert batch for gradebook ${gradebook_id}:`
+        );
+        for (const [rowKey, count] of duplicateUpsertsScoped) {
+          console.log(`[DEBUG] ${workerId} UPSERT (scoped): Row key ${rowKey} appears ${count} times in upsert`);
+        }
+      }
       console.log(
-        `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Processing ${batchUpdatesScoped.length} students in ${chunksScoped.length} chunks (max ${MAX_BATCH_UPDATE_SIZE} per chunk) for gradebook ${gradebook_id}`
+        `[DEBUG] ${workerId} UPSERT (scoped): About to upsert ${rowEntries.length} rows for gradebook ${gradebook_id} (unique keys: ${new Set(upsertRowKeysScoped).size}): ${Array.from(new Set(upsertRowKeysScoped)).slice(0, 10).join(", ")}${upsertRowKeysScoped.length > 10 ? "..." : ""}`
       );
 
-      // Process each chunk separately
-      for (let chunkIndex = 0; chunkIndex < chunksScoped.length; chunkIndex++) {
-        const chunkScoped = chunksScoped[chunkIndex];
-        const allMessageIdsScoped = chunkScoped.flatMap((bu) => bu.message_ids);
+      // Batch upsert all rows in a single statement to trigger broadcast once
+      // Sort by primary key to prevent deadlocks when multiple workers process overlapping rows
+      const batchUpsertDataScoped = rowEntries
+        .map((entry) => ({
+          class_id: classId,
+          gradebook_id,
+          student_id: entry.msg.message.student_id,
+          is_private,
+          dirty: true,
+          is_recalculating: true,
+          updated_at: new Date().toISOString()
+        }))
+        .sort((a, b) => {
+          // Sort by primary key columns: class_id, gradebook_id, student_id, is_private
+          if (a.class_id !== b.class_id) return a.class_id - b.class_id;
+          if (a.gradebook_id !== b.gradebook_id) return a.gradebook_id - b.gradebook_id;
+          if (a.student_id !== b.student_id) return a.student_id.localeCompare(b.student_id);
+          return a.is_private === b.is_private ? 0 : a.is_private ? 1 : -1;
+        });
 
+      const { error: upsertErrorScoped } = await adminSupabase
+        .from("gradebook_row_recalc_state")
+        .upsert(batchUpsertDataScoped, { onConflict: "class_id,gradebook_id,student_id,is_private" });
+
+      if (upsertErrorScoped) {
+        console.error(
+          `[DEBUG] ${workerId} UPSERT ERROR (scoped): Failed to upsert rows for gradebook ${gradebook_id}:`,
+          upsertErrorScoped
+        );
+        Sentry.captureException(upsertErrorScoped, gbScope);
+        continue; // Abort this gradebook - do not run batch RPC/archive; messages will retry on visibility timeout
+      } else {
         console.log(
-          `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Processing chunk ${chunkIndex + 1}/${chunksScoped.length} with ${chunkScoped.length} students and ${allMessageIdsScoped.length} message IDs`
+          `[DEBUG] ${workerId} UPSERT (scoped): Successfully upserted ${rowEntries.length} rows for gradebook ${gradebook_id}`
         );
+      }
 
-        const batchStartTimeScoped = Date.now();
-        const { error: batchErrorScoped, data: batchResultsScoped } = await adminSupabase.rpc(
-          "update_gradebook_rows_batch",
-          {
-            p_batch_updates:
-              chunkScoped as unknown as Database["public"]["Functions"]["update_gradebook_rows_batch"]["Args"]["p_batch_updates"]
-          }
-        );
-        const batchDurationScoped = Date.now() - batchStartTimeScoped;
+      // Batch update all students in a single RPC call
+      // Group entries by student to collect message IDs
+      const entriesByStudentScoped = new Map<string, typeof rowEntries>();
+      for (const entry of rowEntries) {
+        const { student_id } = entry.msg.message;
+        const arr = entriesByStudentScoped.get(student_id) ?? [];
+        arr.push(entry);
+        entriesByStudentScoped.set(student_id, arr);
+      }
 
-        if (batchErrorScoped) {
-          console.error(
-            `[DEBUG] ${workerId} BATCH_UPDATE ERROR (scoped, chunk ${chunkIndex + 1}/${chunksScoped.length}): Failed to batch update rows for gradebook ${gradebook_id} after ${batchDurationScoped}ms. Messages NOT archived: [${allMessageIdsScoped.join(", ")}]`,
-            batchErrorScoped
-          );
-          Sentry.captureException(batchErrorScoped, gbScope);
-          console.error(
-            `[DEBUG] ${workerId} ARCHIVE FAILED (scoped, chunk ${chunkIndex + 1}): ${allMessageIdsScoped.length} messages were NOT archived due to RPC error. These will be re-read when visibility timeout expires.`
-          );
-          continue; // Skip to next chunk
-        }
-        // Extract results array from the RPC response object
-        const rpcResponseScoped = batchResultsScoped as unknown as {
-          results?: Array<{
-            student_id: string;
-            is_private: boolean;
-            updated_count: number;
-            version_matched: boolean;
-            cleared: boolean;
-            error?: string;
-          }>;
-          archive_count?: number;
-          archive_errors?: number;
-          expanded_count?: number;
-          version_matched_count?: number;
-          updated_gcs_count?: number;
-          cleared_state_count?: number;
+      const batchUpdatesScoped = Array.from(entriesByStudentScoped.entries()).map(([student_id, entries]) => {
+        const updates = updatesByStudentScoped.get(student_id) ?? [];
+        const expectedVersion = versionsByStudentScoped.get(student_id) ?? 0;
+
+        // Collect all message IDs for this student (including duplicates)
+        const messageIds = entries.flatMap((entry) => [entry.msg.msg_id, ...entry.duplicateMsgIds]);
+
+        // Include students even with no updates - the RPC will clear state when version matches
+        return {
+          class_id: classId,
+          gradebook_id,
+          student_id,
+          is_private,
+          expected_version: expectedVersion,
+          message_ids: messageIds,
+          updates: updates
         };
-        const results = rpcResponseScoped?.results ?? [];
+      });
+
+      if (batchUpdatesScoped.length > 0) {
+        // Split into chunks of MAX_BATCH_UPDATE_SIZE to avoid timeouts
+        const chunksScoped: (typeof batchUpdatesScoped)[] = [];
+        for (let i = 0; i < batchUpdatesScoped.length; i += MAX_BATCH_UPDATE_SIZE) {
+          chunksScoped.push(batchUpdatesScoped.slice(i, i + MAX_BATCH_UPDATE_SIZE));
+        }
 
         console.log(
-          `[DEBUG] ${workerId} BATCH_UPDATE (scoped, chunk ${chunkIndex + 1}/${chunksScoped.length}): Completed in ${batchDurationScoped}ms. Processed ${results.length} students, archived ${rpcResponseScoped?.archive_count ?? 0}/${allMessageIdsScoped.length} messages`
+          `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Processing ${batchUpdatesScoped.length} students in ${chunksScoped.length} chunks (max ${MAX_BATCH_UPDATE_SIZE} per chunk) for gradebook ${gradebook_id}`
         );
 
-        if (rpcResponseScoped?.archive_errors && rpcResponseScoped.archive_errors > 0) {
-          console.warn(
-            `[DEBUG] ${workerId} ARCHIVE ERRORS (scoped, chunk ${chunkIndex + 1}): ${rpcResponseScoped.archive_errors} messages failed to archive.`
-          );
-        }
+        // Process each chunk separately
+        for (let chunkIndex = 0; chunkIndex < chunksScoped.length; chunkIndex++) {
+          const chunkScoped = chunksScoped[chunkIndex];
+          const allMessageIdsScoped = chunkScoped.flatMap((bu) => bu.message_ids);
 
-        // Log summary for this chunk
-        const clearedCount = results.filter((r) => r.cleared).length;
-        const versionMismatchCount = results.filter((r) => !r.version_matched && !r.error).length;
-        const errorCount = results.filter((r) => r.error).length;
-
-        if (clearedCount < results.length) {
-          console.warn(
-            `[DEBUG] ${workerId} BATCH_UPDATE (scoped, chunk ${chunkIndex + 1}): Only ${clearedCount}/${results.length} rows cleared. Version mismatches: ${versionMismatchCount}, Errors: ${errorCount}`
+          console.log(
+            `[DEBUG] ${workerId} BATCH_UPDATE (scoped): Processing chunk ${chunkIndex + 1}/${chunksScoped.length} with ${chunkScoped.length} students and ${allMessageIdsScoped.length} message IDs`
           );
+
+          const batchStartTimeScoped = Date.now();
+          const { error: batchErrorScoped, data: batchResultsScoped } = await adminSupabase.rpc(
+            "update_gradebook_rows_batch",
+            {
+              p_batch_updates:
+                chunkScoped as unknown as Database["public"]["Functions"]["update_gradebook_rows_batch"]["Args"]["p_batch_updates"]
+            }
+          );
+          const batchDurationScoped = Date.now() - batchStartTimeScoped;
+
+          if (batchErrorScoped) {
+            console.error(
+              `[DEBUG] ${workerId} BATCH_UPDATE ERROR (scoped, chunk ${chunkIndex + 1}/${chunksScoped.length}): Failed to batch update rows for gradebook ${gradebook_id} after ${batchDurationScoped}ms. Messages NOT archived: [${allMessageIdsScoped.join(", ")}]`,
+              batchErrorScoped
+            );
+            Sentry.captureException(batchErrorScoped, gbScope);
+            console.error(
+              `[DEBUG] ${workerId} ARCHIVE FAILED (scoped, chunk ${chunkIndex + 1}): ${allMessageIdsScoped.length} messages were NOT archived due to RPC error. These will be re-read when visibility timeout expires.`
+            );
+            continue; // Skip to next chunk
+          }
+          // Extract results array from the RPC response object
+          const rpcResponseScoped = batchResultsScoped as unknown as {
+            results?: Array<{
+              student_id: string;
+              is_private: boolean;
+              updated_count: number;
+              version_matched: boolean;
+              cleared: boolean;
+              error?: string;
+            }>;
+            archive_count?: number;
+            archive_errors?: number;
+            expanded_count?: number;
+            version_matched_count?: number;
+            updated_gcs_count?: number;
+            cleared_state_count?: number;
+          };
+          const results = rpcResponseScoped?.results ?? [];
+
+          console.log(
+            `[DEBUG] ${workerId} BATCH_UPDATE (scoped, chunk ${chunkIndex + 1}/${chunksScoped.length}): Completed in ${batchDurationScoped}ms. Processed ${results.length} students, archived ${rpcResponseScoped?.archive_count ?? 0}/${allMessageIdsScoped.length} messages`
+          );
+
+          if (rpcResponseScoped?.archive_errors && rpcResponseScoped.archive_errors > 0) {
+            console.warn(
+              `[DEBUG] ${workerId} ARCHIVE ERRORS (scoped, chunk ${chunkIndex + 1}): ${rpcResponseScoped.archive_errors} messages failed to archive.`
+            );
+          }
+
+          // Log summary for this chunk
+          const clearedCount = results.filter((r) => r.cleared).length;
+          const versionMismatchCount = results.filter((r) => !r.version_matched && !r.error).length;
+          const errorCount = results.filter((r) => r.error).length;
+
+          if (clearedCount < results.length) {
+            console.warn(
+              `[DEBUG] ${workerId} BATCH_UPDATE (scoped, chunk ${chunkIndex + 1}): Only ${clearedCount}/${results.length} rows cleared. Version mismatches: ${versionMismatchCount}, Errors: ${errorCount}`
+            );
+          }
         }
+      } else {
+        console.log(
+          `[DEBUG] ${workerId} BATCH_UPDATE SKIP (scoped): No students to process for gradebook ${gradebook_id} (this should not happen)`
+        );
       }
-    } else {
-      console.log(
-        `[DEBUG] ${workerId} BATCH_UPDATE SKIP (scoped): No students to process for gradebook ${gradebook_id} (this should not happen)`
-      );
-    }
+    } // end else (scoped/non-bulk path)
 
     didWork = true;
   }

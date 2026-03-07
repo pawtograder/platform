@@ -57,3 +57,4 @@ playwright/.auth
 .cursor/
 
 .direnv
+data

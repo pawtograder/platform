@@ -8,12 +8,20 @@ import type {
   PullRequestEvent
 } from "https://esm.sh/@octokit/webhooks-types";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { parse } from "jsr:@std/yaml";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createHash } from "node:crypto";
+import micromatch from "npm:micromatch";
+import { Buffer } from "node:buffer";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { createCheckRun, getFileFromRepo, triggerWorkflow, updateCheckRun } from "../_shared/GitHubWrapper.ts";
+import {
+  getFileFromRepo,
+  getOctoKit,
+  triggerWorkflow,
+  SecondaryRateLimitError,
+  PrimaryRateLimitError
+} from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -21,6 +29,62 @@ import { Redis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
+
+function detectRateLimitType(error: unknown): {
+  type: "secondary" | "primary" | "extreme" | null;
+  retryAfter?: number;
+  installationId?: string;
+} {
+  const err = error as {
+    status?: number;
+    name?: string;
+    message?: string;
+    response?: {
+      status?: number;
+      headers?: Record<string, string>;
+    };
+  };
+  const status = err?.status ?? err?.response?.status;
+  const headers = err?.response?.headers;
+
+  // Handle AggregateError from Octokit - "API rate limit exceeded for installation ID XYZ"
+  if (
+    err?.name === "AggregateError" ||
+    (err?.message && err.message.toLowerCase().includes("api rate limit exceeded for installation id"))
+  ) {
+    const installationMatch = err.message?.match(/installation id (\d+)/i);
+    const installationId = installationMatch ? installationMatch[1] : undefined;
+    return { type: "secondary", retryAfter: 60, installationId };
+  }
+
+  if (error instanceof SecondaryRateLimitError) {
+    return { type: "secondary", retryAfter: error.retryAfter };
+  }
+  if (error instanceof PrimaryRateLimitError) {
+    return { type: "primary", retryAfter: error.retryAfter };
+  }
+
+  if (status === 403 || status === 429) {
+    const retryAfter = headers?.["retry-after"] ? parseInt(headers["retry-after"], 10) : undefined;
+    const remaining = headers?.["x-ratelimit-remaining"];
+    if (remaining === "0") {
+      return { type: "primary", retryAfter: retryAfter ?? 60 };
+    }
+    if (
+      err?.message?.toLowerCase().includes("secondary rate limit") ||
+      err?.message?.toLowerCase().includes("abuse detection")
+    ) {
+      return { type: "secondary", retryAfter: retryAfter ?? 60 };
+    }
+    const retryAfterVal = retryAfter ?? 60;
+    if (retryAfterVal >= 300 || status === 429) {
+      return { type: "extreme", retryAfter: retryAfterVal };
+    }
+    return { type: "secondary", retryAfter: retryAfterVal };
+  }
+
+  return { type: null };
+}
 
 // Redis client for webhook status tracking
 let redisClient: Redis | null = null;
@@ -62,6 +126,102 @@ if (Deno.env.get("SENTRY_DSN")) {
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
+function sha256Hex(buf: Uint8Array): string {
+  const hash = createHash("sha256");
+  hash.update(buf);
+  return hash.digest("hex");
+}
+
+function computeCombinedHashFromFileHashes(file_hashes: Record<string, string>): string {
+  const combinedInput = Object.keys(file_hashes)
+    .sort()
+    .map((name) => `${name}\0${file_hashes[name]}\n`)
+    .join("");
+  return sha256Hex(Buffer.from(combinedInput, "utf-8"));
+}
+
+/** Cache key for commit+tree (templateRepo, commitSha). */
+const commitTreeCacheKey = (templateRepo: string, commitSha: string) => `${templateRepo}:${commitSha}`;
+
+/** Cache key for blob hash (owner, repo, blobSha). */
+const blobCacheKey = (owner: string, repo: string, blobSha: string) => `${owner}:${repo}:${blobSha}`;
+
+/** Per-webhook caches to avoid duplicate GitHub API calls across assignments sharing a template repo. */
+type HandoutHashCaches = {
+  commitTree: Map<string, { treeSha: string; tree: { path?: string; sha?: string; type?: string }[] }>;
+  blobHash: Map<string, string>;
+};
+
+async function computeHandoutFileHashesForCommit(params: {
+  templateRepo: string;
+  commitSha: string;
+  expectedFiles: string[];
+  scope: Sentry.Scope;
+  caches?: HandoutHashCaches;
+}): Promise<{ file_hashes: Record<string, string>; combined_hash: string }> {
+  const { templateRepo, commitSha, expectedFiles, scope, caches } = params;
+  const octokit = await getOctoKit(templateRepo, scope);
+  if (!octokit) {
+    throw new Error(`No octokit found for repository ${templateRepo}`);
+  }
+  const [owner, repo] = templateRepo.split("/");
+
+  const ctKey = commitTreeCacheKey(templateRepo, commitSha);
+  let treeSha: string;
+  let tree: { path?: string; sha?: string; type?: string }[];
+
+  if (caches?.commitTree?.has(ctKey)) {
+    const cached = caches.commitTree.get(ctKey)!;
+    treeSha = cached.treeSha;
+    tree = cached.tree;
+  } else {
+    const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+      owner,
+      repo,
+      commit_sha: commitSha
+    });
+    treeSha = commit.tree.sha;
+
+    const { data: treeData } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+      owner,
+      repo,
+      tree_sha: treeSha,
+      recursive: "true"
+    });
+    tree = treeData.tree || [];
+
+    caches?.commitTree?.set(ctKey, { treeSha, tree });
+  }
+
+  const wantedPaths = tree
+    .filter((item) => item.type === "blob" && !!item.path && !!item.sha)
+    .map((item) => ({ path: item.path!, sha: item.sha! }))
+    .filter(({ path }) => expectedFiles.some((pattern) => micromatch.isMatch(path, pattern)));
+
+  const file_hashes: Record<string, string> = {};
+  for (const { path, sha } of wantedPaths) {
+    const bKey = blobCacheKey(owner, repo, sha);
+    let hash: string | undefined = caches?.blobHash?.get(bKey);
+    if (hash === undefined) {
+      const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
+        owner,
+        repo,
+        file_sha: sha
+      });
+      if (blob.encoding !== "base64") {
+        throw new Error(`Unexpected blob encoding for ${path}: ${blob.encoding}`);
+      }
+      const bytes = Buffer.from(blob.content, "base64");
+      hash = sha256Hex(bytes);
+      caches?.blobHash?.set(bKey, hash);
+    }
+    file_hashes[path] = hash;
+  }
+
+  const combined_hash = computeCombinedHashFromFileHashes(file_hashes);
+  return { file_hashes, combined_hash };
+}
+
 // Extend CheckRunStatus locally to track idempotent step markers without using 'any'
 type ExtendedCheckRunStatus = CheckRunStatus & {
   check_run_created_at?: string;
@@ -81,6 +241,69 @@ function maybeCrash(tag: string) {
   if (enabled && Math.random() < prob) {
     console.error(`[FAULT] Injecting crash at ${tag}`);
     throw new Error(`Injected crash at ${tag}`);
+  }
+}
+
+// Check if org-level or method-specific circuit breaker is open before making GitHub API calls
+async function checkCircuitBreakerOpen(
+  adminSupabase: SupabaseClient<Database>,
+  org: string,
+  method?: string,
+  scope?: Sentry.Scope
+): Promise<{ isOpen: boolean; reason?: string; openUntil?: string; circuitScope?: string }> {
+  try {
+    // Check org-level circuit breaker first (highest priority - blocks everything)
+    const orgCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+      p_scope: "org",
+      p_key: org
+    });
+    if (!orgCirc.error && Array.isArray(orgCirc.data) && orgCirc.data.length > 0) {
+      const row = orgCirc.data[0] as { state?: string; open_until?: string; reason?: string };
+      if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+        scope?.setTag("circuit_state", "open");
+        scope?.setTag("circuit_scope", "org");
+        scope?.setContext("circuit_breaker_active", {
+          org,
+          reason: row.reason || "Circuit breaker active",
+          open_until: row.open_until
+        });
+        return { isOpen: true, reason: row.reason, openUntil: row.open_until, circuitScope: "org" };
+      }
+    }
+
+    // Check method-specific circuit breaker if method is provided
+    if (method) {
+      const circuitKey = `${org}:${method}`;
+      const methodCirc = await adminSupabase.schema("public").rpc("get_github_circuit", {
+        p_scope: "org_method",
+        p_key: circuitKey
+      });
+      if (!methodCirc.error && Array.isArray(methodCirc.data) && methodCirc.data.length > 0) {
+        const row = methodCirc.data[0] as { state?: string; open_until?: string; reason?: string };
+        if (row?.state === "open" && (!row.open_until || new Date(row.open_until) > new Date())) {
+          scope?.setTag("circuit_state", "open");
+          scope?.setTag("circuit_scope", "org_method");
+          scope?.setTag("circuit_method", method);
+          scope?.setContext("circuit_breaker_active", {
+            org,
+            method,
+            reason: row.reason || "Circuit breaker active",
+            open_until: row.open_until
+          });
+          return { isOpen: true, reason: row.reason, openUntil: row.open_until, circuitScope: "org_method" };
+        }
+      }
+    }
+
+    return { isOpen: false };
+  } catch (e) {
+    scope?.setContext("circuit_check_warning", {
+      org,
+      method,
+      error_message: e instanceof Error ? e.message : String(e)
+    });
+    Sentry.captureException(e, scope);
+    return { isOpen: false };
   }
 }
 
@@ -112,14 +335,30 @@ async function handlePushToStudentRepo(
     return;
   }
   console.log(`Received push for ${repoName}, message: ${payload.head_commit.message}`);
-  const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${studentRepo.class_id}/assignments/${studentRepo.assignment_id}`;
+
+  // Extract org for circuit breaker check
+  const org = repoName.split("/")[0];
 
   for (const commit of payload.commits) {
     maybeCrash("push.student.for_each_commit.before_lookup");
-    // Idempotency: if a row already exists for this repo+sha, do not create a new check run
+
+    // Check circuit breaker before making GitHub API calls - fail fast if rate limited
+    // Check both org-level and triggerWorkflow method-specific circuit breakers
+    const circuitStatus = await checkCircuitBreakerOpen(adminSupabase, org, "triggerWorkflow", scope);
+    if (circuitStatus.isOpen) {
+      const openUntil = circuitStatus.openUntil ? new Date(circuitStatus.openUntil).toLocaleString() : "unknown";
+      const scopeInfo = circuitStatus.circuitScope === "org_method" ? ` (method: triggerWorkflow)` : "";
+      throw new Error(
+        `Circuit breaker open for org ${org}${scopeInfo}: GitHub API operations temporarily unavailable. ` +
+          `Reason: ${circuitStatus.reason || "Rate limit or error threshold exceeded"}. ` +
+          `Open until: ${openUntil}`
+      );
+    }
+
+    // Idempotency: if a row already exists for this repo+sha, skip
     const { data: existing, error: existingErr } = await adminSupabase
       .from("repository_check_runs")
-      .select("id, check_run_id, status")
+      .select("id")
       .eq("repository_id", studentRepo.id)
       .eq("sha", commit.id)
       .order("created_at", { ascending: false })
@@ -134,44 +373,18 @@ async function handlePushToStudentRepo(
     }
 
     if (existing && existing.id) {
-      // If the record exists but lacks a check_run_id (partial prior failure), create and update it
-      if (!existing.check_run_id) {
-        console.log(`Completing partial check run setup for ${commit.id}`);
-        maybeCrash("push.student.complete_partial.before_create_check_run");
-        const { id: checkRunId } = await createCheckRun(repoName, commit.id, detailsUrl);
-        const newStatus = {
-          ...(existing.status as ExtendedCheckRunStatus),
-          check_run_created_at: new Date().toISOString()
-        } as ExtendedCheckRunStatus;
-        const { error: updateErr } = await adminSupabase
-          .from("repository_check_runs")
-          .update({ check_run_id: checkRunId, status: newStatus as unknown as Json })
-          .eq("id", existing.id);
-        if (updateErr) {
-          console.error(updateErr);
-          scope.setTag("error_source", "repository_check_run_update_failed");
-          scope.setTag("error_context", "Could not update repository_check_run with check_run_id");
-          Sentry.captureException(updateErr, scope);
-          throw updateErr;
-        }
-      }
       continue;
     }
 
-    console.log(`Adding check run for ${commit.id}`);
-    maybeCrash("push.student.before_create_check_run");
-    const { id: checkRunId } = await createCheckRun(repoName, commit.id, detailsUrl);
-    console.log(`Check run created: ${checkRunId}`);
     const status: ExtendedCheckRunStatus = {
       created_at: new Date().toISOString(),
       commit_author: commit.author.name,
       commit_date: commit.timestamp,
-      created_by: "github push by " + payload.pusher.name,
-      check_run_created_at: new Date().toISOString()
+      created_by: "github push by " + payload.pusher.name
     };
     const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
       repository_id: studentRepo.id,
-      check_run_id: checkRunId,
+      check_run_id: null,
       class_id: studentRepo.class_id,
       assignment_group_id: studentRepo.assignment_group_id,
       commit_message: commit.message,
@@ -187,22 +400,9 @@ async function handlePushToStudentRepo(
       throw checkRunError;
     }
 
-    //Check that the workflow file has not been deleted in any commit
+    // If the workflow file was deleted in this commit, skip triggering - the workflow would fail anyway
     const removedInCommit = commit.removed.includes(GRADER_WORKFLOW_PATH);
     if (removedInCommit) {
-      // Fail the check run
-      await updateCheckRun({
-        owner: payload.repository.owner.login,
-        repo: payload.repository.name,
-        check_run_id: checkRunId,
-        status: "completed",
-        conclusion: "failure",
-        output: {
-          title: "Submission failed",
-          summary: "The autograder workflow file has been deleted",
-          text: `Commit ${commit.id.substring(0, 7)} removed the file ${GRADER_WORKFLOW_PATH} from the repository. This file is essential for the operation of the autograder. Please add it back and try again.`
-        }
-      });
       return;
     }
   }
@@ -231,7 +431,32 @@ async function handlePushToStudentRepo(
     const currentStatus = (headRow?.status || {}) as ExtendedCheckRunStatus;
     if (!currentStatus.workflow_triggered_at) {
       maybeCrash("push.student.before_trigger_workflow");
-      await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+      try {
+        await triggerWorkflow(repoName, payload.head_commit.id, "grade.yml");
+      } catch (triggerErr) {
+        console.error("Error triggering workflow:", triggerErr);
+        const rt = detectRateLimitType(triggerErr);
+        if (rt.type) {
+          Sentry.withScope((errorScope) => {
+            errorScope.setFingerprint(["github-rate-limit", rt.type!, org, "triggerWorkflow"]);
+            errorScope.setTag("rate_limit_type", rt.type);
+            errorScope.setTag("github_api_method", "triggerWorkflow");
+            if (rt.installationId) {
+              errorScope.setContext("rate_limit_installation", {
+                installation_id: rt.installationId,
+                note: "Installation ID excluded from fingerprint to prevent notification storms"
+              });
+            }
+            Sentry.captureException(triggerErr, errorScope);
+          });
+          console.warn(`GitHub rate limit (${rt.type}) hit during triggerWorkflow for ${repoName}`);
+        } else {
+          scope.setTag("error_source", "trigger_workflow_failed");
+          scope.setTag("error_context", "Failed to trigger grade workflow");
+          Sentry.captureException(triggerErr, scope);
+        }
+        throw triggerErr;
+      }
       const { error: statusUpdateErr } = await adminSupabase
         .from("repository_check_runs")
         .update({
@@ -443,7 +668,7 @@ async function handlePushToTemplateRepo(
     const { error: assignmentUpdateError } = await adminSupabase
       .from("assignments")
       .update({
-        latest_template_sha: payload.commits[0].id
+        latest_template_sha: payload.after || payload.head_commit?.id || payload.commits?.[0]?.id
       })
       .eq("id", assignment.id);
     if (assignmentUpdateError) {
@@ -468,6 +693,67 @@ async function handlePushToTemplateRepo(
       scope.setTag("error_context", "Failed to store assignment handout commit");
       Sentry.captureException(error, scope);
       throw error;
+    }
+  }
+
+  // Store handout (template repo) file hashes for empty-submission detection.
+  // This is keyed by the commit SHA of the template repo (handout).
+  // We compute hashes only for the expected submission files (from Pawtograder config).
+  const commitSha = payload.after || payload.head_commit?.id || payload.commits?.[0]?.id;
+  if (!commitSha) {
+    scope.setTag("handout_hashes_skipped", "no_commit_sha");
+    return;
+  }
+
+  // Cache commit/tree and blob fetches within this webhook to avoid duplicate GitHub API calls
+  // when multiple assignments share the same template repo (common for multi-section courses).
+  const handoutHashCaches: HandoutHashCaches = {
+    commitTree: new Map(),
+    blobHash: new Map()
+  };
+
+  for (const assignment of assignments) {
+    try {
+      const { data: graderConfig, error: graderConfigError } = await adminSupabase
+        .from("autograder")
+        .select("config")
+        .eq("id", assignment.id)
+        .maybeSingle();
+      if (graderConfigError) {
+        Sentry.captureException(graderConfigError, scope);
+        continue;
+      }
+      const pawtograderConfig = (graderConfig?.config as unknown as PawtograderConfig) || null;
+      const expectedFiles = pawtograderConfig?.submissionFiles
+        ? [...(pawtograderConfig.submissionFiles.files || []), ...(pawtograderConfig.submissionFiles.testFiles || [])]
+        : [];
+      if (!assignment.template_repo || expectedFiles.length === 0) {
+        continue;
+      }
+
+      const { file_hashes, combined_hash } = await computeHandoutFileHashesForCommit({
+        templateRepo: assignment.template_repo,
+        commitSha,
+        expectedFiles,
+        scope,
+        caches: handoutHashCaches
+      });
+
+      const { error: upsertError } = await adminSupabase.from("assignment_handout_file_hashes").upsert(
+        {
+          assignment_id: assignment.id,
+          sha: commitSha,
+          combined_hash,
+          file_hashes,
+          class_id: assignment.class_id
+        },
+        { onConflict: "assignment_id,sha" }
+      );
+      if (upsertError) {
+        Sentry.captureException(upsertError, scope);
+      }
+    } catch (e) {
+      Sentry.captureException(e, scope);
     }
   }
 }
@@ -620,8 +906,31 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
             maybeCrash("check_run.before_trigger_workflow");
             try {
               await triggerWorkflow(payload.repository.full_name, payload.check_run.head_sha, "grade.yml");
-            } catch (err) {
-              //If we fail to trigger the workflow, mark the check run as failed. This is a non-critical path, so ignore the exception.
+            } catch (triggerErr) {
+              // Log the error with proper fingerprinting to prevent notification storms
+              const repoName = payload.repository.full_name;
+              const org = repoName.split("/")[0];
+              const rt = detectRateLimitType(triggerErr);
+              if (rt.type) {
+                Sentry.withScope((errorScope) => {
+                  errorScope.setFingerprint(["github-rate-limit", rt.type!, org, "triggerWorkflow"]);
+                  errorScope.setTag("rate_limit_type", rt.type);
+                  errorScope.setTag("github_api_method", "triggerWorkflow");
+                  if (rt.installationId) {
+                    errorScope.setContext("rate_limit_installation", {
+                      installation_id: rt.installationId,
+                      note: "Installation ID excluded from fingerprint to prevent notification storms"
+                    });
+                  }
+                  Sentry.captureException(triggerErr, errorScope);
+                });
+                console.warn(`GitHub rate limit (${rt.type}) hit during triggerWorkflow (check_run) for ${repoName}`);
+              } else {
+                scope?.setTag("error_source", "trigger_workflow_failed_check_run");
+                scope?.setTag("error_context", "Failed to trigger grade workflow from check_run");
+                Sentry.captureException(triggerErr, scope);
+              }
+              // Mark the check run as triggered but failed so we don't retry endlessly
               await adminSupabase
                 .from("repository_check_runs")
                 .update({
@@ -643,27 +952,13 @@ eventHandler.on("check_run", async ({ payload }: { payload: CheckRunEvent }) => 
               .eq("id", checkRun.data.id);
           }
 
-          // Step 3: mark check run in progress once
+          // Step 3: mark check run in progress once (DB state only; no GitHub API call)
           const statusForCheckRun = (
             startedStatus.workflow_triggered_at
               ? startedStatus
               : { ...(startedStatus as ExtendedCheckRunStatus), workflow_triggered_at: new Date().toISOString() }
           ) as ExtendedCheckRunStatus;
           if (!statusForCheckRun.check_run_marked_in_progress_at) {
-            console.log(`[CHECK_RUN] Marking GitHub check run in_progress id=${payload.check_run.id}`);
-            maybeCrash("check_run.before_update_check_run_in_progress");
-            await updateCheckRun({
-              owner: payload.repository.owner.login,
-              repo: payload.repository.name,
-              check_run_id: payload.check_run.id,
-              status: "in_progress",
-              output: {
-                title: "Grading in progress",
-                summary: "Autograder is starting",
-                text: "Details may be available in the 'Submit and Grade Assignment' action."
-              },
-              actions: []
-            });
             const afterMark = {
               ...(statusForCheckRun as ExtendedCheckRunStatus),
               check_run_marked_in_progress_at: new Date().toISOString()
@@ -1007,28 +1302,6 @@ async function handleWorkflowCompletionErrors(
             Sentry.captureException(insertError, scope);
           } else {
             scope.setTag("workflow_run_error_created", "true");
-          }
-
-          // Update check run to failed if we have the check run ID
-          if (submission.repository_check_runs?.check_run_id) {
-            try {
-              await updateCheckRun({
-                owner: repository.owner.login,
-                repo: repository.name,
-                check_run_id: submission.repository_check_runs.check_run_id,
-                status: "completed",
-                conclusion: "failure",
-                output: {
-                  title: "Grading Failed",
-                  summary: userErrorMessage,
-                  text: "The autograder encountered an error during execution. This submission could not be graded automatically."
-                },
-                actions: []
-              });
-              scope.setTag("check_run_updated_to_failed", "true");
-            } catch (checkRunError) {
-              Sentry.captureException(checkRunError, scope);
-            }
           }
 
           const graderResultError: Json = {

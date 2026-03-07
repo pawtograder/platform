@@ -1,6 +1,7 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useErrorPinsForPattern } from "@/hooks/useTestInsights";
 import { createClient } from "@/utils/supabase/client";
 import { Badge, Box, Button, Card, Dialog, Field, HStack, Icon, Input, Spinner, Text, VStack } from "@chakra-ui/react";
@@ -22,6 +23,7 @@ interface ErrorPinIntegrationProps {
  * Shows existing matching pins and allows creating new pins.
  */
 export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClose, isOpen }: ErrorPinIntegrationProps) {
+  const { private_profile_id } = useClassProfiles();
   const [searchTerm, setSearchTerm] = useState("");
   const [discussionThreads, setDiscussionThreads] = useState<
     Array<{ id: number; subject: string; created_at: string }>
@@ -95,27 +97,16 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
     try {
       const supabase = createClient();
 
-      // Get the current user's profile
-      const {
-        data: { user }
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { data: profile } = await supabase
-        .from("user_roles")
-        .select("private_profile_id")
-        .eq("class_id", courseId)
-        .eq("user_id", user.id)
-        .single();
-
-      if (!profile?.private_profile_id) throw new Error("Profile not found");
+      if (!private_profile_id) {
+        throw new Error("User profile not found");
+      }
 
       // Create the error pin with rules based on the error group
       const pinData = {
         discussion_thread_id: selectedThread,
         assignment_id: assignmentId,
         class_id: courseId,
-        created_by: profile.private_profile_id,
+        created_by: private_profile_id,
         rule_logic: "and",
         enabled: true
       };
@@ -159,7 +150,7 @@ export function ErrorPinIntegration({ assignmentId, courseId, errorGroup, onClos
     } finally {
       setIsCreating(false);
     }
-  }, [selectedThread, assignmentId, courseId, errorGroup, onClose]);
+  }, [selectedThread, assignmentId, courseId, errorGroup, private_profile_id, onClose]);
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={({ open }) => !open && onClose()} size="xl">

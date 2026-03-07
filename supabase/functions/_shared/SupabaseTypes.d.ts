@@ -55,6 +55,47 @@ export type Database = {
   };
   public: {
     Tables: {
+      ai_help_feedback: {
+        Row: {
+          class_id: number;
+          comment: string | null;
+          context_type: string;
+          created_at: string;
+          id: string;
+          rating: string;
+          resource_id: number;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          comment?: string | null;
+          context_type: string;
+          created_at?: string;
+          id?: string;
+          rating: string;
+          resource_id: number;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          comment?: string | null;
+          context_type?: string;
+          created_at?: string;
+          id?: string;
+          rating?: string;
+          resource_id?: number;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "ai_help_feedback_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       api_gateway_calls: {
         Row: {
           class_id: number | null;
@@ -95,6 +136,42 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      api_tokens: {
+        Row: {
+          created_at: string;
+          expires_at: string;
+          id: string;
+          last_used_at: string | null;
+          name: string;
+          revoked_at: string | null;
+          scopes: string[];
+          token_id: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          expires_at: string;
+          id?: string;
+          last_used_at?: string | null;
+          name: string;
+          revoked_at?: string | null;
+          scopes?: string[];
+          token_id: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          expires_at?: string;
+          id?: string;
+          last_used_at?: string | null;
+          name?: string;
+          revoked_at?: string | null;
+          scopes?: string[];
+          token_id?: string;
+          user_id?: string;
+        };
+        Relationships: [];
       };
       assignment_due_date_exceptions: {
         Row: {
@@ -693,6 +770,79 @@ export type Database = {
           }
         ];
       };
+      assignment_handout_file_hashes: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          combined_hash: string;
+          created_at: string;
+          file_hashes: Json;
+          id: number;
+          sha: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          combined_hash: string;
+          created_at?: string;
+          file_hashes?: Json;
+          id?: number;
+          sha: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          combined_hash?: string;
+          created_at?: string;
+          file_hashes?: Json;
+          id?: number;
+          sha?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_file_hashes_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignment_leaderboard: {
         Row: {
           assignment_id: number;
@@ -861,6 +1011,7 @@ export type Database = {
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
+          handout_url: string | null;
           has_autograder: boolean;
           has_handgrader: boolean;
           id: number;
@@ -870,6 +1021,7 @@ export type Database = {
           meta_grading_rubric_id: number | null;
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
+          permit_empty_submissions: boolean;
           regrade_deadline: string | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
@@ -896,6 +1048,7 @@ export type Database = {
           grading_rubric_id?: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
+          handout_url?: string | null;
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
@@ -905,6 +1058,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          permit_empty_submissions?: boolean;
           regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
@@ -931,6 +1085,7 @@ export type Database = {
           grading_rubric_id?: number | null;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
+          handout_url?: string | null;
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
@@ -940,6 +1095,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          permit_empty_submissions?: boolean;
           regrade_deadline?: string | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
@@ -1090,270 +1246,6 @@ export type Database = {
             referencedColumns: ["user_id"];
           }
         ];
-      };
-      audit_20260120: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260121: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260122: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260123: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260124: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260125: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260126: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
-      };
-      audit_20260127: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          ip_addr: string | null;
-          new: Json | null;
-          old: Json | null;
-          table: string;
-          user_id: string | null;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table: string;
-          user_id?: string | null;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          ip_addr?: string | null;
-          new?: Json | null;
-          old?: Json | null;
-          table?: string;
-          user_id?: string | null;
-        };
-        Relationships: [];
       };
       audit_legacy: {
         Row: {
@@ -1611,6 +1503,7 @@ export type Database = {
           organizer_name: string | null;
           queue_name: string | null;
           raw_ics_data: Json | null;
+          resolved_help_queue_id: number | null;
           start_announced_at: string | null;
           start_time: string;
           title: string;
@@ -1630,6 +1523,7 @@ export type Database = {
           organizer_name?: string | null;
           queue_name?: string | null;
           raw_ics_data?: Json | null;
+          resolved_help_queue_id?: number | null;
           start_announced_at?: string | null;
           start_time: string;
           title: string;
@@ -1649,6 +1543,7 @@ export type Database = {
           organizer_name?: string | null;
           queue_name?: string | null;
           raw_ics_data?: Json | null;
+          resolved_help_queue_id?: number | null;
           start_announced_at?: string | null;
           start_time?: string;
           title?: string;
@@ -1661,6 +1556,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "calendar_events_resolved_help_queue_id_fkey";
+            columns: ["resolved_help_queue_id"];
+            isOneToOne: false;
+            referencedRelation: "help_queues";
             referencedColumns: ["id"];
           }
         ];
@@ -1909,6 +1811,7 @@ export type Database = {
           is_demo: boolean;
           late_tokens_per_student: number;
           name: string | null;
+          office_hours_description: string | null;
           office_hours_ics_url: string | null;
           slug: string | null;
           start_date: string | null;
@@ -1931,6 +1834,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_description?: string | null;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
@@ -1953,6 +1857,7 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
+          office_hours_description?: string | null;
           office_hours_ics_url?: string | null;
           slug?: string | null;
           start_date?: string | null;
@@ -2115,6 +2020,7 @@ export type Database = {
           discord_channel_id: string;
           discord_message_id: string;
           id: number;
+          last_synced_stats: Json | null;
           resource_id: number;
           resource_type: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -2124,6 +2030,7 @@ export type Database = {
           discord_channel_id: string;
           discord_message_id: string;
           id?: number;
+          last_synced_stats?: Json | null;
           resource_id: number;
           resource_type: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -2133,6 +2040,7 @@ export type Database = {
           discord_channel_id?: string;
           discord_message_id?: string;
           id?: number;
+          last_synced_stats?: Json | null;
           resource_id?: number;
           resource_type?: Database["public"]["Enums"]["discord_resource_type"];
         };
@@ -2950,7 +2858,7 @@ export type Database = {
       };
       error_pins: {
         Row: {
-          assignment_id: number;
+          assignment_id: number | null;
           class_id: number;
           created_at: string;
           created_by: string;
@@ -2960,7 +2868,7 @@ export type Database = {
           rule_logic: string;
         };
         Insert: {
-          assignment_id: number;
+          assignment_id?: number | null;
           class_id: number;
           created_at?: string;
           created_by: string;
@@ -2970,7 +2878,7 @@ export type Database = {
           rule_logic?: string;
         };
         Update: {
-          assignment_id?: number;
+          assignment_id?: number | null;
           class_id?: number;
           created_at?: string;
           created_by?: string;
@@ -4300,8 +4208,10 @@ export type Database = {
           description: string;
           id: number;
           is_active: boolean;
+          is_demo: boolean;
           max_concurrent_requests: number | null;
           name: string;
+          ordinal: number;
           queue_type: Database["public"]["Enums"]["help_queue_type"];
           updated_at: string;
         };
@@ -4315,8 +4225,10 @@ export type Database = {
           description: string;
           id?: number;
           is_active?: boolean;
+          is_demo?: boolean;
           max_concurrent_requests?: number | null;
           name: string;
+          ordinal?: number;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
           updated_at?: string;
         };
@@ -4330,8 +4242,10 @@ export type Database = {
           description?: string;
           id?: number;
           is_active?: boolean;
+          is_demo?: boolean;
           max_concurrent_requests?: number | null;
           name?: string;
+          ordinal?: number;
           queue_type?: Database["public"]["Enums"]["help_queue_type"];
           updated_at?: string;
         };
@@ -4602,6 +4516,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           instructors_only: boolean;
+          is_system_message: boolean | null;
           message: string;
           reply_to_message_id: number | null;
           updated_at: string;
@@ -4613,6 +4528,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           instructors_only?: boolean;
+          is_system_message?: boolean | null;
           message: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -4624,6 +4540,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           instructors_only?: boolean;
+          is_system_message?: boolean | null;
           message?: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -5008,6 +4925,8 @@ export type Database = {
           location_type: Database["public"]["Enums"]["location_type"];
           referenced_submission_id: number | null;
           request: string;
+          resolution_notes: string | null;
+          resolution_status: Database["public"]["Enums"]["help_request_resolution_status"] | null;
           resolved_at: string | null;
           resolved_by: string | null;
           status: Database["public"]["Enums"]["help_request_status"];
@@ -5027,6 +4946,8 @@ export type Database = {
           location_type?: Database["public"]["Enums"]["location_type"];
           referenced_submission_id?: number | null;
           request: string;
+          resolution_notes?: string | null;
+          resolution_status?: Database["public"]["Enums"]["help_request_resolution_status"] | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
@@ -5046,6 +4967,8 @@ export type Database = {
           location_type?: Database["public"]["Enums"]["location_type"];
           referenced_submission_id?: number | null;
           request?: string;
+          resolution_notes?: string | null;
+          resolution_status?: Database["public"]["Enums"]["help_request_resolution_status"] | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           status?: Database["public"]["Enums"]["help_request_status"];
@@ -5969,7 +5892,7 @@ export type Database = {
         Row: {
           assignment_group_id: number | null;
           auto_promote_result: boolean | null;
-          check_run_id: number;
+          check_run_id: number | null;
           class_id: number;
           commit_message: string;
           created_at: string;
@@ -5986,7 +5909,7 @@ export type Database = {
         Insert: {
           assignment_group_id?: number | null;
           auto_promote_result?: boolean | null;
-          check_run_id: number;
+          check_run_id?: number | null;
           class_id: number;
           commit_message: string;
           created_at?: string;
@@ -6003,7 +5926,7 @@ export type Database = {
         Update: {
           assignment_group_id?: number | null;
           auto_promote_result?: boolean | null;
-          check_run_id?: number;
+          check_run_id?: number | null;
           class_id?: number;
           commit_message?: string;
           created_at?: string;
@@ -6347,6 +6270,21 @@ export type Database = {
             referencedColumns: ["id"];
           }
         ];
+      };
+      revoked_token_ids: {
+        Row: {
+          revoked_at: string;
+          token_id: string;
+        };
+        Insert: {
+          revoked_at?: string;
+          token_id: string;
+        };
+        Update: {
+          revoked_at?: string;
+          token_id?: string;
+        };
+        Relationships: [];
       };
       rubric_check_references: {
         Row: {
@@ -7755,31 +7693,43 @@ export type Database = {
         Row: {
           assignment_group_id: number | null;
           class_id: number;
-          contents: string;
+          contents: string | null;
           created_at: string;
+          file_size: number | null;
           id: number;
+          is_binary: boolean;
+          mime_type: string | null;
           name: string;
           profile_id: string | null;
+          storage_key: string | null;
           submission_id: number;
         };
         Insert: {
           assignment_group_id?: number | null;
           class_id: number;
-          contents: string;
+          contents?: string | null;
           created_at?: string;
+          file_size?: number | null;
           id?: number;
+          is_binary?: boolean;
+          mime_type?: string | null;
           name: string;
           profile_id?: string | null;
+          storage_key?: string | null;
           submission_id: number;
         };
         Update: {
           assignment_group_id?: number | null;
           class_id?: number;
-          contents?: string;
+          contents?: string | null;
           created_at?: string;
+          file_size?: number | null;
           id?: number;
+          is_binary?: boolean;
+          mime_type?: string | null;
           name?: string;
           profile_id?: string | null;
+          storage_key?: string | null;
           submission_id?: number;
         };
         Relationships: [
@@ -8436,6 +8386,7 @@ export type Database = {
           grading_review_id: number | null;
           id: number;
           is_active: boolean;
+          is_empty_submission: boolean;
           is_not_graded: boolean;
           ordinal: number;
           profile_id: string | null;
@@ -8455,6 +8406,7 @@ export type Database = {
           grading_review_id?: number | null;
           id?: number;
           is_active?: boolean;
+          is_empty_submission?: boolean;
           is_not_graded?: boolean;
           ordinal?: number;
           profile_id?: string | null;
@@ -8474,6 +8426,7 @@ export type Database = {
           grading_review_id?: number | null;
           id?: number;
           is_active?: boolean;
+          is_empty_submission?: boolean;
           is_not_graded?: boolean;
           ordinal?: number;
           profile_id?: string | null;
@@ -10095,6 +10048,7 @@ export type Database = {
           execution_time: number | null;
           groupname: string | null;
           id: number | null;
+          is_review_graded: boolean | null;
           latestsubmissionid: number | null;
           name: string | null;
           profile_id: string | null;
@@ -10757,6 +10711,10 @@ export type Database = {
         Args: { poll_id: string; profile_id: string };
         Returns: boolean;
       };
+      can_access_submission_storage_path: {
+        Args: { path: string };
+        Returns: boolean;
+      };
       channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
       check_assignment_deadlines_passed: { Args: never; Returns: undefined };
       check_assignment_release_dates: { Args: never; Returns: undefined };
@@ -11137,6 +11095,8 @@ export type Database = {
         Args: never;
         Returns: {
           async_queue_size: number;
+          discord_dlq_queue_size: number;
+          discord_queue_size: number;
           dlq_queue_size: number;
           gradebook_row_recalculate_queue_size: number;
         }[];
@@ -11236,19 +11196,39 @@ export type Database = {
         Args: { p_class_id: number };
         Returns: Json;
       };
-      get_instructor_dashboard_metrics: {
+      get_grading_progress_for_assignment: {
+        Args: { p_assignment_id: number; p_class_id: number };
+        Returns: {
+          completed_count: number;
+          earliest_due_date: string;
+          email: string;
+          name: string;
+          pending_count: number;
+          profile_id: string;
+          submissions_with_comments: number;
+        }[];
+      };
+      get_instructor_dashboard_overview_metrics: {
         Args: { p_class_id: number; p_now?: string };
         Returns: {
           assignment_id: number;
+          class_student_count: number;
           closed_or_resolved_regrade_requests: number;
           due_date: string;
           graded_submissions: number;
+          grades_release_status: string;
+          grades_released_count: number;
+          grades_unreleased_count: number;
           open_regrade_requests: number;
           review_assignments_completed: number;
           review_assignments_incomplete: number;
           review_assignments_total: number;
           section: string;
           students_with_valid_extensions: number;
+          students_without_submissions: number;
+          submission_reviews_completed: number;
+          submission_reviews_incomplete: number;
+          submission_reviews_total: number;
           time_zone: string;
           title: string;
           total_submitters: number;
@@ -11527,7 +11507,12 @@ export type Database = {
         Returns: number;
       };
       preview_error_pin_matches: {
-        Args: { p_assignment_id: number; p_rule_logic?: string; p_rules: Json };
+        Args: {
+          p_assignment_id: number;
+          p_class_id?: number;
+          p_rule_logic?: string;
+          p_rules: Json;
+        };
         Returns: Json;
       };
       process_calendar_announcements: { Args: never; Returns: Json };
@@ -11581,6 +11566,10 @@ export type Database = {
         Args: { p_error_pin_id: number };
         Returns: Json;
       };
+      resolve_calendar_event_queues: {
+        Args: { p_class_id?: number };
+        Returns: undefined;
+      };
       safe_broadcast: {
         Args: {
           p_channel: string;
@@ -11621,6 +11610,16 @@ export type Database = {
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
+      };
+      submit_ai_help_feedback: {
+        Args: {
+          p_class_id: number;
+          p_comment?: string;
+          p_context_type: string;
+          p_rating: string;
+          p_resource_id: number;
+        };
+        Returns: Json;
       };
       sync_calendar_events: {
         Args: {
@@ -11804,6 +11803,7 @@ export type Database = {
         | "sync_repo_to_handout";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
+      help_request_resolution_status: "self_solved" | "staff_helped" | "peer_helped" | "no_time" | "other";
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
@@ -11994,6 +11994,7 @@ export const Constants = {
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],
+      help_request_resolution_status: ["self_solved", "staff_helped", "peer_helped", "no_time", "other"],
       help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],

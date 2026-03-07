@@ -11,6 +11,7 @@ import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
+import { HelpDrawerProvider } from "@/hooks/useHelpDrawer";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -60,13 +61,15 @@ const ProtectedLayout = async ({
               profileId={user_role.private_profile_id}
               role={user_role.role}
             >
-              <DynamicCourseNav />
-              {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
-              {/* mobilenav */}
-              <Box pt="0" ml="0" mr="0">
-                {children}
-              </Box>
-              <FloatingHelpRequestWidget />
+              <HelpDrawerProvider>
+                <DynamicCourseNav />
+                {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
+                {/* mobilenav */}
+                <Box pt="0" ml="0" mr="0" pb="80px">
+                  {children}
+                </Box>
+                <FloatingHelpRequestWidget />
+              </HelpDrawerProvider>
             </OfficeHoursControllerProvider>
           </CourseControllerProvider>
         </TimeZoneProvider>

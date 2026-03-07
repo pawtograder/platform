@@ -10,6 +10,8 @@ import CodeFile, {
 import DownloadLink from "@/components/ui/download-link";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
+import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
+import BinaryFilePreview from "@/components/ui/binary-file-preview";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -1267,7 +1269,18 @@ export default function FilesView() {
             </Box>
           ) : selectedFile ? (
             <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
-              <CodeFile key={selectedFile.id} file={selectedFile} />
+              {isMarkdownFile(selectedFile.name) && !selectedFile.is_binary ? (
+                <MarkdownFilePreview
+                  key={selectedFile.id}
+                  file={selectedFile}
+                  allFiles={submission.submission_files}
+                  onNavigateToFile={handleSelectFile}
+                />
+              ) : selectedFile.is_binary ? (
+                <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
+              ) : (
+                <CodeFile key={selectedFile.id} file={selectedFile} />
+              )}
             </Box>
           ) : (
             <Text>Select a file or artifact to view.</Text>

@@ -2,10 +2,11 @@ import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Redis } from "./Redis.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import * as Sentry from "npm:@sentry/deno";
+import { SecurityError } from "./HandlerUtils.ts";
 
 // Structured error used to signal Octokit secondary rate limit back to callers
 export class SecondaryRateLimitError extends Error {
@@ -71,11 +72,13 @@ async function retryWithBackoff<T>(
     } catch (error: unknown) {
       lastError = error as Error;
 
-      // Check if this is a 404 error that we should retry
+      // Check if this is an error we should retry (404 or "Git Repository is empty")
       const is404 = error instanceof RequestError && error.status === 404;
+      const isGitRepoEmpty = error instanceof Error && error.message?.toLowerCase().includes("git repository is empty");
+      const shouldRetry = is404 || isGitRepoEmpty;
 
-      if (!is404 || attempt === maxRetries) {
-        // Don't retry for non-404 errors or if we've exhausted retries
+      if (!shouldRetry || attempt === maxRetries) {
+        // Don't retry for non-retryable errors or if we've exhausted retries
         if (attempt > 0) {
           scope?.setContext("retry_failed", {
             final_attempt: attempt + 1,
@@ -88,7 +91,7 @@ async function retryWithBackoff<T>(
             tags: {
               operation: "github_api_retry_failed",
               attempts: attempt + 1,
-              error_type: is404 ? "404_not_found" : "other"
+              error_type: is404 ? "404_not_found" : isGitRepoEmpty ? "git_repo_empty" : "other"
             }
           });
         }
@@ -101,23 +104,25 @@ async function retryWithBackoff<T>(
       scope?.setContext("retry_attempt", {
         attempt: attempt + 1,
         next_delay_ms: delayMs,
-        error_status: 404,
+        error_status: error instanceof RequestError ? error.status : "unknown",
+        error_reason: is404 ? "404" : "git_repo_empty",
         operation: "github_api_retry"
       });
 
       Sentry.addBreadcrumb({
-        message: `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`,
+        message: `GitHub API ${is404 ? "404" : "Git Repository is empty"} error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`,
         level: "warning",
         data: {
           attempt: attempt + 1,
           delay_ms: delayMs,
-          error_status: 404,
+          error_status: error instanceof RequestError ? error.status : "unknown",
+          error_reason: is404 ? "404" : "git_repo_empty",
           error_message: error instanceof Error ? error.message : String(error)
         }
       });
 
       console.log(
-        `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1}):`,
+        `GitHub API ${is404 ? "404" : "Git Repository is empty"} error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1}):`,
         error instanceof Error ? error.message : String(error)
       );
 
@@ -621,6 +626,57 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
   return verified as GitHubOIDCToken;
 }
 
+// E2E testing constants and helper
+export const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
+// Read END_TO_END_SECRET strictly - no fallback to prevent security bypass
+const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET");
+// Explicit opt-in flag for E2E testing
+const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
+
+/**
+ * Validates an OIDC token, or allows E2E test tokens that use the special prefix.
+ * For E2E runs, we don't validate the signature but check that the secret matches.
+ *
+ * SECURITY: E2E bypass is only enabled if both E2E_ENABLE=true and END_TO_END_SECRET
+ * are explicitly set. This prevents accidental use in production.
+ */
+export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHubOIDCToken> {
+  const decoded = decode(token);
+  const payload = decoded[1] as GitHubOIDCToken;
+  if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
+    // Fail closed: require explicit opt-in and secret configuration
+    if (!E2E_ENABLE) {
+      console.error(
+        "E2E token detected but E2E_ENABLE is not set to 'true'. " +
+          "E2E bypass is disabled for security. Set E2E_ENABLE=true and END_TO_END_SECRET to enable."
+      );
+      throw new SecurityError(
+        "E2E testing is not enabled. E2E bypass requires explicit opt-in via E2E_ENABLE=true and END_TO_END_SECRET environment variables."
+      );
+    }
+    if (!END_TO_END_SECRET || END_TO_END_SECRET.trim() === "") {
+      console.error(
+        "E2E token detected but END_TO_END_SECRET is missing or empty. " +
+          "E2E bypass requires a non-empty secret to prevent unauthorized access."
+      );
+      throw new SecurityError(
+        "E2E testing secret is not configured. END_TO_END_SECRET must be set to a non-empty value to enable E2E bypass."
+      );
+    }
+
+    const header = decoded[0] as {
+      alg: string;
+      typ: string;
+      kid: string;
+    };
+    if (header.kid !== END_TO_END_SECRET) {
+      throw new SecurityError("E2E repo provided, but secret is incorrect");
+    }
+    return payload;
+  }
+  return await validateOIDCToken(token);
+}
+
 export async function getRepos(org: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_repos");
   scope?.setTag("org", org);
@@ -701,8 +757,8 @@ export async function createRepo(
           owner: org,
           repo: repoName
         }),
-      3, // maxRetries
-      1000, // baseDelayMs
+      5, // maxRetries
+      3000, // baseDelayMs
       scope
     );
     scope?.setTag("head_sha", heads.data.object.sha);
