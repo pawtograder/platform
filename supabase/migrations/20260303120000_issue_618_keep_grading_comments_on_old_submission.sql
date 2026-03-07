@@ -17,30 +17,47 @@ DECLARE
 BEGIN
     -- Only proceed if is_active changed from true to false.
     IF OLD.is_active = true AND NEW.is_active = false THEN
-        -- Find the new active submission for the same assignment and student/group.
+        -- Find the replacement submission for the same assignment and student/group.
+        -- Prefer currently-active successors, but fall back to the most recent submission
+        -- to support out-of-order activation/deactivation flows.
         IF OLD.assignment_group_id IS NOT NULL THEN
             SELECT id INTO new_active_submission_id
             FROM public.submissions
             WHERE assignment_id = OLD.assignment_id
               AND assignment_group_id = OLD.assignment_group_id
+              AND is_active = true
               AND id != OLD.id
-            ORDER BY
-                CASE WHEN is_active THEN 0 ELSE 1 END,
-                created_at DESC,
-                id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1;
+
+            IF new_active_submission_id IS NULL THEN
+                SELECT id INTO new_active_submission_id
+                FROM public.submissions
+                WHERE assignment_id = OLD.assignment_id
+                  AND assignment_group_id = OLD.assignment_group_id
+                  AND id != OLD.id
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1;
+            END IF;
         ELSE
             SELECT id INTO new_active_submission_id
             FROM public.submissions
             WHERE assignment_id = OLD.assignment_id
               AND profile_id = OLD.profile_id
-              AND assignment_group_id IS NULL
+              AND is_active = true
               AND id != OLD.id
-            ORDER BY
-                CASE WHEN is_active THEN 0 ELSE 1 END,
-                created_at DESC,
-                id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 1;
+
+            IF new_active_submission_id IS NULL THEN
+                SELECT id INTO new_active_submission_id
+                FROM public.submissions
+                WHERE assignment_id = OLD.assignment_id
+                  AND profile_id = OLD.profile_id
+                  AND id != OLD.id
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1;
+            END IF;
         END IF;
 
         IF new_active_submission_id IS NOT NULL THEN
