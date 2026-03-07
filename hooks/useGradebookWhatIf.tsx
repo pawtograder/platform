@@ -1,5 +1,5 @@
 import { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
-import { all, create, FunctionNode, isArray, isDenseMatrix, MathNode, Matrix } from "mathjs";
+import { all, create, FunctionNode, MathNode } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
@@ -13,6 +13,10 @@ import {
   dedupeIncompleteValues,
   pushMissingDependenciesToContext
 } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
+import {
+  addCommonExpressionFunctions,
+  COMMON_CONTEXT_FUNCTIONS
+} from "@/supabase/functions/gradebook-column-recalculate/expression/commonMathFunctions";
 import type { IncompleteValuesAdvice } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
 
 const TRACE_WHAT_IF_CALCULATIONS = false;
@@ -26,7 +30,7 @@ export type ExpressionContext = {
   class_id: number;
 };
 //These functions should be called with a context object as the first argument
-export const ContextFunctions = ["mean", "countif", "sum", "drop_lowest", "gradebook_columns"];
+export const ContextFunctions = [...COMMON_CONTEXT_FUNCTIONS, "gradebook_columns", "assignments"];
 
 export type { IncompleteValuesAdvice } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
 
@@ -44,19 +48,6 @@ export type GradebookColumnStudentWithMaxScore = Omit<GradebookColumnStudent, "s
   max_score: number;
   column_slug: string;
 };
-function isGradebookColumnStudent(value: unknown): value is GradebookColumnStudentWithMaxScore {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "score" in value &&
-    "score_override" in value &&
-    "is_droppable" in value &&
-    "is_excused" in value &&
-    "is_missing" in value &&
-    "max_score" in value &&
-    "column_slug" in value
-  );
-}
 
 type AssignmentForStudentDashboard = Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"];
 class GradebookWhatIfController {
@@ -291,9 +282,9 @@ class GradebookWhatIfController {
     if (!column) return;
     if (column.score_expression) {
       const math = create(all, {});
-      //eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const imports: Record<string, (...args: any[]) => unknown> = {};
-      imports["gradebook_columns"] = (context: ExpressionContext, columnSlug: string | string[]) => {
+      type ImportFunction = (...args: never[]) => unknown;
+      const imports: Record<string, ImportFunction> = {};
+      imports["gradebook_columns"] = ((context: ExpressionContext, columnSlug: string | string[]) => {
         if (TRACE_WHAT_IF_CALCULATIONS) {
           console.log("context", context);
           console.log("columnSlug", columnSlug);
@@ -452,8 +443,8 @@ class GradebookWhatIfController {
           }
           return [ret as GradebookColumnStudent];
         }
-      };
-      imports["assignments"] = (assignmentSlug: string | string[]) => {
+      }) as ImportFunction;
+      imports["assignments"] = ((_context: ExpressionContext, assignmentSlug: string | string[]) => {
         const findOne = (slug: string) => {
           const matchingAssignments = this.gradebookController.assignments?.filter(
             (a) => a.slug && minimatch(a.slug, slug)
@@ -476,318 +467,10 @@ class GradebookWhatIfController {
           const ret = findOne(assignmentSlug);
           return ret;
         }
-      };
-      imports["divide"] = (
-        a: number | GradebookColumnStudentWithMaxScore,
-        b: number | GradebookColumnStudentWithMaxScore
-      ) => {
-        if (a === undefined || b === undefined) {
-          return undefined;
-        }
-        let a_val = 0;
-        let b_val = 0;
-        if (isGradebookColumnStudent(a)) {
-          a_val = a.score ?? 0;
-        } else if (typeof a === "number") {
-          a_val = a;
-        }
-        if (isGradebookColumnStudent(b)) {
-          b_val = b.score ?? 0;
-        } else if (typeof b === "number") {
-          b_val = b;
-        }
-        return a_val / b_val;
-      };
-      imports["subtract"] = (
-        a: number | GradebookColumnStudentWithMaxScore,
-        b: number | GradebookColumnStudentWithMaxScore
-      ) => {
-        if (a === undefined || b === undefined) {
-          return undefined;
-        }
-        let a_val = 0;
-        let b_val = 0;
-        if (isGradebookColumnStudent(a)) {
-          a_val = a.score ?? 0;
-        } else if (typeof a === "number") {
-          a_val = a;
-        }
-        if (isGradebookColumnStudent(b)) {
-          b_val = b.score ?? 0;
-        } else if (typeof b === "number") {
-          b_val = b;
-        }
-        return a_val - b_val;
-      };
-      imports["multiply"] = (
-        a: number | GradebookColumnStudentWithMaxScore,
-        b: number | GradebookColumnStudentWithMaxScore
-      ) => {
-        if (a === undefined || b === undefined) {
-          return undefined;
-        }
-        let a_val = 0;
-        let b_val = 0;
-        if (isGradebookColumnStudent(a)) {
-          a_val = a.score ?? 0;
-        } else if (typeof a === "number") {
-          a_val = a;
-        }
-        if (isGradebookColumnStudent(b)) {
-          b_val = b.score ?? 0;
-        } else if (typeof b === "number") {
-          b_val = b;
-        }
-        return a_val * b_val;
-      };
-      imports["add"] = (
-        a: number | GradebookColumnStudentWithMaxScore,
-        b: number | GradebookColumnStudentWithMaxScore
-      ) => {
-        if (a === undefined || b === undefined) {
-          return undefined;
-        }
-        let a_val = 0;
-        let b_val = 0;
-        if (isGradebookColumnStudent(a)) {
-          a_val = a.score ?? 0;
-        } else if (typeof a === "number") {
-          a_val = a;
-        }
-        if (isGradebookColumnStudent(b)) {
-          b_val = b.score ?? 0;
-        } else if (typeof b === "number") {
-          b_val = b;
-        }
-        return a_val + b_val;
-      };
-      imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
-        context.scope.setTag("student_id", context.student_id);
-        context.scope.setTag("class_id", context.class_id);
-        context.scope.setTag("is_private", context.is_private_calculation);
-        context.scope.addBreadcrumb({
-          message: `Sum called with value: ${JSON.stringify(value, null, 2)}`,
-          level: "debug"
-        });
-        if (isDenseMatrix(value)) {
-          const values = value.toArray();
-          return values
-            .map((v) => {
-              if (isGradebookColumnStudent(v)) {
-                return v.score ?? 0;
-              }
-              if (typeof v === "number") {
-                return v;
-              } else if (v === undefined || v === null) {
-                return undefined;
-              }
-              throw new Error(
-                `Unsupported type in matrix for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
-              );
-            })
-            .filter((v) => v !== undefined)
-            .reduce((a, b) => a + b, 0);
-        }
-        if (Array.isArray(value)) {
-          const values = value
-            .map((v) => {
-              if (isGradebookColumnStudent(v)) {
-                return v.score ?? 0;
-              }
-              if (typeof v === "number") {
-                return v;
-              }
-              if (v === undefined || v === null) {
-                return undefined;
-              }
-              throw new Error(
-                `Unsupported value type in array for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
-              );
-            })
-            .filter((v) => v !== undefined);
-          if (values.length === 0) {
-            return undefined;
-          }
-          return values.reduce((a, b) => a + b, 0);
-        }
-        throw new Error(`Sum called with non-array value: ${JSON.stringify(value, null, 2)}`);
-      };
-      imports["equal"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-        if (isGradebookColumnStudent(value)) {
-          return value.score === threshold ? 1 : 0;
-        }
-        return value === threshold ? 1 : 0;
-      };
-      imports["unequal"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-        if (isGradebookColumnStudent(value)) {
-          return value.score !== threshold ? 1 : 0;
-        }
-        return value !== threshold ? 1 : 0;
-      };
-      imports["largerEq"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-        if (isGradebookColumnStudent(value)) {
-          return value.score >= threshold ? 1 : 0;
-        }
-        return value >= threshold ? 1 : 0;
-      };
-      imports["smallerEq"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-        if (isGradebookColumnStudent(value)) {
-          return value.score <= threshold ? 1 : 0;
-        }
-        return value <= threshold ? 1 : 0;
-      };
-      // Helper to flatten and extract scalar values from mixed inputs (numbers, GradebookColumnStudent, arrays, matrices)
-      const extractScalarValues = (values: unknown[]): number[] => {
-        const result: number[] = [];
-        for (const v of values) {
-          if (v === null || v === undefined) continue;
-          if (typeof v === "number") {
-            result.push(v);
-          } else if (isGradebookColumnStudent(v)) {
-            if (v.score !== undefined && v.score !== null) {
-              result.push(v.score);
-            }
-          } else if (isDenseMatrix(v)) {
-            result.push(...extractScalarValues(v.toArray()));
-          } else if (Array.isArray(v)) {
-            result.push(...extractScalarValues(v));
-          }
-        }
-        return result;
-      };
-
-      imports["min"] = (...values: unknown[]) => {
-        const validValues = extractScalarValues(values);
-        if (validValues.length === 0) {
-          return undefined;
-        }
-        return Math.min(...validValues);
-      };
-      imports["max"] = (...values: unknown[]) => {
-        const validValues = extractScalarValues(values);
-        if (validValues.length === 0) {
-          return undefined;
-        }
-        return Math.max(...validValues);
-      };
-      imports["larger"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-        if (isGradebookColumnStudent(value)) {
-          return value.score > threshold ? 1 : 0;
-        }
-        return value > threshold ? 1 : 0;
-      };
-      imports["smaller"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-        if (isGradebookColumnStudent(value)) {
-          return value.score < threshold ? 1 : 0;
-        }
-        return value < threshold ? 1 : 0;
-      };
-      imports["countif"] = (
-        _context: ExpressionContext,
-        value: GradebookColumnStudentWithMaxScore[],
-        condition: (value: GradebookColumnStudentWithMaxScore) => boolean
-      ) => {
-        if (isDenseMatrix(value)) {
-          value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-        }
-        if (Array.isArray(value)) {
-          const values = value.map((v) => {
-            const ret = condition(v) ? 1 : 0;
-            return ret;
-          });
-          const validValues = values.filter((v) => v !== undefined);
-          if (validValues.length === 0) {
-            return undefined;
-          }
-          return validValues.filter((v) => v === 1).length;
-        }
-        throw new Error("Countif called with non-array value");
-      };
-
-      imports["mean"] = (
-        _context: ExpressionContext,
-        value: GradebookColumnStudentWithMaxScore[],
-        weighted: boolean = true
-      ) => {
-        if (isDenseMatrix(value)) {
-          value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-        }
-        if (Array.isArray(value)) {
-          const valuesToAverage = value.map((v) => {
-            if (isGradebookColumnStudent(v)) {
-              if (!v.released && !v.is_private) {
-                return undefined;
-              } else if (v.is_missing) {
-                if (v.is_excused) {
-                  return { score: undefined, max_score: v.max_score };
-                }
-                return { score: 0, max_score: v.max_score };
-              }
-              return { score: v.score, max_score: v.max_score };
-            }
-            if (isArray(v)) {
-              throw new Error("Unsupported nesting of arrays");
-            }
-            throw new Error(
-              `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value. Got: ${JSON.stringify(v, null, 2)}`
-            );
-          });
-          const validValues = valuesToAverage.filter(
-            (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined && v.score !== null
-          );
-          if (validValues.length === 0) {
-            return undefined;
-          }
-          if (weighted) {
-            const totalPoints = validValues.reduce((a, b) => a + (b?.max_score ?? 0), 0);
-            const totalScore = validValues.reduce((a, b) => a + (b?.score ?? 0), 0);
-            if (totalPoints === 0) {
-              return undefined;
-            }
-            const ret = (100 * totalScore) / totalPoints;
-            return ret;
-          } else {
-            const ret =
-              (100 * validValues.reduce((a, b) => a + (b && b.score ? b.score / b.max_score : 0), 0)) /
-              validValues.length;
-            return ret;
-          }
-        }
-        throw new Error("Mean called with non-matrix value");
-      };
-      imports["drop_lowest"] = (
-        _context: ExpressionContext,
-        value: GradebookColumnStudentWithMaxScore[],
-        count: number
-      ) => {
-        if (isDenseMatrix(value)) {
-          value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-        }
-        if (Array.isArray(value)) {
-          const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
-          const ret: GradebookColumnStudentWithMaxScore[] = [];
-          let numDropped = 0;
-          for (const v of sorted) {
-            if (numDropped < count && v.is_droppable) {
-              numDropped++;
-              continue;
-            }
-            ret.push(v);
-          }
-          return ret;
-        }
-        throw new Error("Drop_lowest called with non-matrix value");
-      };
-      imports["case_when"] = (conditions: Matrix<unknown>) => {
-        const conditionValues = conditions.toArray();
-        for (const condition of conditionValues) {
-          const [value, result] = condition as [boolean, number];
-          if (value) {
-            return result;
-          }
-        }
-        return undefined;
-      };
+      }) as ImportFunction;
+      addCommonExpressionFunctions(imports, {
+        includeSecurityGuards: false
+      });
 
       math.import(imports, { override: true });
       if (column.score_expression) {

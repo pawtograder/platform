@@ -96,11 +96,13 @@ test.describe("Gradebook What-If", () => {
     await expect(finalCard).toBeVisible();
 
     const finalBefore = normalizeText(await finalCard.innerText());
+    const participationBefore = normalizeText(await participationCard.innerText());
+    const targetValue = participationBefore.includes("100/100") ? "0" : "100";
 
     await participationCard.click();
     const whatIfInput = participationCard.locator('input[type="number"]');
     await expect(whatIfInput).toBeVisible();
-    await whatIfInput.fill("0");
+    await whatIfInput.fill(targetValue);
     await whatIfInput.press("Enter");
 
     await expect(async () => {
