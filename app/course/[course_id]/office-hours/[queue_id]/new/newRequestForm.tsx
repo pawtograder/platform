@@ -10,7 +10,6 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import Markdown from "@/components/ui/markdown";
 import {
-  useHelpQueueAssignments,
   useHelpQueues,
   useHelpRequests,
   useHelpRequestStudents,
