@@ -378,23 +378,20 @@ test.describe("Due Date Exceptions & Extensions", () => {
         name: `${student2!.private_profile_name} ${hours} No`
       })
     ).toBeVisible();
-    // Check that the extension is applied to assignment exceptions in the database.
-    const { data: assignmentExceptionsAfterCreate, error: assignmentExceptionsAfterCreateError } = await supabase
-      .from("assignment_due_date_exceptions")
-      .select("assignment_id, student_id, hours, minutes, tokens_consumed, note, creator_id")
-      .eq("class_id", course.id)
-      .eq("student_id", student2!.private_profile_id)
-      .in("assignment_id", [testAssignment!.id, testGroupAssignment!.id]);
-    expect(assignmentExceptionsAfterCreateError).toBeNull();
-    expect(assignmentExceptionsAfterCreate).toBeDefined();
-    expect((assignmentExceptionsAfterCreate || []).length).toBeGreaterThanOrEqual(2);
-    for (const exception of assignmentExceptionsAfterCreate || []) {
-      expect(exception.hours).toBe(hours);
-      expect(exception.minutes).toBe(0);
-      expect(exception.tokens_consumed).toBe(0);
-      expect(exception.creator_id).toBe(instructor!.private_profile_id);
-      expect(exception.note).toBe("Instructor-granted extension for all assignments in class");
-    }
+    // Check that the extension is applied to assignment exceptions in the UI.
+    await page.getByRole("link", { name: "Assignment Exceptions" }).click();
+    await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
+    const dueDatesAssignment = page.getByLabel("Assignment Exceptions for Due Dates Assignment").first();
+    await expect(dueDatesAssignment).toContainText(student2!.private_profile_name);
+    await expect(dueDatesAssignment).toContainText("24");
+    await expect(dueDatesAssignment).toContainText("Instructor-granted extension for all assignments in class");
+
+    const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();
+    await expect(dueDatesGroupAssignment).toContainText(student2!.private_profile_name);
+    await expect(dueDatesGroupAssignment).toContainText("Group: Test Group 1");
+    await expect(dueDatesGroupAssignment).toContainText(student!.private_profile_name);
+    await expect(dueDatesGroupAssignment).toContainText("24");
+    await expect(dueDatesGroupAssignment).toContainText("Instructor-granted extension for all assignments in class");
 
     // Test Delete
     await page.getByRole("link", { name: "Student Extensions" }).click();
@@ -412,14 +409,9 @@ test.describe("Due Date Exceptions & Extensions", () => {
       })
     ).not.toBeVisible();
     // Deleting the student-wide extension should not retroactively delete pre-existing assignment exceptions.
-    const { data: assignmentExceptionsAfterDelete, error: assignmentExceptionsAfterDeleteError } = await supabase
-      .from("assignment_due_date_exceptions")
-      .select("assignment_id, student_id")
-      .eq("class_id", course.id)
-      .eq("student_id", student2!.private_profile_id)
-      .in("assignment_id", [testAssignment!.id, testGroupAssignment!.id]);
-    expect(assignmentExceptionsAfterDeleteError).toBeNull();
-    expect((assignmentExceptionsAfterDelete || []).length).toBeGreaterThanOrEqual(2);
+    await page.getByRole("link", { name: "Assignment Exceptions" }).click();
+    await expect(dueDatesAssignment).toContainText(student2!.private_profile_name);
+    await expect(dueDatesGroupAssignment).toContainText(student2!.private_profile_name);
   });
 
   test("Group-level exception displays group name and members", async ({ page }) => {
