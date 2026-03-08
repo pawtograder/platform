@@ -6,7 +6,6 @@ import { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { createHash } from "crypto";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
 dotenv.config({ path: ".env.local" });
@@ -15,49 +14,6 @@ const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
 // export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
 export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
-const SAMPLE_JAVA_SUBMISSION_FILE = `package com.pawtograder.example.java;
-
-public class Entrypoint {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
-    }
-
-  /*
-   * This method takes two integers and returns their sum.
-   * 
-   * @param a the first integer
-   * @param b the second integer
-   * @return the sum of a and b
-   */
-  public int doMath(int a, int b) {
-      return a+b;
-  }
-
-  /**
-   * This method returns a message, "Hello, World!"
-   * @return
-   */
-  public String getMessage() {
-      
-      return "Hello, World!";
-  }
-}`;
-
-function computeCombinedFileHash(files: { name: string; contents: string }[]) {
-  const file_hashes: Record<string, string> = {};
-  for (const f of files) {
-    const hash = createHash("sha256");
-    hash.update(Buffer.from(f.contents, "utf-8"));
-    file_hashes[f.name] = hash.digest("hex");
-  }
-  const combinedInput = Object.keys(file_hashes)
-    .sort()
-    .map((name) => `${name}\0${file_hashes[name]}\n`)
-    .join("");
-  const combinedHash = createHash("sha256");
-  combinedHash.update(Buffer.from(combinedInput, "utf-8"));
-  return combinedHash.digest("hex");
-}
 
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
@@ -1565,119 +1521,6 @@ export async function insertAssignment({
   return { ...assignmentData, rubricParts: partsData.data, rubricChecks: rubricChecksData };
 }
 
-async function insertSubmissionViaAPIFallback({
-  student_profile_id,
-  assignment_group_id,
-  sha,
-  commit_message,
-  assignment_id,
-  class_id,
-  repository,
-  repository_id,
-  check_run_id
-}: {
-  student_profile_id?: string;
-  assignment_group_id?: number;
-  sha?: string;
-  commit_message?: string;
-  assignment_id: number;
-  class_id: number;
-  repository: string;
-  repository_id: number;
-  check_run_id: number;
-}): Promise<{ submission_id: number; repository_name: string }> {
-  const isNotGradedSubmission = (commit_message || "").toUpperCase().includes("#NOT-GRADED");
-  const { data: assignmentRow, error: assignmentError } = await supabase
-    .from("assignments")
-    .select("due_date, allow_not_graded_submissions, permit_empty_submissions")
-    .eq("id", assignment_id)
-    .single();
-  if (assignmentError || !assignmentRow) {
-    throw new Error(`Failed to load assignment for fallback submission: ${assignmentError?.message}`);
-  }
-
-  let finalDueDate: Date = new Date(assignmentRow.due_date);
-  const { data: dueDateFromRpc } = await supabase.rpc("calculate_final_due_date", {
-    assignment_id_param: assignment_id,
-    student_profile_id_param: student_profile_id || "0xd34db34f",
-    assignment_group_id_param: assignment_group_id
-  });
-  if (dueDateFromRpc) {
-    finalDueDate = new Date(dueDateFromRpc);
-  }
-
-  const now = new Date();
-  if (now > finalDueDate) {
-    if (isNotGradedSubmission && assignmentRow.allow_not_graded_submissions) {
-      // Allowed path.
-    } else if (isNotGradedSubmission && !assignmentRow.allow_not_graded_submissions) {
-      throw new Error(
-        "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension."
-      );
-    } else {
-      throw new Error("You cannot submit after the due date");
-    }
-  }
-
-  const { data: submissionData, error: submissionError } = await supabase
-    .from("submissions")
-    .insert({
-      profile_id: student_profile_id,
-      assignment_group_id: assignment_group_id,
-      assignment_id,
-      repository,
-      repository_id,
-      sha: sha || "HEAD",
-      run_number: 1,
-      run_attempt: 1,
-      class_id,
-      repository_check_run_id: check_run_id,
-      is_not_graded: isNotGradedSubmission
-    })
-    .select("id")
-    .single();
-  if (submissionError || !submissionData) {
-    throw new Error(`Failed to insert fallback submission: ${submissionError?.message}`);
-  }
-
-  const submissionId = submissionData.id;
-  const { error: filesError } = await supabase.from("submission_files").insert({
-    name: "sample.java",
-    contents: SAMPLE_JAVA_SUBMISSION_FILE,
-    class_id,
-    submission_id: submissionId,
-    profile_id: student_profile_id,
-    assignment_group_id
-  });
-  if (filesError) {
-    throw new Error(`Failed to insert fallback submission file: ${filesError.message}`);
-  }
-
-  const combinedHash = computeCombinedFileHash([{ name: "sample.java", contents: SAMPLE_JAVA_SUBMISSION_FILE }]);
-  const { data: handoutMatch } = await supabase
-    .from("assignment_handout_file_hashes")
-    .select("id")
-    .eq("assignment_id", assignment_id)
-    .eq("combined_hash", combinedHash)
-    .limit(1)
-    .maybeSingle();
-  const isEmptySubmission = Boolean(handoutMatch);
-
-  await supabase.from("submissions").update({ is_empty_submission: isEmptySubmission }).eq("id", submissionId);
-
-  if (isEmptySubmission && assignmentRow.permit_empty_submissions === false) {
-    await supabase.from("submission_files").delete().eq("submission_id", submissionId);
-    await supabase.from("submission_reviews").delete().eq("submission_id", submissionId);
-    await supabase.from("submissions").delete().eq("id", submissionId);
-    throw new Error("Empty submissions are not permitted for this assignment");
-  }
-
-  return {
-    repository_name: repository,
-    submission_id: submissionId
-  };
-}
-
 export async function insertSubmissionViaAPI({
   student_profile_id,
   assignment_group_id,
@@ -1778,54 +1621,25 @@ export async function insertSubmissionViaAPI({
     }
   });
   if (error) {
-    return await insertSubmissionViaAPIFallback({
-      student_profile_id,
-      assignment_group_id,
-      sha,
-      commit_message,
-      assignment_id,
-      class_id,
-      repository,
-      repository_id,
-      check_run_id
-    });
+    throw new Error(`Failed to create submission: ${error.message}`);
   }
   if (data == null) {
-    return await insertSubmissionViaAPIFallback({
-      student_profile_id,
-      assignment_group_id,
-      sha,
-      commit_message,
-      assignment_id,
-      class_id,
-      repository,
-      repository_id,
-      check_run_id
-    });
+    throw new Error("Failed to create submission, no data returned");
   }
   if ("error" in data) {
     if (typeof data.error === "object" && data.error && "details" in data.error) {
       const details = String((data.error as { details: string }).details);
-      if (
-        details.includes("You cannot submit after the due date") ||
-        details.includes("Empty submissions are not permitted for this assignment") ||
-        details.includes("This assignment does not allow NOT-GRADED submissions")
-      ) {
+      if (details.length > 0) {
         throw new Error(details);
       }
     }
-    return await insertSubmissionViaAPIFallback({
-      student_profile_id,
-      assignment_group_id,
-      sha,
-      commit_message,
-      assignment_id,
-      class_id,
-      repository,
-      repository_id,
-      check_run_id
-    });
+    throw new Error("Failed to create submission");
   }
+
+  if (!("submission_id" in data) || typeof data.submission_id !== "number") {
+    throw new Error("Failed to create submission, invalid response");
+  }
+
   return {
     repository_name: repository,
     submission_id: (data as { submission_id: number }).submission_id
@@ -1881,104 +1695,6 @@ export type GradeResponse = {
   supabase_anon_key: string;
 };
 
-async function submitFeedbackViaAPIFallback({
-  repository,
-  sha,
-  run_id,
-  run_attempt,
-  feedback
-}: {
-  repository: string;
-  sha: string;
-  run_id: number;
-  run_attempt: number;
-  feedback: GradingScriptResult;
-}): Promise<GradeResponse> {
-  const { data: submissionRow, error: submissionError } = await supabase
-    .from("submissions")
-    .select("id, class_id, assignment_id, profile_id, assignment_group_id")
-    .eq("repository", repository)
-    .eq("sha", sha)
-    .eq("run_number", run_id)
-    .eq("run_attempt", run_attempt)
-    .single();
-  if (submissionError || !submissionRow) {
-    throw new Error(`Failed to find submission for fallback feedback: ${submissionError?.message}`);
-  }
-
-  const { data: graderResult, error: graderResultError } = await supabase
-    .from("grader_results")
-    .insert({
-      submission_id: submissionRow.id,
-      profile_id: submissionRow.profile_id,
-      class_id: submissionRow.class_id,
-      assignment_group_id: submissionRow.assignment_group_id,
-      ret_code: feedback.ret_code ?? null,
-      grader_sha: feedback.grader_sha ?? null,
-      score: feedback.feedback.score || 0,
-      max_score: feedback.feedback.max_score || 0,
-      lint_output: feedback.feedback.lint.output ?? "",
-      lint_output_format: feedback.feedback.lint.output_format || "text",
-      lint_passed: feedback.feedback.lint.status === "pass",
-      execution_time: feedback.execution_time ?? null
-    })
-    .select("id")
-    .single();
-  if (graderResultError || !graderResult) {
-    throw new Error(`Failed to insert fallback grader result: ${graderResultError?.message}`);
-  }
-
-  const outputEntries = Object.entries(feedback.feedback.output || {}).filter(([, value]) => Boolean(value));
-  if (outputEntries.length > 0) {
-    const { error: outputError } = await supabase.from("grader_result_output").insert(
-      outputEntries.map(([visibility, output]) => ({
-        class_id: submissionRow.class_id,
-        student_id: submissionRow.profile_id,
-        assignment_group_id: submissionRow.assignment_group_id,
-        grader_result_id: graderResult.id,
-        visibility: visibility as "hidden" | "visible" | "after_due_date" | "after_published",
-        format: output?.output_format || "text",
-        output: output?.output || ""
-      }))
-    );
-    if (outputError) {
-      throw new Error(`Failed to insert fallback grader outputs: ${outputError.message}`);
-    }
-  }
-
-  if (feedback.feedback.tests.length > 0) {
-    const { error: testsError } = await supabase.from("grader_result_tests").insert(
-      feedback.feedback.tests.map((test) => ({
-        class_id: submissionRow.class_id,
-        student_id: submissionRow.profile_id,
-        assignment_group_id: submissionRow.assignment_group_id,
-        grader_result_id: graderResult.id,
-        name: test.name,
-        output: test.output,
-        output_format: test.output_format || "text",
-        name_format: test.name_format || "text",
-        score: test.score,
-        max_score: test.max_score,
-        part: test.part,
-        is_released: !test.hide_until_released,
-        submission_id: submissionRow.id
-      }))
-    );
-    if (testsError) {
-      throw new Error(`Failed to insert fallback grader tests: ${testsError.message}`);
-    }
-  }
-
-  const baseUrl = process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL || "http://localhost:3000";
-  return {
-    is_ok: true,
-    message: `Submission ${submissionRow.id} registered`,
-    details_url: `${baseUrl}/course/${submissionRow.class_id}/assignments/${submissionRow.assignment_id}/submissions/${submissionRow.id}`,
-    supabase_url: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-    supabase_anon_key: process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
-  };
-}
-
 /**
  * Submits feedback for a submission via the autograder-submit-feedback edge function.
  * This simulates what the grading script does after grading completes.
@@ -2023,21 +1739,21 @@ export async function submitFeedbackViaAPI({
   });
 
   if (error) {
-    return await submitFeedbackViaAPIFallback({ repository, sha, run_id, run_attempt, feedback });
+    throw new Error(`Failed to submit feedback: ${error.message}`);
   }
 
   if (data == null) {
-    return await submitFeedbackViaAPIFallback({ repository, sha, run_id, run_attempt, feedback });
+    throw new Error("Failed to submit feedback, no data returned");
   }
 
   if ("error" in data) {
     if (typeof data.error === "object" && data.error && "details" in data.error) {
       const details = String((data.error as { details: string }).details);
       if (details.length > 0) {
-        return await submitFeedbackViaAPIFallback({ repository, sha, run_id, run_attempt, feedback });
+        throw new Error(details);
       }
     }
-    return await submitFeedbackViaAPIFallback({ repository, sha, run_id, run_attempt, feedback });
+    throw new Error("Failed to submit feedback");
   }
 
   return data as GradeResponse;
