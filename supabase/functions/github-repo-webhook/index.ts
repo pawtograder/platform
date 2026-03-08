@@ -1,4 +1,4 @@
-import { createEventHandler } from "https://esm.sh/@octokit/webhooks@13?dts";
+import { createEventHandler } from "npm:@octokit/webhooks@13";
 import type {
   PushEvent,
   CheckRunEvent,
