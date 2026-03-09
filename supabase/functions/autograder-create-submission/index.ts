@@ -523,7 +523,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
-    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*))")
+    .select(
+      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*), classes(time_zone))"
+    )
     .eq("repository", repository)
     .maybeSingle();
   if (repoError) {
@@ -613,6 +615,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       if (!workflow_ref.includes(`.github/workflows/grade.yml`)) {
         throw new Error(`Invalid workflow, got ${workflow_ref}`);
       }
+      // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
+      const fetchUserRolesForActor = async (
+        classId: number | null
+      ): Promise<Database["public"]["Tables"]["user_roles"]["Row"] | undefined> => {
+        if (classId == null || isPawtograderTriggered) return undefined;
+        const { data: user, error: userError } = await adminSupabase
+          .from("users")
+          .select("user_id")
+          .ilike("github_username", decoded.actor)
+          .maybeSingle();
+        if (userError) {
+          Sentry.captureException(userError, scope);
+          throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
+        }
+        if (!user) return undefined;
+        const { data: userRolesData, error: userRolesError } = await adminSupabase
+          .from("user_roles")
+          .select("*")
+          .eq("user_id", user.user_id)
+          .eq("class_id", Number(classId))
+          .maybeSingle();
+        if (userRolesError) {
+          Sentry.captureException(userRolesError, scope);
+          throw new UserVisibleError(`Failed to lookup user role: ${userRolesError.message}`);
+        }
+        return userRolesData ?? undefined;
+      };
+
       // Fetch check run with retry logic for race conditions
       const fetchCheckRun = async () => {
         const { data: initialCheckRun, error: checkRunError } = await adminSupabase
@@ -631,44 +661,53 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         if (!initialCheckRun) {
           scope?.setTag("check_run_db_found", "false");
-          throw new UserVisibleError(
-            `No push record found for ${repository}@${sha}. The webhook may not have processed yet. Please try again.`
-          );
+          return null;
         }
 
-        // Fetch the role of the user who triggered the workflow (decoded.actor = GitHub username)
-        let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
         const classId = initialCheckRun.class_id ?? repoData.assignments.class_id;
-        if (classId && !isPawtograderTriggered) {
-          const { data: user, error: userError } = await adminSupabase
-            .from("users")
-            .select("user_id")
-            .ilike("github_username", decoded.actor)
-            .maybeSingle();
-          if (userError) {
-            Sentry.captureException(userError, scope);
-            throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
-          }
-          if (user) {
-            const { data: userRolesData, error: userRolesError } = await adminSupabase
-              .from("user_roles")
-              .select("*")
-              .eq("user_id", user.user_id)
-              .eq("class_id", classId)
-              .maybeSingle();
-            if (userRolesError) {
-              Sentry.captureException(userRolesError, scope);
-              throw new UserVisibleError(`Failed to lookup user role: ${userRolesError.message}`);
-            }
-            userRoles = userRolesData ?? undefined;
-          }
-        }
-
+        const userRoles = await fetchUserRolesForActor(classId as number);
         return { ...initialCheckRun, user_roles: userRoles };
       };
 
-      const checkRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
-      const timeZone = checkRun.classes.time_zone || "America/New_York";
+      const rawCheckRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
+
+      // Fallback when no push record exists: construct minimal check run data from alternative sources
+      let checkRun: NonNullable<Awaited<ReturnType<typeof fetchCheckRun>>>;
+      if (rawCheckRun) {
+        checkRun = rawCheckRun;
+      } else {
+        scope?.setTag("submission_without_check_run", "true");
+        Sentry.addBreadcrumb({
+          message: "Creating submission without check run record",
+          level: "warning",
+          data: { repository, sha }
+        });
+        const classId = repoData.assignments.class_id as number;
+        const userRoles = await fetchUserRolesForActor(classId);
+        const timeZoneFromClass = (repoData.assignments as { classes?: { time_zone?: string } | null })?.classes
+          ?.time_zone;
+        checkRun = {
+          id: null,
+          class_id: classId,
+          assignment_group_id: repoData.assignment_group_id,
+          profile_id: repoData.profile_id,
+          commit_message: null,
+          created_at: new Date().toISOString(),
+          is_regression_rerun: false,
+          target_submission_id: null,
+          requested_grader_sha: null,
+          status: null,
+          check_run_id: null,
+          repository_id: repoData.id,
+          sha,
+          auto_promote_result: null,
+          triggered_by: null,
+          classes: { time_zone: timeZoneFromClass ?? "America/New_York" },
+          user_roles: userRoles
+        } as unknown as NonNullable<Awaited<ReturnType<typeof fetchCheckRun>>>;
+      }
+
+      const timeZone = checkRun.classes?.time_zone || "America/New_York";
       const isRegressionRerun = Boolean(checkRun.is_regression_rerun && checkRun.target_submission_id);
       const rerunTargetSubmissionId = checkRun.target_submission_id ?? null;
 
@@ -986,7 +1025,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       console.log(`Created submission ${submission_id} for repository ${repository}`);
-      if (checkRun && !isE2ERun && !isRegressionRerun) {
+      if (checkRun?.id && !isE2ERun && !isRegressionRerun) {
         await adminSupabase
           .from("repository_check_runs")
           .update({
