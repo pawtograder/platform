@@ -17,7 +17,7 @@
  * Where RECYCLE_USERS_KEY defaults to "demo" but can be set via environment variable.
  * This allows multiple test environments to have separate user pools.
  */
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Database, type Json } from "@/utils/supabase/SupabaseTypes";
 import { faker } from "@faker-js/faker";
 import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
@@ -85,6 +85,8 @@ export interface SurveyConfig {
   numTemplates: number;
   responseRate: number; // Percentage of students who respond (0-1)
   submissionRate: number; // Percentage of responses that are submitted (0-1)
+  linkToGroupAssignments?: boolean; // Create surveys linked to group assignments (only group members respond)
+  includeTeamCollaboration?: boolean; // Include the team collaboration survey type in the rotation
 }
 
 export interface SeedingConfiguration {
@@ -585,6 +587,196 @@ const SURVEYJS_TEMPLATES = {
             title: "Any additional comments?",
             placeholder: "Optional...",
             rows: 3
+          }
+        ]
+      }
+    ]
+  },
+
+  teamCollaboration: {
+    title: "Weekly Team Collaboration Survey",
+    description: "Please complete this weekly survey about your team collaboration experience.",
+    pages: [
+      {
+        name: "page1",
+        elements: [
+          {
+            type: "checkbox",
+            name: "q1",
+            title: "This week I have...",
+            choices: [
+              { value: 1, text: "Completed all my assigned tasks" },
+              { value: 4, text: "Completed some of my assigned tasks" },
+              { value: 2, text: "Asked a teammate for help completing my task(s)" },
+              { value: 3, text: "Helped a teammate complete a portion of their task(s)" },
+              { value: 5, text: "Other" }
+            ],
+            hasOther: true
+          },
+          {
+            type: "checkbox",
+            name: "q2",
+            title: "This week I have interacted with my team by...",
+            choices: [
+              { value: 1, text: "Met live (including Zoom meetings, Discord voicechat, or similar) with my team" },
+              { value: 2, text: "Participated in checkins with my team (via text, email, GroupMe, or similar)" },
+              { value: 3, text: "Opened a Pull Request and asked my team for feedback on my code" },
+              { value: 4, text: "Asked my team for feedback on my non-code work (requirements, design, test plan)" },
+              {
+                value: 5,
+                text: "Reviewed technical artifacts (design, requirements, tests, or code) for my teammates"
+              },
+              { value: 6, text: "Other" }
+            ],
+            hasOther: true
+          }
+        ]
+      },
+      {
+        name: "page2",
+        elements: [
+          {
+            type: "radiogroup",
+            name: "q3",
+            title: "This week, I knew what I needed to get done",
+            choices: [
+              { value: 1, text: "Strongly agree" },
+              { value: 2, text: "Agree" },
+              { value: 4, text: "Neither agree nor disagree" },
+              { value: 6, text: "Disagree" },
+              { value: 7, text: "Strongly disagree" }
+            ]
+          },
+          {
+            type: "radiogroup",
+            name: "q4",
+            title: "This week, I have gotten done ___________ than I think I should have",
+            choices: [
+              { value: 1, text: "Much more" },
+              { value: 2, text: "A bit more" },
+              { value: 3, text: "About as much as" },
+              { value: 4, text: "A bit less" },
+              { value: 5, text: "Much less" }
+            ]
+          },
+          {
+            type: "radiogroup",
+            name: "q5",
+            title: "This week, my team overall has gotten done ___________ than I think we should have",
+            choices: [
+              { value: 1, text: "Much more" },
+              { value: 2, text: "A bit more" },
+              { value: 3, text: "About as much as" },
+              { value: 4, text: "A bit less" },
+              { value: 5, text: "Much less" }
+            ]
+          },
+          {
+            type: "radiogroup",
+            name: "q6",
+            title: "Overall, I think that everyone has been contributing adequately to the success of the project",
+            choices: [
+              { value: 1, text: "Strongly agree" },
+              { value: 5, text: "Agree" },
+              { value: 6, text: "Neither agree nor disagree" },
+              { value: 7, text: "Disagree" },
+              { value: 8, text: "Strongly disagree" }
+            ]
+          },
+          {
+            type: "radiogroup",
+            name: "q7",
+            title: "Next week, I intend to get done ______ than I did this week",
+            choices: [
+              { value: 1, text: "Much more" },
+              { value: 2, text: "A bit more" },
+              { value: 3, text: "About as much as" },
+              { value: 4, text: "A bit less" },
+              { value: 5, text: "Much less" }
+            ]
+          }
+        ]
+      },
+      {
+        name: "page3",
+        elements: [
+          {
+            type: "radiogroup",
+            name: "q16",
+            title: "In our team we relied on each other to get the job done.",
+            choices: [
+              { value: 5, text: "Strongly agree" },
+              { value: 4, text: "Agree" },
+              { value: 3, text: "Neither agree nor disagree" },
+              { value: 2, text: "Disagree" },
+              { value: 1, text: "Strongly disagree" }
+            ]
+          },
+          {
+            type: "radiogroup",
+            name: "q21",
+            title: "Team members keep information to themselves that should be shared with others.",
+            choices: [
+              { value: 5, text: "Strongly agree" },
+              { value: 4, text: "Agree" },
+              { value: 3, text: "Neither agree nor disagree" },
+              { value: 2, text: "Disagree" },
+              { value: 1, text: "Strongly disagree" }
+            ]
+          },
+          {
+            type: "radiogroup",
+            name: "q23",
+            title: "I am satisfied with the performance of my team.",
+            choices: [
+              { value: 5, text: "Strongly agree" },
+              { value: 4, text: "Agree" },
+              { value: 3, text: "Neither agree nor disagree" },
+              { value: 2, text: "Disagree" },
+              { value: 1, text: "Strongly disagree" }
+            ]
+          },
+          {
+            type: "radiogroup",
+            name: "q24",
+            title: "We have completed the tasks this week in a way we all agreed upon.",
+            choices: [
+              { value: 5, text: "Strongly agree" },
+              { value: 4, text: "Agree" },
+              { value: 3, text: "Neither agree nor disagree" },
+              { value: 2, text: "Disagree" },
+              { value: 1, text: "Strongly disagree" }
+            ]
+          }
+        ]
+      },
+      {
+        name: "page4",
+        elements: [
+          {
+            type: "checkbox",
+            name: "q9",
+            title: "My progress this week has been impeded by:",
+            choices: [
+              { value: 1, text: "Difficulties with technologies or course materials" },
+              { value: 2, text: "Demands of other classes" },
+              { value: 3, text: "Other personal responsibilities/distractions" },
+              { value: 4, text: "Teammates who didn't complete their responsibilities" },
+              { value: 5, text: "Communication difficulties with my teammates" },
+              {
+                value: 6,
+                text: "Difficulties scheduling tasks so that I wasn't waiting for my team to complete their work"
+              },
+              { value: 7, text: "Other" },
+              { value: 8, text: "None of the above: I was able to work productively" }
+            ],
+            hasOther: true
+          },
+          {
+            type: "comment",
+            name: "q15",
+            title:
+              "How do you feel about your team's collaboration process in this project? Please reflect in about two sentences."
           }
         ]
       }
@@ -1092,7 +1284,7 @@ export class DatabaseSeeder {
       }
 
       // // Create assignments and submissions
-      const { assignments, nextOrdinal } = await this.createAssignments(config, class_id, students);
+      const { assignments, nextOrdinal } = await this.createAssignments(config, class_id, students, graders);
 
       // Create additional discussion topics if configured
       if (config.discussionConfig?.numAdditionalTopics) {
@@ -1241,7 +1433,7 @@ export class DatabaseSeeder {
 
       // Create surveys if configured
       if (config.surveyConfig) {
-        await this.createSurveys(config.surveyConfig, class_id, students, instructors);
+        await this.createSurveys(config.surveyConfig, class_id, students, instructors, assignments);
       }
 
       // Display final summary
@@ -2137,7 +2329,8 @@ export class DatabaseSeeder {
   private async createAssignments(
     config: SeedingConfiguration,
     class_id: number,
-    students: TestingUser[]
+    students: TestingUser[],
+    graders: TestingUser[] = []
   ): Promise<{
     assignments: Array<{
       id: number;
@@ -2307,7 +2500,7 @@ export class DatabaseSeeder {
       // Create assignment groups for group assignments
       let groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
       if (isGroupAssignment || isLabGroupAssignment) {
-        groups = await this.createAssignmentGroups(assignmentData.id, class_id, students, groupSize);
+        groups = await this.createAssignmentGroups(assignmentData.id, class_id, students, groupSize, graders);
       }
 
       const assignmentResult = {
@@ -4317,7 +4510,8 @@ final;`,
     assignment_id: number,
     class_id: number,
     students: TestingUser[],
-    groupSize: number
+    groupSize: number,
+    graders: TestingUser[] = []
   ): Promise<Array<{ id: number; name: string; memberCount: number; members: string[] }>> {
     const groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
     const numGroups = Math.ceil(students.length / groupSize);
@@ -4331,6 +4525,9 @@ final;`,
 
         if (groupStudents.length === 0) return null;
 
+        // Assign a mentor (grader) to each group - round-robin if we have graders
+        const mentorProfileId = graders.length > 0 ? graders[i % graders.length].private_profile_id : null;
+
         // Create the group
         const { data: groupData, error: groupError } = await this.rateLimitManager.trackAndLimit(
           "assignment_groups",
@@ -4340,7 +4537,8 @@ final;`,
               .insert({
                 assignment_id: assignment_id,
                 class_id: class_id,
-                name: `Group ${String.fromCharCode(65 + i)}` // A, B, C, etc.
+                name: `Group ${String.fromCharCode(65 + i)}`, // A, B, C, etc.
+                mentor_profile_id: mentorProfileId
               })
               .select("id, name")
         );
@@ -4704,19 +4902,100 @@ public class Entrypoint {
     config: SurveyConfig,
     class_id: number,
     students: TestingUser[],
-    instructors: TestingUser[]
+    instructors: TestingUser[],
+    assignments: Array<{
+      id: number;
+      title: string;
+      due_date: string;
+      groups?: Array<{ id: number; name: string; memberCount: number; members: string[] }>;
+    }> = []
   ) {
-    console.log(`\n📋 Creating ${config.numSurveys} surveys...`);
+    console.log(`\n📋 Creating surveys...`);
 
     // First, create survey templates
     const templates = await this.createSurveyTemplates(config, class_id, instructors);
     console.log(`   ✓ Created ${templates.length} survey templates`);
 
-    // Create surveys
-    const surveys = [];
-    const surveyTypes = Object.keys(SURVEYJS_TEMPLATES);
+    const surveys: Array<{
+      id: string;
+      survey_id: string;
+      status: string;
+      title: string;
+      assignment_id?: number;
+      groupMembersByAssignment?: Map<number, string[]>;
+    }> = [];
 
-    for (let i = 0; i < config.numSurveys; i++) {
+    // Create assignment-linked team collaboration surveys if configured
+    const groupAssignments = assignments.filter((a) => a.groups && a.groups.length > 0);
+    if (config.linkToGroupAssignments && groupAssignments.length > 0 && config.includeTeamCollaboration !== false) {
+      const teamCollabTemplate = SURVEYJS_TEMPLATES.teamCollaboration;
+      for (const assignment of groupAssignments) {
+        const instructor = instructors[Math.floor(Math.random() * instructors.length)];
+        const groupMembers = new Set<string>();
+        for (const group of assignment.groups!) {
+          for (const memberId of group.members) {
+            groupMembers.add(memberId);
+          }
+        }
+
+        const surveyData = {
+          class_id: class_id,
+          created_by: instructor.private_profile_id,
+          assigned_to_all: false,
+          title: `Week ${assignment.id} Team Collaboration Survey`,
+          description: teamCollabTemplate.description,
+          json: teamCollabTemplate,
+          status: "published" as const,
+          allow_response_editing: Math.random() < 0.5,
+          assignment_id: assignment.id,
+          due_date: addDays(new Date(), Math.floor(Math.random() * 14) + 5).toISOString(),
+          version: 1
+        };
+
+        const { data: surveyResult, error: surveyError } = await this.rateLimitManager.trackAndLimit("surveys", () =>
+          supabase.from("surveys").insert(surveyData).select("id, survey_id, status, title")
+        );
+
+        if (surveyError) {
+          throw new Error(`Failed to create assignment-linked survey: ${surveyError.message}`);
+        }
+
+        // Create survey_assignments for each group member (required when assigned_to_all is false)
+        const assignmentInserts = Array.from(groupMembers).map((profileId) => ({
+          survey_id: surveyResult[0].id,
+          profile_id: profileId,
+          class_id: class_id
+        }));
+        if (assignmentInserts.length > 0) {
+          const { error: assignError } = await this.rateLimitManager.trackAndLimit(
+            "survey_assignments",
+            () => supabase.from("survey_assignments").insert(assignmentInserts).select("id"),
+            assignmentInserts.length
+          );
+          if (assignError) {
+            throw new Error(`Failed to assign survey to group members: ${assignError.message}`);
+          }
+        }
+
+        surveys.push({
+          ...surveyResult[0],
+          assignment_id: assignment.id,
+          groupMembersByAssignment: new Map([[assignment.id, Array.from(groupMembers)]])
+        });
+        console.log(
+          `   ✓ Created assignment-linked survey: "${surveyResult[0].title}" (linked to assignment ${assignment.id}, ${groupMembers.size} group members)`
+        );
+      }
+    }
+
+    // Create regular (non-linked) surveys
+    const surveyTypes =
+      config.includeTeamCollaboration !== false
+        ? Object.keys(SURVEYJS_TEMPLATES)
+        : Object.keys(SURVEYJS_TEMPLATES).filter((k) => k !== "teamCollaboration");
+    const numRegularSurveys = config.numSurveys - surveys.length;
+
+    for (let i = 0; i < numRegularSurveys; i++) {
       const instructor = instructors[Math.floor(Math.random() * instructors.length)];
       const surveyType = surveyTypes[i % surveyTypes.length] as keyof typeof SURVEYJS_TEMPLATES;
       const template = SURVEYJS_TEMPLATES[surveyType];
@@ -4803,7 +5082,14 @@ public class Entrypoint {
   }
 
   private async createSurveyResponses(
-    surveys: Array<{ id: string; survey_id: string; status: string; title: string }>,
+    surveys: Array<{
+      id: string;
+      survey_id: string;
+      status: string;
+      title: string;
+      assignment_id?: number;
+      groupMembersByAssignment?: Map<number, string[]>;
+    }>,
     students: TestingUser[],
     class_id: number,
     responseRate: number,
@@ -4814,7 +5100,7 @@ public class Entrypoint {
     const responsesToCreate: Array<{
       survey_id: string;
       profile_id: string;
-      response: Record<string, any>;
+      response: Json;
       is_submitted: boolean;
       submitted_at: string | null;
     }> = [];
@@ -4825,15 +5111,27 @@ public class Entrypoint {
 
       if (!surveyData || !surveyData.json) continue;
 
-      const surveyJson = surveyData.json as { pages: Array<{ elements: Array<any> }> };
+      const surveyJson = surveyData.json as {
+        pages: Array<{ elements: Array<{ name?: string; type?: string; choices?: unknown[] }> }>;
+      };
       const allElements = surveyJson.pages.flatMap((page) => page.elements || []);
 
-      // Determine which students respond (based on responseRate)
-      const respondingStudents = students.filter(() => Math.random() < responseRate);
+      // For assignment-linked surveys, only group members can respond
+      let eligibleStudents: TestingUser[];
+      if (survey.assignment_id && survey.groupMembersByAssignment) {
+        const memberIds = survey.groupMembersByAssignment.get(survey.assignment_id) || [];
+        const memberIdSet = new Set(memberIds);
+        eligibleStudents = students.filter((s) => memberIdSet.has(s.private_profile_id));
+      } else {
+        eligibleStudents = students;
+      }
+
+      // Determine which eligible students respond (based on responseRate)
+      const respondingStudents = eligibleStudents.filter(() => Math.random() < responseRate);
 
       for (const student of respondingStudents) {
         const isSubmitted = Math.random() < submissionRate;
-        const responseData: Record<string, any> = {};
+        const responseData: Record<string, unknown> = {};
 
         // Generate responses for each question element
         allElements.forEach((element) => {
@@ -4844,7 +5142,7 @@ public class Entrypoint {
         responsesToCreate.push({
           survey_id: survey.id,
           profile_id: student.private_profile_id,
-          response: responseData,
+          response: responseData as Json,
           is_submitted: isSubmitted,
           submitted_at: isSubmitted ? new Date().toISOString() : null
         });
@@ -4887,7 +5185,9 @@ public class Entrypoint {
       case "dropdown": {
         const choices = element.choices || [];
         if (choices.length === 0) return null;
-        return choices[Math.floor(Math.random() * choices.length)];
+        const selected = choices[Math.floor(Math.random() * choices.length)];
+        // Handle both { value, text } objects and plain string/number choices
+        return typeof selected === "object" && selected !== null && "value" in selected ? selected.value : selected;
       }
 
       case "checkbox": {
@@ -4895,7 +5195,11 @@ public class Entrypoint {
         if (checkboxChoices.length === 0) return [];
         // Select 1-3 random options
         const numSelections = Math.floor(Math.random() * Math.min(3, checkboxChoices.length)) + 1;
-        return faker.helpers.arrayElements(checkboxChoices, numSelections);
+        const selected = faker.helpers.arrayElements(checkboxChoices, numSelections);
+        // Handle both { value, text } objects and plain string/number choices
+        return selected.map((s: unknown) =>
+          typeof s === "object" && s !== null && "value" in s ? (s as { value: unknown }).value : s
+        );
       }
 
       case "boolean":

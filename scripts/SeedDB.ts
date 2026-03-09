@@ -87,7 +87,9 @@ const TEMPLATES: Record<string, SeederConfig> = {
       numSurveys: 3,
       numTemplates: 2,
       responseRate: 0.75,
-      submissionRate: 0.85
+      submissionRate: 0.85,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
     }
   },
 
@@ -138,7 +140,9 @@ const TEMPLATES: Record<string, SeederConfig> = {
       numSurveys: 5,
       numTemplates: 3,
       responseRate: 0.75,
-      submissionRate: 0.85
+      submissionRate: 0.85,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
     }
   },
 
@@ -194,7 +198,9 @@ const TEMPLATES: Record<string, SeederConfig> = {
       numSurveys: 15,
       numTemplates: 8,
       responseRate: 0.7,
-      submissionRate: 0.8
+      submissionRate: 0.8,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
     }
   },
 
@@ -245,7 +251,9 @@ const TEMPLATES: Record<string, SeederConfig> = {
       numSurveys: 8,
       numTemplates: 5,
       responseRate: 0.7,
-      submissionRate: 0.8
+      submissionRate: 0.8,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true
     },
     rateLimitOverrides: {}
   }

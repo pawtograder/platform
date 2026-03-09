@@ -507,6 +507,7 @@ export type Database = {
           class_id: number;
           created_at: string;
           id: number;
+          mentor_profile_id: string | null;
           name: string;
         };
         Insert: {
@@ -514,6 +515,7 @@ export type Database = {
           class_id: number;
           created_at?: string;
           id?: number;
+          mentor_profile_id?: string | null;
           name: string;
         };
         Update: {
@@ -521,6 +523,7 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           id?: number;
+          mentor_profile_id?: string | null;
           name?: string;
         };
         Relationships: [
@@ -565,6 +568,20 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_groups_mentor_profile_id_fkey";
+            columns: ["mentor_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_groups_mentor_profile_id_fkey";
+            columns: ["mentor_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };
@@ -1247,7 +1264,7 @@ export type Database = {
           }
         ];
       };
-      audit_20260131: {
+      audit_20260309: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1280,7 +1297,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260201: {
+      audit_20260310: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1313,7 +1330,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260202: {
+      audit_20260311: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1346,7 +1363,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260203: {
+      audit_20260312: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1379,7 +1396,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260204: {
+      audit_20260313: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1412,7 +1429,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260205: {
+      audit_20260314: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1445,7 +1462,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260206: {
+      audit_20260315: {
         Row: {
           class_id: number;
           created_at: string;
@@ -1478,7 +1495,7 @@ export type Database = {
         };
         Relationships: [];
       };
-      audit_20260207: {
+      audit_20260316: {
         Row: {
           class_id: number;
           created_at: string;
@@ -4780,7 +4797,7 @@ export type Database = {
           help_request_id: number;
           id: number;
           instructors_only: boolean;
-          is_system_message: boolean;
+          is_system_message: boolean | null;
           message: string;
           reply_to_message_id: number | null;
           updated_at: string;
@@ -4792,7 +4809,7 @@ export type Database = {
           help_request_id: number;
           id?: number;
           instructors_only?: boolean;
-          is_system_message?: boolean;
+          is_system_message?: boolean | null;
           message: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -4804,7 +4821,7 @@ export type Database = {
           help_request_id?: number;
           id?: number;
           instructors_only?: boolean;
-          is_system_message?: boolean;
+          is_system_message?: boolean | null;
           message?: string;
           reply_to_message_id?: number | null;
           updated_at?: string;
@@ -8993,6 +9010,8 @@ export type Database = {
         Row: {
           allow_response_editing: boolean;
           assigned_to_all: boolean;
+          assignment_id: number | null;
+          available_at: string | null;
           class_id: number;
           created_at: string;
           created_by: string;
@@ -9012,6 +9031,8 @@ export type Database = {
         Insert: {
           allow_response_editing?: boolean;
           assigned_to_all?: boolean;
+          assignment_id?: number | null;
+          available_at?: string | null;
           class_id: number;
           created_at?: string;
           created_by: string;
@@ -9031,6 +9052,8 @@ export type Database = {
         Update: {
           allow_response_editing?: boolean;
           assigned_to_all?: boolean;
+          assignment_id?: number | null;
+          available_at?: string | null;
           class_id?: number;
           created_at?: string;
           created_by?: string;
@@ -9048,6 +9071,41 @@ export type Database = {
           version?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "surveys_class_id_fkey";
             columns: ["class_id"];
@@ -10975,6 +11033,10 @@ export type Database = {
         Args: { poll_id: string; profile_id: string };
         Returns: boolean;
       };
+      can_access_submission_storage_path: {
+        Args: { path: string };
+        Returns: boolean;
+      };
       channel_has_subscribers: { Args: { p_channel: string }; Returns: boolean };
       check_assignment_deadlines_passed: { Args: never; Returns: undefined };
       check_assignment_release_dates: { Args: never; Returns: undefined };
@@ -11355,10 +11417,10 @@ export type Database = {
         Args: never;
         Returns: {
           async_queue_size: number;
+          discord_dlq_queue_size: number;
+          discord_queue_size: number;
           dlq_queue_size: number;
           gradebook_row_recalculate_queue_size: number;
-          discord_queue_size: number;
-          discord_dlq_queue_size: number;
         }[];
       };
       get_circuit_breaker_statuses: {
@@ -11505,6 +11567,33 @@ export type Database = {
       get_submissions_to_full_marks: {
         Args: { p_assignment_id: number };
         Returns: Json;
+      };
+      get_survey_responses_with_group_context: {
+        Args: { p_class_id: number; p_survey_id: string };
+        Returns: {
+          group_id: number;
+          group_name: string;
+          is_submitted: boolean;
+          mentor_name: string;
+          mentor_profile_id: string;
+          profile_id: string;
+          profile_name: string;
+          response: Json;
+          response_id: string;
+          submitted_at: string;
+        }[];
+      };
+      get_survey_status_for_assignment: {
+        Args: { p_assignment_id: number; p_profile_id: string };
+        Returns: {
+          available_at: string;
+          due_date: string;
+          is_submitted: boolean;
+          submitted_at: string;
+          survey_id: string;
+          survey_status: Database["public"]["Enums"]["survey_status"];
+          survey_title: string;
+        }[];
       };
       get_system_notification_stats: {
         Args: { p_requested_by?: string };
@@ -12055,8 +12144,8 @@ export type Database = {
         | "sync_repo_to_handout";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
-      help_request_status: "open" | "in_progress" | "resolved" | "closed";
       help_request_resolution_status: "self_solved" | "staff_helped" | "peer_helped" | "no_time" | "other";
+      help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
@@ -12246,8 +12335,8 @@ export const Constants = {
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],
-      help_request_status: ["open", "in_progress", "resolved", "closed"],
       help_request_resolution_status: ["self_solved", "staff_helped", "peer_helped", "no_time", "other"],
+      help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],

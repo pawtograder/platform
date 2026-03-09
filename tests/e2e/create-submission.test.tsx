@@ -227,7 +227,7 @@ test.describe("Create submission", () => {
       throw new Error(`Failed to load submission files: ${submissionFilesError?.message}`);
     }
     const { combined_hash, file_hashes } = computeCombinedHashFromSubmissionFiles(
-      submissionFiles.map((f) => ({ name: f.name, contents: f.contents }))
+      submissionFiles.map((f) => ({ name: f.name, contents: f.contents ?? "" }))
     );
 
     // Store as a handout version for multiple assignments.

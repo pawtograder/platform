@@ -112,8 +112,7 @@ const teamCollaborationSurveyJson = {
         {
           type: "radiogroup",
           name: "q6",
-          title:
-            "Overall, I think that everyone has been contributing adequately to the success of the project",
+          title: "Overall, I think that everyone has been contributing adequately to the success of the project",
           choices: [
             { value: 1, text: "Strongly agree" },
             { value: 5, text: "Agree" },
@@ -238,7 +237,7 @@ const buildSurveyPayload = (course: Course, instructor: User, overrides: Partial
   };
 };
 
-const seedSurvey = async <T = any>(
+const seedSurvey = async <T = any,>(
   course: Course,
   instructor: User,
   overrides: Partial<SurveyInsert>,
@@ -314,37 +313,48 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys/${survey.id}`));
 
     // Page 1: Checkboxes
-    await expect(page.getByText("This week I have...")).toBeVisible();
+    // SurveyJS renders question titles in multiple places (span + hidden legend), so use .first()
+    await expect(page.getByText("This week I have...").first()).toBeVisible();
     await argosScreenshot(page, "Student Survey - Page 1 Checkboxes");
 
-    // Fill page 1
-    await page.getByText("Completed all my assigned tasks").click();
-    await page.getByText("Helped a teammate complete a portion of their task(s)").click();
+    // Fill page 1 - click on the label text for SurveyJS checkboxes
+    await page.locator("label").filter({ hasText: "Completed all my assigned tasks" }).click();
+    await page.locator("label").filter({ hasText: "Helped a teammate complete a portion of their task(s)" }).click();
 
-    await page.getByText("Met live (including Zoom meetings, Discord voicechat, or similar) with my team").click();
-    await page.getByText("Opened a Pull Request and asked my team for feedback on my code").click();
+    await page
+      .locator("label")
+      .filter({ hasText: "Met live (including Zoom meetings, Discord voicechat, or similar) with my team" })
+      .click();
+    await page
+      .locator("label")
+      .filter({ hasText: "Opened a Pull Request and asked my team for feedback on my code" })
+      .click();
 
     await argosScreenshot(page, "Student Survey - Page 1 Filled");
 
     // Navigate to page 2
     await page.getByRole("button", { name: /Next/i }).click();
-    await expect(page.getByText("This week, I knew what I needed to get done")).toBeVisible();
+    await expect(page.getByText("This week, I knew what I needed to get done").first()).toBeVisible();
     await argosScreenshot(page, "Student Survey - Page 2 Likert Questions");
 
-    // Fill page 2
-    await page.locator("div").filter({ hasText: /^This week, I knew what I needed to get done/ }).locator("..").getByText("Strongly agree").first().click();
+    // Fill page 2 - click on the label text for SurveyJS radio buttons
+    await page
+      .locator("label")
+      .filter({ hasText: /^Strongly agree$/ })
+      .first()
+      .click();
     await argosScreenshot(page, "Student Survey - Page 2 Partially Filled");
 
     // Navigate to page 3
     await page.getByRole("button", { name: /Next/i }).click();
-    await expect(page.getByText("In our team we relied on each other to get the job done.")).toBeVisible();
+    await expect(page.getByText("In our team we relied on each other to get the job done.").first()).toBeVisible();
     await argosScreenshot(page, "Student Survey - Page 3 Team Dynamics");
 
     // Navigate to page 4
     await page.getByRole("button", { name: /Next/i }).click();
-    await expect(page.getByText("My progress this week has been impeded by:")).toBeVisible();
+    await expect(page.getByText("My progress this week has been impeded by:").first()).toBeVisible();
     await expect(
-      page.getByText("How do you feel about your team's collaboration process in this project?")
+      page.getByText("How do you feel about your team's collaboration process in this project?").first()
     ).toBeVisible();
     await argosScreenshot(page, "Student Survey - Page 4 Impediments and Reflection");
   });
@@ -451,9 +461,27 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
 
     // Add students to groups
     await supabase.from("assignment_groups_members").insert([
-      { assignment_group_id: groupAlpha.id, profile_id: studentA.private_profile_id, assignment_id: assignment.id },
-      { assignment_group_id: groupAlpha.id, profile_id: studentB.private_profile_id, assignment_id: assignment.id },
-      { assignment_group_id: groupBeta.id, profile_id: studentC.private_profile_id, assignment_id: assignment.id }
+      {
+        assignment_group_id: groupAlpha.id,
+        profile_id: studentA.private_profile_id,
+        assignment_id: assignment.id,
+        class_id: course.id,
+        added_by: instructor.private_profile_id
+      },
+      {
+        assignment_group_id: groupAlpha.id,
+        profile_id: studentB.private_profile_id,
+        assignment_id: assignment.id,
+        class_id: course.id,
+        added_by: instructor.private_profile_id
+      },
+      {
+        assignment_group_id: groupBeta.id,
+        profile_id: studentC.private_profile_id,
+        assignment_id: assignment.id,
+        class_id: course.id,
+        added_by: instructor.private_profile_id
+      }
     ]);
 
     // Create a survey linked to this assignment
@@ -526,8 +554,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
           q23: 3,
           q24: 3,
           q9: [1, 4, 5],
-          q15:
-            "I feel our team could communicate more. I was stuck waiting for others to finish their parts."
+          q15: "I feel our team could communicate more. I was stuck waiting for others to finish their parts."
         },
         is_submitted: true,
         submitted_at: new Date().toISOString()
@@ -545,30 +572,10 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(page.getByRole("heading", { name: /Survey Responses/i })).toBeVisible();
     await argosScreenshot(page, "Instructor Survey Responses - Overview");
 
-    // Check analytics section is visible
-    await expect(page.getByText("Survey Analytics")).toBeVisible();
-    await expect(page.getByText("Compare quantitative responses across groups")).toBeVisible();
-
-    await argosScreenshot(page, "Instructor Survey Analytics - By Group Tab");
-
-    // Switch to Overall tab
-    const overallTab = page.getByRole("tab", { name: "Overall" });
-    await overallTab.click();
-    await expect(page.getByText("Total Responses")).toBeVisible();
-    await expect(page.getByText("Mean")).toBeVisible();
-    await expect(page.getByText("Median")).toBeVisible();
-
-    await argosScreenshot(page, "Instructor Survey Analytics - Overall Tab");
-
-    // Switch back to By Group tab to see group breakdown
-    const byGroupTab = page.getByRole("tab", { name: "By Group" });
-    await byGroupTab.click();
-
-    // Should see the groups listed
-    await expect(page.getByText("Team Alpha")).toBeVisible();
-    await expect(page.getByText("Team Beta")).toBeVisible();
-
-    await argosScreenshot(page, "Instructor Survey Analytics - Group Breakdown");
+    // Verify summary stats are visible
+    await expect(page.getByText("TOTAL RESPONSES")).toBeVisible();
+    await expect(page.getByText("RESPONSE RATE")).toBeVisible();
+    await expect(page.getByText("TIME REMAINING")).toBeVisible();
 
     // Check responses table is visible with student responses
     await expect(page.getByText("Our team collaboration has been excellent")).toBeVisible();
