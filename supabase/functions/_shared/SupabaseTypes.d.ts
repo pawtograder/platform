@@ -507,6 +507,7 @@ export type Database = {
           class_id: number;
           created_at: string;
           id: number;
+          mentor_profile_id: string | null;
           name: string;
         };
         Insert: {
@@ -514,6 +515,7 @@ export type Database = {
           class_id: number;
           created_at?: string;
           id?: number;
+          mentor_profile_id?: string | null;
           name: string;
         };
         Update: {
@@ -521,6 +523,7 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           id?: number;
+          mentor_profile_id?: string | null;
           name?: string;
         };
         Relationships: [
@@ -564,6 +567,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_groups_mentor_profile_id_fkey";
+            columns: ["mentor_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
             referencedColumns: ["id"];
           }
         ];
@@ -8993,6 +9003,8 @@ export type Database = {
         Row: {
           allow_response_editing: boolean;
           assigned_to_all: boolean;
+          assignment_id: number | null;
+          available_at: string | null;
           class_id: number;
           created_at: string;
           created_by: string;
@@ -9012,6 +9024,8 @@ export type Database = {
         Insert: {
           allow_response_editing?: boolean;
           assigned_to_all?: boolean;
+          assignment_id?: number | null;
+          available_at?: string | null;
           class_id: number;
           created_at?: string;
           created_by: string;
@@ -9031,6 +9045,8 @@ export type Database = {
         Update: {
           allow_response_editing?: boolean;
           assigned_to_all?: boolean;
+          assignment_id?: number | null;
+          available_at?: string | null;
           class_id?: number;
           created_at?: string;
           created_by?: string;
@@ -9048,6 +9064,13 @@ export type Database = {
           version?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
           {
             foreignKeyName: "surveys_class_id_fkey";
             columns: ["class_id"];
