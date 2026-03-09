@@ -220,6 +220,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     //Make sure that we get a very nice screenshot with a fully-loaded page
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
+    await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
+    await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
       el.scrollIntoView({ block: "start", behavior: "instant" });

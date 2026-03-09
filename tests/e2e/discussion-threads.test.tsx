@@ -107,7 +107,7 @@ test.describe("Discussion Thread Page", () => {
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
     await expect(page.getByRole("heading", { name: "Is my answer for HW1 Q1 correct?" })).toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: /Follow|Unfollow/ })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).toBeVisible();
   });
 
@@ -142,7 +142,7 @@ test.describe("Discussion Thread Page", () => {
       );
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
     await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: /Follow|Unfollow/ })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student2?.public_profile_name })).toBeVisible();
   });
 
@@ -150,50 +150,34 @@ test.describe("Discussion Thread Page", () => {
     await loginAsUser(page, instructor!, course);
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
+    // Check that the threads are visible
     await page.waitForURL("**/discussion");
+    await expect(page.getByText("Is my answer for HW1 Q1 correct?")).toBeVisible();
 
-    const privateThreadTitle = "Is my answer for HW1 Q1 correct?";
-    await expect(page.getByRole("link", { name: privateThreadTitle })).toBeVisible();
-    await page.getByRole("link", { name: privateThreadTitle }).click();
-
-    // Validate follow/unfollow toggle on the private thread.
-    await expect(page.getByRole("heading", { name: privateThreadTitle })).toBeVisible();
-    const privateFollowToggle = page
-      .getByRole("button")
-      .filter({ hasText: /Follow|Unfollow/ })
-      .first();
-    await expect(privateFollowToggle).toBeVisible();
-    const privateInitialText = (await privateFollowToggle.textContent()) || "";
-    if (/Follow/i.test(privateInitialText)) {
-      await privateFollowToggle.click();
-      await expect(page.getByRole("button").filter({ hasText: "Unfollow" }).first()).toBeVisible();
-      await page.getByRole("button").filter({ hasText: "Unfollow" }).first().click();
-      await expect(page.getByRole("button").filter({ hasText: "Follow" }).first()).toBeVisible();
-    } else {
-      await privateFollowToggle.click();
-      await expect(page.getByRole("button").filter({ hasText: "Follow" }).first()).toBeVisible();
-      await page.getByRole("button").filter({ hasText: "Follow" }).first().click();
-      await expect(page.getByRole("button").filter({ hasText: "Unfollow" }).first()).toBeVisible();
-    }
-
-    // Reply in private thread.
+    // Check that the instructor can reply to the private thread
+    await page.getByText("Is my answer for HW1 Q1 correct?").click();
+    await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page.getByPlaceholder("Reply...").fill("Yes.");
     await page.getByRole("button").filter({ hasText: "Send" }).click();
     //Wait for the form to disappear
     await expect(page.getByText("Enter to send")).not.toBeVisible();
-    await expect(page.getByText(instructor?.private_profile_name ?? "").first()).toBeVisible(); //Not needed, races with removing the reply form
+    await expect(page.getByText(instructor?.private_profile_name ?? "")).toBeVisible(); //Not needed, races with removing the reply form
     await expect(page.getByText("Yes.")).toBeVisible();
+    await expect(page.getByText("Reply")).toBeVisible();
+    await expect(page.getByText("Edit")).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
 
-    // Navigate to browse topics and verify public thread persistence.
+    // Need to go to browse topics to see the thread (because it's public)
     await page.getByRole("link", { name: "Browse Topics" }).click();
     await page.waitForURL("**/discussion?view=browse");
-    await page.getByRole("button", { name: /Logistics (Follow|Unfollow) topic/i }).click();
+    await page.getByRole("button", { name: "Logistics Follow topic" }).click();
     await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
-    await page.getByRole("link", { name: "JAVA SUCKS" }).click();
 
     // Check that the instructor can reply to the public thread
-    await expect(page.getByText(/I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE\./)).toBeVisible(); // Wait for the page to change
+    await page.getByRole("link", { name: "JAVA SUCKS" }).click();
+    await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible(); //Wait for the page to change
+    await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page
       .getByPlaceholder("Reply...")
@@ -203,29 +187,15 @@ test.describe("Discussion Thread Page", () => {
     await page.getByRole("button").filter({ hasText: "Send" }).click();
     //Wait for the form to disappear
     await expect(page.getByText("Enter to send")).not.toBeVisible();
-    await expect(page.getByText(instructor?.private_profile_name ?? "").first()).toBeVisible();
+    await expect(page.getByText(instructor?.private_profile_name ?? "")).toBeVisible();
     await expect(
       page.getByText(
         "Java has had support for functions through lambda expressions for a while now, all the way back from Java 8. It also has lots of documentation and tutorials for new learners. If it's good enough for Netflix's backend through Spring Boot, it's good enough for the purposes of this class. We can schedule a private meeting to continue discussing your personal grievances with the course."
       )
     ).toBeVisible();
-    const publicFollowToggle = page
-      .getByRole("button")
-      .filter({ hasText: /Follow|Unfollow/ })
-      .first();
-    await expect(publicFollowToggle).toBeVisible();
-    const publicInitialText = (await publicFollowToggle.textContent()) || "";
-    if (/Follow/i.test(publicInitialText)) {
-      await publicFollowToggle.click();
-      await expect(page.getByRole("button").filter({ hasText: "Unfollow" }).first()).toBeVisible();
-      await page.getByRole("button").filter({ hasText: "Unfollow" }).first().click();
-      await expect(page.getByRole("button").filter({ hasText: "Follow" }).first()).toBeVisible();
-    } else {
-      await publicFollowToggle.click();
-      await expect(page.getByRole("button").filter({ hasText: "Follow" }).first()).toBeVisible();
-      await page.getByRole("button").filter({ hasText: "Follow" }).first().click();
-      await expect(page.getByRole("button").filter({ hasText: "Unfollow" }).first()).toBeVisible();
-    }
+    await expect(page.getByText("Reply")).toBeVisible();
+    await expect(page.getByText("Edit")).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await argosScreenshot(page, "After Instructor Replied to Public Thread");
   });
 });
