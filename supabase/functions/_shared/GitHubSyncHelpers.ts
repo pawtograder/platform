@@ -389,22 +389,70 @@ export async function createBranchAndCommit(
 
   console.log("createBranchAndCommit", repoFullName, branchName, baseSha, files.length, "files");
 
-  // Create new branch
+  // Create or update branch - handle various edge cases robustly
+  let newRef: { ref: string };
   try {
-    await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+    // First, try to create the branch
+    const createResult = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
       owner,
       repo,
-      ref: `heads/${branchName}`
+      ref: `refs/heads/${branchName}`,
+      sha: baseSha
     });
-  } catch {
-    // Branch doesn't exist, which is fine
+    newRef = createResult.data;
+  } catch (createError: unknown) {
+    const errorMessage = createError instanceof Error ? createError.message : String(createError);
+
+    // If branch already exists, force-update it to the base SHA
+    if (errorMessage.includes("Reference already exists")) {
+      scope?.addBreadcrumb({
+        message: `Branch ${branchName} already exists, force-updating to ${baseSha}`,
+        category: "git",
+        level: "info"
+      });
+
+      try {
+        const updateResult = await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+          owner,
+          repo,
+          ref: `heads/${branchName}`,
+          sha: baseSha,
+          force: true // Force update even if not a fast-forward
+        });
+        newRef = updateResult.data;
+      } catch (updateError: unknown) {
+        // If force update fails, try delete then create
+        const updateErrorMsg = updateError instanceof Error ? updateError.message : String(updateError);
+        scope?.addBreadcrumb({
+          message: `Force update failed: ${updateErrorMsg}, trying delete+create`,
+          category: "git",
+          level: "warning"
+        });
+
+        try {
+          await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+            owner,
+            repo,
+            ref: `heads/${branchName}`
+          });
+        } catch {
+          // Ignore delete errors - branch might not exist or might be protected
+        }
+
+        // Try create again
+        const retryResult = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+          owner,
+          repo,
+          ref: `refs/heads/${branchName}`,
+          sha: baseSha
+        });
+        newRef = retryResult.data;
+      }
+    } else {
+      // Some other error - rethrow
+      throw createError;
+    }
   }
-  const { data: newRef } = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-    owner,
-    repo,
-    ref: `refs/heads/${branchName}`,
-    sha: baseSha
-  });
   scope?.setTag("new_ref", newRef.ref);
 
   const { data: baseCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
@@ -869,13 +917,21 @@ export async function isRepoAlreadyInSync(
 
 /**
  * Find existing sync PRs for a repository with the given branch name pattern.
- * Returns info about any existing PR (open or merged).
+ * Returns info about any existing PR (open, merged, or closed without merge).
  */
 export async function findExistingSyncPR(
   repoFullName: string,
   branchName: string,
   scope?: Sentry.Scope
-): Promise<{ exists: boolean; merged?: boolean; prNumber?: number; prUrl?: string; mergeSha?: string } | null> {
+): Promise<{
+  exists: boolean;
+  merged?: boolean;
+  isOpen?: boolean;
+  closedWithoutMerge?: boolean;
+  prNumber?: number;
+  prUrl?: string;
+  mergeSha?: string;
+} | null> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) {
     return null;
@@ -898,16 +954,21 @@ export async function findExistingSyncPR(
 
     const pr = prs[0]; // Get the most recent PR with this branch
     const prUrl = pr.html_url;
+    const merged = pr.merged_at !== null;
+    const isOpen = pr.state === "open";
+    const closedWithoutMerge = pr.state === "closed" && !merged;
 
     scope?.addBreadcrumb({
-      message: `Found existing PR #${pr.number} for branch ${branchName} (state: ${pr.state}, merged: ${pr.merged_at !== null})`,
+      message: `Found existing PR #${pr.number} for branch ${branchName} (state: ${pr.state}, merged: ${merged}, closedWithoutMerge: ${closedWithoutMerge})`,
       category: "sync",
       level: "info"
     });
 
     return {
       exists: true,
-      merged: pr.merged_at !== null,
+      merged,
+      isOpen,
+      closedWithoutMerge,
       prNumber: pr.number,
       prUrl,
       mergeSha: pr.merge_commit_sha || undefined
@@ -1025,7 +1086,11 @@ export async function syncRepositoryToHandout(params: {
 
         const branchName = `sync-to-${toSha.substring(0, 7)}`;
 
-        // RESILIENCE CHECK 1: Check if student repo is already in sync with template
+        // RESILIENCE CHECK 1: Check for existing PR with this branch name FIRST
+        // This must happen before any branch deletion to avoid closing open PRs
+        const existingPR = await findExistingSyncPR(repositoryFullName, branchName, scope);
+
+        // RESILIENCE CHECK 2: Check if student repo is already in sync with template
         // This handles cases where a previous PR was merged but our database wasn't updated
         const alreadyInSync = await isRepoAlreadyInSync(repositoryFullName, templateRepo, changedFiles, toSha, scope);
 
@@ -1036,18 +1101,42 @@ export async function syncRepositoryToHandout(params: {
             level: "info"
           });
 
-          // Clean up any leftover branch from a previous sync attempt
-          const octokit = await github.getOctoKit(repositoryFullName, scope);
-          if (octokit) {
-            const [owner, repo] = repositoryFullName.split("/");
-            try {
-              await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
-                owner,
-                repo,
-                ref: `heads/${branchName}`
-              });
-            } catch {
-              // Branch doesn't exist, which is fine
+          // If there's an existing merged PR, return its info so DB can be updated
+          if (existingPR?.exists && existingPR.merged) {
+            return {
+              success: true,
+              pr_number: existingPR.prNumber,
+              pr_url: existingPR.prUrl,
+              merged: true,
+              merge_sha: existingPR.mergeSha
+            };
+          }
+
+          // If there's an open PR but repo is in sync, the PR is stale
+          // Don't delete the branch - let the PR remain for visibility
+          // Just report no changes needed
+          if (existingPR?.exists && !existingPR.merged) {
+            scope?.addBreadcrumb({
+              message: `Repository in sync but has open PR #${existingPR.prNumber} - may need manual review`,
+              category: "sync",
+              level: "warning"
+            });
+          }
+
+          // Only clean up branch if NO PR exists (safe to delete)
+          if (!existingPR?.exists) {
+            const octokit = await github.getOctoKit(repositoryFullName, scope);
+            if (octokit) {
+              const [owner, repo] = repositoryFullName.split("/");
+              try {
+                await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+                  owner,
+                  repo,
+                  ref: `heads/${branchName}`
+                });
+              } catch {
+                // Branch doesn't exist, which is fine
+              }
             }
           }
 
@@ -1056,9 +1145,6 @@ export async function syncRepositoryToHandout(params: {
             no_changes: true
           };
         }
-
-        // RESILIENCE CHECK 2: Check for existing PR with this branch name
-        const existingPR = await findExistingSyncPR(repositoryFullName, branchName, scope);
 
         if (existingPR?.exists) {
           if (existingPR.merged) {
@@ -1075,8 +1161,8 @@ export async function syncRepositoryToHandout(params: {
               merged: true,
               merge_sha: existingPR.mergeSha
             };
-          } else {
-            // PR exists but isn't merged - return its info so caller knows the state
+          } else if (existingPR.isOpen) {
+            // PR exists and is still open - return its info so caller knows the state
             scope?.addBreadcrumb({
               message: `Found open PR #${existingPR.prNumber} for ${repositoryFullName}`,
               category: "sync",
@@ -1088,6 +1174,15 @@ export async function syncRepositoryToHandout(params: {
               pr_url: existingPR.prUrl,
               merged: false
             };
+          } else if (existingPR.closedWithoutMerge) {
+            // PR was closed without merge - we need to create a new PR
+            // The branch will be recreated below, and a new PR will be opened
+            scope?.addBreadcrumb({
+              message: `Found closed-without-merge PR #${existingPR.prNumber} for ${repositoryFullName} - will create new PR`,
+              category: "sync",
+              level: "info"
+            });
+            // Fall through to create new branch and PR
           }
         }
 

@@ -796,11 +796,13 @@ function AssignmentGroupInvitationView({
 function GroupDetails({
   group,
   allGroups,
-  assignment
+  assignment,
+  instructorFormsGroups
 }: {
   group: AssignmentGroupWithMembersInvitationsAndJoinRequests;
   allGroups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
   assignment: Assignment;
+  instructorFormsGroups?: boolean;
 }) {
   return (
     <VStack alignItems="flex-start">
@@ -810,12 +812,17 @@ function GroupDetails({
           <GroupMember profile_id={m.profile_id} key={m.profile_id} />
         ))}
       </HStack>
-      <AssignmentGroupJoinRequests group={group} />
-      <HStack>
-        <InviteButton group={group} allGroups={allGroups} />
-        <InactiveJoinRequests group={group} />
-        <LeaveGroupButton assignment={assignment} />
-      </HStack>
+      {!instructorFormsGroups && (
+        <>
+          <AssignmentGroupJoinRequests group={group} />
+          <HStack>
+            <InviteButton group={group} allGroups={allGroups} />
+            <InactiveJoinRequests group={group} />
+            <LeaveGroupButton assignment={assignment} />
+          </HStack>
+        </>
+      )}
+      {instructorFormsGroups && assignment.group_config === "both" && <LeaveGroupButton assignment={assignment} />}
     </VStack>
   );
 }
@@ -887,6 +894,7 @@ export default function ManageGroupWidget({
   const myGroup = useMemo(() => {
     return groups?.data?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === private_profile_id));
   }, [groups, private_profile_id]);
+  const instructorFormsGroups = assignment.allow_student_formed_groups !== true;
 
   if (assignment.group_config === "individual") {
     return (
@@ -932,7 +940,22 @@ export default function ManageGroupWidget({
   const now = TZDate.tz(time_zone || "America/New_York");
   let actions = <></>;
   if (myGroup) {
-    actions = <GroupDetails group={myGroup} allGroups={groups.data} assignment={assignment} />;
+    actions = (
+      <GroupDetails
+        group={myGroup}
+        allGroups={groups.data}
+        assignment={assignment}
+        instructorFormsGroups={instructorFormsGroups}
+      />
+    );
+  } else if (instructorFormsGroups) {
+    actions = (
+      <Text fontSize="sm" color="fg.muted">
+        {assignment.group_config === "both"
+          ? "Your instructor may assign you to a group, or you may submit individually — please follow instructor instructions."
+          : "Your instructor will assign you to a group. Please wait for your group assignment."}
+      </Text>
+    );
   } else if (now > groupJoinDeadline) {
     actions = (
       <Text fontSize="sm" color="fg.muted">
