@@ -661,15 +661,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         if (!initialCheckRun) {
           scope?.setTag("check_run_db_found", "false");
-          return null;
+          throw new Error("CHECK_RUN_NOT_FOUND_YET");
         }
 
         const classId = initialCheckRun.class_id ?? repoData.assignments.class_id;
         const userRoles = await fetchUserRolesForActor(classId as number);
-        return { ...initialCheckRun, user_roles: userRoles };
+        return { ...initialCheckRun, user_roles: userRoles, hasRealCheckRun: true };
       };
 
-      const rawCheckRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
+      const CHECK_RUN_NOT_FOUND_MSG = "CHECK_RUN_NOT_FOUND_YET";
+      let rawCheckRun: Awaited<ReturnType<typeof fetchCheckRun>> | null;
+      try {
+        rawCheckRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
+      } catch (err) {
+        if (err instanceof Error && err.message === CHECK_RUN_NOT_FOUND_MSG) {
+          rawCheckRun = null;
+        } else {
+          throw err;
+        }
+      }
 
       // Fallback when no push record exists: construct minimal check run data from alternative sources
       let checkRun: NonNullable<Awaited<ReturnType<typeof fetchCheckRun>>>;
@@ -691,29 +701,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           class_id: classId,
           assignment_group_id: repoData.assignment_group_id,
           profile_id: repoData.profile_id,
-          commit_message: null,
-          created_at: new Date().toISOString(),
-          is_regression_rerun: false,
-          target_submission_id: null,
-          requested_grader_sha: null,
-          status: null,
           check_run_id: null,
           repository_id: repoData.id,
           sha,
           auto_promote_result: null,
           triggered_by: null,
           classes: { time_zone: timeZoneFromClass ?? "America/New_York" },
-          user_roles: userRoles
-        } as unknown as NonNullable<Awaited<ReturnType<typeof fetchCheckRun>>>;
+          user_roles: userRoles,
+          hasRealCheckRun: false
+        } as unknown as NonNullable<Awaited<ReturnType<typeof fetchCheckRun>>> & { hasRealCheckRun: boolean };
       }
 
       const timeZone = checkRun.classes?.time_zone || "America/New_York";
-      const isRegressionRerun = Boolean(checkRun.is_regression_rerun && checkRun.target_submission_id);
-      const rerunTargetSubmissionId = checkRun.target_submission_id ?? null;
+      const hasRealCheckRun = (checkRun as { hasRealCheckRun?: boolean }).hasRealCheckRun ?? true;
+      const isRegressionRerun =
+        hasRealCheckRun && Boolean(checkRun.is_regression_rerun && checkRun.target_submission_id);
+      const rerunTargetSubmissionId = hasRealCheckRun ? (checkRun.target_submission_id ?? null) : null;
 
-      // Check if this is a NOT-GRADED submission
+      // Check if this is a NOT-GRADED submission (only when we have a real check run with commit message)
       const isNotGradedSubmission =
-        (checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) || false;
+        (hasRealCheckRun && checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) ||
+        false;
 
       scope?.setTag("time_zone", timeZone);
       scope?.setTag("is_not_graded", isNotGradedSubmission.toString());
@@ -770,8 +778,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         //Convert to course time zone for display purposes
         const finalDueDateInCourseTimeZone = new TZDate(finalDueDateResult, timeZone);
         console.log(`Final due date in course time zone: ${finalDueDateInCourseTimeZone.toLocaleString()}`);
-        // Use push timestamp (when webhook received the push) for late detection, not current time
-        const pushTime = checkRun?.created_at ? new TZDate(checkRun.created_at, timeZone) : TZDate.tz(timeZone);
+        // Use push timestamp (when webhook received the push) for late detection when available; otherwise use current time
+        const pushTime =
+          hasRealCheckRun && checkRun.created_at ? new TZDate(checkRun.created_at, timeZone) : TZDate.tz(timeZone);
 
         if (isAfter(pushTime, finalDueDate)) {
           // Check if this is a NOT-GRADED submission and if the assignment allows it
