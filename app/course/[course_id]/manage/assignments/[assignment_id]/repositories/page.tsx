@@ -3,7 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
+import { EdgeFunctionError, resendOrgInvitation, assignmentFixRepoPermissions } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -25,7 +25,7 @@ import {
 } from "@chakra-ui/react";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
-import { CheckIcon, RefreshCw, GitPullRequest } from "lucide-react";
+import { CheckIcon, RefreshCw, GitPullRequest, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -233,6 +233,95 @@ function SyncButton({
   );
 }
 
+function FixRepoPermissionsButton({
+  courseId,
+  assignmentId,
+  tableController
+}: {
+  courseId: number;
+  assignmentId: number;
+  tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
+}) {
+  const [isFixing, setIsFixing] = useState(false);
+  const [lastResult, setLastResult] = useState<{
+    message: string;
+    summary: Record<string, number>;
+  } | null>(null);
+
+  const handleFixPermissions = async () => {
+    const supabase = createClient();
+    setIsFixing(true);
+    setLastResult(null);
+
+    try {
+      const result = await assignmentFixRepoPermissions({ course_id: courseId, assignment_id: assignmentId }, supabase);
+
+      setLastResult({ message: result.message, summary: result.summary });
+
+      if (result.summary.errors > 0) {
+        toaster.warning({
+          title: "Permissions Fix Completed with Errors",
+          description: result.message
+        });
+      } else {
+        toaster.success({
+          title: "Permissions Fix Queued",
+          description: result.message
+        });
+      }
+
+      await tableController?.refetchAll();
+    } catch (error) {
+      console.error(error);
+      if (error instanceof EdgeFunctionError) {
+        toaster.error({ title: "Error", description: error.message + " " + error.details });
+      } else {
+        toaster.error({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to fix repository permissions"
+        });
+      }
+    } finally {
+      setIsFixing(false);
+    }
+  };
+
+  return (
+    <VStack alignItems="flex-start" gap={2}>
+      <HStack gap={2}>
+        <Button colorPalette="orange" variant="outline" onClick={handleFixPermissions} loading={isFixing}>
+          <Icon as={ShieldCheck} />
+          Fix Repository Permissions
+        </Button>
+        {isFixing && (
+          <Text fontSize="sm" color="fg.muted">
+            Auditing all repositories and enqueuing permission syncs...
+          </Text>
+        )}
+      </HStack>
+      {lastResult && (
+        <Box bg="bg.subtle" p={3} borderRadius="md" w="100%">
+          <Text fontSize="sm" fontWeight="medium">
+            {lastResult.message}
+          </Text>
+          <HStack gap={4} mt={1}>
+            {lastResult.summary.enqueued_sync > 0 && (
+              <Badge colorPalette="green">{lastResult.summary.enqueued_sync} synced</Badge>
+            )}
+            {lastResult.summary.skipped_no_usernames > 0 && (
+              <Badge colorPalette="gray">{lastResult.summary.skipped_no_usernames} no usernames</Badge>
+            )}
+            {lastResult.summary.skipped_not_ready > 0 && (
+              <Badge colorPalette="yellow">{lastResult.summary.skipped_not_ready} not ready</Badge>
+            )}
+            {lastResult.summary.errors > 0 && <Badge colorPalette="red">{lastResult.summary.errors} errors</Badge>}
+          </HStack>
+        </Box>
+      )}
+    </VStack>
+  );
+}
+
 function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
   const { time_zone } = useCourse();
   const { data: assignment } = useOne<Database["public"]["Tables"]["assignments"]["Row"]>({
@@ -311,7 +400,7 @@ function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
 const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
 
 export default function RepositoriesPage() {
-  const { assignment_id } = useParams();
+  const { assignment_id, course_id } = useParams();
   const courseController = useCourseController();
 
   // Get assignment data for latest template SHA
@@ -636,6 +725,11 @@ export default function RepositoriesPage() {
             .
           </Text>
         </Box>
+        <FixRepoPermissionsButton
+          courseId={Number(course_id)}
+          assignmentId={Number(assignment_id)}
+          tableController={repositories}
+        />
         <HandoutCommitHistory assignmentId={Number(assignment_id)} />
 
         {selectedCount > 0 && (

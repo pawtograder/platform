@@ -269,6 +269,18 @@ export async function assignmentGroupInstructorCreateGroup(
   return data as { message: string; id: number };
 }
 
+export async function assignmentFixRepoPermissions(
+  params: FunctionTypes.AssignmentFixRepoPermissionsRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("assignment-fix-repo-permissions", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.AssignmentFixRepoPermissionsResponse;
+}
+
 export async function assignmentCreateHandoutRepo(
   params: FunctionTypes.AssignmentCreateHandoutRepoRequest,
   supabase: SupabaseClient<Database>
