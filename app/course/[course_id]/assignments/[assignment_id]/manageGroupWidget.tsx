@@ -822,6 +822,9 @@ function GroupDetails({
           </HStack>
         </>
       )}
+      {instructorFormsGroups && assignment.group_config === "both" && (
+        <LeaveGroupButton assignment={assignment} />
+      )}
     </VStack>
   );
 }
@@ -893,7 +896,7 @@ export default function ManageGroupWidget({
   const myGroup = useMemo(() => {
     return groups?.data?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === private_profile_id));
   }, [groups, private_profile_id]);
-  const instructorFormsGroups = assignment.allow_student_formed_groups === false;
+  const instructorFormsGroups = assignment.allow_student_formed_groups !== true;
 
   if (assignment.group_config === "individual") {
     return (
