@@ -527,8 +527,10 @@ function TableByGroups({
   const graders = useGradersAndInstructors();
   const supabase = createClient();
   const invalidate = useInvalidate();
+  const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
 
   const updateMentor = async (groupId: number, mentorProfileId: string | null) => {
+    setUpdatingMentorGroupId(groupId);
     const { error } = await supabase
       .from("assignment_groups")
       .update({ mentor_profile_id: mentorProfileId })
@@ -539,6 +541,7 @@ function TableByGroups({
       toaster.create({ title: "Mentor updated", type: "success" });
       invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
     }
+    setUpdatingMentorGroupId(null);
   };
 
   /**
@@ -695,7 +698,7 @@ function TableByGroups({
                   {newProfilesForGroup(group.id)}
                 </Table.Cell>
                 <Table.Cell>
-                  <NativeSelect.Root size="sm">
+                  <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
                     <NativeSelect.Field
                       value={group.mentor_profile_id ?? ""}
                       onChange={(e) => {
