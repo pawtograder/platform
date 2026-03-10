@@ -139,9 +139,13 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         supabase
       );
 
-      // Use Promise.allSettled to collect all results
-      const results = await Promise.allSettled(
-        group.member_ids.map(async (member_id) => {
+      // Add students sequentially to avoid race conditions in repo permission sync.
+      // Parallel additions cause each call to snapshot a partial member list, and if
+      // the async worker processes them out of order, earlier snapshots can overwrite
+      // later ones, removing students who should have access.
+      const results: PromiseSettledResult<string>[] = [];
+      for (const member_id of group.member_ids) {
+        try {
           await assignmentGroupInstructorMoveStudent(
             {
               new_assignment_group_id: id || null,
@@ -151,11 +155,12 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
             },
             supabase
           );
-          return member_id;
-        })
-      );
+          results.push({ status: "fulfilled", value: member_id });
+        } catch (e) {
+          results.push({ status: "rejected", reason: e });
+        }
+      }
 
-      // Categorize results
       const successes = results.filter((r) => r.status === "fulfilled");
       const failures = results.filter((r) => r.status === "rejected");
 

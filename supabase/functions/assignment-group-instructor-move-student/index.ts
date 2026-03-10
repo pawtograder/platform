@@ -62,14 +62,12 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: S
         .from("assignment_group_join_request")
         .delete()
         .eq("assignment_group_id", old_assignment_group_id);
-      // Delete the group and the repository, enqueue the async worker to do it
-      await enqueueGithubArchiveRepo(
-        class_id,
-        currentGroup.classes!.github_org!,
-        currentGroup.assignment_groups!.repositories[0].repository
-      );
+      const oldGroupRepo = currentGroup.assignment_groups!.repositories[0];
+      if (oldGroupRepo) {
+        await enqueueGithubArchiveRepo(class_id, currentGroup.classes!.github_org!, oldGroupRepo.repository);
+        await adminSupabase.from("repositories").delete().eq("id", oldGroupRepo.id);
+      }
       await adminSupabase.from("assignment_groups").delete().eq("id", old_assignment_group_id);
-      await adminSupabase.from("repositories").delete().eq("id", currentGroup.assignment_groups!.repositories[0].id);
     }
     const repository = currentGroup.assignment_groups!.repositories[0];
     if (repository && remaining_members.length > 0) {
