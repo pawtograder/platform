@@ -22,37 +22,44 @@ export function TimeZoneAwareDate({
     } else {
       d = new Date(date); // string
     }
+    if (Number.isNaN(d.getTime())) {
+      return "—";
+    }
 
     // Use date-fns for consistent formatting
-    switch (format) {
-      case "compact":
-        // "10/5/2025, 8:21:34 PM EDT"
-        return formatInTimeZone(d, timeZone, "M/d/yyyy, h:mm:ss a zzz");
+    try {
+      switch (format) {
+        case "compact":
+          // "10/5/2025, 8:21:34 PM EDT"
+          return formatInTimeZone(d, timeZone, "M/d/yyyy, h:mm:ss a zzz");
 
-      case "dateOnly":
-        // "Oct 5, 2025 (EDT)"
-        return formatInTimeZone(d, timeZone, "MMM d, yyyy (zzz)");
+        case "dateOnly":
+          // "Oct 5, 2025 (EDT)"
+          return formatInTimeZone(d, timeZone, "MMM d, yyyy (zzz)");
 
-      case "timeOnly":
-        // "8:21 PM EDT"
-        return formatInTimeZone(d, timeZone, "h:mm a zzz");
+        case "timeOnly":
+          // "8:21 PM EDT"
+          return formatInTimeZone(d, timeZone, "h:mm a zzz");
 
-      case "Pp":
-        // "10/05/2025, 8:21 PM EDT"
-        return formatInTimeZone(d, timeZone, "MM/dd/yyyy, h:mm a zzz");
+        case "Pp":
+          // "10/05/2025, 8:21 PM EDT"
+          return formatInTimeZone(d, timeZone, "MM/dd/yyyy, h:mm a zzz");
 
-      case "MMM d, h:mm a":
-        // "Oct 5, 8:21 PM EDT"
-        return formatInTimeZone(d, timeZone, "MMM d, h:mm a zzz");
+        case "MMM d, h:mm a":
+          // "Oct 5, 8:21 PM EDT"
+          return formatInTimeZone(d, timeZone, "MMM d, h:mm a zzz");
 
-      case "MMM d":
-        // "Oct 5 (EDT)"
-        return formatInTimeZone(d, timeZone, "MMM d (zzz)");
+        case "MMM d":
+          // "Oct 5 (EDT)"
+          return formatInTimeZone(d, timeZone, "MMM d (zzz)");
 
-      default:
-      case "full":
-        // "Oct 5, 2025, 11:21 PM EDT"
-        return formatInTimeZone(d, timeZone, "MMM d, yyyy, h:mm a zzz");
+        default:
+        case "full":
+          // "Oct 5, 2025, 11:21 PM EDT"
+          return formatInTimeZone(d, timeZone, "MMM d, yyyy, h:mm a zzz");
+      }
+    } catch {
+      return "—";
     }
   }, [date, format, timeZone]);
 

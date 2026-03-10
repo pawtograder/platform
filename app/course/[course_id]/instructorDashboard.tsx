@@ -7,6 +7,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { TZDate } from "@date-fns/tz";
 import {
   Badge,
   Box,
@@ -23,10 +24,10 @@ import {
   Stack,
   Text,
   VStack,
-  HStack,
   Table
 } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
+import { formatInTimeZone } from "date-fns-tz";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";

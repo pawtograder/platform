@@ -1,10 +1,10 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Redis } from "./Redis.ts";
-import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
-import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
+import { createAppAuth } from "npm:@octokit/auth-app";
+import { throttling } from "npm:@octokit/plugin-throttling";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
-import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
+import { App, Endpoints, Octokit, RequestError } from "npm:octokit";
 import * as Sentry from "npm:@sentry/deno";
 import { SecurityError } from "./HandlerUtils.ts";
 
