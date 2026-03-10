@@ -950,7 +950,9 @@ export default function ManageGroupWidget({
   } else if (instructorFormsGroups) {
     actions = (
       <Text fontSize="sm" color="fg.muted">
-        Your instructor will assign you to a group. Please wait for your group assignment.
+        {assignment.group_config === "both"
+          ? "Your instructor may assign you to a group, or you may submit individually — please follow instructor instructions."
+          : "Your instructor will assign you to a group. Please wait for your group assignment."}
       </Text>
     );
   } else if (now > groupJoinDeadline) {
