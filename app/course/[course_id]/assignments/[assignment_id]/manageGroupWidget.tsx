@@ -822,9 +822,7 @@ function GroupDetails({
           </HStack>
         </>
       )}
-      {instructorFormsGroups && assignment.group_config === "both" && (
-        <LeaveGroupButton assignment={assignment} />
-      )}
+      {instructorFormsGroups && assignment.group_config === "both" && <LeaveGroupButton assignment={assignment} />}
     </VStack>
   );
 }
