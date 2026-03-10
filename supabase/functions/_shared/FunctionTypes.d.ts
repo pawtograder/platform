@@ -237,26 +237,6 @@ export type AssignmentGroupInstructorCreateRequest = {
   assignment_id: number;
 };
 
-export type AssignmentFixRepoPermissionsRequest = {
-  course_id: number;
-  assignment_id: number;
-};
-
-export type AssignmentFixRepoPermissionsResponse = {
-  message: string;
-  results: {
-    repository_id: number;
-    repository: string;
-    type: "individual" | "group";
-    group_name?: string;
-    student_name?: string;
-    expected_usernames: string[];
-    action: "enqueued_sync" | "skipped_no_usernames" | "skipped_not_ready" | "error";
-    error_message?: string;
-  }[];
-  summary: Record<string, number>;
-};
-
 export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_check_runs"]["Row"], "status"> & {
   status: CheckRunStatus;
 };

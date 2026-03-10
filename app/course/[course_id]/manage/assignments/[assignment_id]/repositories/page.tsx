@@ -3,7 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { EdgeFunctionError, resendOrgInvitation, assignmentFixRepoPermissions } from "@/lib/edgeFunctions";
+import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -254,8 +254,17 @@ function FixRepoPermissionsButton({
     setLastResult(null);
 
     try {
-      const result = await assignmentFixRepoPermissions({ course_id: courseId, assignment_id: assignmentId }, supabase);
+      const { data, error } = await (supabase.rpc as CallableFunction)(
+        "fix_assignment_repo_permissions",
+        {
+          p_class_id: courseId,
+          p_assignment_id: assignmentId
+        }
+      );
 
+      if (error) throw error;
+
+      const result = data as { message: string; summary: Record<string, number> };
       setLastResult({ message: result.message, summary: result.summary });
 
       if (result.summary.errors > 0) {
@@ -273,14 +282,10 @@ function FixRepoPermissionsButton({
       await tableController?.refetchAll();
     } catch (error) {
       console.error(error);
-      if (error instanceof EdgeFunctionError) {
-        toaster.error({ title: "Error", description: error.message + " " + error.details });
-      } else {
-        toaster.error({
-          title: "Error",
-          description: error instanceof Error ? error.message : "Failed to fix repository permissions"
-        });
-      }
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to fix repository permissions"
+      });
     } finally {
       setIsFixing(false);
     }
