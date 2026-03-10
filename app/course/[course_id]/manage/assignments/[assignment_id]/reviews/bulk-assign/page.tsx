@@ -913,8 +913,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           type: "warning"
         });
       }
-    } else {
-      // Normal mode validation
+    } else if (assignmentMode !== "by_group_mentors") {
+      // Normal mode validation (skip for group mentors which have their own validation above)
       const users = finalSelectedUsers();
       if (users.length === 0) {
         toaster.create({
@@ -1864,8 +1864,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           <Fieldset.Content m={0}>
             <VStack align="flex-start" maxW={"lg"} gap={1}>
               <Alert status="info">
-                Submissions will be automatically assigned to all lab leaders of each student&apos;s lab section. No
-                manual grader selection is needed.
+                {assignmentMode === "by_group_mentors"
+                  ? "Each group's submission will be automatically assigned to the group's mentor. No manual grader selection is needed."
+                  : "Submissions will be automatically assigned to all lab leaders of each student's lab section. No manual grader selection is needed."}
               </Alert>
             </VStack>
           </Fieldset.Content>

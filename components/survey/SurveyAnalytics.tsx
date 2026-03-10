@@ -9,7 +9,7 @@ import type { Json } from "@/utils/supabase/SupabaseTypes";
 type GroupContextResponse = {
   response_id: string;
   profile_id: string;
-  profile_name: string;
+  profile_name: string | null;
   is_submitted: boolean;
   submitted_at: string | null;
   response: Json;
@@ -29,7 +29,7 @@ function getNumericQuestions(surveyJson: Json): NumericQuestion[] {
   try {
     const survey = new Model(surveyJson);
     survey.getAllQuestions().forEach((q) => {
-      if (q.getType() === "rating" || q.getType() === "nouislider" || q.getType() === "text") {
+      if (q.getType() === "rating" || q.getType() === "nouislider" || q.getType() === "text" || q.getType() === "radiogroup") {
         questions.push({ name: q.name, title: q.title || q.name });
       }
     });

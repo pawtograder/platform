@@ -307,6 +307,20 @@ export default function EditSurveyPage() {
           }
         }
 
+        // Validate available_at is before due_date
+        if (values.available_at && values.due_date) {
+          const availableAtISO = convertDueDateToISO(values.available_at as string);
+          const dueDateISO = convertDueDateToISO(values.due_date as string);
+          if (availableAtISO && dueDateISO && new Date(availableAtISO) >= new Date(dueDateISO)) {
+            toaster.create({
+              title: "Invalid Dates",
+              description: "The 'Available At' date must be before the due date.",
+              type: "error"
+            });
+            return;
+          }
+        }
+
         // Validate student assignments
         if (!values.assigned_to_all && (!values.assigned_students || values.assigned_students.length === 0)) {
           toaster.create({
@@ -368,6 +382,8 @@ export default function EditSurveyPage() {
                   status: "draft",
                   allow_response_editing: values.allow_response_editing as boolean,
                   due_date: convertDueDateToISO(values.due_date as string),
+                  available_at: convertDueDateToISO(values.available_at as string),
+                  assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
                   validation_errors: `Database error: ${error?.message || "Unknown error"}`,
                   assigned_to_all: Boolean(values.assigned_to_all)
                 })

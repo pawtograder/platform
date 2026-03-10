@@ -30,6 +30,9 @@ export function SurveyStatusBanner({ assignmentId, courseId }: { assignmentId: n
         p_assignment_id: assignmentId,
         p_profile_id: private_profile_id
       });
+      if (error) {
+        console.error("[SurveyStatusBanner] Error fetching survey status:", error);
+      }
       if (!error && data) {
         setSurveys(data);
       }

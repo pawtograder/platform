@@ -11186,6 +11186,33 @@ export type Database = {
         Args: { p_profile_ids: string[]; p_survey_id: string };
         Returns: undefined;
       };
+      get_survey_status_for_assignment: {
+        Args: { p_assignment_id: number; p_profile_id: string };
+        Returns: {
+          survey_id: string;
+          survey_title: string;
+          survey_status: Database["public"]["Enums"]["survey_status"];
+          is_submitted: boolean;
+          submitted_at: string | null;
+          due_date: string | null;
+          available_at: string | null;
+        }[];
+      };
+      get_survey_responses_with_group_context: {
+        Args: { p_survey_id: string; p_class_id: number };
+        Returns: {
+          response_id: string;
+          profile_id: string;
+          profile_name: string | null;
+          is_submitted: boolean;
+          submitted_at: string | null;
+          response: Json;
+          group_id: number | null;
+          group_name: string | null;
+          mentor_profile_id: string | null;
+          mentor_name: string | null;
+        }[];
+      };
       create_system_notification: {
         Args: {
           p_backdrop_dismiss?: boolean;

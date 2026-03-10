@@ -193,6 +193,12 @@ export default function NewSurveyPage() {
 
             const assignedStudents = assignmentData?.map((a) => a.profile_id) || [];
 
+            // Convert available_at from ISO string to datetime-local format
+            let availableAtFormatted = "";
+            if (data.available_at) {
+              availableAtFormatted = formatInTimeZone(new Date(data.available_at), timezone, "yyyy-MM-dd'T'HH:mm");
+            }
+
             // Load the draft data into the form
             const formData = {
               title: data.title || "",
@@ -200,6 +206,8 @@ export default function NewSurveyPage() {
               json: data.json || "",
               status: data.status || "draft",
               due_date: dueDateFormatted,
+              available_at: availableAtFormatted,
+              assignment_id: data.assignment_id ?? null,
               allow_response_editing: Boolean(data.allow_response_editing),
               assigned_to_all: data.assigned_to_all !== undefined ? data.assigned_to_all : true,
               assigned_students: assignedStudents
@@ -436,6 +444,20 @@ export default function NewSurveyPage() {
             });
             return;
           }
+        }
+      }
+
+      // Validate available_at is before due_date
+      if (values.available_at && values.due_date) {
+        const availableAtISO = convertDueDateToISO(values.available_at as string);
+        const dueDateISO = convertDueDateToISO(values.due_date as string);
+        if (availableAtISO && dueDateISO && new Date(availableAtISO) >= new Date(dueDateISO)) {
+          toaster.create({
+            title: "Invalid Dates",
+            description: "The 'Available At' date must be before the due date.",
+            type: "error"
+          });
+          return;
         }
       }
 
