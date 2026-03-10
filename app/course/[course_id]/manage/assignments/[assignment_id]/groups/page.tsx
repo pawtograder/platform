@@ -531,17 +531,28 @@ function TableByGroups({
 
   const updateMentor = async (groupId: number, mentorProfileId: string | null) => {
     setUpdatingMentorGroupId(groupId);
-    const { error } = await supabase
-      .from("assignment_groups")
-      .update({ mentor_profile_id: mentorProfileId })
-      .eq("id", groupId);
-    if (error) {
-      toaster.create({ title: "Error updating mentor", description: error.message, type: "error" });
-    } else {
-      toaster.create({ title: "Mentor updated", type: "success" });
-      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+    try {
+      const { error } = await supabase
+        .from("assignment_groups")
+        .update({ mentor_profile_id: mentorProfileId })
+        .eq("id", groupId);
+      if (error) {
+        Sentry.captureException(error);
+        toaster.create({ title: "Error updating mentor", description: error.message, type: "error" });
+      } else {
+        toaster.create({ title: "Mentor updated", type: "success" });
+        invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+      }
+    } catch (e) {
+      Sentry.captureException(e);
+      toaster.create({
+        title: "Error updating mentor",
+        description: e instanceof Error ? e.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setUpdatingMentorGroupId(null);
     }
-    setUpdatingMentorGroupId(null);
   };
 
   /**

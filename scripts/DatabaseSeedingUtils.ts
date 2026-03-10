@@ -4993,9 +4993,9 @@ public class Entrypoint {
       config.includeTeamCollaboration !== false
         ? Object.keys(SURVEYJS_TEMPLATES)
         : Object.keys(SURVEYJS_TEMPLATES).filter((k) => k !== "teamCollaboration");
-    const numRegularSurveys = config.numSurveys - surveys.length;
+    const remaining = Math.max(0, config.numSurveys - surveys.length);
 
-    for (let i = 0; i < numRegularSurveys; i++) {
+    for (let i = 0; i < remaining; i++) {
       const instructor = instructors[Math.floor(Math.random() * instructors.length)];
       const surveyType = surveyTypes[i % surveyTypes.length] as keyof typeof SURVEYJS_TEMPLATES;
       const template = SURVEYJS_TEMPLATES[surveyType];

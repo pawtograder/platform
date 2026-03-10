@@ -53,6 +53,19 @@ GRANT EXECUTE ON FUNCTION public.can_access_submission_storage_path(text) TO aut
 
 -- RLS policy for submission-files bucket: path-based access control
 -- Only allows read when user has access to the submission (owner, group member, or staff)
+-- NOTE: These policies are commented out because CREATE POLICY on storage.objects can fail with
+-- "must be owner of table objects" in some Supabase environments (storage.objects ownership varies).
+-- Apply these policies manually via Supabase Dashboard > Storage > submission-files > Policies if needed:
+--
+-- 1. "Authenticated users can read submission files" (SELECT, TO authenticated):
+--    USING: bucket_id = 'submission-files' AND public.can_access_submission_storage_path(name)
+--
+-- 2. "Service role can insert submission files" (INSERT, TO service_role):
+--    WITH CHECK: bucket_id = 'submission-files'
+--
+-- 3. "Service role can delete submission files" (DELETE, TO service_role):
+--    USING: bucket_id = 'submission-files'
+--
 -- CREATE POLICY "Authenticated users can read submission files"
 -- ON storage.objects FOR SELECT
 -- TO authenticated
@@ -60,14 +73,12 @@ GRANT EXECUTE ON FUNCTION public.can_access_submission_storage_path(text) TO aut
 --   bucket_id = 'submission-files'
 --   AND public.can_access_submission_storage_path(name)
 -- );
-
--- -- Service role (used by edge functions) can insert
+--
 -- CREATE POLICY "Service role can insert submission files"
 -- ON storage.objects FOR INSERT
 -- TO service_role
 -- WITH CHECK (bucket_id = 'submission-files');
-
--- -- Service role can delete submission files
+--
 -- CREATE POLICY "Service role can delete submission files"
 -- ON storage.objects FOR DELETE
 -- TO service_role

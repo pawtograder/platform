@@ -7,11 +7,16 @@
 
 -- =============================================================================
 -- 1. Add assignment_id to surveys (optional FK to assignments)
+-- Composite FK (assignment_id, class_id) ensures assignment belongs to same class
 -- =============================================================================
 alter table "public"."surveys" add column "assignment_id" bigint;
 
+-- Unique on (id, class_id) required for composite FK reference
+alter table "public"."assignments" add constraint "assignments_id_class_id_key"
+  UNIQUE (id, class_id);
+
 alter table "public"."surveys" add constraint "surveys_assignment_id_fkey"
-  FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE SET NULL not valid;
+  FOREIGN KEY (assignment_id, class_id) REFERENCES assignments(id, class_id) ON DELETE SET NULL not valid;
 
 alter table "public"."surveys" validate constraint "surveys_assignment_id_fkey";
 
@@ -95,6 +100,9 @@ AS $$
   WHERE s.assignment_id = p_assignment_id
     AND s.deleted_at IS NULL
     AND s.status IN ('published', 'closed')
+    AND (s.available_at IS NULL OR s.available_at <= now())
+    AND authorizeforclass(s.class_id)
+    AND (authorizeforprofile(p_profile_id) OR authorizeforclassgrader(s.class_id))
 $$;
 
 -- =============================================================================

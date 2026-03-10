@@ -34,31 +34,8 @@ AS $$
     AND s.status IN ('published', 'closed')
     AND (s.available_at IS NULL OR s.available_at <= now())
     AND authorizeforclass(s.class_id)
+    AND (authorizeforprofile(p_profile_id) OR authorizeforclassgrader(s.class_id))
 $$;
 
--- Fix: Add class_id check to surveys_assignment_id_fkey to prevent cross-class linkage
--- We add a CHECK constraint that validates assignment belongs to same class
-CREATE OR REPLACE FUNCTION public.check_survey_assignment_same_class()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  IF NEW.assignment_id IS NOT NULL THEN
-    IF NOT EXISTS (
-      SELECT 1 FROM assignments a
-      WHERE a.id = NEW.assignment_id
-        AND a.class_id = NEW.class_id
-    ) THEN
-      RAISE EXCEPTION 'Assignment must belong to the same class as the survey';
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS check_survey_assignment_class ON public.surveys;
-
-CREATE TRIGGER check_survey_assignment_class
-  BEFORE INSERT OR UPDATE OF assignment_id ON public.surveys
-  FOR EACH ROW
-  EXECUTE FUNCTION public.check_survey_assignment_same_class();
+-- Note: Cross-class linkage is enforced by composite FK surveys_assignment_id_fkey
+-- (assignment_id, class_id) REFERENCES assignments(id, class_id) in 20260222000000

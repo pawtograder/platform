@@ -29,7 +29,12 @@ function getNumericQuestions(surveyJson: Json): NumericQuestion[] {
   try {
     const survey = new Model(surveyJson);
     survey.getAllQuestions().forEach((q) => {
-      if (q.getType() === "rating" || q.getType() === "nouislider" || q.getType() === "text" || q.getType() === "radiogroup") {
+      if (
+        q.getType() === "rating" ||
+        q.getType() === "nouislider" ||
+        q.getType() === "text" ||
+        q.getType() === "radiogroup"
+      ) {
         questions.push({ name: q.name, title: q.title || q.name });
       }
     });

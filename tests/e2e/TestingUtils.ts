@@ -56,6 +56,7 @@ function ensureServiceRoleKeyNotHS256(): void {
     }
   } catch (e) {
     if (e instanceof Error && e.message.includes("SUPABASE_SERVICE_ROLE_KEY")) throw e;
+    throw new Error(`Malformed SUPABASE_SERVICE_ROLE_KEY: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 ensureServiceRoleKeyNotHS256();

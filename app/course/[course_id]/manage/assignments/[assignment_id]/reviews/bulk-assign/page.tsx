@@ -1721,9 +1721,17 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                 }}
                 onChange={(e) => {
                   if (e?.value) {
-                    setAssignmentMode(
-                      e.value as "by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors"
-                    );
+                    const newMode = e.value as
+                      | "by_submission"
+                      | "by_rubric_part"
+                      | "by_lab_leaders"
+                      | "by_group_mentors";
+                    setAssignmentMode(newMode);
+                    if (newMode === "by_group_mentors" || newMode === "by_lab_leaders") {
+                      setSelectedTags([]);
+                      setSelectedUsers([]);
+                      setNumGradersToSelect(0);
+                    }
                   }
                 }}
                 options={[
@@ -2363,7 +2371,19 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             <DragAndDropExample
               draftReviews={draftReviews}
               setDraftReviews={setDraftReviews}
-              courseStaffWithConflicts={finalSelectedUsers() ?? []}
+              courseStaffWithConflicts={
+                assignmentMode === "by_group_mentors"
+                  ? (() => {
+                      const seen = new Set<string>();
+                      return draftReviews
+                        .map((d) => d.assignee)
+                        .filter(
+                          (a): a is UserRoleWithConflictsAndName =>
+                            !!a && !seen.has(a.private_profile_id) && (seen.add(a.private_profile_id), true)
+                        );
+                    })()
+                  : (finalSelectedUsers() ?? [])
+              }
               currentReviewAssignments={currentReviewAssignments}
               selectedRubric={selectedRubric}
               allActiveSubmissions={allActiveSubmissions}

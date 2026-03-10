@@ -617,6 +617,13 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(page.getByText("Week 5 Team Collaboration Survey")).toBeVisible();
     await expect(page.getByText("General Course Feedback")).toBeVisible();
 
+    // Verify linked-assignment column cells: linked survey shows assignment label, unlinked shows fallback
+    const linkedRow = page.getByRole("row").filter({ hasText: "Week 5 Team Collaboration Survey" });
+    await expect(linkedRow).toContainText("Project Sprint 5");
+
+    const unlinkedRow = page.getByRole("row").filter({ hasText: "General Course Feedback" });
+    await expect(unlinkedRow).toContainText("—");
+
     await argosScreenshot(page, "Instructor Manage Surveys - Linked Assignment Column");
   });
 
