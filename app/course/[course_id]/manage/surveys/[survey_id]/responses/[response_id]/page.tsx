@@ -1,14 +1,13 @@
 "use client";
 
-import { Box, Heading, Text, VStack, HStack, Button, Badge } from "@chakra-ui/react";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { toaster } from "@/components/ui/toaster";
+import { Survey, SurveyResponseWithProfile } from "@/types/survey";
 import { createClient } from "@/utils/supabase/client";
+import { Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
+import dynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { toaster } from "@/components/ui/toaster";
-import { formatInTimeZone } from "date-fns-tz";
-import dynamic from "next/dynamic";
-import { Survey, SurveyResponseWithProfile } from "@/types/survey";
-import { useCourse } from "@/hooks/useCourseController";
 
 type SurveyData = Pick<Survey, "id" | "title" | "description" | "json" | "allow_response_editing">;
 
@@ -24,13 +23,11 @@ const ViewSurveyResponse = dynamic(() => import("@/components/ViewSurveyResponse
 export default function IndividualResponsePage() {
   const { course_id, survey_id, response_id } = useParams();
   const router = useRouter();
-  const course = useCourse();
   const [response, setResponse] = useState<SurveyResponseWithProfile | null>(null);
   const [survey, setSurvey] = useState<SurveyData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Use timezone from course context
-  const timezone = course?.time_zone || "America/New_York";
+  // Timezone-aware display handled by TimeZoneAwareDate component
 
   useEffect(() => {
     const loadResponseData = async () => {
@@ -133,14 +130,6 @@ export default function IndividualResponsePage() {
 
     loadResponseData();
   }, [course_id, survey_id, response_id, router]);
-
-  const formatDate = (dateString: string) => {
-    try {
-      return formatInTimeZone(new Date(dateString), timezone, "MMM dd, yyyy 'at' h:mm a");
-    } catch {
-      return "Invalid date";
-    }
-  };
 
   const getStatusBadge = (isSubmitted: boolean) => {
     if (isSubmitted) {
@@ -285,14 +274,18 @@ export default function IndividualResponsePage() {
                 <Text color="fg" fontSize="sm" fontWeight="medium" opacity={0.8}>
                   Started
                 </Text>
-                <Text color="fg">{formatDate(response.created_at || "")}</Text>
+                <Text color="fg">
+                  {response.created_at ? <TimeZoneAwareDate date={response.created_at} format="full" /> : ""}
+                </Text>
               </VStack>
 
               <VStack align="start" gap={1}>
                 <Text color="fg" fontSize="sm" fontWeight="medium" opacity={0.8}>
                   Last Updated
                 </Text>
-                <Text color="fg">{formatDate(response.updated_at || "")}</Text>
+                <Text color="fg">
+                  {response.updated_at ? <TimeZoneAwareDate date={response.updated_at} format="full" /> : ""}
+                </Text>
               </VStack>
 
               {response.submitted_at && (
@@ -300,7 +293,9 @@ export default function IndividualResponsePage() {
                   <Text color="fg" fontSize="sm" fontWeight="medium" opacity={0.8}>
                     Submitted
                   </Text>
-                  <Text color="fg">{formatDate(response.submitted_at)}</Text>
+                  <Text color="fg">
+                    <TimeZoneAwareDate date={response.submitted_at} format="full" />
+                  </Text>
                 </VStack>
               )}
             </Box>

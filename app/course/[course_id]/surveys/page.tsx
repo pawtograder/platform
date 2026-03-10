@@ -1,17 +1,17 @@
 "use client";
 
-import { Box, Heading, Text, VStack, HStack, Badge, Button } from "@chakra-ui/react";
-import { createClient } from "@/utils/supabase/client";
-import { useParams } from "next/navigation";
-import { useEffect, useState, useMemo, useCallback } from "react";
-import { toaster } from "@/components/ui/toaster";
-import Link from "@/components/ui/link";
-import { formatInTimeZone } from "date-fns-tz";
-import { SurveyWithResponse } from "@/types/survey";
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import Link from "@/components/ui/link";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
-import { useCourse, usePublishedSurveys } from "@/hooks/useCourseController";
+import { usePublishedSurveys } from "@/hooks/useCourseController";
+import { SurveyWithResponse } from "@/types/survey";
+import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type FilterType = "all" | "not_started" | "completed";
 type SurveyResponse = Database["public"]["Tables"]["survey_responses"]["Row"];
@@ -25,7 +25,6 @@ export default function StudentSurveysPage() {
   // Get private_profile_id from ClassProfileProvider (already available via course layout)
   const { private_profile_id } = useClassProfiles();
   const isStudent = useIsStudent();
-  const course = useCourse();
 
   // Use the hook for realtime survey updates
   const { surveys: publishedSurveys, isLoading: surveysLoading } = usePublishedSurveys();
@@ -159,18 +158,6 @@ export default function StudentSurveysPage() {
     [statusColors]
   );
 
-  const formatDueDate = useCallback(
-    (dueDate: string) => {
-      try {
-        const timeZone = course.time_zone || "America/New_York";
-        return formatInTimeZone(new Date(dueDate), timeZone, "MMM dd, yyyy 'at' h:mm a");
-      } catch {
-        return "Invalid date";
-      }
-    },
-    [course.time_zone]
-  );
-
   // Filter options for student view
   const filterOptions = useMemo(
     () => [
@@ -299,12 +286,12 @@ export default function StudentSurveysPage() {
                       <VStack align="start" gap={1}>
                         {survey.due_date && (
                           <Text color="fg" fontSize="sm" fontWeight="medium">
-                            Due: {formatDueDate(survey.due_date)}
+                            Due: <TimeZoneAwareDate date={survey.due_date} format="full" />
                           </Text>
                         )}
                         {survey.submitted_at && (
                           <Text color="fg" fontSize="sm" opacity={0.7}>
-                            Submitted: {formatDueDate(survey.submitted_at)}
+                            Submitted: <TimeZoneAwareDate date={survey.submitted_at} format="full" />
                           </Text>
                         )}
                       </VStack>

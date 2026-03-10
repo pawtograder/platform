@@ -1,17 +1,20 @@
 import { createAdminClient } from "@/utils/supabase/client";
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { TZDate } from "@date-fns/tz";
 import { Page } from "@playwright/test";
+import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
-import { createClient } from "@supabase/supabase-js";
 dotenv.config({ path: ".env.local" });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
 // export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
 export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
+
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = format(new Date(), "dd/MM/yy HH:mm:ss") + "#" + suffix;
@@ -29,6 +32,36 @@ export type TestingUser = {
   password: string;
 };
 
+export function formatDateForTest(
+  date: string | Date | TZDate,
+  timeZone: string = "America/New_York",
+  format: "full" | "compact" | "dateOnly" | "timeOnly" | "Pp" | "MMM d, h:mm a" | "MMM d" = "MMM d, h:mm a"
+): string {
+  let d: Date;
+  if (date instanceof TZDate || date instanceof Date) {
+    d = date;
+  } else {
+    d = new Date(date);
+  }
+
+  switch (format) {
+    case "compact":
+      return formatInTimeZone(d, timeZone, "M/d/yyyy, h:mm:ss a zzz");
+    case "dateOnly":
+      return formatInTimeZone(d, timeZone, "MMM d, yyyy (zzz)");
+    case "timeOnly":
+      return formatInTimeZone(d, timeZone, "h:mm a zzz");
+    case "Pp":
+      return formatInTimeZone(d, timeZone, "MM/dd/yyyy, h:mm a zzz");
+    case "MMM d, h:mm a":
+      return formatInTimeZone(d, timeZone, "MMM d, h:mm a zzz");
+    case "MMM d":
+      return formatInTimeZone(d, timeZone, "MMM d (zzz)");
+    case "full":
+    default:
+      return formatInTimeZone(d, timeZone, "MMM d, yyyy, h:mm a zzz");
+  }
+}
 export async function createClass({
   name,
   rateLimitManager
@@ -343,6 +376,50 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   return userSupabase;
 }
 
+const TIMEZONE_DIALOG_TITLE = "Choose Your Time Zone Preference";
+const TIMEZONE_PREFERENCE_KEY = "pawtograder-timezone-pref";
+const DEFAULT_TIMEZONE_PREFERENCE: "course" | "browser" = "course";
+
+export async function ensureTimeZonePreferenceInitialized(
+  page: Page,
+  preference: "course" | "browser" = DEFAULT_TIMEZONE_PREFERENCE
+) {
+  await page.addInitScript(
+    ({ key, value }) => {
+      try {
+        const existingPreference = localStorage.getItem(key);
+        if (!existingPreference) {
+          localStorage.setItem(key, value);
+        }
+      } catch {
+        // Ignore localStorage failures in test setup.
+      }
+    },
+    { key: TIMEZONE_PREFERENCE_KEY, value: preference }
+  );
+}
+
+export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 10000): Promise<boolean> {
+  const timezoneDialog = page.getByRole("dialog", { name: TIMEZONE_DIALOG_TITLE });
+  const isVisible = await timezoneDialog.isVisible({ timeout: timeoutMs }).catch(() => false);
+  if (!isVisible) {
+    return false;
+  }
+
+  const closeButton = timezoneDialog.getByRole("button", { name: /^Close$/ }).first();
+  const canClickCloseButton = await closeButton.isVisible({ timeout: 1000 }).catch(() => false);
+  if (canClickCloseButton) {
+    await closeButton.click({ timeout: 5000 }).catch(async () => {
+      await page.keyboard.press("Escape");
+    });
+  } else {
+    await page.keyboard.press("Escape");
+  }
+
+  await timezoneDialog.waitFor({ state: "hidden", timeout: timeoutMs });
+  return true;
+}
+
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
@@ -384,14 +461,26 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
   }
 }
-export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
+export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
+  if (dismissTimezoneDialog) {
+    await ensureTimeZonePreferenceInitialized(page);
+  }
+
   await page.goto("/");
   await signInWithMagicLinkAndRetry(page, testingUser);
+
+  if (dismissTimezoneDialog) {
+    await dismissTimeZonePreferenceModal(page, 15000);
+  }
 
   if (course) {
     await page.waitForLoadState("networkidle");
     await page.goto(`/course/${course.id}`);
     await page.waitForLoadState("networkidle");
+  }
+
+  if (dismissTimezoneDialog) {
+    await dismissTimeZonePreferenceModal(page, 10000);
   }
 }
 
@@ -870,6 +959,9 @@ export async function insertPreBakedSubmission({
   }
   const repositoryData = repositoryDataList[0];
   const repository_id = repositoryData?.id;
+  if (!repository_id) {
+    throw new Error("Failed to create repository id");
+  }
 
   const { data: checkRunDataList, error: checkRunError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
@@ -1480,25 +1572,30 @@ export async function insertSubmissionViaAPI({
   const repositoryData = repositoryDataList[0];
   const repository_id = repositoryData?.id;
 
-  const { error: checkRunError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
-    "repository_check_runs",
-    () =>
-      supabase
-        .from("repository_check_runs")
-        .insert({
-          class_id: class_id,
-          repository_id: repository_id,
-          check_run_id: 1,
-          status: "{}",
-          sha: sha || "HEAD",
-          commit_message: commit_message || "none"
-        })
-        .select("id")
+  const { data: checkRunDataList, error: checkRunError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("repository_check_runs", () =>
+    supabase
+      .from("repository_check_runs")
+      .insert({
+        class_id: class_id,
+        repository_id: repository_id,
+        check_run_id: 1,
+        status: "{}",
+        sha: sha || "HEAD",
+        commit_message: commit_message || "none"
+      })
+      .select("id")
   );
   if (checkRunError) {
     // eslint-disable-next-line no-console
     console.error(checkRunError);
     throw new Error("Failed to create check run");
+  }
+  const checkRunData = checkRunDataList[0];
+  const check_run_id = checkRunData?.id;
+  if (!check_run_id) {
+    throw new Error("Failed to create check run id");
   }
   // Prepare a JWT token to invoke the edge function
   const payload = {
@@ -1518,20 +1615,31 @@ export async function insertSubmissionViaAPI({
     "." +
     Buffer.from(JSON.stringify(payload)).toString("base64") +
     ".";
-  const { data } = await supabase.functions.invoke("autograder-create-submission", {
+  const { data, error } = await supabase.functions.invoke("autograder-create-submission", {
     headers: {
       Authorization: token_str
     }
   });
+  if (error) {
+    throw new Error(`Failed to create submission: ${error.message}`);
+  }
   if (data == null) {
     throw new Error("Failed to create submission, no data returned");
   }
   if ("error" in data) {
     if (typeof data.error === "object" && data.error && "details" in data.error) {
-      throw new Error(String((data.error as { details: string }).details));
+      const details = String((data.error as { details: string }).details);
+      if (details.length > 0) {
+        throw new Error(details);
+      }
     }
     throw new Error("Failed to create submission");
   }
+
+  if (!("submission_id" in data) || typeof data.submission_id !== "number") {
+    throw new Error("Failed to create submission, invalid response");
+  }
+
   return {
     repository_name: repository,
     submission_id: (data as { submission_id: number }).submission_id
@@ -1640,10 +1748,12 @@ export async function submitFeedbackViaAPI({
 
   if ("error" in data) {
     if (typeof data.error === "object" && data.error && "details" in data.error) {
-      console.trace(data);
-      throw new Error(String((data.error as { details: string }).details));
+      const details = String((data.error as { details: string }).details);
+      if (details.length > 0) {
+        throw new Error(details);
+      }
     }
-    throw new Error(`Failed to submit feedback: ${JSON.stringify(data.error)}`);
+    throw new Error("Failed to submit feedback");
   }
 
   return data as GradeResponse;

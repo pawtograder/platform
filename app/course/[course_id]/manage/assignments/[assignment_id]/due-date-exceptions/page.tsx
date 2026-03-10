@@ -1,4 +1,5 @@
 "use client";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Field } from "@/components/ui/field";
 import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
@@ -332,10 +333,10 @@ function AdjustDueDateDialogContent({
           <>
             <Text mb={2}>
               <strong>Original Assignment Due Date:</strong>{" "}
-              {formatInTimeZone(originalDueDate, time_zone, "MMM d h:mm aaa")}
+              <TimeZoneAwareDate date={originalDueDate} format="MMM d, h:mm a" />
             </Text>
             <Text mb={2}>
-              <strong>Lab-Based Due Date:</strong> {formatInTimeZone(labBasedDueDate, time_zone, "MMM d h:mm aaa")}
+              <strong>Lab-Based Due Date:</strong> <TimeZoneAwareDate date={labBasedDueDate} format="MMM d, h:mm a" />
               {labBasedDueDate.getTime() !== originalDueDate.getTime() && (
                 <Text as="span" color="blue.500" ml={2}>
                   (adjusted for lab scheduling)
@@ -343,7 +344,7 @@ function AdjustDueDateDialogContent({
               )}
             </Text>
             <Text mb={4}>
-              <strong>Current Final Due Date:</strong> {formatInTimeZone(finalDueDate, time_zone, "MMM d h:mm aaa")}
+              <strong>Current Final Due Date:</strong> <TimeZoneAwareDate date={finalDueDate} format="MMM d, h:mm a" />
               {hoursExtended > 0 && (
                 <Text as="span" color="orange.500" ml={2}>
                   (with {formattedDuration} extension)
@@ -354,7 +355,7 @@ function AdjustDueDateDialogContent({
         ) : (
           <Text mb={4}>
             The current due date for this {studentOrGroup} is{" "}
-            {formatInTimeZone(finalDueDate, time_zone, "MMM d h:mm aaa")}
+            <TimeZoneAwareDate date={finalDueDate} format="MMM d, h:mm a" />
             {hoursExtended > 0 && ` (an extension of ${formattedDuration})`}.
           </Text>
         )}
@@ -492,7 +493,7 @@ function AdjustDueDateDialogContent({
                   </Text>
                 ) : (
                   <Text fontSize="sm" color="fg.info">
-                    <strong>New Due Date:</strong> {formatInTimeZone(newDueDate, time_zone, "MMM d h:mm aaa")}
+                    <strong>New Due Date:</strong> <TimeZoneAwareDate date={newDueDate} format="MMM d, h:mm a" />
                   </Text>
                 )}
               </Box>
@@ -516,7 +517,9 @@ function AdjustDueDateDialogContent({
               <Table.Body>
                 {extensions?.map((extension) => (
                   <Table.Row key={extension.id}>
-                    <Table.Cell>{formatInTimeZone(extension.created_at, time_zone, "MMM d h:mm aaa")}</Table.Cell>
+                    <Table.Cell>
+                      <TimeZoneAwareDate date={extension.created_at} format="MMM d, h:mm a" />
+                    </Table.Cell>
                     <Table.Cell>
                       {extension.hours}
                       {
@@ -734,7 +737,9 @@ export default function DueDateExceptions() {
 
           return (
             <VStack align="start" gap={1}>
-              <Text>{formatInTimeZone(effectiveDueDate, time_zone, "MMM d h:mm aaa")}</Text>
+              <Text>
+                <TimeZoneAwareDate date={effectiveDueDate} format="MMM d, h:mm a" />
+              </Text>
               {isDifferentFromOriginal && (
                 <Text fontSize="xs" color="blue.500">
                   (lab-adjusted)
@@ -755,7 +760,9 @@ export default function DueDateExceptions() {
 
           return (
             <VStack align="start" gap={1}>
-              <Text>{formatInTimeZone(finalDate, time_zone, "MMM d h:mm aaa")}</Text>
+              <Text>
+                <TimeZoneAwareDate date={finalDate} format="MMM d, h:mm a" />
+              </Text>
               <Text fontSize="xs" color="orange.500">
                 (+{hoursExtended}h {minutesExtended}m)
               </Text>
@@ -822,7 +829,7 @@ export default function DueDateExceptions() {
           </Heading>
           <Text mb={2}>
             <strong>Original Assignment Due Date:</strong>{" "}
-            {originalDueDate ? formatInTimeZone(originalDueDate, time_zone, "MMM d h:mm aaa") : "No due date"}
+            {originalDueDate ? <TimeZoneAwareDate date={originalDueDate} format="MMM d, h:mm a" /> : "No due date"}
           </Text>
           {hasLabScheduling && (
             <Text mb={2} color="fg.info">

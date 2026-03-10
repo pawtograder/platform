@@ -1,5 +1,6 @@
 "use client";
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import {
   useAllStudentProfiles,
   useCourseController,
@@ -9,9 +10,9 @@ import {
 } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
+  useListTableControllerValues,
   useTableControllerTableValues,
-  useTableControllerValueById,
-  useListTableControllerValues
+  useTableControllerValueById
 } from "@/lib/TableController";
 import type { Assignment, LabSection } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
@@ -348,10 +349,14 @@ export default function StudentPage() {
                           <Link
                             href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
                           >
-                            {a.submission_timestamp ? new Date(a.submission_timestamp).toLocaleString() : "—"}
+                            {a.submission_timestamp ? (
+                              <TimeZoneAwareDate date={a.submission_timestamp} format="compact" />
+                            ) : (
+                              "—"
+                            )}
                           </Link>
                         ) : a.submission_timestamp ? (
-                          new Date(a.submission_timestamp).toLocaleString()
+                          <TimeZoneAwareDate date={a.submission_timestamp} format="compact" />
                         ) : (
                           "—"
                         )}
@@ -384,10 +389,10 @@ export default function StudentPage() {
                             <Link
                               href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
                             >
-                              {new Date(a.effective_due_date).toLocaleString()}
+                              <TimeZoneAwareDate date={a.effective_due_date} format="compact" />
                             </Link>
                           ) : (
-                            new Date(a.effective_due_date).toLocaleString()
+                            <TimeZoneAwareDate date={a.effective_due_date} format="compact" />
                           )
                         ) : (
                           "—"
@@ -441,7 +446,9 @@ export default function StudentPage() {
                       <Table.Cell>
                         <Link href={`/course/${course_id}/manage/office-hours/request/${req.id}`}>#{req.id}</Link>
                       </Table.Cell>
-                      <Table.Cell>{new Date(req.created_at).toLocaleString()}</Table.Cell>
+                      <Table.Cell>
+                        <TimeZoneAwareDate date={req.created_at} format="compact" />
+                      </Table.Cell>
                       <Table.Cell
                         maxW={{ base: 56, md: 96 }}
                         overflow="hidden"
@@ -454,7 +461,9 @@ export default function StudentPage() {
                       <Table.Cell>
                         <Badge>{req.status}</Badge>
                       </Table.Cell>
-                      <Table.Cell>{req.resolved_at ? new Date(req.resolved_at).toLocaleString() : "—"}</Table.Cell>
+                      <Table.Cell>
+                        {req.resolved_at ? <TimeZoneAwareDate date={req.resolved_at} format="compact" /> : "—"}
+                      </Table.Cell>
                     </Table.Row>
                   ))}
                 </Table.Body>
@@ -540,7 +549,9 @@ export default function StudentPage() {
                       <Table.Cell>
                         <Link href={`/course/${course_id}/discussion/${post.id}`}>#{post.id}</Link>
                       </Table.Cell>
-                      <Table.Cell>{new Date(post.created_at).toLocaleString()}</Table.Cell>
+                      <Table.Cell>
+                        <TimeZoneAwareDate date={post.created_at} format="compact" />
+                      </Table.Cell>
                       <Table.Cell
                         maxW={{ base: 56, md: 96 }}
                         overflow="hidden"
@@ -589,7 +600,9 @@ export default function StudentPage() {
                       <Table.Cell>
                         <Link href={`/course/${course_id}/discussion/${reply.root}`}>#{reply.id}</Link>
                       </Table.Cell>
-                      <Table.Cell>{new Date(reply.created_at).toLocaleString()}</Table.Cell>
+                      <Table.Cell>
+                        <TimeZoneAwareDate date={reply.created_at} format="compact" />
+                      </Table.Cell>
                       <Table.Cell
                         maxW={{ base: 56, md: 96 }}
                         overflow="hidden"
