@@ -8,11 +8,61 @@ import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 import AssignmentDashboard from "./assignmentDashboard";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import TableController from "@/lib/TableController";
 import * as Sentry from "@sentry/nextjs";
+
+const VALID_TABS = ["assigned-grading", "all-submissions", "dashboard"] as const;
+
+function AssignmentHomeTabs({
+  hasReviewAssignments,
+  tableController
+}: {
+  hasReviewAssignments: boolean;
+  tableController: TableController<"submissions"> | null;
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const tabFromUrl = VALID_TABS.includes(tabParam as (typeof VALID_TABS)[number])
+    ? (tabParam as (typeof VALID_TABS)[number])
+    : null;
+
+  return (
+    <Tabs.Root
+      value={tabFromUrl ?? (hasReviewAssignments ? "assigned-grading" : "all-submissions")}
+      onValueChange={(details) => {
+        const tab = details.value as (typeof VALID_TABS)[number];
+        if (VALID_TABS.includes(tab)) {
+          const params = new URLSearchParams(searchParams.toString());
+          params.set("tab", tab);
+          router.replace(`${pathname}?${params.toString()}`);
+        }
+      }}
+      variant="enclosed"
+      lazyMount
+      unmountOnExit
+    >
+      <Tabs.List>
+        <Tabs.Trigger value="assigned-grading">Grading Assigned to You</Tabs.Trigger>
+        <Tabs.Trigger value="all-submissions">All Submissions</Tabs.Trigger>
+        <Tabs.Trigger value="dashboard">Dashboard</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="assigned-grading">
+        <ReviewAssignmentsTable />
+      </Tabs.Content>
+      <Tabs.Content value="all-submissions">
+        <AssignmentsTable tableController={tableController} />
+      </Tabs.Content>
+      <Tabs.Content value="dashboard">
+        <AssignmentDashboard tableController={tableController} />
+      </Tabs.Content>
+    </Tabs.Root>
+  );
+}
 
 export default function AssignmentHome() {
   const controller = useAssignmentController();
@@ -106,27 +156,9 @@ export default function AssignmentHome() {
           </VStack>
         </HStack>
       </Box>
-      <Tabs.Root
-        defaultValue={hasReviewAssignments ? "assigned-grading" : "all-submissions"}
-        variant="enclosed"
-        lazyMount
-        unmountOnExit
-      >
-        <Tabs.List>
-          <Tabs.Trigger value="assigned-grading">Grading Assigned to You</Tabs.Trigger>
-          <Tabs.Trigger value="all-submissions">All Submissions</Tabs.Trigger>
-          <Tabs.Trigger value="dashboard">Dashboard</Tabs.Trigger>
-        </Tabs.List>
-        <Tabs.Content value="assigned-grading">
-          <ReviewAssignmentsTable />
-        </Tabs.Content>
-        <Tabs.Content value="all-submissions">
-          <AssignmentsTable tableController={tableController} />
-        </Tabs.Content>
-        <Tabs.Content value="dashboard">
-          <AssignmentDashboard tableController={tableController} />
-        </Tabs.Content>
-      </Tabs.Root>
+      <Suspense fallback={null}>
+        <AssignmentHomeTabs hasReviewAssignments={hasReviewAssignments} tableController={tableController} />
+      </Suspense>
     </Box>
   );
 }

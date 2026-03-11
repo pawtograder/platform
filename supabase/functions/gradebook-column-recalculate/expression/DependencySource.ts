@@ -959,7 +959,7 @@ export async function addDependencySourceFunctions({
     if (Array.isArray(value)) {
       // Log input to help diagnose issues
       console.log(
-        `Mean called with ${value.length} values (weighted=${weighted}):`,
+        `Mean called for student ${_context.student_id} with ${value.length} values (weighted=${weighted}):`,
         JSON.stringify(
           value.map((v) => ({
             score: isGradebookColumnStudent(v) ? v.score : "N/A",
@@ -991,8 +991,11 @@ export async function addDependencySourceFunctions({
         if (isArray(v)) {
           throw new Error("Unsupported nesting of arrays");
         }
+        if (v === undefined || v === null) {
+          return { score: undefined, max_score: undefined };
+        }
         throw new Error(
-          `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value. Got: ${JSON.stringify(v, null, 2)}`
+          `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value.`
         );
       });
       const validValues = valuesToAverage.filter(
@@ -1099,9 +1102,9 @@ export async function addDependencySourceFunctions({
       }));
       console.log(`Drop_lowest called with ${value.length} values, dropping ${count}:`, JSON.stringify(inputSummary));
 
-      // Filter out entries with max_score <= 0 before sorting and selecting to drop
+      // Filter out entries with max_score <= 0 or score === null before sorting and selecting to drop
       // These entries should be preserved and not count toward drop_lowest
-      const validEntries = value.filter((v) => (v.max_score ?? 0) > 0);
+      const validEntries = value.filter((v) => (v.max_score ?? 0) > 0 && v.score !== null);
 
       // Sort to identify which items to drop by relative score (score/max_score), but preserve original order in output
       const sorted = [...validEntries].sort((a, b) => {
@@ -1123,12 +1126,12 @@ export async function addDependencySourceFunctions({
         }
       }
 
-      // Return items in original order, excluding only those marked for dropping that have max_score > 0
+      // Return items in original order, excluding only those marked for dropping that have max_score > 0 and score !== null
       // Preserve all entries with max_score <= 0 untouched
       const ret: GradebookColumnStudentWithMaxScore[] = [];
       for (const v of value) {
         // Only exclude items that were chosen to drop AND have max_score > 0
-        if (!(toDrop.has(v) && (v.max_score ?? 0) > 0)) {
+        if (!toDrop.has(v) && (v.max_score ?? 0) > 0 && v.score !== null) {
           ret.push(v);
         }
       }
