@@ -149,8 +149,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     ).toBeVisible({ timeout: 10000 });
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
-
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
@@ -212,7 +210,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
@@ -290,7 +290,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Students can view their grading results and request a regrade", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
@@ -336,7 +338,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -365,7 +369,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -387,7 +393,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -413,7 +421,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   });
   test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {
     await loginAsUser(page, grader!, course);
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id2}/files`);
 
     await expect(page.getByText("(on Grading Review Part 2)")).toBeVisible();

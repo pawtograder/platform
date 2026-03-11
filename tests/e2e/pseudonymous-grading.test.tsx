@@ -101,8 +101,6 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     ).toBeVisible({ timeout: 10000 });
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
-
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
@@ -153,7 +151,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Instructors can grade the submission with pseudonymous mode enabled", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
@@ -212,7 +212,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Instructors see their real name in parentheses on grading comments", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
     const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);
@@ -233,7 +235,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Students see only the grader's pseudonym, not their real name", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
@@ -265,7 +269,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Student can request a regrade and sees grader's pseudonym in responses", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
     // Find the region with aria-label 'Grading checks on line 4' and request a regrade
@@ -287,7 +293,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Instructor resolves regrade with pseudonymous profile and adds comment", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
     const region = page.getByRole("region", { name: "Grading checks on line 4" });
@@ -315,7 +323,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Student sees grader pseudonym (not real name) in regrade response", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
     const region = page.getByRole("region", { name: "Grading checks on line 4" });
@@ -335,7 +345,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Student escalates the regrade request", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
     const region = page.getByRole("region", { name: "Grading checks on line 4" });
@@ -355,7 +367,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Instructor closes escalated regrade with their REAL identity (not pseudonym)", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
     const region = page.getByRole("region", { name: "Grading checks on line 4" });
@@ -378,7 +392,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Student sees instructor's REAL name (not pseudonym) for final escalation decision", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
 
     const region = page.getByRole("region", { name: "Grading checks on line 4" });
