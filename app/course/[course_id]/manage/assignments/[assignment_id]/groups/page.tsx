@@ -1,6 +1,6 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
-import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
+
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -30,12 +30,7 @@ import { FaArrowRight, FaEdit, FaRegTimesCircle, FaDownload } from "react-icons/
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
-import {
-  GroupCreateData,
-  GroupManagementProvider,
-  StudentMoveData,
-  useGroupManagement
-} from "./GroupManagementContext";
+import { GroupCreateData, GroupManagementProvider, useGroupManagement } from "./GroupManagementContext";
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
@@ -101,167 +96,77 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   const supabase = createClient();
 
   /**
-   * Submits changes to all students
+   * Publish all staged changes in a single RPC call.
    */
   const publishChanges = async () => {
-    // move students where staged
-
-    await Promise.all(
-      movesToFulfill.map(async (move) => {
-        await updateGroupForStudent(move);
-      })
-    );
-    // create groups where staged
-    await Promise.all(
-      groupsToCreate.map(async (group) => {
-        await createGroupWithStudents(group);
-      })
-    );
-    // clear context
-    clearGroupsToCreate();
-    clearMovesToFulfill();
-    invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
-    invalidate({ resource: "user_roles", invalidates: ["list"] });
-  };
-
-  /**
-   * Create a new group for this assignment and add all students specified
-   */
-  const createGroupWithStudents = async (group: GroupCreateData) => {
+    setLoading(true);
     try {
-      const { id } = await assignmentGroupInstructorCreateGroup(
-        {
-          name: group.name,
-          course_id: course_id,
-          assignment_id: assignment.id
-        },
-        supabase
-      );
+      const { data, error } = await (supabase.rpc as CallableFunction)("publish_assignment_group_changes", {
+        p_class_id: course_id,
+        p_assignment_id: assignment.id,
+        p_groups_to_create: groupsToCreate.map((g) => ({ name: g.name, member_ids: g.member_ids })),
+        p_moves_to_fulfill: movesToFulfill.map((m) => ({
+          profile_id: m.profile_id,
+          old_group_id: m.old_group_id,
+          new_group_id: m.new_group_id
+        }))
+      });
 
-      // Add students sequentially to avoid race conditions in repo permission sync.
-      // Parallel additions cause each call to snapshot a partial member list, and if
-      // the async worker processes them out of order, earlier snapshots can overwrite
-      // later ones, removing students who should have access.
-      const results: PromiseSettledResult<string>[] = [];
-      for (const member_id of group.member_ids) {
-        try {
-          await assignmentGroupInstructorMoveStudent(
-            {
-              new_assignment_group_id: id || null,
-              old_assignment_group_id: null,
-              profile_id: member_id,
-              class_id: course_id
-            },
-            supabase
-          );
-          results.push({ status: "fulfilled", value: member_id });
-        } catch (e) {
-          results.push({ status: "rejected", reason: e });
-        }
-      }
+      if (error) throw error;
 
-      const successes = results.filter((r) => r.status === "fulfilled");
-      const failures = results.filter((r) => r.status === "rejected");
+      const result = data as {
+        groups_created: number;
+        members_added: number;
+        members_moved: number;
+        groups_dissolved: number;
+        syncs_enqueued: number;
+        errors: { error: string; profile_id?: string; group_name?: string }[];
+      };
 
-      // Show consolidated toast based on results
-      if (failures.length === 0) {
-        // All succeeded
-        toaster.create({
-          title: "New group created",
-          description: `All ${successes.length} student(s) added successfully`,
-          type: "success"
-        });
-      } else if (successes.length === 0) {
-        // All failed
-        const failedIds = group.member_ids
-          .map((member_id) => {
-            const profile = profiles?.data?.find(
-              (prof: { private_profile_id: string }) => prof.private_profile_id === member_id
-            );
-            return profile?.profiles?.name || member_id;
-          })
-          .join(", ");
-
-        toaster.create({
-          title: "Error creating group",
-          description: `Failed to add ${failures.length} student(s): ${failedIds}`,
-          type: "error"
+      if (result.errors.length > 0) {
+        result.errors.forEach((e) => {
+          Sentry.captureMessage(`Group publish error: ${e.error}`, {
+            level: "error",
+            extra: e
+          });
+          console.error("Group publish error:", e);
         });
 
-        // Log detailed errors
-        results.forEach((result, idx) => {
-          if (result.status === "rejected") {
-            Sentry.captureException(result.reason);
-            console.error(`Failed to move student ${group.member_ids[idx]}:`, result.reason);
-          }
-        });
-      } else {
-        // Partial success - collect failed member IDs by matching results array indices
-        const failedMemberIds = results
-          .map((result, idx) => (result.status === "rejected" ? group.member_ids[idx] : null))
-          .filter((id) => id !== null) as string[];
-
-        const failedNames = failedMemberIds
-          .map((member_id) => {
-            const profile = profiles?.data?.find(
-              (prof: { private_profile_id: string }) => prof.private_profile_id === member_id
-            );
-            return profile?.profiles?.name || member_id;
-          })
-          .join(", ");
-
         toaster.create({
-          title: "Group created with partial success",
-          description: `${successes.length} student(s) added, ${failures.length} failed: ${failedNames}`,
+          title: "Published with errors",
+          description: `${result.groups_created} groups created, ${result.members_moved + result.members_added} students moved, ${result.errors.length} error(s)`,
           type: "warning"
         });
+      } else {
+        const parts: string[] = [];
+        if (result.groups_created > 0) parts.push(`${result.groups_created} group(s) created`);
+        if (result.members_added > 0) parts.push(`${result.members_added} member(s) added`);
+        if (result.members_moved > 0) parts.push(`${result.members_moved} student(s) moved`);
+        if (result.groups_dissolved > 0) parts.push(`${result.groups_dissolved} group(s) dissolved`);
+        if (result.syncs_enqueued > 0) parts.push(`${result.syncs_enqueued} permission sync(s) queued`);
 
-        // Log detailed errors
-        results.forEach((result, idx) => {
-          if (result.status === "rejected") {
-            Sentry.captureException(result.reason);
-            console.error(`Failed to move student ${group.member_ids[idx]}:`, result.reason);
-          }
+        toaster.create({
+          title: "Changes published",
+          description: parts.join(", ") || "No changes needed",
+          type: "success"
         });
       }
     } catch (e) {
       console.error(e);
+      Sentry.captureException(e);
       toaster.create({
-        title: "Error creating group",
-        description: e instanceof Error ? e.message : "Unknown error",
-        type: "error"
-      });
-    }
-  };
-
-  /**
-   * Move student to the desired group
-   */
-  const updateGroupForStudent = async (move: StudentMoveData) => {
-    try {
-      setLoading(true);
-      await assignmentGroupInstructorMoveStudent(
-        {
-          new_assignment_group_id: move.new_group_id,
-          old_assignment_group_id: move.old_group_id,
-          profile_id: move.profile_id,
-          class_id: course_id
-        },
-        supabase
-      );
-      toaster.create({ title: "Student moved", description: "", type: "success" });
-    } catch (e) {
-      console.error(e);
-      toaster.create({
-        title: "Error moving student",
+        title: "Error publishing changes",
         description: e instanceof Error ? e.message : "Unknown error",
         type: "error"
       });
     } finally {
       setLoading(false);
+      clearGroupsToCreate();
+      clearMovesToFulfill();
+      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+      invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
+      invalidate({ resource: "user_roles", invalidates: ["list"] });
     }
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
   };
 
   const tagDisplay = (group: GroupCreateData) => {
