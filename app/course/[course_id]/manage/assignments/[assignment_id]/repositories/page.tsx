@@ -303,15 +303,25 @@ function FixRepoPermissionsButton({
           <Text fontWeight="medium">{lastResult.message}</Text>
           <HStack gap={2} mt={1} flexWrap="wrap">
             {lastResult.summary.enqueued_sync > 0 && (
-              <Badge size="sm" colorPalette="green">{lastResult.summary.enqueued_sync} synced</Badge>
+              <Badge size="sm" colorPalette="green">
+                {lastResult.summary.enqueued_sync} synced
+              </Badge>
             )}
             {lastResult.summary.skipped_no_usernames > 0 && (
-              <Badge size="sm" colorPalette="gray">{lastResult.summary.skipped_no_usernames} no usernames</Badge>
+              <Badge size="sm" colorPalette="gray">
+                {lastResult.summary.skipped_no_usernames} no usernames
+              </Badge>
             )}
             {lastResult.summary.skipped_not_ready > 0 && (
-              <Badge size="sm" colorPalette="yellow">{lastResult.summary.skipped_not_ready} not ready</Badge>
+              <Badge size="sm" colorPalette="yellow">
+                {lastResult.summary.skipped_not_ready} not ready
+              </Badge>
             )}
-            {lastResult.summary.errors > 0 && <Badge size="sm" colorPalette="red">{lastResult.summary.errors} errors</Badge>}
+            {lastResult.summary.errors > 0 && (
+              <Badge size="sm" colorPalette="red">
+                {lastResult.summary.errors} errors
+              </Badge>
+            )}
           </HStack>
         </Box>
       )}
