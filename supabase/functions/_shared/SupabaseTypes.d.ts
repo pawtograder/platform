@@ -5888,6 +5888,269 @@ export type Database = {
           }
         ];
       };
+      repository_analytics_daily: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          commits: number;
+          date: string;
+          id: number;
+          issue_comments: number;
+          issues_closed: number;
+          issues_opened: number;
+          pr_review_comments: number;
+          prs_opened: number;
+          repository_id: number;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          commits?: number;
+          date: string;
+          id?: number;
+          issue_comments?: number;
+          issues_closed?: number;
+          issues_opened?: number;
+          pr_review_comments?: number;
+          prs_opened?: number;
+          repository_id: number;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          commits?: number;
+          date?: string;
+          id?: number;
+          issue_comments?: number;
+          issues_closed?: number;
+          issues_opened?: number;
+          pr_review_comments?: number;
+          prs_opened?: number;
+          repository_id?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      repository_analytics_fetch_status: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          error_message: string | null;
+          id: number;
+          last_fetched_at: string | null;
+          last_requested_at: string | null;
+          status: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          error_message?: string | null;
+          id?: number;
+          last_fetched_at?: string | null;
+          last_requested_at?: string | null;
+          status?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          error_message?: string | null;
+          id?: number;
+          last_fetched_at?: string | null;
+          last_requested_at?: string | null;
+          status?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: true;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      repository_analytics_items: {
+        Row: {
+          assignment_id: number;
+          author: string | null;
+          class_id: number;
+          created_date: string;
+          github_id: string;
+          id: number;
+          item_type: string;
+          repository_id: number;
+          state: string | null;
+          title: string | null;
+          updated_at: string;
+          url: string;
+        };
+        Insert: {
+          assignment_id: number;
+          author?: string | null;
+          class_id: number;
+          created_date: string;
+          github_id: string;
+          id?: number;
+          item_type: string;
+          repository_id: number;
+          state?: string | null;
+          title?: string | null;
+          updated_at?: string;
+          url: string;
+        };
+        Update: {
+          assignment_id?: number;
+          author?: string | null;
+          class_id?: number;
+          created_date?: string;
+          github_id?: string;
+          id?: number;
+          item_type?: string;
+          repository_id?: number;
+          state?: string | null;
+          title?: string | null;
+          updated_at?: string;
+          url?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       repository_check_runs: {
         Row: {
           assignment_group_id: number | null;
@@ -11060,6 +11323,10 @@ export type Database = {
         Args: { p_rows: Json[] };
         Returns: undefined;
       };
+      enqueue_repo_analytics_fetch: {
+        Args: { p_assignment_id: number; p_class_id: number; p_org: string };
+        Returns: number;
+      };
       evaluate_error_pin_rule: {
         Args: {
           p_grader_result_id: number;
@@ -11208,27 +11475,19 @@ export type Database = {
           submissions_with_comments: number;
         }[];
       };
-      get_instructor_dashboard_overview_metrics: {
+      get_instructor_dashboard_metrics: {
         Args: { p_class_id: number; p_now?: string };
         Returns: {
           assignment_id: number;
-          class_student_count: number;
           closed_or_resolved_regrade_requests: number;
           due_date: string;
           graded_submissions: number;
-          grades_release_status: string;
-          grades_released_count: number;
-          grades_unreleased_count: number;
           open_regrade_requests: number;
           review_assignments_completed: number;
           review_assignments_incomplete: number;
           review_assignments_total: number;
           section: string;
           students_with_valid_extensions: number;
-          students_without_submissions: number;
-          submission_reviews_completed: number;
-          submission_reviews_incomplete: number;
-          submission_reviews_total: number;
           time_zone: string;
           title: string;
           total_submitters: number;
