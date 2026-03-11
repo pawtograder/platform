@@ -12,6 +12,7 @@ import {
   FaChartBar,
   FaCode,
   FaEdit,
+  FaGithub,
   FaHome,
   FaPen,
   FaPlay,
@@ -87,6 +88,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Test Insights",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/test-insights`,
     icon: FaChartBar,
+    instructorsOnly: "graderOrInstructor"
+  },
+  {
+    label: "Repo Analytics",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/repository-analytics`,
+    icon: FaGithub,
     instructorsOnly: "graderOrInstructor"
   }
 ];
