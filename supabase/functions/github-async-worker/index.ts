@@ -5,6 +5,7 @@ import * as Sentry from "npm:@sentry/deno";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,
+  FetchRepoAnalyticsArgs,
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
   RerunAutograderArgs,
@@ -533,6 +534,7 @@ export async function processEnvelope(
         const repo = (envelope.args as SyncRepoToHandoutArgs).repository_full_name;
         return repo.split("/")[0];
       }
+      if (envelope.method === "fetch_repo_analytics") return (envelope.args as FetchRepoAnalyticsArgs).org;
       throw new Error(`Unknown method, ignoring circuit breaker, seems dangerous. ${envelope.method}`);
     })();
     if (org) {
@@ -1156,6 +1158,331 @@ export async function processEnvelope(
           throw error;
         }
       }
+      case "fetch_repo_analytics": {
+        const { assignment_id, org } = envelope.args as FetchRepoAnalyticsArgs;
+
+        scope.setTag("assignment_id", String(assignment_id));
+        scope.setTag("org", org);
+
+        Sentry.addBreadcrumb({
+          message: `Fetching repo analytics for assignment ${assignment_id} in org ${org}`,
+          level: "info"
+        });
+
+        try {
+          // Get all repositories for this assignment
+          const { data: repos, error: reposError } = await adminSupabase
+            .from("repositories")
+            .select("id, repository, assignment_id, class_id")
+            .eq("assignment_id", assignment_id)
+            .eq("is_github_ready", true);
+
+          if (reposError) throw reposError;
+          if (!repos || repos.length === 0) {
+            Sentry.addBreadcrumb({ message: "No repositories found for assignment", level: "info" });
+            await adminSupabase.from("repository_analytics_fetch_status").upsert(
+              {
+                assignment_id,
+                class_id: envelope.class_id!,
+                last_fetched_at: new Date().toISOString(),
+                status: "completed"
+              },
+              { onConflict: "assignment_id" }
+            );
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 200,
+                class_id: envelope.class_id,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            return true;
+          }
+
+          const octokit = await github.getOctoKit(org, scope);
+          if (!octokit) throw new Error(`No octokit found for org ${org}`);
+
+          for (const repo of repos) {
+            const repoFullName = repo.repository;
+            const [repoOwner, repoName] = repoFullName.split("/");
+
+            // Fetch issues (opened + closed events, comments)
+            try {
+              const issues = await octokit.paginate("GET /repos/{owner}/{repo}/issues", {
+                owner: repoOwner,
+                repo: repoName,
+                state: "all",
+                per_page: 100
+              });
+
+              const dailyMap = new Map<
+                string,
+                {
+                  issues_opened: number;
+                  issues_closed: number;
+                  issue_comments: number;
+                  prs_opened: number;
+                  pr_review_comments: number;
+                  commits: number;
+                }
+              >();
+
+              const ensureDay = (dateStr: string) => {
+                const day = dateStr.substring(0, 10);
+                if (!dailyMap.has(day)) {
+                  dailyMap.set(day, {
+                    issues_opened: 0,
+                    issues_closed: 0,
+                    issue_comments: 0,
+                    prs_opened: 0,
+                    pr_review_comments: 0,
+                    commits: 0
+                  });
+                }
+                return day;
+              };
+
+              const itemUpserts: Array<{
+                repository_id: number;
+                class_id: number;
+                assignment_id: number;
+                item_type: string;
+                github_id: string;
+                title: string | null;
+                url: string;
+                author: string | null;
+                created_date: string;
+                state: string | null;
+                updated_at: string;
+              }> = [];
+              const now = new Date().toISOString();
+
+              for (const issue of issues) {
+                if (issue.pull_request) continue; // skip PRs in issues list
+                const createdDay = ensureDay(issue.created_at);
+                dailyMap.get(createdDay)!.issues_opened++;
+
+                if (issue.closed_at) {
+                  const closedDay = ensureDay(issue.closed_at);
+                  dailyMap.get(closedDay)!.issues_closed++;
+                }
+
+                itemUpserts.push({
+                  repository_id: repo.id,
+                  class_id: repo.class_id,
+                  assignment_id: repo.assignment_id,
+                  item_type: "issue",
+                  github_id: String(issue.number),
+                  title: issue.title,
+                  url: issue.html_url,
+                  author: issue.user?.login || null,
+                  created_date: createdDay,
+                  state: issue.state,
+                  updated_at: now
+                });
+              }
+
+              // Fetch issue comments
+              try {
+                const issueComments = await octokit.paginate("GET /repos/{owner}/{repo}/issues/comments", {
+                  owner: repoOwner,
+                  repo: repoName,
+                  per_page: 100
+                });
+                for (const comment of issueComments) {
+                  if (!comment.created_at) continue;
+                  const day = ensureDay(comment.created_at);
+                  dailyMap.get(day)!.issue_comments++;
+
+                  itemUpserts.push({
+                    repository_id: repo.id,
+                    class_id: repo.class_id,
+                    assignment_id: repo.assignment_id,
+                    item_type: "issue_comment",
+                    github_id: String(comment.id),
+                    title: comment.body?.substring(0, 200) || null,
+                    url: comment.html_url,
+                    author: comment.user?.login || null,
+                    created_date: day,
+                    state: null,
+                    updated_at: now
+                  });
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({
+                  message: `Error fetching issue comments for ${repoFullName}: ${e}`,
+                  level: "warning"
+                });
+              }
+
+              // Fetch PRs
+              try {
+                const prs = await octokit.paginate("GET /repos/{owner}/{repo}/pulls", {
+                  owner: repoOwner,
+                  repo: repoName,
+                  state: "all",
+                  per_page: 100
+                });
+                for (const pr of prs) {
+                  const createdDay = ensureDay(pr.created_at);
+                  dailyMap.get(createdDay)!.prs_opened++;
+
+                  itemUpserts.push({
+                    repository_id: repo.id,
+                    class_id: repo.class_id,
+                    assignment_id: repo.assignment_id,
+                    item_type: "pr",
+                    github_id: String(pr.number),
+                    title: pr.title,
+                    url: pr.html_url,
+                    author: pr.user?.login || null,
+                    created_date: createdDay,
+                    state: pr.state,
+                    updated_at: now
+                  });
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({ message: `Error fetching PRs for ${repoFullName}: ${e}`, level: "warning" });
+              }
+
+              // Fetch PR review comments
+              try {
+                const reviewComments = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/comments", {
+                  owner: repoOwner,
+                  repo: repoName,
+                  per_page: 100
+                });
+                for (const comment of reviewComments) {
+                  if (!comment.created_at) continue;
+                  const day = ensureDay(comment.created_at);
+                  dailyMap.get(day)!.pr_review_comments++;
+
+                  itemUpserts.push({
+                    repository_id: repo.id,
+                    class_id: repo.class_id,
+                    assignment_id: repo.assignment_id,
+                    item_type: "pr_review_comment",
+                    github_id: String(comment.id),
+                    title: comment.body?.substring(0, 200) || null,
+                    url: comment.html_url,
+                    author: comment.user?.login || null,
+                    created_date: day,
+                    state: null,
+                    updated_at: now
+                  });
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({
+                  message: `Error fetching PR review comments for ${repoFullName}: ${e}`,
+                  level: "warning"
+                });
+              }
+
+              // Fetch commits
+              try {
+                const commits = await octokit.paginate("GET /repos/{owner}/{repo}/commits", {
+                  owner: repoOwner,
+                  repo: repoName,
+                  per_page: 100
+                });
+                for (const commit of commits) {
+                  const dateStr = commit.commit.author?.date || commit.commit.committer?.date;
+                  if (!dateStr) continue;
+                  const day = ensureDay(dateStr);
+                  dailyMap.get(day)!.commits++;
+
+                  itemUpserts.push({
+                    repository_id: repo.id,
+                    class_id: repo.class_id,
+                    assignment_id: repo.assignment_id,
+                    item_type: "commit",
+                    github_id: commit.sha,
+                    title: commit.commit.message?.substring(0, 200) || null,
+                    url: commit.html_url,
+                    author: commit.author?.login || commit.commit.author?.name || null,
+                    created_date: day,
+                    state: null,
+                    updated_at: now
+                  });
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({ message: `Error fetching commits for ${repoFullName}: ${e}`, level: "warning" });
+              }
+
+              // Upsert daily stats
+              for (const [day, stats] of dailyMap.entries()) {
+                await adminSupabase.from("repository_analytics_daily").upsert(
+                  {
+                    repository_id: repo.id,
+                    class_id: repo.class_id,
+                    assignment_id: repo.assignment_id,
+                    date: day,
+                    ...stats,
+                    updated_at: now
+                  },
+                  { onConflict: "repository_id,date" }
+                );
+              }
+
+              // Upsert items in batches of 100
+              for (let i = 0; i < itemUpserts.length; i += 100) {
+                const batch = itemUpserts.slice(i, i + 100);
+                await adminSupabase
+                  .from("repository_analytics_items")
+                  .upsert(batch, { onConflict: "repository_id,item_type,github_id" });
+              }
+            } catch (repoError) {
+              Sentry.addBreadcrumb({
+                message: `Error processing repo ${repoFullName}: ${repoError}`,
+                level: "error"
+              });
+              Sentry.captureException(repoError, scope);
+            }
+          }
+
+          // Update fetch status
+          await adminSupabase.from("repository_analytics_fetch_status").upsert(
+            {
+              assignment_id,
+              class_id: envelope.class_id!,
+              last_fetched_at: new Date().toISOString(),
+              status: "completed"
+            },
+            { onConflict: "assignment_id" }
+          );
+        } catch (error) {
+          // Update fetch status with error
+          await adminSupabase.from("repository_analytics_fetch_status").upsert(
+            {
+              assignment_id,
+              class_id: envelope.class_id!,
+              status: "error",
+              error_message: error instanceof Error ? error.message : String(error)
+            },
+            { onConflict: "assignment_id" }
+          );
+          throw error;
+        }
+
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 200,
+            class_id: envelope.class_id,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        return true;
+      }
       default:
         throw new Error(`Unknown async method: ${(envelope as GitHubAsyncEnvelope).method}`);
     }
@@ -1195,6 +1522,7 @@ export async function processEnvelope(
         const repo = (envelope.args as RerunAutograderArgs).repository;
         return repo.split("/")[0];
       }
+      if (envelope.method === "fetch_repo_analytics") return (envelope.args as FetchRepoAnalyticsArgs).org;
       return undefined;
     })();
 
