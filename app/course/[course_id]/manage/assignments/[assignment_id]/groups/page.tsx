@@ -140,10 +140,14 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         });
 
         const failedProfileIds = new Set(
-          result.errors.filter((e): e is { error: string; profile_id: string } => !!e.profile_id).map((e) => e.profile_id)
+          result.errors
+            .filter((e): e is { error: string; profile_id: string } => !!e.profile_id)
+            .map((e) => e.profile_id)
         );
         const failedGroupNames = new Set(
-          result.errors.filter((e): e is { error: string; group_name: string } => !!e.group_name).map((e) => e.group_name)
+          result.errors
+            .filter((e): e is { error: string; group_name: string } => !!e.group_name)
+            .map((e) => e.group_name)
         );
         retainOnlyFailedMovesAndGroups(failedProfileIds, failedGroupNames);
       } else {
