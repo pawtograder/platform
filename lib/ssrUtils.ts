@@ -47,6 +47,7 @@ export type CourseControllerInitialData = {
   assignmentGroupsWithMembers?: Array<
     Database["public"]["Tables"]["assignment_groups"]["Row"] & {
       assignment_groups_members: Database["public"]["Tables"]["assignment_groups_members"]["Row"][];
+      mentor: { name: string | null } | null;
     }
   >;
   discussionTopics?: DiscussionTopic[];
@@ -341,11 +342,12 @@ export async function fetchCourseControllerData(
     fetchAllPages<
       Database["public"]["Tables"]["assignment_groups"]["Row"] & {
         assignment_groups_members: Database["public"]["Tables"]["assignment_groups_members"]["Row"][];
+        mentor: { name: string | null } | null;
       }
     >(
       assignmentGroupsClient
         .from("assignment_groups")
-        .select("*, assignment_groups_members(*)")
+        .select("*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)")
         .eq("class_id", course_id)
     ),
 

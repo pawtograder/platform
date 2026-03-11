@@ -31,6 +31,8 @@ import {
 } from "../tests/e2e/TestingUtils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { DEFAULT_RATE_LIMITS, RateLimitConfig, RateLimitManager } from "@/tests/generator/GenerationUtils";
+import { TEAM_COLLABORATION_SURVEY } from "@/tests/fixtures/teamCollaborationSurvey";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 
 // Ensure crypto is available globally for Node.js environments
 if (typeof globalThis.crypto === "undefined") {
@@ -65,6 +67,10 @@ export interface LabAssignmentConfig {
 export interface GroupAssignmentConfig {
   numGroupAssignments: number;
   numLabGroupAssignments: number;
+  /** When true, form groups once and reuse the same membership across all group assignments */
+  reuseGroupsAcrossAssignments?: boolean;
+  /** Override group size (e.g. 4 for 3-4 person groups). If unset, uses calculateGroupSize(students). */
+  groupSize?: number;
 }
 
 export interface HelpRequestConfig {
@@ -87,6 +93,8 @@ export interface SurveyConfig {
   submissionRate: number; // Percentage of responses that are submitted (0-1)
   linkToGroupAssignments?: boolean; // Create surveys linked to group assignments (only group members respond)
   includeTeamCollaboration?: boolean; // Include the team collaboration survey type in the rotation
+  /** When set, first N assignment-linked surveys get 100% responses (all submitted); rest get 0%. */
+  completeResponsesForFirstNAssignmentSurveys?: number;
 }
 
 export interface SeedingConfiguration {
@@ -593,194 +601,97 @@ const SURVEYJS_TEMPLATES = {
     ]
   },
 
-  teamCollaboration: {
-    title: "Weekly Team Collaboration Survey",
-    description: "Please complete this weekly survey about your team collaboration experience.",
-    pages: [
-      {
-        name: "page1",
-        elements: [
-          {
-            type: "checkbox",
-            name: "q1",
-            title: "This week I have...",
-            choices: [
-              { value: 1, text: "Completed all my assigned tasks" },
-              { value: 4, text: "Completed some of my assigned tasks" },
-              { value: 2, text: "Asked a teammate for help completing my task(s)" },
-              { value: 3, text: "Helped a teammate complete a portion of their task(s)" },
-              { value: 5, text: "Other" }
-            ],
-            hasOther: true
-          },
-          {
-            type: "checkbox",
-            name: "q2",
-            title: "This week I have interacted with my team by...",
-            choices: [
-              { value: 1, text: "Met live (including Zoom meetings, Discord voicechat, or similar) with my team" },
-              { value: 2, text: "Participated in checkins with my team (via text, email, GroupMe, or similar)" },
-              { value: 3, text: "Opened a Pull Request and asked my team for feedback on my code" },
-              { value: 4, text: "Asked my team for feedback on my non-code work (requirements, design, test plan)" },
-              {
-                value: 5,
-                text: "Reviewed technical artifacts (design, requirements, tests, or code) for my teammates"
-              },
-              { value: 6, text: "Other" }
-            ],
-            hasOther: true
-          }
-        ]
-      },
-      {
-        name: "page2",
-        elements: [
-          {
-            type: "radiogroup",
-            name: "q3",
-            title: "This week, I knew what I needed to get done",
-            choices: [
-              { value: 1, text: "Strongly agree" },
-              { value: 2, text: "Agree" },
-              { value: 4, text: "Neither agree nor disagree" },
-              { value: 6, text: "Disagree" },
-              { value: 7, text: "Strongly disagree" }
-            ]
-          },
-          {
-            type: "radiogroup",
-            name: "q4",
-            title: "This week, I have gotten done ___________ than I think I should have",
-            choices: [
-              { value: 1, text: "Much more" },
-              { value: 2, text: "A bit more" },
-              { value: 3, text: "About as much as" },
-              { value: 4, text: "A bit less" },
-              { value: 5, text: "Much less" }
-            ]
-          },
-          {
-            type: "radiogroup",
-            name: "q5",
-            title: "This week, my team overall has gotten done ___________ than I think we should have",
-            choices: [
-              { value: 1, text: "Much more" },
-              { value: 2, text: "A bit more" },
-              { value: 3, text: "About as much as" },
-              { value: 4, text: "A bit less" },
-              { value: 5, text: "Much less" }
-            ]
-          },
-          {
-            type: "radiogroup",
-            name: "q6",
-            title: "Overall, I think that everyone has been contributing adequately to the success of the project",
-            choices: [
-              { value: 1, text: "Strongly agree" },
-              { value: 5, text: "Agree" },
-              { value: 6, text: "Neither agree nor disagree" },
-              { value: 7, text: "Disagree" },
-              { value: 8, text: "Strongly disagree" }
-            ]
-          },
-          {
-            type: "radiogroup",
-            name: "q7",
-            title: "Next week, I intend to get done ______ than I did this week",
-            choices: [
-              { value: 1, text: "Much more" },
-              { value: 2, text: "A bit more" },
-              { value: 3, text: "About as much as" },
-              { value: 4, text: "A bit less" },
-              { value: 5, text: "Much less" }
-            ]
-          }
-        ]
-      },
-      {
-        name: "page3",
-        elements: [
-          {
-            type: "radiogroup",
-            name: "q16",
-            title: "In our team we relied on each other to get the job done.",
-            choices: [
-              { value: 5, text: "Strongly agree" },
-              { value: 4, text: "Agree" },
-              { value: 3, text: "Neither agree nor disagree" },
-              { value: 2, text: "Disagree" },
-              { value: 1, text: "Strongly disagree" }
-            ]
-          },
-          {
-            type: "radiogroup",
-            name: "q21",
-            title: "Team members keep information to themselves that should be shared with others.",
-            choices: [
-              { value: 5, text: "Strongly agree" },
-              { value: 4, text: "Agree" },
-              { value: 3, text: "Neither agree nor disagree" },
-              { value: 2, text: "Disagree" },
-              { value: 1, text: "Strongly disagree" }
-            ]
-          },
-          {
-            type: "radiogroup",
-            name: "q23",
-            title: "I am satisfied with the performance of my team.",
-            choices: [
-              { value: 5, text: "Strongly agree" },
-              { value: 4, text: "Agree" },
-              { value: 3, text: "Neither agree nor disagree" },
-              { value: 2, text: "Disagree" },
-              { value: 1, text: "Strongly disagree" }
-            ]
-          },
-          {
-            type: "radiogroup",
-            name: "q24",
-            title: "We have completed the tasks this week in a way we all agreed upon.",
-            choices: [
-              { value: 5, text: "Strongly agree" },
-              { value: 4, text: "Agree" },
-              { value: 3, text: "Neither agree nor disagree" },
-              { value: 2, text: "Disagree" },
-              { value: 1, text: "Strongly disagree" }
-            ]
-          }
-        ]
-      },
-      {
-        name: "page4",
-        elements: [
-          {
-            type: "checkbox",
-            name: "q9",
-            title: "My progress this week has been impeded by:",
-            choices: [
-              { value: 1, text: "Difficulties with technologies or course materials" },
-              { value: 2, text: "Demands of other classes" },
-              { value: 3, text: "Other personal responsibilities/distractions" },
-              { value: 4, text: "Teammates who didn't complete their responsibilities" },
-              { value: 5, text: "Communication difficulties with my teammates" },
-              {
-                value: 6,
-                text: "Difficulties scheduling tasks so that I wasn't waiting for my team to complete their work"
-              },
-              { value: 7, text: "Other" },
-              { value: 8, text: "None of the above: I was able to work productively" }
-            ],
-            hasOther: true
-          },
-          {
-            type: "comment",
-            name: "q15",
-            title:
-              "How do you feel about your team's collaboration process in this project? Please reflect in about two sentences."
-          }
-        ]
-      }
-    ]
+  teamCollaboration: TEAM_COLLABORATION_SURVEY
+};
+
+const TEAM_COLLABORATION_ANALYTICS_CONFIG: SurveyAnalyticsConfig = {
+  questions: {
+    q1: {
+      includeInAnalytics: true,
+      displayLabel: "This week I have..."
+    },
+    q2: {
+      includeInAnalytics: true,
+      displayLabel: "Interacted with team by..."
+    },
+    q3: {
+      includeInAnalytics: true,
+      alertThreshold: 5,
+      alertDirection: "above",
+      alertMessage: "Student unclear on weekly goals",
+      displayLabel: "Knew what to do"
+    },
+    q4: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Individual reports lower than expected progress",
+      displayLabel: "Personal progress"
+    },
+    q5: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Team reports lower than expected progress",
+      displayLabel: "Team progress"
+    },
+    q6: {
+      includeInAnalytics: true,
+      alertThreshold: 6,
+      alertDirection: "any_above",
+      alertMessage: "Possible unequal contribution reported",
+      displayLabel: "Equal contribution"
+    },
+    q7: {
+      includeInAnalytics: true,
+      alertThreshold: 4,
+      alertDirection: "above",
+      alertMessage: "Student planning to do less next week",
+      displayLabel: "Next week plans"
+    },
+    q16: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Low team interdependence",
+      isReversedScale: true,
+      displayLabel: "Team reliance"
+    },
+    q21: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Information hoarding detected",
+      isReversedScale: true,
+      displayLabel: "Info sharing"
+    },
+    q23: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Low team satisfaction",
+      isReversedScale: true,
+      displayLabel: "Team satisfaction"
+    },
+    q24: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Tasks not completed as agreed",
+      isReversedScale: true,
+      displayLabel: "Task agreement"
+    },
+    q9: {
+      includeInAnalytics: true,
+      flagValues: [4, 5, 6],
+      alertMessage: "Teammate/communication impediments reported",
+      displayLabel: "Impediments"
+    }
+  },
+  globalSettings: {
+    varianceThreshold: 1.5,
+    nonResponseThreshold: 0.8,
+    trendDeclineCount: 3
   }
 };
 
@@ -2352,7 +2263,7 @@ export class DatabaseSeeder {
     const timeStep = timeRange / (config.numAssignments - 1);
 
     // Calculate group size for group assignments
-    const groupSize = calculateGroupSize(students.length);
+    const groupSize = config.groupAssignmentConfig?.groupSize ?? calculateGroupSize(students.length);
 
     // Get the maximum ordinal from existing discussion topics to determine starting ordinal
     const { data: existingTopics, error: topicsError } = await supabase
@@ -2379,6 +2290,13 @@ export class DatabaseSeeder {
     console.log(`   Lab assignments: ${config.labAssignmentConfig!.numLabAssignments}`);
     console.log(`   Group assignments: ${config.groupAssignmentConfig!.numGroupAssignments}`);
     console.log(`   Lab group assignments: ${config.groupAssignmentConfig!.numLabGroupAssignments}`);
+
+    // Form groups once and reuse across all group assignments when configured
+    let sharedGroupMembership: string[][] | null = null;
+    if (config.groupAssignmentConfig?.reuseGroupsAcrossAssignments) {
+      sharedGroupMembership = this.formGroupMembership(students, groupSize);
+      console.log(`   Formed ${sharedGroupMembership.length} shared groups (reused across assignments)`);
+    }
 
     for (let i = 0; i < config.numAssignments; i++) {
       const assignmentDate = new Date(config.firstAssignmentDate.getTime() + timeStep * i);
@@ -2500,7 +2418,16 @@ export class DatabaseSeeder {
       // Create assignment groups for group assignments
       let groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
       if (isGroupAssignment || isLabGroupAssignment) {
-        groups = await this.createAssignmentGroups(assignmentData.id, class_id, students, groupSize, graders);
+        if (sharedGroupMembership) {
+          groups = await this.createAssignmentGroupsFromMembership(
+            assignmentData.id,
+            class_id,
+            sharedGroupMembership,
+            graders
+          );
+        } else {
+          groups = await this.createAssignmentGroups(assignmentData.id, class_id, students, groupSize, graders);
+        }
       }
 
       const assignmentResult = {
@@ -4505,6 +4432,83 @@ final;`,
     );
   }
 
+  /** Form group membership once (shuffle + partition). Returns array of arrays of profile_ids. */
+  private formGroupMembership(students: TestingUser[], groupSize: number): string[][] {
+    const numGroups = Math.ceil(students.length / groupSize);
+    const shuffled = [...students].sort(() => Math.random() - 0.5);
+    const membership: string[][] = [];
+    for (let i = 0; i < numGroups; i++) {
+      const groupStudents = shuffled.slice(i * groupSize, (i + 1) * groupSize);
+      if (groupStudents.length > 0) {
+        membership.push(groupStudents.map((s) => s.private_profile_id));
+      }
+    }
+    return membership;
+  }
+
+  /** Create assignment groups from a pre-formed membership structure (reuse across assignments). */
+  private async createAssignmentGroupsFromMembership(
+    assignment_id: number,
+    class_id: number,
+    membership: string[][],
+    graders: TestingUser[] = []
+  ): Promise<Array<{ id: number; name: string; memberCount: number; members: string[] }>> {
+    const groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
+
+    const createdGroups = await Promise.all(
+      membership.map(async (memberProfileIds, i) => {
+        if (memberProfileIds.length === 0) return null;
+
+        const mentorProfileId = graders.length > 0 ? graders[i % graders.length].private_profile_id : null;
+
+        const { data: groupData, error: groupError } = await this.rateLimitManager.trackAndLimit(
+          "assignment_groups",
+          () =>
+            supabase
+              .from("assignment_groups")
+              .insert({
+                assignment_id,
+                class_id,
+                name: `Group ${String.fromCharCode(65 + i)}`,
+                mentor_profile_id: mentorProfileId
+              })
+              .select("id, name")
+        );
+
+        if (groupError || !groupData || groupData.length === 0) {
+          throw new Error(`Failed to create assignment group: ${groupError?.message || "No data returned"}`);
+        }
+
+        const group = groupData[0];
+        const memberInserts = memberProfileIds.map((profileId) => ({
+          assignment_group_id: group.id,
+          profile_id: profileId,
+          assignment_id,
+          class_id,
+          added_by: memberProfileIds[0]
+        }));
+
+        if (memberInserts.length > 0) {
+          await this.rateLimitManager.trackAndLimit(
+            "assignment_groups_members",
+            () => supabase.from("assignment_groups_members").insert(memberInserts).select("*"),
+            memberInserts.length
+          );
+        }
+
+        return {
+          id: group.id,
+          name: group.name,
+          memberCount: memberProfileIds.length,
+          members: memberProfileIds
+        };
+      })
+    );
+
+    groups.push(...createdGroups.filter((group): group is NonNullable<typeof group> => group !== null));
+    return groups;
+  }
+
   // Helper method to create assignment groups
   private async createAssignmentGroups(
     assignment_id: number,
@@ -4927,8 +4931,30 @@ public class Entrypoint {
 
     // Create assignment-linked team collaboration surveys if configured
     const groupAssignments = assignments.filter((a) => a.groups && a.groups.length > 0);
+    let teamCollabSeriesId: string | null = null;
+    if (config.linkToGroupAssignments && groupAssignments.length > 0 && config.includeTeamCollaboration !== false) {
+      const instructor = instructors[0];
+      const { data: seriesData, error: seriesError } = await supabase
+        .from("survey_series")
+        .insert({
+          class_id: class_id,
+          name: "Weekly Team Collaboration",
+          description: "Weekly surveys to track team dynamics and identify struggling teams",
+          created_by: instructor.private_profile_id
+        })
+        .select("id")
+        .single();
+      if (seriesError) {
+        console.warn(`   ⚠ Could not create survey series: ${seriesError.message}`);
+      } else if (seriesData) {
+        teamCollabSeriesId = seriesData.id;
+        console.log(`   ✓ Created survey series: "Weekly Team Collaboration"`);
+      }
+    }
+
     if (config.linkToGroupAssignments && groupAssignments.length > 0 && config.includeTeamCollaboration !== false) {
       const teamCollabTemplate = SURVEYJS_TEMPLATES.teamCollaboration;
+      let weekNumber = 1;
       for (const assignment of groupAssignments) {
         const instructor = instructors[Math.floor(Math.random() * instructors.length)];
         const groupMembers = new Set<string>();
@@ -4942,14 +4968,17 @@ public class Entrypoint {
           class_id: class_id,
           created_by: instructor.private_profile_id,
           assigned_to_all: false,
-          title: `Week ${assignment.id} Team Collaboration Survey`,
+          title: `Week ${weekNumber} Team Collaboration Survey`,
           description: teamCollabTemplate.description,
           json: teamCollabTemplate,
           status: "published" as const,
           allow_response_editing: Math.random() < 0.5,
           assignment_id: assignment.id,
           due_date: addDays(new Date(), Math.floor(Math.random() * 14) + 5).toISOString(),
-          version: 1
+          version: 1,
+          series_id: teamCollabSeriesId,
+          series_ordinal: weekNumber,
+          analytics_config: TEAM_COLLABORATION_ANALYTICS_CONFIG
         };
 
         const { data: surveyResult, error: surveyError } = await this.rateLimitManager.trackAndLimit("surveys", () =>
@@ -4983,8 +5012,9 @@ public class Entrypoint {
           groupMembersByAssignment: new Map([[assignment.id, Array.from(groupMembers)]])
         });
         console.log(
-          `   ✓ Created assignment-linked survey: "${surveyResult[0].title}" (linked to assignment ${assignment.id}, ${groupMembers.size} group members)`
+          `   ✓ Created assignment-linked survey: "${surveyResult[0].title}" (Week ${weekNumber}, linked to assignment ${assignment.id}, ${groupMembers.size} group members)`
         );
+        weekNumber++;
       }
     }
 
@@ -5038,7 +5068,8 @@ public class Entrypoint {
         students,
         class_id,
         config.responseRate,
-        config.submissionRate
+        config.submissionRate,
+        config.completeResponsesForFirstNAssignmentSurveys
       );
     }
 
@@ -5093,7 +5124,8 @@ public class Entrypoint {
     students: TestingUser[],
     class_id: number,
     responseRate: number,
-    submissionRate: number
+    submissionRate: number,
+    completeResponsesForFirstNAssignmentSurveys?: number
   ) {
     console.log(`   Creating survey responses...`);
 
@@ -5104,6 +5136,8 @@ public class Entrypoint {
       is_submitted: boolean;
       submitted_at: string | null;
     }> = [];
+
+    let assignmentLinkedIndex = 0;
 
     for (const survey of surveys) {
       // Get the survey JSON to generate appropriate responses
@@ -5126,11 +5160,27 @@ public class Entrypoint {
         eligibleStudents = students;
       }
 
-      // Determine which eligible students respond (based on responseRate)
-      const respondingStudents = eligibleStudents.filter(() => Math.random() < responseRate);
+      // Apply completeResponsesForFirstNAssignmentSurveys: first N get 100%/100%, rest get 0%
+      let effectiveResponseRate = responseRate;
+      let effectiveSubmissionRate = submissionRate;
+      if (survey.assignment_id && completeResponsesForFirstNAssignmentSurveys !== undefined) {
+        if (assignmentLinkedIndex < completeResponsesForFirstNAssignmentSurveys) {
+          effectiveResponseRate = 1;
+          effectiveSubmissionRate = 1;
+        } else {
+          effectiveResponseRate = 0; // Skip responses for this survey
+        }
+        assignmentLinkedIndex++;
+      }
+
+      // Determine which eligible students respond (based on effectiveResponseRate)
+      const respondingStudents =
+        effectiveResponseRate >= 1
+          ? eligibleStudents
+          : eligibleStudents.filter(() => Math.random() < effectiveResponseRate);
 
       for (const student of respondingStudents) {
-        const isSubmitted = Math.random() < submissionRate;
+        const isSubmitted = effectiveSubmissionRate >= 1 || Math.random() < effectiveSubmissionRate;
         const responseData: Record<string, unknown> = {};
 
         // Generate responses for each question element

@@ -33,7 +33,9 @@ import {
   DialogCloseTrigger
 } from "@/components/ui/dialog";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
-import { useAssignments } from "@/hooks/useCourseController";
+import { useAssignments, useSurveySeries } from "@/hooks/useCourseController";
+import { AnalyticsConfigEditor } from "@/components/survey/AnalyticsConfigEditor";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 
 // New modal wrapper around SurveyBuilder
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
@@ -53,6 +55,9 @@ type SurveyFormData = {
   allow_response_editing: boolean;
   assigned_to_all: boolean;
   assigned_students?: string[];
+  series_id?: string | null;
+  series_ordinal?: number | null;
+  analytics_config?: SurveyAnalyticsConfig | null;
 };
 
 const sampleJsonTemplate = `{
@@ -111,7 +116,10 @@ export default function SurveyForm({
   const [isStudentSelectorOpen, setIsStudentSelectorOpen] = useState(false);
 
   const assignments = useAssignments();
+  const { series: surveySeries } = useSurveySeries();
   const currentJson = watch("json");
+  const watchSeriesId = watch("series_id");
+  const watchAnalyticsConfig = watch("analytics_config");
   const currentStatus = watch("status");
   const assignedStudents = watch("assigned_students") || [];
 
@@ -469,6 +477,78 @@ export default function SurveyForm({
                     )}
                   />
                 </Field>
+              </Fieldset.Content>
+
+              {/* Survey Series */}
+              <Fieldset.Content>
+                <Fieldset.Legend>Survey Series (Optional)</Fieldset.Legend>
+                <VStack align="stretch" gap={4} mt={2}>
+                  <Field label="Link to Series" helperText="Link surveys to a series for trend analysis across weeks">
+                    <Controller
+                      name="series_id"
+                      control={control}
+                      render={({ field }) => (
+                        <NativeSelect.Root size="sm">
+                          <NativeSelect.Field
+                            value={field.value ?? ""}
+                            onChange={(e) => field.onChange(e.target.value || null)}
+                            bg="bg.subtle"
+                            borderColor="border"
+                            color="fg"
+                          >
+                            <option value="">Not part of a series</option>
+                            {surveySeries.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </NativeSelect.Field>
+                        </NativeSelect.Root>
+                      )}
+                    />
+                  </Field>
+                  {watchSeriesId && (
+                    <Field label="Week Number" helperText="Position in the series (Week 1, Week 2, etc.)">
+                      <Controller
+                        name="series_ordinal"
+                        control={control}
+                        render={({ field }) => (
+                          <Input
+                            type="number"
+                            min={1}
+                            value={field.value ?? ""}
+                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : null)}
+                            bg="bg.subtle"
+                            borderColor="border"
+                            color="fg"
+                          />
+                        )}
+                      />
+                    </Field>
+                  )}
+                </VStack>
+              </Fieldset.Content>
+
+              {/* Analytics Config */}
+              <Fieldset.Content>
+                <Fieldset.Legend>Analytics Configuration</Fieldset.Legend>
+                <Box mt={2}>
+                  <AnalyticsConfigEditor
+                    surveyJson={
+                      currentJson
+                        ? (() => {
+                            try {
+                              return JSON.parse(currentJson);
+                            } catch {
+                              return {};
+                            }
+                          })()
+                        : {}
+                    }
+                    analyticsConfig={watchAnalyticsConfig ?? { questions: {}, globalSettings: {} }}
+                    onChange={(config: SurveyAnalyticsConfig) => setValue("analytics_config", config)}
+                  />
+                </Box>
               </Fieldset.Content>
 
               {/* Available At */}

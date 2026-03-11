@@ -10,6 +10,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
 import { Box } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { PostgrestError } from "@supabase/supabase-js";
 import { TZDate } from "@date-fns/tz";
@@ -26,6 +27,9 @@ type SurveyFormData = {
   allow_response_editing: boolean;
   assigned_to_all: boolean;
   assigned_students?: string[];
+  series_id?: string | null;
+  series_ordinal?: number | null;
+  analytics_config?: SurveyAnalyticsConfig | null;
 };
 
 type SurveyStatus = Tables<"surveys">["status"]; // "draft" | "published" | "closed"
@@ -87,7 +91,10 @@ export default function NewSurveyPage() {
       due_date: "",
       allow_response_editing: false,
       assigned_to_all: true,
-      assigned_students: []
+      assigned_students: [],
+      series_id: null,
+      series_ordinal: null,
+      analytics_config: null
     }
   });
 
@@ -300,7 +307,10 @@ export default function NewSurveyPage() {
           assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
           validation_errors: validationErrors,
           assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          series_id: values.series_id ? values.series_id : null,
+          series_ordinal: values.series_ordinal != null ? Number(values.series_ordinal) : null,
+          analytics_config: values.analytics_config ?? null
         };
 
         const result = await supabase
@@ -331,7 +341,10 @@ export default function NewSurveyPage() {
           available_at: convertDueDateToISO(values.available_at as string),
           assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
           validation_errors: validationErrors,
-          assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all)
+          assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all),
+          series_id: values.series_id ? values.series_id : null,
+          series_ordinal: values.series_ordinal != null ? Number(values.series_ordinal) : null,
+          analytics_config: values.analytics_config ?? null
         };
 
         const result = await supabase.from("surveys").insert(insertPayload).select("id, survey_id").single();

@@ -204,6 +204,61 @@ const TEMPLATES: Record<string, SeederConfig> = {
     }
   },
 
+  groupfocused: {
+    className: "Group-Focused Test Class",
+    students: 50,
+    graders: 5,
+    instructors: 1,
+    assignments: 10,
+    dateRangeStart: -30,
+    dateRangeEnd: 30,
+    manualGradedColumns: 2,
+    rubricConfig: {
+      minPartsPerAssignment: 2,
+      maxPartsPerAssignment: 3,
+      minCriteriaPerPart: 1,
+      maxCriteriaPerPart: 2,
+      minChecksPerCriteria: 2,
+      maxChecksPerCriteria: 3
+    },
+    sectionsAndTags: {
+      numClassSections: 2,
+      numLabSections: 2,
+      numStudentTags: 2,
+      numGraderTags: 2
+    },
+    labAssignments: {
+      numLabAssignments: 0,
+      minutesDueAfterLab: 60
+    },
+    groupAssignments: {
+      numGroupAssignments: 10,
+      numLabGroupAssignments: 0,
+      reuseGroupsAcrossAssignments: true,
+      groupSize: 4 // 3-4 person groups (50 students → 13 groups: 12 of 4, 1 of 2)
+    },
+    helpRequests: {
+      numHelpRequests: 20,
+      minRepliesPerRequest: 0,
+      maxRepliesPerRequest: 5,
+      maxMembersPerRequest: 4
+    },
+    discussions: {
+      postsPerTopic: 3,
+      maxRepliesPerPost: 4
+    },
+    gradingScheme: "specification",
+    surveyConfig: {
+      numSurveys: 2,
+      numTemplates: 1,
+      responseRate: 0.7,
+      submissionRate: 0.8,
+      linkToGroupAssignments: true,
+      includeTeamCollaboration: true,
+      completeResponsesForFirstNAssignmentSurveys: 9 // First 9 surveys: all students respond (submitted); last 1: none
+    }
+  },
+
   custom: {
     className: "Custom Configuration Class",
     students: 100,
@@ -427,7 +482,7 @@ Seed the database with test data
 
 Options:
   -t, --template <template>           Use a predefined template configuration
-                                      [choices: "micro", "small", "large", "custom"] [default: "micro"]
+                                      [choices: "micro", "small", "large", "groupfocused", "custom"] [default: "micro"]
       --class-name <name>             Name for the test class
       
 Core Options:

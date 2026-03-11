@@ -352,6 +352,52 @@ export function useClassSections() {
   return classSections;
 }
 
+export function useSurveySeries() {
+  const controller = useCourseController();
+  const [series, setSeries] = useState<{ id: string; name: string; description: string | null }[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const fetchSeries = useCallback(() => {
+    setSeries([]);
+    setIsLoading(true);
+    createClient()
+      .from("survey_series")
+      .select("id, name, description, class_id, created_at, created_by")
+      .eq("class_id", controller.courseId)
+      .order("name")
+      .then(({ data, error }) => {
+        if (!error) setSeries((data as { id: string; name: string; description: string | null }[]) ?? []);
+        setIsLoading(false);
+      });
+  }, [controller.courseId]);
+  useEffect(() => {
+    fetchSeries();
+  }, [fetchSeries]);
+  return { series, isLoading, refetch: fetchSeries };
+}
+
+export function useSurveysInSeries(seriesId: string | undefined) {
+  const [surveys, setSurveys] = useState<Database["public"]["Tables"]["surveys"]["Row"][]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  useEffect(() => {
+    if (!seriesId) {
+      setSurveys([]);
+      setIsLoading(false);
+      return;
+    }
+    createClient()
+      .from("surveys")
+      .select("*")
+      .eq("series_id", seriesId)
+      .is("deleted_at", null)
+      .order("series_ordinal", { ascending: true })
+      .then(({ data, error }) => {
+        if (!error) setSurveys((data as Database["public"]["Tables"]["surveys"]["Row"][]) ?? []);
+        setIsLoading(false);
+      });
+  }, [seriesId]);
+  return { surveys, isLoading };
+}
+
 export type UpdateCallback<T> = (data: T) => void;
 export type Unsubscribe = () => void;
 export type UserProfileWithPrivateProfile = UserProfile & {
@@ -385,7 +431,10 @@ export class CourseController {
   private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
   private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
   private _assignments?: TableController<"assignments">;
-  private _assignmentGroupsWithMembers?: TableController<"assignment_groups", "*, assignment_groups_members(*)">;
+  private _assignmentGroupsWithMembers?: TableController<
+    "assignment_groups",
+    "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+  >;
   private _repositories?: TableController<"repositories">;
   private _notifications?: TableController<"notifications">;
   private _gradebookColumns?: TableController<"gradebook_columns">;
@@ -697,16 +746,20 @@ export class CourseController {
     return this._assignments;
   }
 
-  get assignmentGroupsWithMembers(): TableController<"assignment_groups", "*, assignment_groups_members(*)"> {
+  get assignmentGroupsWithMembers(): TableController<
+    "assignment_groups",
+    "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+  > {
     if (!this._assignmentGroupsWithMembers) {
       this._assignmentGroupsWithMembers = new TableController({
         client: this.client,
         table: "assignment_groups",
         query: this.client
           .from("assignment_groups")
-          .select("*, assignment_groups_members(*)")
+          .select("*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)")
           .eq("class_id", this.courseId),
-        selectForSingleRow: "*, assignment_groups_members(*)",
+        selectForSingleRow:
+          "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)",
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.assignmentGroupsWithMembers
       });
@@ -1301,7 +1354,10 @@ export class CourseController {
       | TableController<"student_deadline_extensions">
       | TableController<"assignment_due_date_exceptions">
       | TableController<"assignments">
-      | TableController<"assignment_groups", "*, assignment_groups_members(*)">
+      | TableController<
+          "assignment_groups",
+          "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+        >
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
     if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);

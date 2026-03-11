@@ -11,6 +11,7 @@ import {
 } from "./TestingUtils";
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { addDays } from "date-fns";
+import { TEAM_COLLABORATION_SURVEY } from "../fixtures/teamCollaborationSurvey";
 
 dotenv.config({ path: ".env.local" });
 
@@ -18,208 +19,8 @@ type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
 type SurveyInsert = TablesInsert<"surveys">;
 
-/**
- * Weekly team collaboration survey JSON matching the provided questionnaire.
- * Uses survey-js format with:
- *   - Q1/Q2: checkbox (multi-select)
- *   - Q3–Q7: radiogroup (Likert-type)
- *   - Q16,Q21,Q23,Q24: radiogroup (Likert-type)
- *   - Q9: checkbox
- *   - Q15: comment (long text)
- */
-const teamCollaborationSurveyJson = {
-  pages: [
-    {
-      name: "page1",
-      elements: [
-        {
-          type: "checkbox",
-          name: "q1",
-          title: "This week I have...",
-          choices: [
-            { value: 1, text: "Completed all my assigned tasks" },
-            { value: 4, text: "Completed some of my assigned tasks" },
-            { value: 2, text: "Asked a teammate for help completing my task(s)" },
-            { value: 3, text: "Helped a teammate complete a portion of their task(s)" },
-            { value: 5, text: "Other" }
-          ],
-          hasOther: true
-        },
-        {
-          type: "checkbox",
-          name: "q2",
-          title: "This week I have interacted with my team by...",
-          choices: [
-            { value: 1, text: "Met live (including Zoom meetings, Discord voicechat, or similar) with my team" },
-            {
-              value: 2,
-              text: "Participated in checkins with my team (via text, email, GroupMe, or similar)"
-            },
-            { value: 3, text: "Opened a Pull Request and asked my team for feedback on my code" },
-            {
-              value: 4,
-              text: "Asked my team for feedback on my non-code work (requirements, design, test plan)"
-            },
-            {
-              value: 5,
-              text: "Reviewed technical artifacts (design, requirements, tests, or code) for my teammates"
-            },
-            { value: 6, text: "Other" }
-          ],
-          hasOther: true
-        }
-      ]
-    },
-    {
-      name: "page2",
-      elements: [
-        {
-          type: "radiogroup",
-          name: "q3",
-          title: "This week, I knew what I needed to get done",
-          choices: [
-            { value: 1, text: "Strongly agree" },
-            { value: 2, text: "Agree" },
-            { value: 4, text: "Neither agree nor disagree" },
-            { value: 6, text: "Disagree" },
-            { value: 7, text: "Strongly disagree" }
-          ]
-        },
-        {
-          type: "radiogroup",
-          name: "q4",
-          title: "This week, I have gotten done ___________ than I think I should have",
-          choices: [
-            { value: 1, text: "Much more" },
-            { value: 2, text: "A bit more" },
-            { value: 3, text: "About as much as" },
-            { value: 4, text: "A bit less" },
-            { value: 5, text: "Much less" }
-          ]
-        },
-        {
-          type: "radiogroup",
-          name: "q5",
-          title: "This week, my team overall has gotten done ___________ than I think we should have",
-          choices: [
-            { value: 1, text: "Much more" },
-            { value: 2, text: "A bit more" },
-            { value: 3, text: "About as much as" },
-            { value: 4, text: "A bit less" },
-            { value: 5, text: "Much less" }
-          ]
-        },
-        {
-          type: "radiogroup",
-          name: "q6",
-          title: "Overall, I think that everyone has been contributing adequately to the success of the project",
-          choices: [
-            { value: 1, text: "Strongly agree" },
-            { value: 5, text: "Agree" },
-            { value: 6, text: "Neither agree nor disagree" },
-            { value: 7, text: "Disagree" },
-            { value: 8, text: "Strongly disagree" }
-          ]
-        },
-        {
-          type: "radiogroup",
-          name: "q7",
-          title: "Next week, I intend to get done ______ than I did this week",
-          choices: [
-            { value: 1, text: "Much more" },
-            { value: 2, text: "A bit more" },
-            { value: 3, text: "About as much as" },
-            { value: 4, text: "A bit less" },
-            { value: 5, text: "Much less" }
-          ]
-        }
-      ]
-    },
-    {
-      name: "page3",
-      elements: [
-        {
-          type: "radiogroup",
-          name: "q16",
-          title: "In our team we relied on each other to get the job done.",
-          choices: [
-            { value: 5, text: "Strongly agree" },
-            { value: 4, text: "Agree" },
-            { value: 3, text: "Neither agree nor disagree" },
-            { value: 2, text: "Disagree" },
-            { value: 1, text: "Strongly disagree" }
-          ]
-        },
-        {
-          type: "radiogroup",
-          name: "q21",
-          title: "Team members keep information to themselves that should be shared with others.",
-          choices: [
-            { value: 5, text: "Strongly agree" },
-            { value: 4, text: "Agree" },
-            { value: 3, text: "Neither agree nor disagree" },
-            { value: 2, text: "Disagree" },
-            { value: 1, text: "Strongly disagree" }
-          ]
-        },
-        {
-          type: "radiogroup",
-          name: "q23",
-          title: "I am satisfied with the performance of my team.",
-          choices: [
-            { value: 5, text: "Strongly agree" },
-            { value: 4, text: "Agree" },
-            { value: 3, text: "Neither agree nor disagree" },
-            { value: 2, text: "Disagree" },
-            { value: 1, text: "Strongly disagree" }
-          ]
-        },
-        {
-          type: "radiogroup",
-          name: "q24",
-          title: "We have completed the tasks this week in a way we all agreed upon.",
-          choices: [
-            { value: 5, text: "Strongly agree" },
-            { value: 4, text: "Agree" },
-            { value: 3, text: "Neither agree nor disagree" },
-            { value: 2, text: "Disagree" },
-            { value: 1, text: "Strongly disagree" }
-          ]
-        }
-      ]
-    },
-    {
-      name: "page4",
-      elements: [
-        {
-          type: "checkbox",
-          name: "q9",
-          title: "My progress this week has been impeded by:",
-          choices: [
-            { value: 1, text: "Difficulties with technologies or course materials" },
-            { value: 2, text: "Demands of other classes" },
-            { value: 3, text: "Other personal responsibilities/distractions" },
-            { value: 4, text: "Teammates who didn't complete their responsibilities" },
-            { value: 5, text: "Communication difficulties with my teammates" },
-            {
-              value: 6,
-              text: "Difficulties scheduling tasks so that I wasn't waiting for my team to complete their work"
-            },
-            { value: 7, text: "Other" },
-            { value: 8, text: "None of the above: I was able to work productively" }
-          ],
-          hasOther: true
-        },
-        {
-          type: "comment",
-          name: "q15",
-          title:
-            "How do you feel about your team's collaboration process in this project? Please reflect in about two sentences."
-        }
-      ]
-    }
-  ]
-};
+/** Use shared team collaboration survey (same as DB seeding) */
+const teamCollaborationSurveyJson = TEAM_COLLABORATION_SURVEY;
 
 const buildSurveyPayload = (course: Course, instructor: User, overrides: Partial<SurveyInsert> = {}): SurveyInsert => {
   const { json, ...rest } = overrides;
@@ -402,10 +203,10 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       response: {
         q1: [1, 3],
         q2: [1, 3],
-        q3: 1,
+        q3: 5,
         q4: 3,
         q5: 3,
-        q6: 1,
+        q6: 5,
         q7: 3,
         q16: 5,
         q21: 1,
@@ -502,10 +303,10 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
         response: {
           q1: [1, 3],
           q2: [1, 3, 5],
-          q3: 1,
-          q4: 2,
-          q5: 2,
-          q6: 1,
+          q3: 5,
+          q4: 4,
+          q5: 4,
+          q6: 5,
           q7: 3,
           q16: 5,
           q21: 1,
@@ -523,11 +324,11 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
         response: {
           q1: [1, 2],
           q2: [1, 2, 4],
-          q3: 2,
+          q3: 4,
           q4: 3,
           q5: 3,
-          q6: 5,
-          q7: 2,
+          q6: 4,
+          q7: 4,
           q16: 4,
           q21: 3,
           q23: 4,
@@ -544,11 +345,11 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
         response: {
           q1: [4],
           q2: [2],
-          q3: 4,
-          q4: 4,
-          q5: 4,
-          q6: 6,
-          q7: 1,
+          q3: 3,
+          q4: 2,
+          q5: 2,
+          q6: 3,
+          q7: 5,
           q16: 3,
           q21: 4,
           q23: 3,
@@ -645,10 +446,10 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       response: {
         q1: [1],
         q2: [1, 3],
-        q3: 1,
+        q3: 5,
         q4: 3,
         q5: 3,
-        q6: 1,
+        q6: 5,
         q7: 3,
         q16: 5,
         q21: 1,

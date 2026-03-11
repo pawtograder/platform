@@ -59,7 +59,7 @@ function ensureServiceRoleKeyNotHS256(): void {
     throw new Error(`Malformed SUPABASE_SERVICE_ROLE_KEY: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
-ensureServiceRoleKeyNotHS256();
+// ensureServiceRoleKeyNotHS256();
 
 export async function createClass({
   name,

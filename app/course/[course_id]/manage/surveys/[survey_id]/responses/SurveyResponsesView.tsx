@@ -12,18 +12,22 @@ import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
 import { useSurveyResponses } from "@/hooks/useCourseController";
 import SurveyAnalytics from "@/components/survey/SurveyAnalytics";
 
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
+
 type SurveyResponsesViewProps = {
   courseId: string;
-  surveyId: string; // The UUID (survey_id column)
-  surveyDbId: string; // The database ID (id column) - used for querying responses
+  surveyId: string;
+  surveyDbId: string;
   surveyTitle: Survey["title"];
   surveyVersion: number;
   surveyStatus: Survey["status"];
-  surveyJson: Survey["json"]; // The JSON configuration of the survey
-  surveyDueDate: Survey["due_date"]; // The deadline for the survey
-  initialResponses: SurveyResponseWithProfile[]; // SSR initial data
+  surveyJson: Survey["json"];
+  surveyDueDate: Survey["due_date"];
+  initialResponses: SurveyResponseWithProfile[];
   totalStudents: number;
-  timezone: string; // Course timezone for date formatting
+  timezone: string;
+  analyticsConfig?: SurveyAnalyticsConfig | null;
+  seriesId?: string | null;
 };
 
 /**
@@ -121,7 +125,9 @@ export default function SurveyResponsesView({
   surveyDueDate,
   initialResponses,
   totalStudents,
-  timezone
+  timezone,
+  analyticsConfig = null,
+  seriesId
 }: SurveyResponsesViewProps) {
   const router = useRouter();
 
@@ -506,7 +512,14 @@ export default function SurveyResponsesView({
       </HStack>
 
       {/* Analytics - compare quantitative values across groups */}
-      <SurveyAnalytics surveyId={surveyDbId} surveyJson={surveyJson} classId={Number(courseId)} />
+      <SurveyAnalytics
+        surveyId={surveyDbId}
+        surveyJson={surveyJson}
+        analyticsConfig={analyticsConfig}
+        classId={Number(courseId)}
+        seriesId={seriesId ?? undefined}
+        totalStudents={totalStudents}
+      />
 
       {/* Responses Table */}
       <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">
