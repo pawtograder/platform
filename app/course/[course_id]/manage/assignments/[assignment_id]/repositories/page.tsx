@@ -293,34 +293,25 @@ function FixRepoPermissionsButton({
   };
 
   return (
-    <VStack alignItems="flex-start" gap={2}>
-      <HStack gap={2}>
-        <Button colorPalette="orange" variant="outline" onClick={handleFixPermissions} loading={isFixing}>
-          <Icon as={ShieldCheck} />
-          Fix Repository Permissions
-        </Button>
-        {isFixing && (
-          <Text fontSize="sm" color="fg.muted">
-            Auditing all repositories and enqueuing permission syncs...
-          </Text>
-        )}
-      </HStack>
+    <VStack alignItems="flex-end" gap={1}>
+      <Button size="sm" colorPalette="orange" variant="outline" onClick={handleFixPermissions} loading={isFixing}>
+        <Icon as={ShieldCheck} boxSize={3.5} />
+        Fix Permissions
+      </Button>
       {lastResult && (
-        <Box bg="bg.subtle" p={3} borderRadius="md" w="100%">
-          <Text fontSize="sm" fontWeight="medium">
-            {lastResult.message}
-          </Text>
-          <HStack gap={4} mt={1}>
+        <Box bg="bg.subtle" px={2} py={1.5} borderRadius="md" fontSize="xs">
+          <Text fontWeight="medium">{lastResult.message}</Text>
+          <HStack gap={2} mt={1} flexWrap="wrap">
             {lastResult.summary.enqueued_sync > 0 && (
-              <Badge colorPalette="green">{lastResult.summary.enqueued_sync} synced</Badge>
+              <Badge size="sm" colorPalette="green">{lastResult.summary.enqueued_sync} synced</Badge>
             )}
             {lastResult.summary.skipped_no_usernames > 0 && (
-              <Badge colorPalette="gray">{lastResult.summary.skipped_no_usernames} no usernames</Badge>
+              <Badge size="sm" colorPalette="gray">{lastResult.summary.skipped_no_usernames} no usernames</Badge>
             )}
             {lastResult.summary.skipped_not_ready > 0 && (
-              <Badge colorPalette="yellow">{lastResult.summary.skipped_not_ready} not ready</Badge>
+              <Badge size="sm" colorPalette="yellow">{lastResult.summary.skipped_not_ready} not ready</Badge>
             )}
-            {lastResult.summary.errors > 0 && <Badge colorPalette="red">{lastResult.summary.errors} errors</Badge>}
+            {lastResult.summary.errors > 0 && <Badge size="sm" colorPalette="red">{lastResult.summary.errors} errors</Badge>}
           </HStack>
         </Box>
       )}
@@ -731,11 +722,6 @@ export default function RepositoriesPage() {
             .
           </Text>
         </Box>
-        <FixRepoPermissionsButton
-          courseId={Number(course_id)}
-          assignmentId={Number(assignment_id)}
-          tableController={repositories}
-        />
         <HandoutCommitHistory assignmentId={Number(assignment_id)} />
 
         {selectedCount > 0 && (
@@ -748,7 +734,14 @@ export default function RepositoriesPage() {
           </HStack>
         )}
         <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
-          <Heading size="sm">Repository Status</Heading>
+          <HStack justifyContent="space-between" alignItems="flex-start" w="100%" mb={2}>
+            <Heading size="sm">Repository Status</Heading>
+            <FixRepoPermissionsButton
+              courseId={Number(course_id)}
+              assignmentId={Number(assignment_id)}
+              tableController={repositories}
+            />
+          </HStack>
           <Table.Root minW="0" w="100%">
             <Table.Header>
               {getHeaderGroups().map((headerGroup) => (
