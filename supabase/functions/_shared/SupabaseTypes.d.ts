@@ -6625,6 +6625,7 @@ export type Database = {
           data: Json | null;
           description: string | null;
           id: number;
+          is_individual_grading: boolean;
           name: string;
           ordinal: number;
           rubric_id: number;
@@ -6636,6 +6637,7 @@ export type Database = {
           data?: Json | null;
           description?: string | null;
           id?: number;
+          is_individual_grading?: boolean;
           name: string;
           ordinal: number;
           rubric_id: number;
@@ -6647,6 +6649,7 @@ export type Database = {
           data?: Json | null;
           description?: string | null;
           id?: number;
+          is_individual_grading?: boolean;
           name?: string;
           ordinal?: number;
           rubric_id?: number;
@@ -7092,6 +7095,7 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id: number | null;
+          target_student_profile_id: string | null;
           updated_at: string;
         };
         Insert: {
@@ -7111,6 +7115,7 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id?: number | null;
+          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -7130,6 +7135,7 @@ export type Database = {
           submission_artifact_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
+          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -7423,6 +7429,7 @@ export type Database = {
           rubric_check_id: number | null;
           submission_id: number;
           submission_review_id: number | null;
+          target_student_profile_id: string | null;
           updated_at: string;
         };
         Insert: {
@@ -7441,6 +7448,7 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id: number;
           submission_review_id?: number | null;
+          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -7459,6 +7467,7 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id?: number;
           submission_review_id?: number | null;
+          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -7560,6 +7569,7 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id: number | null;
+          target_student_profile_id: string | null;
           updated_at: string;
         };
         Insert: {
@@ -7580,6 +7590,7 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id?: number | null;
+          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -7600,6 +7611,7 @@ export type Database = {
           submission_file_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
+          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -8242,6 +8254,7 @@ export type Database = {
           created_at: string;
           grader: string | null;
           id: number;
+          individual_scores: Json | null;
           meta_grader: string | null;
           name: string;
           released: boolean;
@@ -8261,6 +8274,7 @@ export type Database = {
           created_at?: string;
           grader?: string | null;
           id?: number;
+          individual_scores?: Json | null;
           meta_grader?: string | null;
           name: string;
           released?: boolean;
@@ -8280,6 +8294,7 @@ export type Database = {
           created_at?: string;
           grader?: string | null;
           id?: number;
+          individual_scores?: Json | null;
           meta_grader?: string | null;
           name?: string;
           released?: boolean;
@@ -10230,6 +10245,7 @@ export type Database = {
           groupname: string | null;
           hours: number | null;
           id: number | null;
+          individual_scores: Json | null;
           lab_section_id: number | null;
           lab_section_name: string | null;
           late_due_date: string | null;
@@ -11553,6 +11569,14 @@ export type Database = {
           p_profile_id?: string;
         };
         Returns: undefined;
+      };
+      check_grading_completion_eligibility: {
+        Args: { p_assignment_id: number };
+        Returns: { total_incomplete: number; completable: number; missing_required_checks: number }[];
+      };
+      complete_eligible_grading_reviews: {
+        Args: { p_assignment_id: number };
+        Returns: number;
       };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };

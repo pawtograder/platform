@@ -53,6 +53,7 @@ import {
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -72,6 +73,7 @@ import { format, formatRelative } from "date-fns";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TargetStudentContext, useTargetStudentProfileId } from "@/hooks/useTargetStudent";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
@@ -1221,6 +1223,7 @@ function SubmissionCommentForm({
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const graderPseudonymousMode = useGraderPseudonymousMode();
+  const targetStudentProfileId = useTargetStudentProfileId();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
@@ -1277,6 +1280,7 @@ function SubmissionCommentForm({
             submission_review_id: submissionReview?.id ?? null,
             eventually_visible: true,
             regrade_request_id: null,
+            target_student_profile_id: targetStudentProfileId ?? null,
             ...artifactInfo
           };
           onSuccess();
@@ -1655,6 +1659,41 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   );
 }
 
+function IndividualGradingPartForStudent({
+  part,
+  memberProfileId,
+  assignmentId,
+  classId,
+  currentRubricId
+}: {
+  part: RubricPartType;
+  memberProfileId: string;
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+}) {
+  const profile = useUserProfile(memberProfileId);
+  return (
+    <TargetStudentContext.Provider value={memberProfileId}>
+      <Box
+        w="100%"
+        borderLeft="3px solid"
+        borderColor="border.info"
+        pl={3}
+        role="region"
+        aria-label={`Individual grading: ${part.name} for ${profile?.name ?? memberProfileId}`}
+      >
+        <Box mb={1}>
+          <Badge variant="outline">
+            <PersonName uid={memberProfileId} />
+          </Badge>
+        </Box>
+        <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+      </Box>
+    </TargetStudentContext.Provider>
+  );
+}
+
 export function RubricSidebar({ rubricId }: { rubricId: number }) {
   /*
   What this sidebar should show:
@@ -1672,6 +1711,11 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(rubricId);
   const viewOnly = !isGrader && !reviewForThisRubric;
   const rubricParts = useRubricParts(rubricId);
+  const submission = useSubmissionMaybe();
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission?.assignment_group_id
+  });
+  const groupMembers = assignmentGroupWithMembers?.assignment_groups_members ?? [];
 
   if (!rubric) {
     return (
@@ -1735,15 +1779,39 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
             )}
           </Box>
         )}
-        {partsToDisplay.map((part) => (
-          <RubricPart
-            key={part.name + "-" + part.id}
-            part={part}
-            assignmentId={assignmentController.assignment.id}
-            classId={assignmentController.assignment.class_id}
-            currentRubricId={rubric?.id}
-          />
-        ))}
+        {partsToDisplay.map((part) => {
+          if (part.is_individual_grading && groupMembers.length > 0) {
+            return (
+              <Box key={part.name + "-" + part.id} w="100%">
+                <Heading size="md" mb={2}>
+                  {part.name} <Badge variant="secondary">Individual</Badge>
+                </Heading>
+                {part.description && <Markdown>{part.description}</Markdown>}
+                <VStack align="start" w="100%" gap={3} mt={2}>
+                  {groupMembers.map((member) => (
+                    <IndividualGradingPartForStudent
+                      key={`${part.id}-${member.profile_id}`}
+                      part={part}
+                      memberProfileId={member.profile_id}
+                      assignmentId={assignmentController.assignment.id}
+                      classId={assignmentController.assignment.class_id}
+                      currentRubricId={rubric?.id}
+                    />
+                  ))}
+                </VStack>
+              </Box>
+            );
+          }
+          return (
+            <RubricPart
+              key={part.name + "-" + part.id}
+              part={part}
+              assignmentId={assignmentController.assignment.id}
+              classId={assignmentController.assignment.class_id}
+              currentRubricId={rubric?.id}
+            />
+          );
+        })}
       </VStack>
     </Box>
   );

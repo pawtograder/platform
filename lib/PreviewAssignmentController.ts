@@ -33,10 +33,11 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
       description: part.description,
       ordinal: part.ordinal,
       data: part.data ?? null,
-      rubric_id: hydrated.id, // Use parent rubric's ID
+      rubric_id: hydrated.id,
       class_id: hydrated.class_id,
       assignment_id: hydrated.assignment_id,
-      created_at: part.created_at
+      created_at: part.created_at,
+      is_individual_grading: part.is_individual_grading ?? false
     });
 
     for (const crit of part.rubric_criteria) {

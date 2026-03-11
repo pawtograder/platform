@@ -18,6 +18,7 @@ import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
   GraderResultTest,
+  IndividualScores,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -35,6 +36,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { TZDate } from "@date-fns/tz";
 import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
@@ -296,14 +298,30 @@ export default function AssignmentsTable({
         header: "Total Score",
         enableColumnFilter: true,
         cell: (props) => {
+          const individualScores = (props.row.original as { individual_scores?: IndividualScores | null })
+            .individual_scores;
+          const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
           return (
-            <ScoreLink
-              score={props.getValue() as number}
-              private_profile_id={props.row.original.student_private_profile_id!}
-              submission_id={props.row.original.activesubmissionid!}
-              course_id={course_id as string}
-              assignment_id={assignment_id as string}
-            />
+            <HStack gap={1}>
+              <ScoreLink
+                score={props.getValue() as number}
+                private_profile_id={props.row.original.student_private_profile_id!}
+                submission_id={props.row.original.activesubmissionid!}
+                course_id={course_id as string}
+                assignment_id={assignment_id as string}
+              />
+              {hasIndividual && (
+                <Tooltip
+                  content={Object.entries(individualScores!)
+                    .map(([, score]) => `${score}`)
+                    .join(" | ")}
+                >
+                  <Text fontSize="xs" color="fg.info" cursor="help">
+                    ⓘ
+                  </Text>
+                </Tooltip>
+              )}
+            </HStack>
           );
         },
         filterFn: (row, id, filterValue) => {
