@@ -117,6 +117,10 @@ BEGIN
             v_org_name  := split_part(v_repo.repository, '/', 1);
             v_repo_name := split_part(v_repo.repository, '/', 2);
 
+            IF v_org_name != v_github_org THEN
+                RAISE EXCEPTION 'Repository % org (%) does not match class github_org (%)', v_repo.repository, v_org_name, v_github_org;
+            END IF;
+
             PERFORM public.enqueue_github_sync_repo_permissions(
                 p_class_id,
                 v_org_name,

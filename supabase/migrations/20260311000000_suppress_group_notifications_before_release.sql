@@ -5,6 +5,7 @@ CREATE OR REPLACE FUNCTION public.notification_assignment_group_member()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
+ SET search_path = public, pg_temp
 AS $function$
 declare
    body jsonb;
@@ -87,6 +88,7 @@ CREATE OR REPLACE FUNCTION public.notification_assignment_group_invitations()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
+ SET search_path = public, pg_temp
 AS $function$
 declare
    body jsonb;
@@ -136,6 +138,7 @@ CREATE OR REPLACE FUNCTION public.notification_assignment_group_join_request()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
+ SET search_path = public, pg_temp
 AS $function$
 declare
    body jsonb;

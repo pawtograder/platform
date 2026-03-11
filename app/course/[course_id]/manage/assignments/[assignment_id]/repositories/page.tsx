@@ -276,7 +276,11 @@ function FixRepoPermissionsButton({
         });
       }
 
-      await tableController?.refetchAll();
+      try {
+        await tableController?.refetchAll();
+      } catch (refetchErr) {
+        console.error("refetchAll failed:", refetchErr);
+      }
     } catch (error) {
       console.error(error);
       toaster.error({
