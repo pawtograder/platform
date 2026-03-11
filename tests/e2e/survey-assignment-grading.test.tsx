@@ -373,10 +373,18 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(page.getByRole("heading", { name: /Survey Responses/i })).toBeVisible();
     await argosScreenshot(page, "Instructor Survey Responses - Overview");
 
-    // Verify summary stats are visible
-    await expect(page.getByText("TOTAL RESPONSES")).toBeVisible();
-    await expect(page.getByText("RESPONSE RATE")).toBeVisible();
-    await expect(page.getByText("TIME REMAINING")).toBeVisible();
+    // Verify legacy summary stats are visible (exact match to avoid collision with analytics "Total Responses")
+    await expect(page.getByText("TOTAL RESPONSES", { exact: true })).toBeVisible();
+    await expect(page.getByText("RESPONSE RATE", { exact: true })).toBeVisible();
+    await expect(page.getByText("TIME REMAINING", { exact: true })).toBeVisible();
+
+    // Verify new analytics UI: SurveyAnalytics block and numeric stat
+    await expect(page.getByRole("heading", { name: "Survey Analytics" })).toBeVisible();
+    await expect(page.getByText("Total Responses", { exact: true })).toBeVisible();
+
+    // Verify group-specific section from group/mentor aggregation (GroupSummaryCards)
+    await expect(page.getByText("Team Alpha").first()).toBeVisible();
+    await expect(page.getByText("Team Beta").first()).toBeVisible();
 
     // Check responses table is visible with student responses
     await expect(page.getByText("Our team collaboration has been excellent")).toBeVisible();
