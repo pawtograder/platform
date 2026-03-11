@@ -254,13 +254,10 @@ function FixRepoPermissionsButton({
     setLastResult(null);
 
     try {
-      const { data, error } = await (supabase.rpc as CallableFunction)(
-        "fix_assignment_repo_permissions",
-        {
-          p_class_id: courseId,
-          p_assignment_id: assignmentId
-        }
-      );
+      const { data, error } = await (supabase.rpc as CallableFunction)("fix_assignment_repo_permissions", {
+        p_class_id: courseId,
+        p_assignment_id: assignmentId
+      });
 
       if (error) throw error;
 
