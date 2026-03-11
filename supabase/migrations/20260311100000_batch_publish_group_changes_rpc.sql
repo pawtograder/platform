@@ -34,9 +34,9 @@ DECLARE
     v_old_gid           bigint;
     v_new_gid           bigint;
     v_profile_id        uuid;
+    v_empty_gid         bigint;
 
     v_membership_id     bigint;
-    v_remaining         integer;
     v_repo_record       record;
 
     -- collect affected group IDs so we can do one permission sync per repo
@@ -87,6 +87,32 @@ BEGIN
         v_new_gid    := (v_move->>'new_group_id')::bigint;   -- nullable
 
         BEGIN
+            -- validate group IDs belong to assignment before any mutations
+            IF v_old_gid IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM public.assignment_groups
+                WHERE id = v_old_gid
+                  AND assignment_id = p_assignment_id
+                  AND class_id = p_class_id
+            ) THEN
+                v_errors := array_append(v_errors, jsonb_build_object(
+                    'profile_id', v_profile_id,
+                    'error', format('Group %s does not belong to assignment %s', v_old_gid, p_assignment_id)
+                ));
+                CONTINUE;
+            END IF;
+            IF v_new_gid IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM public.assignment_groups
+                WHERE id = v_new_gid
+                  AND assignment_id = p_assignment_id
+                  AND class_id = p_class_id
+            ) THEN
+                v_errors := array_append(v_errors, jsonb_build_object(
+                    'profile_id', v_profile_id,
+                    'error', format('Group %s does not belong to assignment %s', v_new_gid, p_assignment_id)
+                ));
+                CONTINUE;
+            END IF;
+
             -- remove from old group
             IF v_old_gid IS NOT NULL THEN
                 SELECT id INTO v_membership_id
@@ -105,38 +131,6 @@ BEGIN
 
                 DELETE FROM public.assignment_groups_members WHERE id = v_membership_id;
                 v_affected_groups := array_append(v_affected_groups, v_old_gid);
-
-                -- check if old group is now empty
-                SELECT count(*) INTO v_remaining
-                FROM public.assignment_groups_members
-                WHERE assignment_group_id = v_old_gid;
-
-                IF v_remaining = 0 THEN
-                    DELETE FROM public.assignment_group_invitations
-                    WHERE assignment_group_id = v_old_gid;
-                    DELETE FROM public.assignment_group_join_request
-                    WHERE assignment_group_id = v_old_gid;
-
-                    -- archive the repo if one exists
-                    FOR v_repo_record IN
-                        SELECT r.id, r.repository
-                        FROM public.repositories r
-                        WHERE r.assignment_group_id = v_old_gid
-                    LOOP
-                        IF v_github_org IS NOT NULL AND v_repo_record.repository IS NOT NULL THEN
-                            PERFORM public.enqueue_github_archive_repo(
-                                p_class_id, v_github_org, v_repo_record.repository,
-                                'batch-dissolve-' || v_old_gid::text
-                            );
-                        END IF;
-                        DELETE FROM public.repository_check_runs WHERE repository_id = v_repo_record.id;
-                        DELETE FROM public.repositories WHERE id = v_repo_record.id;
-                    END LOOP;
-
-                    DELETE FROM public.assignment_groups WHERE id = v_old_gid;
-                    v_deleted_groups := array_append(v_deleted_groups, v_old_gid);
-                    v_groups_dissolved := v_groups_dissolved + 1;
-                END IF;
             END IF;
 
             -- add to new group
@@ -251,6 +245,48 @@ BEGIN
     END LOOP;
 
     -- ══════════════════════════════════════════════════════════════════════
+    -- Phase 2b: dissolve empty groups (batch-final state after moves + creates)
+    -- ══════════════════════════════════════════════════════════════════════
+    FOR v_empty_gid IN
+        SELECT ag.id
+        FROM public.assignment_groups ag
+        WHERE ag.assignment_id = p_assignment_id
+          AND ag.class_id = p_class_id
+          AND NOT EXISTS (
+              SELECT 1 FROM public.assignment_groups_members agm
+              WHERE agm.assignment_group_id = ag.id
+          )
+    LOOP
+        DELETE FROM public.assignment_group_invitations
+        WHERE assignment_group_id = v_empty_gid;
+        DELETE FROM public.assignment_group_join_request
+        WHERE assignment_group_id = v_empty_gid;
+
+        FOR v_repo_record IN
+            SELECT r.id, r.repository
+            FROM public.repositories r
+            WHERE r.assignment_group_id = v_empty_gid
+              AND r.repository IS NOT NULL
+              AND position('/' in r.repository) > 0
+        LOOP
+            IF v_github_org IS NOT NULL THEN
+                PERFORM public.enqueue_github_archive_repo(
+                    p_class_id,
+                    v_github_org,
+                    split_part(v_repo_record.repository, '/', 2),
+                    'batch-dissolve-' || v_empty_gid::text
+                );
+            END IF;
+            DELETE FROM public.repository_check_runs WHERE repository_id = v_repo_record.id;
+            DELETE FROM public.repositories WHERE id = v_repo_record.id;
+        END LOOP;
+
+        DELETE FROM public.assignment_groups WHERE id = v_empty_gid;
+        v_deleted_groups := array_append(v_deleted_groups, v_empty_gid);
+        v_groups_dissolved := v_groups_dissolved + 1;
+    END LOOP;
+
+    -- ══════════════════════════════════════════════════════════════════════
     -- Phase 3: enqueue ONE permission sync per affected repo
     -- ══════════════════════════════════════════════════════════════════════
     -- Deduplicate and exclude dissolved groups
@@ -271,7 +307,7 @@ BEGIN
             DECLARE
                 v_usernames text[];
             BEGIN
-                SELECT array_remove(array_agg(u.github_username), NULL)
+                SELECT coalesce(array_remove(array_agg(u.github_username), NULL), '{}')
                 INTO v_usernames
                 FROM public.assignment_groups_members agm
                 JOIN public.user_roles ur ON ur.private_profile_id = agm.profile_id
@@ -283,13 +319,13 @@ BEGIN
                   AND u.github_username IS NOT NULL
                   AND u.github_username != '';
 
-                IF v_usernames IS NOT NULL AND array_length(v_usernames, 1) > 0 THEN
+                IF v_repo_record.repository IS NOT NULL AND position('/' in v_repo_record.repository) > 0 THEN
                     PERFORM public.enqueue_github_sync_repo_permissions(
                         p_class_id,
-                        split_part(v_repo_record.repository, '/', 1),
+                        v_github_org,
                         split_part(v_repo_record.repository, '/', 2),
                         v_course_slug,
-                        v_usernames,
+                        coalesce(v_usernames, '{}'),
                         'batch-publish-' || p_assignment_id::text || '-g' || v_repo_record.assignment_group_id::text
                     );
                     v_syncs_enqueued := v_syncs_enqueued + 1;

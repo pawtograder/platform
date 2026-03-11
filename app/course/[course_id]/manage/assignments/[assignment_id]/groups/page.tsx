@@ -88,6 +88,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     movesToFulfill,
     clearGroupsToCreate,
     clearMovesToFulfill,
+    retainOnlyFailedMovesAndGroups,
     removeGroupToCreate,
     removeMoveToFulfill
   } = useGroupManagement();
@@ -137,6 +138,14 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           description: `${result.groups_created} groups created, ${result.members_moved + result.members_added} students moved, ${result.errors.length} error(s)`,
           type: "warning"
         });
+
+        const failedProfileIds = new Set(
+          result.errors.filter((e): e is { error: string; profile_id: string } => !!e.profile_id).map((e) => e.profile_id)
+        );
+        const failedGroupNames = new Set(
+          result.errors.filter((e): e is { error: string; group_name: string } => !!e.group_name).map((e) => e.group_name)
+        );
+        retainOnlyFailedMovesAndGroups(failedProfileIds, failedGroupNames);
       } else {
         const parts: string[] = [];
         if (result.groups_created > 0) parts.push(`${result.groups_created} group(s) created`);
@@ -150,6 +159,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           description: parts.join(", ") || "No changes needed",
           type: "success"
         });
+
+        clearGroupsToCreate();
+        clearMovesToFulfill();
       }
     } catch (e) {
       console.error(e);
@@ -161,8 +173,6 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       });
     } finally {
       setLoading(false);
-      clearGroupsToCreate();
-      clearMovesToFulfill();
       invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
       invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
       invalidate({ resource: "user_roles", invalidates: ["list"] });
