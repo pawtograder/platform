@@ -8,10 +8,7 @@ import { resolveClass } from "../utils/resolvers.ts";
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import type { CLIResponse, ClassesShowParams } from "../types.ts";
 
-async function handleClassesList(
-  ctx: MCPAuthContext,
-  _params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleClassesList(ctx: MCPAuthContext, _params: Record<string, unknown>): Promise<CLIResponse> {
   const supabase = getAdminClient();
 
   const { data: classes, error } = await supabase
@@ -40,10 +37,7 @@ async function handleClassesList(
   };
 }
 
-async function handleClassesShow(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleClassesShow(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { CLICommandError } = await import("../errors.ts");
   const identifier = (params as unknown as ClassesShowParams).identifier;
   if (!identifier) throw new CLICommandError("identifier is required");

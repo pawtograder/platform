@@ -7,26 +7,15 @@ import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import type { ClassRow, AssignmentRow } from "../types.ts";
 import { CLICommandError } from "../errors.ts";
 
-export async function resolveClass(
-  supabase: SupabaseClient<Database>,
-  identifier: string | number
-): Promise<ClassRow> {
+export async function resolveClass(supabase: SupabaseClient<Database>, identifier: string | number): Promise<ClassRow> {
   // Try by ID first
   if (typeof identifier === "number" || /^\d+$/.test(String(identifier))) {
-    const { data, error } = await supabase
-      .from("classes")
-      .select("*")
-      .eq("id", Number(identifier))
-      .single();
+    const { data, error } = await supabase.from("classes").select("*").eq("id", Number(identifier)).single();
     if (!error && data) return data as ClassRow;
   }
 
   // Try by slug
-  const { data: bySlug } = await supabase
-    .from("classes")
-    .select("*")
-    .eq("slug", String(identifier))
-    .single();
+  const { data: bySlug } = await supabase.from("classes").select("*").eq("slug", String(identifier)).single();
   if (bySlug) return bySlug as ClassRow;
 
   // Try by name (partial match)

@@ -9,10 +9,7 @@ import { resolveClass } from "../utils/resolvers.ts";
 import { CLICommandError } from "../errors.ts";
 import type { CLIResponse, FlashcardsListParams, FlashcardsCopyParams } from "../types.ts";
 
-async function handleFlashcardsList(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { class: classIdentifier } = params as unknown as FlashcardsListParams;
   if (!classIdentifier) throw new CLICommandError("class is required");
 
@@ -56,10 +53,7 @@ async function handleFlashcardsList(
   };
 }
 
-async function handleFlashcardsCopy(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as FlashcardsCopyParams;
   const sourceClassId = p.source_class;
   const targetClassId = p.target_class;
@@ -79,11 +73,7 @@ async function handleFlashcardsCopy(
     throw new CLICommandError("Source and target classes must be different");
   }
 
-  let decksQuery = supabase
-    .from("flashcard_decks")
-    .select("*")
-    .eq("class_id", sourceClass.id)
-    .is("deleted_at", null);
+  let decksQuery = supabase.from("flashcard_decks").select("*").eq("class_id", sourceClass.id).is("deleted_at", null);
 
   if (deckIdentifier) {
     const deckId = parseInt(deckIdentifier, 10);

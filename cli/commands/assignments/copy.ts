@@ -56,8 +56,7 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
       params.schedule = schedule;
     }
 
-    const assignmentCount =
-      params.assignment ? 1 : params.schedule ? (params.schedule as unknown[]).length : undefined;
+    const assignmentCount = params.assignment ? 1 : params.schedule ? (params.schedule as unknown[]).length : undefined;
     logger.info(
       `Sending request to ${params.source_class} → ${params.target_class}${assignmentCount ? ` (${assignmentCount} assignment${assignmentCount > 1 ? "s" : ""})` : ""}...`
     );

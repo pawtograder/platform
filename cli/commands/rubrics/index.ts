@@ -93,11 +93,7 @@ export const builder = (yargs: Argv) => {
 
           for (const rubric of data.rubrics) {
             const typeLabel =
-              rubric.type === "grading"
-                ? "Grading"
-                : rubric.type === "self_review"
-                  ? "Self-Review"
-                  : "Meta-Grading";
+              rubric.type === "grading" ? "Grading" : rubric.type === "self_review" ? "Self-Review" : "Meta-Grading";
 
             if (rubric.id) {
               logger.info(`${typeLabel} Rubric (ID: ${rubric.id})`);

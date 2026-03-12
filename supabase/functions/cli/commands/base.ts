@@ -6,10 +6,7 @@
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import type { CLIResponse } from "../types.ts";
 
-export type CommandHandler = (
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-) => Promise<CLIResponse>;
+export type CommandHandler = (ctx: MCPAuthContext, params: Record<string, unknown>) => Promise<CLIResponse>;
 
 export interface CommandDefinition<TParams = Record<string, unknown>> {
   name: string;

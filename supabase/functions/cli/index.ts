@@ -85,8 +85,7 @@ Deno.serve(async (req) => {
 
     if (error instanceof MCPAuthError) {
       const status =
-        error.message === "Missing Authorization header" ||
-        error.message === "Invalid Authorization header format"
+        error.message === "Missing Authorization header" || error.message === "Invalid Authorization header format"
           ? 401
           : error.message.includes("Missing required scope")
             ? 403

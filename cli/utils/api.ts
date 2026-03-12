@@ -142,8 +142,7 @@ export async function apiCall(command: string, params: Record<string, unknown> =
     }
     if (response.status === 403) {
       throw new CLIError(
-        `Permission denied: ${errorMsg}\n` +
-          "   Your token may lack the required scopes (cli:read or cli:write)."
+        `Permission denied: ${errorMsg}\n` + "   Your token may lack the required scopes (cli:read or cli:write)."
       );
     }
     if (response.status >= 500) {

@@ -17,10 +17,7 @@ import type {
   RubricExportPart
 } from "../types.ts";
 
-async function handleRubricsList(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { class: classIdentifier, assignment: assignmentIdentifier } = params as unknown as RubricsListParams;
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("assignment is required");
@@ -38,11 +35,7 @@ async function handleRubricsList(
   const rubrics: Array<{ type: string; id: number | null; name: string | null; description: string | null }> = [];
   for (const rubric of rubricTypes) {
     if (rubric.id) {
-      const { data } = await supabase
-        .from("rubrics")
-        .select("id, name, description")
-        .eq("id", rubric.id)
-        .single();
+      const { data } = await supabase.from("rubrics").select("id, name, description").eq("id", rubric.id).single();
 
       rubrics.push({
         type: rubric.type,
@@ -65,7 +58,14 @@ async function handleRubricsList(
   };
 }
 
-function buildExportData(rubric: RubricWithHierarchy): { name: string; description: string | null; cap_score_to_assignment_points: boolean; is_private: boolean; review_round: string | null; parts: RubricExportPart[] } {
+function buildExportData(rubric: RubricWithHierarchy): {
+  name: string;
+  description: string | null;
+  cap_score_to_assignment_points: boolean;
+  is_private: boolean;
+  review_round: string | null;
+  parts: RubricExportPart[];
+} {
   return {
     name: rubric.name,
     description: rubric.description,
@@ -105,10 +105,7 @@ function buildExportData(rubric: RubricWithHierarchy): { name: string; descripti
   };
 }
 
-async function handleRubricsExport(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as RubricsExportParams;
   const classIdentifier = p.class;
   const assignmentIdentifier = p.assignment;
@@ -150,10 +147,7 @@ async function handleRubricsExport(
   };
 }
 
-async function handleRubricsImport(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as RubricsImportParams;
   const classIdentifier = p.class;
   const assignmentIdentifier = p.assignment;
@@ -222,7 +216,9 @@ async function handleRubricsImport(
       description: rubricData.description ?? null,
       cap_score_to_assignment_points: rubricData.cap_score_to_assignment_points ?? true,
       is_private: rubricData.is_private ?? false,
-      review_round: (rubricData.review_round as "self-review" | "grading-review" | "meta-grading-review" | "code-walk" | null) ?? null
+      review_round:
+        (rubricData.review_round as "self-review" | "grading-review" | "meta-grading-review" | "code-walk" | null) ??
+        null
     })
     .eq("id", targetRubricId);
 
@@ -290,7 +286,8 @@ async function handleRubricsImport(
           file: check.file ?? null,
           group: check.group ?? null,
           max_annotations: check.max_annotations ?? null,
-          student_visibility: (check.student_visibility as "always" | "if_released" | "if_applied" | "never") ?? "always"
+          student_visibility:
+            (check.student_visibility as "always" | "if_released" | "if_applied" | "never") ?? "always"
         });
 
         if (checkError) {

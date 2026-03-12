@@ -4,6 +4,9 @@
 
 import { getOctoKit } from "../../_shared/GitHubWrapper.ts";
 
+/** Commit message used when copying repo contents - used to detect if copy succeeded in a previous run */
+export const COPY_CONTENT_COMMIT_MESSAGE_PREFIX = "Copy content from ";
+
 interface GitTreeBlobEntry {
   path?: string;
   mode?: string;
@@ -23,10 +26,32 @@ export async function repoExistsOnGitHub(repoFullName: string): Promise<boolean>
   }
 }
 
-export async function copyRepoContentsViaGitHub(
+/**
+ * Returns true if the target repo has a commit indicating content was successfully copied
+ * from the source (e.g. from a previous run that created the repo but then failed after copy).
+ */
+export async function targetRepoHasContentFromSource(
   sourceRepoFullName: string,
   targetRepoFullName: string
-): Promise<void> {
+): Promise<boolean> {
+  const [targetOrg, targetRepo] = targetRepoFullName.split("/");
+  const octokit = await getOctoKit(targetOrg);
+  if (!octokit) return false;
+  const expectedMessage = `${COPY_CONTENT_COMMIT_MESSAGE_PREFIX}${sourceRepoFullName}`;
+  try {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/commits", {
+      owner: targetOrg,
+      repo: targetRepo,
+      per_page: 1
+    });
+    const latestCommit = Array.isArray(data) ? data[0] : null;
+    return latestCommit?.commit?.message?.trim() === expectedMessage;
+  } catch {
+    return false;
+  }
+}
+
+export async function copyRepoContentsViaGitHub(sourceRepoFullName: string, targetRepoFullName: string): Promise<void> {
   const [sourceOrg, sourceRepo] = sourceRepoFullName.split("/");
   const [targetOrg, targetRepo] = targetRepoFullName.split("/");
 
@@ -57,27 +82,21 @@ export async function copyRepoContentsViaGitHub(
   const sourceCommitSha = sourceRef.data.object.sha;
 
   // Get the source commit to find the tree
-  const sourceCommit = await sourceOctokit.request(
-    "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-    {
-      owner: sourceOrg,
-      repo: sourceRepo,
-      commit_sha: sourceCommitSha
-    }
-  );
+  const sourceCommit = await sourceOctokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+    owner: sourceOrg,
+    repo: sourceRepo,
+    commit_sha: sourceCommitSha
+  });
 
   const sourceTreeSha = sourceCommit.data.tree.sha;
 
   // Get the full source tree (recursive)
-  const sourceTree = await sourceOctokit.request(
-    "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-    {
-      owner: sourceOrg,
-      repo: sourceRepo,
-      tree_sha: sourceTreeSha,
-      recursive: "true"
-    }
-  );
+  const sourceTree = await sourceOctokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+    owner: sourceOrg,
+    repo: sourceRepo,
+    tree_sha: sourceTreeSha,
+    recursive: "true"
+  });
 
   // Copy each blob from source to target
   const newTreeEntries: GitTreeBlobEntry[] = [];
@@ -85,14 +104,11 @@ export async function copyRepoContentsViaGitHub(
   const treeItems = sourceTree.data.tree as Array<{ type?: string; sha?: string; path?: string; mode?: string }>;
   for (const item of treeItems) {
     if (item.type === "blob" && item.sha) {
-      const blob = await sourceOctokit.request(
-        "GET /repos/{owner}/{repo}/git/blobs/{file_sha}",
-        {
-          owner: sourceOrg,
-          repo: sourceRepo,
-          file_sha: item.sha
-        }
-      );
+      const blob = await sourceOctokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
+        owner: sourceOrg,
+        repo: sourceRepo,
+        file_sha: item.sha
+      });
 
       const newBlob = await targetOctokit.request("POST /repos/{owner}/{repo}/git/blobs", {
         owner: targetOrg,
@@ -115,7 +131,12 @@ export async function copyRepoContentsViaGitHub(
   const newTree = await targetOctokit.request("POST /repos/{owner}/{repo}/git/trees", {
     owner: targetOrg,
     repo: targetRepo,
-    tree: newTreeEntries as Array<{ path?: string; mode?: "100644" | "100755" | "040000" | "160000" | "120000"; type?: "blob"; sha: string }>
+    tree: newTreeEntries as Array<{
+      path?: string;
+      mode?: "100644" | "100755" | "040000" | "160000" | "120000";
+      type?: "blob";
+      sha: string;
+    }>
   });
 
   let targetRef: { data: { object: { sha: string }; ref: string } };

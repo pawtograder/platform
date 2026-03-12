@@ -9,7 +9,7 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
 import { copyRubricTree } from "../utils/rubric.ts";
-import { repoExistsOnGitHub, copyRepoContentsViaGitHub } from "../utils/github.ts";
+import { repoExistsOnGitHub, copyRepoContentsViaGitHub, targetRepoHasContentFromSource } from "../utils/github.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
@@ -24,10 +24,7 @@ import type {
   AssignmentRow
 } from "../types.ts";
 
-async function handleAssignmentsList(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { class: classIdentifier } = params as unknown as AssignmentsListParams;
   if (!classIdentifier) throw new CLICommandError("class is required");
 
@@ -65,10 +62,7 @@ async function handleAssignmentsList(
   };
 }
 
-async function handleAssignmentsShow(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleAssignmentsShow(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { class: classIdentifier, identifier: assignmentIdentifier } = params as unknown as AssignmentsShowParams;
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("identifier is required");
@@ -103,12 +97,8 @@ async function handleAssignmentsShow(
   };
 }
 
-async function handleAssignmentsDelete(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
-  const { class: classIdentifier, identifier: assignmentIdentifier } =
-    params as unknown as AssignmentsDeleteParams;
+async function handleAssignmentsDelete(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
+  const { class: classIdentifier, identifier: assignmentIdentifier } = params as unknown as AssignmentsDeleteParams;
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("identifier is required");
 
@@ -138,10 +128,7 @@ async function handleAssignmentsDelete(
   };
 }
 
-async function handleAssignmentsCopy(
-  ctx: MCPAuthContext,
-  params: Record<string, unknown>
-): Promise<CLIResponse> {
+async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as AssignmentsCopyParams;
   const sourceClassId = p.source_class;
   const targetClassId = p.target_class;
@@ -187,10 +174,7 @@ async function handleAssignmentsCopy(
       assignmentsToCopy.push({ assignment: a as AssignmentRow });
     }
   } else if (schedule) {
-    const { data: allAssignments } = await supabase
-      .from("assignments")
-      .select("*")
-      .eq("class_id", sourceClass.id);
+    const { data: allAssignments } = await supabase.from("assignments").select("*").eq("class_id", sourceClass.id);
 
     const bySlug = new Map<string, AssignmentRow>();
     const byTitle = new Map<string, AssignmentRow>();
@@ -533,8 +517,13 @@ async function copySingleAssignment(
 
   if (!options.skipRepos && targetClass.github_org) {
     if (sourceAssignment.template_repo) {
-      const needsHandout = !newAssignment.template_repo;
-      if (needsHandout) {
+      const handoutRepoExists = !!newAssignment.template_repo;
+      const handoutContentsCopied =
+        handoutRepoExists && newAssignment.template_repo
+          ? await targetRepoHasContentFromSource(sourceAssignment.template_repo, newAssignment.template_repo)
+          : false;
+
+      if (!handoutRepoExists) {
         try {
           const { data: handoutData } = await supabase.functions.invoke("assignment-create-handout-repo", {
             body: { assignment_id: newAssignment.id, class_id: targetClass.id }
@@ -555,6 +544,14 @@ async function copySingleAssignment(
           }
         } catch (err) {
           addError("handout_repo_create", err);
+        }
+      } else if (!handoutContentsCopied && newAssignment.template_repo) {
+        status.handoutRepoCreated = true;
+        try {
+          await copyRepoContentsViaGitHub(sourceAssignment.template_repo, newAssignment.template_repo);
+          status.handoutRepoContentsCopied = true;
+        } catch (err) {
+          addError("handout_repo_contents", err);
         }
       } else {
         status.handoutRepoCreated = true;
@@ -577,8 +574,13 @@ async function copySingleAssignment(
 
       const targetRepoSet = !!targetAutograder?.grader_repo;
       let targetRepoExists = false;
+      let solutionContentsCopied = false;
       if (targetRepoSet && targetAutograder?.grader_repo) {
         targetRepoExists = await repoExistsOnGitHub(targetAutograder.grader_repo);
+        solutionContentsCopied = await targetRepoHasContentFromSource(
+          sourceAutograder.grader_repo,
+          targetAutograder.grader_repo
+        );
       }
 
       const needsSolution = !targetRepoSet || !targetRepoExists;
@@ -601,10 +603,7 @@ async function copySingleAssignment(
               .single();
 
             if (!afterCreate?.grader_repo) {
-              await supabase
-                .from("autograder")
-                .update({ grader_repo: targetRepoFullName })
-                .eq("id", newAssignment.id);
+              await supabase.from("autograder").update({ grader_repo: targetRepoFullName }).eq("id", newAssignment.id);
             }
             status.solutionRepoCreated = true;
 
@@ -617,6 +616,14 @@ async function copySingleAssignment(
           }
         } catch (err) {
           addError("solution_repo_create", err);
+        }
+      } else if (!solutionContentsCopied && targetAutograder?.grader_repo) {
+        status.solutionRepoCreated = true;
+        try {
+          await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetAutograder.grader_repo);
+          status.solutionRepoContentsCopied = true;
+        } catch (err) {
+          addError("solution_repo_contents", err);
         }
       } else {
         status.solutionRepoCreated = true;

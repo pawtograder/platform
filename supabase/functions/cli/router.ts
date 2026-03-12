@@ -9,9 +9,7 @@ import type { CLIRequest, CLIResponse } from "./types.ts";
 
 const commands = new Map<string, CommandDefinition>();
 
-export function registerCommand<TParams = Record<string, unknown>>(
-  definition: CommandDefinition<TParams>
-): void {
+export function registerCommand<TParams = Record<string, unknown>>(definition: CommandDefinition<TParams>): void {
   commands.set(definition.name, definition as CommandDefinition);
 }
 

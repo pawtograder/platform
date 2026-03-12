@@ -12,8 +12,5 @@ export const corsHeaders = {
 };
 
 export function getAdminClient(): SupabaseClient<Database> {
-  return createClient<Database>(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+  return createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 }
