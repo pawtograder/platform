@@ -1,5 +1,8 @@
 -- Add group_member_count to get_survey_responses_with_full_context for correct response rate calculation
 -- Previously memberCount was derived from respondents only, making responseRate always 1 when any response existed
+-- Must DROP first because PostgreSQL does not allow changing return type with CREATE OR REPLACE
+
+DROP FUNCTION IF EXISTS public.get_survey_responses_with_full_context(uuid, bigint);
 
 CREATE OR REPLACE FUNCTION public.get_survey_responses_with_full_context(
   p_survey_id uuid,
