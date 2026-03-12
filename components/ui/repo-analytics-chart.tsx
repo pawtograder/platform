@@ -1,16 +1,7 @@
 "use client";
 
 import { Box, Text } from "@chakra-ui/react";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer
-} from "@/components/ui/recharts-wrapper";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "./recharts-wrapper";
 
 type DailyData = {
   date: string;

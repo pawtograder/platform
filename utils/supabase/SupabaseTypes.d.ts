@@ -6658,6 +6658,7 @@ export type Database = {
           is_annotation: boolean;
           is_comment_required: boolean;
           is_required: boolean;
+          kpi_category: string | null;
           max_annotations: number | null;
           name: string;
           ordinal: number;
@@ -6680,6 +6681,7 @@ export type Database = {
           is_annotation: boolean;
           is_comment_required?: boolean;
           is_required?: boolean;
+          kpi_category?: string | null;
           max_annotations?: number | null;
           name: string;
           ordinal: number;
@@ -6702,6 +6704,7 @@ export type Database = {
           is_annotation?: boolean;
           is_comment_required?: boolean;
           is_required?: boolean;
+          kpi_category?: string | null;
           max_annotations?: number | null;
           name?: string;
           ordinal?: number;

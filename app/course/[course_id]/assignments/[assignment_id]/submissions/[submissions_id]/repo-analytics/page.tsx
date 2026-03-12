@@ -1,0 +1,390 @@
+"use client";
+
+import { useSubmission } from "@/hooks/useSubmission";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useParams, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Tabs, Text, VStack } from "@chakra-ui/react";
+import { Button } from "@/components/ui/button";
+import Link from "@/components/ui/link";
+import {
+  FaChartBar,
+  FaCodeBranch,
+  FaComment,
+  FaDownload,
+  FaExclamationCircle,
+  FaGitAlt,
+  FaList,
+  FaSync
+} from "react-icons/fa";
+import { toaster } from "@/components/ui/toaster";
+import {
+  getRepositoryAnalyticsForSubmission,
+  requestAnalyticsRefreshForSubmission,
+  getAnalyticsCsvDataForSubmission
+} from "./actions";
+import { AnalyticsChart } from "@/components/ui/repo-analytics-chart";
+
+const TYPE_ICONS: Record<string, typeof FaGitAlt> = {
+  commit: FaGitAlt,
+  pr: FaCodeBranch,
+  issue: FaExclamationCircle,
+  issue_comment: FaComment,
+  pr_review_comment: FaComment
+};
+
+const TYPE_COLORS: Record<string, string> = {
+  commit: "blue",
+  pr: "green",
+  issue: "yellow",
+  issue_comment: "purple",
+  pr_review_comment: "orange"
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  commit: "Commit",
+  pr: "Pull Request",
+  issue: "Issue",
+  issue_comment: "Issue Comment",
+  pr_review_comment: "PR Review Comment"
+};
+
+const KPI_ITEM_TYPE_MAP: Record<string, string[]> = {
+  commits: ["commit"],
+  prs_opened: ["pr"],
+  pr_review_comments: ["pr_review_comment"],
+  issues_opened: ["issue"],
+  issues_closed: ["issue"],
+  issue_comments: ["issue_comment"]
+};
+
+type AnalyticsItem = {
+  id: number;
+  item_type: string;
+  github_id: string;
+  title: string | null;
+  url: string;
+  author: string | null;
+  created_date: string;
+  state: string | null;
+};
+
+type DailyRow = {
+  date: string;
+  issues_opened: number;
+  issues_closed: number;
+  issue_comments: number;
+  prs_opened: number;
+  pr_review_comments: number;
+  commits: number;
+};
+
+type FetchStatus = {
+  last_fetched_at: string | null;
+  last_requested_at: string | null;
+  status: string;
+} | null;
+
+function sanitizeCell(value: unknown): string {
+  let str = String(value ?? "");
+  str = str.replace(/"/g, '""');
+  if (/^[=+\-@\t]/.test(str)) {
+    str = "'" + str;
+  }
+  return str;
+}
+
+export default function SubmissionRepoAnalyticsPage() {
+  const submission = useSubmission();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const { course_id } = useParams();
+  const searchParams = useSearchParams();
+  const courseId = Number(course_id);
+  const initialFilter = searchParams.get("kpi_category");
+
+  const [items, setItems] = useState<AnalyticsItem[]>([]);
+  const [daily, setDaily] = useState<DailyRow[]>([]);
+  const [fetchStatus, setFetchStatus] = useState<FetchStatus>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [filterType, setFilterType] = useState<string | null>(
+    initialFilter ? (KPI_ITEM_TYPE_MAP[initialFilter]?.[0] ?? null) : null
+  );
+  const [activeTab, setActiveTab] = useState("items");
+
+  const loadData = useCallback(async () => {
+    if (!submission.repository_id) return;
+    try {
+      setLoading(true);
+      const data = await getRepositoryAnalyticsForSubmission(
+        courseId,
+        submission.repository_id,
+        submission.assignment_id
+      );
+      setItems(data.items);
+      setDaily(data.daily);
+      setFetchStatus(data.fetchStatus);
+    } catch (e) {
+      toaster.error({ title: "Failed to load analytics", description: String(e) });
+    } finally {
+      setLoading(false);
+    }
+  }, [courseId, submission.repository_id, submission.assignment_id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await requestAnalyticsRefreshForSubmission(courseId, submission.assignment_id);
+      if (result.success) {
+        toaster.success({ title: result.message });
+        setTimeout(() => loadData(), 5000);
+      } else {
+        toaster.info({ title: "Rate limited", description: result.message });
+      }
+    } catch (e) {
+      toaster.error({ title: "Refresh failed", description: String(e) });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleExportCsv = async () => {
+    if (!submission.repository_id) return;
+    setExporting(true);
+    try {
+      const data = await getAnalyticsCsvDataForSubmission(courseId, submission.repository_id);
+      const headers = ["Type", "GitHub ID", "Title", "Author", "Date", "State", "URL"];
+      const rows = data.items.map((item: AnalyticsItem) => [
+        TYPE_LABELS[item.item_type] || item.item_type,
+        item.github_id,
+        item.title || "",
+        item.author || "",
+        item.created_date,
+        item.state || "",
+        item.url
+      ]);
+      const csv =
+        "\uFEFF" +
+        [headers.map(sanitizeCell), ...rows.map((r: string[]) => r.map(sanitizeCell))]
+          .map((row) => row.map((cell: string) => `"${cell}"`).join(","))
+          .join("\n");
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `repo-analytics-${submission.repository.split("/").pop()}-${new Date().toISOString().split("T")[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toaster.success({ title: "CSV exported" });
+    } catch (e) {
+      toaster.error({ title: "Export failed", description: String(e) });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  if (!isGraderOrInstructor) {
+    return (
+      <Box p={8} textAlign="center">
+        <Text color="fg.muted">This tab is only available to instructors and graders.</Text>
+      </Box>
+    );
+  }
+
+  if (!submission.repository_id) {
+    return (
+      <Box p={8} textAlign="center">
+        <Text color="fg.muted">No repository linked to this submission.</Text>
+      </Box>
+    );
+  }
+
+  const filteredItems = filterType ? items.filter((i) => i.item_type === filterType) : items;
+
+  return (
+    <VStack align="stretch" gap={4} p={4}>
+      <Flex justify="space-between" align="center" wrap="wrap" gap={3}>
+        <HStack gap={3}>
+          <Button onClick={handleRefresh} loading={refreshing} variant="outline" size="sm">
+            <Icon as={FaSync} mr={2} />
+            Refresh
+          </Button>
+          <Button
+            onClick={handleExportCsv}
+            loading={exporting}
+            variant="outline"
+            size="sm"
+            disabled={items.length === 0}
+          >
+            <Icon as={FaDownload} mr={2} />
+            Export CSV
+          </Button>
+        </HStack>
+        {fetchStatus && (
+          <HStack gap={2} fontSize="sm" color="fg.muted">
+            <Badge
+              colorPalette={
+                fetchStatus.status === "completed"
+                  ? "green"
+                  : fetchStatus.status === "fetching"
+                    ? "blue"
+                    : fetchStatus.status === "error"
+                      ? "red"
+                      : "gray"
+              }
+            >
+              {fetchStatus.status}
+            </Badge>
+            {fetchStatus.last_fetched_at && (
+              <Text>Last fetched: {new Date(fetchStatus.last_fetched_at).toLocaleString()}</Text>
+            )}
+          </HStack>
+        )}
+      </Flex>
+
+      {loading ? (
+        <Flex justify="center" py={8}>
+          <Spinner size="xl" />
+        </Flex>
+      ) : items.length === 0 ? (
+        <Box textAlign="center" py={8}>
+          <Text color="fg.muted">No analytics data yet. Click &quot;Refresh&quot; to fetch from GitHub.</Text>
+        </Box>
+      ) : (
+        <Tabs.Root value={activeTab} onValueChange={(d) => setActiveTab(d.value)} variant="line">
+          <Tabs.List>
+            <Tabs.Trigger value="items">
+              <HStack>
+                <Icon as={FaList} />
+                <Text>Items ({filteredItems.length})</Text>
+              </HStack>
+            </Tabs.Trigger>
+            <Tabs.Trigger value="chart">
+              <HStack>
+                <Icon as={FaChartBar} />
+                <Text>Activity Chart</Text>
+              </HStack>
+            </Tabs.Trigger>
+          </Tabs.List>
+
+          <Tabs.Content value="items">
+            <Box pt={4}>
+              <HStack gap={2} mb={4} flexWrap="wrap">
+                <Button
+                  size="xs"
+                  variant={filterType === null ? "solid" : "outline"}
+                  onClick={() => setFilterType(null)}
+                >
+                  All ({items.length})
+                </Button>
+                {["commit", "pr", "issue", "issue_comment", "pr_review_comment"].map((type) => {
+                  const count = items.filter((i) => i.item_type === type).length;
+                  if (count === 0) return null;
+                  return (
+                    <Button
+                      key={type}
+                      size="xs"
+                      variant={filterType === type ? "solid" : "outline"}
+                      onClick={() => setFilterType(type)}
+                    >
+                      {TYPE_LABELS[type]} ({count})
+                    </Button>
+                  );
+                })}
+              </HStack>
+
+              <Box overflowX="auto">
+                <Table.Root size="sm">
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.ColumnHeader w="120px">Type</Table.ColumnHeader>
+                      <Table.ColumnHeader>Title / Message</Table.ColumnHeader>
+                      <Table.ColumnHeader w="120px">Author</Table.ColumnHeader>
+                      <Table.ColumnHeader w="100px">Date</Table.ColumnHeader>
+                      <Table.ColumnHeader w="80px">State</Table.ColumnHeader>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {filteredItems.length === 0 ? (
+                      <Table.Row>
+                        <Table.Cell colSpan={5}>
+                          <Text textAlign="center" color="fg.muted" py={4}>
+                            No items found
+                          </Text>
+                        </Table.Cell>
+                      </Table.Row>
+                    ) : (
+                      filteredItems.map((item) => (
+                        <Table.Row key={item.id}>
+                          <Table.Cell>
+                            <HStack>
+                              <Icon as={TYPE_ICONS[item.item_type] || FaGitAlt} />
+                              <Badge colorPalette={TYPE_COLORS[item.item_type] || "gray"} size="sm">
+                                {TYPE_LABELS[item.item_type] || item.item_type}
+                              </Badge>
+                            </HStack>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Link
+                              href={item.url}
+                              target="_blank"
+                              color="blue.fg"
+                              fontSize="sm"
+                              display="block"
+                              maxW="500px"
+                              overflow="hidden"
+                              textOverflow="ellipsis"
+                              whiteSpace="nowrap"
+                            >
+                              {item.item_type === "commit"
+                                ? `${item.github_id.substring(0, 7)} — ${item.title || "No message"}`
+                                : item.item_type === "pr" || item.item_type === "issue"
+                                  ? `#${item.github_id} — ${item.title || "No title"}`
+                                  : item.title || "View on GitHub"}
+                            </Link>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text fontSize="sm">{item.author || "—"}</Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text fontSize="sm">{item.created_date}</Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            {item.state && (
+                              <Badge
+                                size="sm"
+                                colorPalette={
+                                  item.state === "open" ? "green" : item.state === "closed" ? "red" : "gray"
+                                }
+                              >
+                                {item.state}
+                              </Badge>
+                            )}
+                          </Table.Cell>
+                        </Table.Row>
+                      ))
+                    )}
+                  </Table.Body>
+                </Table.Root>
+              </Box>
+            </Box>
+          </Tabs.Content>
+
+          <Tabs.Content value="chart">
+            <Box pt={4}>
+              <AnalyticsChart data={daily} />
+            </Box>
+          </Tabs.Content>
+        </Tabs.Root>
+      )}
+    </VStack>
+  );
+}
