@@ -212,7 +212,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
         q21: 1,
         q23: 5,
         q24: 4,
-        q9: [8],
+        q9: [7],
         q15: "Our team collaborates well through regular meetings and code reviews."
       },
       is_submitted: true,
@@ -312,7 +312,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
           q21: 1,
           q23: 5,
           q24: 5,
-          q9: [8],
+          q9: [7],
           q15: "Our team collaboration has been excellent. We meet regularly and everyone contributes."
         },
         is_submitted: true,
@@ -463,7 +463,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
         q21: 1,
         q23: 5,
         q24: 5,
-        q9: [8],
+        q9: [7],
         q15: "Great team collaboration this week!"
       },
       is_submitted: true,

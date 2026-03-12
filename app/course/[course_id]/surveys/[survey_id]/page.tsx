@@ -240,16 +240,6 @@ export default function SurveyTakingPage() {
             ← Back to Surveys
           </Button>
 
-          <Heading size="xl" color="fg" textAlign="left">
-            {survey.title}
-          </Heading>
-
-          {survey.description && (
-            <Text color="fg" fontSize="md" opacity={0.8}>
-              {survey.description}
-            </Text>
-          )}
-
           {isReadOnly && (
             <Box
               colorPalette="yellow"

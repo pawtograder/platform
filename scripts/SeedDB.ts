@@ -204,8 +204,8 @@ const TEMPLATES: Record<string, SeederConfig> = {
     }
   },
 
-  groupfocused: {
-    className: "Group-Focused Test Class",
+  tcrs: {
+    className: "TCRS Test Class",
     students: 50,
     graders: 5,
     instructors: 1,
@@ -482,7 +482,7 @@ Seed the database with test data
 
 Options:
   -t, --template <template>           Use a predefined template configuration
-                                      [choices: "micro", "small", "large", "groupfocused", "custom"] [default: "micro"]
+                                      [choices: "micro", "small", "large", "tcrs", "custom"] [default: "micro"]
       --class-name <name>             Name for the test class
       
 Core Options:

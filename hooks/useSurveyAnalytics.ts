@@ -63,6 +63,167 @@ function getQuestionsToAnalyze(surveyJson: Json, analyticsConfig: SurveyAnalytic
   });
 }
 
+/** Pure helper: compute group analytics from submitted responses. Reused by useSurveyAnalytics and useSurveySeriesAnalytics. */
+export function computeGroupAnalyticsFromResponses(
+  submitted: SurveyResponseWithContext[],
+  surveyJson: Json | null,
+  analyticsConfig: SurveyAnalyticsConfig | null,
+  courseStats: Record<string, QuestionStats>
+): GroupAnalytics[] {
+  const groupMap = new Map<
+    number,
+    { name: string; mentorId: string | null; mentorName: string | null; responses: SurveyResponseWithContext[] }
+  >();
+
+  submitted.forEach((r) => {
+    if (r.group_id && r.group_name) {
+      const key = r.group_id;
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          name: r.group_name,
+          mentorId: r.mentor_profile_id,
+          mentorName: r.mentor_name,
+          responses: []
+        });
+      }
+      groupMap.get(key)!.responses.push(r);
+    }
+  });
+
+  const groupAnalytics: GroupAnalytics[] = [];
+  const config = analyticsConfig?.questions;
+
+  for (const [groupId, group] of groupMap) {
+    const questionStats: Record<string, QuestionStats> = {};
+    const allQuestionNames = new Set<string>();
+
+    for (const r of group.responses) {
+      const resp = r.response as Record<string, unknown>;
+      for (const key of Object.keys(resp)) {
+        const val = resp[key];
+        if (val !== null && val !== undefined && typeof val === "number" && !isNaN(val)) {
+          allQuestionNames.add(key);
+        }
+      }
+    }
+
+    const questionsToAnalyze = config
+      ? Object.keys(config).filter((k) => config[k]?.includeInAnalytics !== false)
+      : Array.from(allQuestionNames);
+
+    if (questionsToAnalyze.length === 0 && group.responses.length > 0) {
+      for (const r of group.responses) {
+        Object.keys(r.response as Record<string, unknown>).forEach((k) => allQuestionNames.add(k));
+      }
+    }
+
+    const allNumericKeys = new Set<string>();
+    group.responses.forEach((r) => {
+      const resp = r.response as Record<string, unknown>;
+      Object.keys(resp).forEach((k) => {
+        const v = resp[k];
+        if (v !== null && v !== undefined && typeof v === "number" && !isNaN(v)) return;
+        if (Array.isArray(v)) return;
+        const n = Number(v);
+        if (!isNaN(n)) allNumericKeys.add(k);
+      });
+    });
+
+    const keysToUse = questionsToAnalyze.length > 0 ? questionsToAnalyze : Array.from(allNumericKeys);
+
+    for (const qName of keysToUse) {
+      const questionType = surveyJson ? getQuestionType(surveyJson, qName) : null;
+      const values = group.responses
+        .map((r) => extractNumericValue(r.response as Record<string, unknown>, qName))
+        .filter((v): v is number => v !== null);
+
+      const qConfig = config?.[qName];
+
+      if (questionType === "checkbox") {
+        const allSelections = group.responses
+          .map((r) => extractCheckboxFlagValues(r.response as Record<string, unknown>, qName))
+          .flat();
+        const distribution: Record<number, number> = {};
+        allSelections.forEach((v) => {
+          distribution[v] = (distribution[v] ?? 0) + 1;
+        });
+        if (Object.keys(distribution).length > 0) {
+          const responsesWithSelection = group.responses.filter((r) => {
+            const vals = extractCheckboxFlagValues(r.response as Record<string, unknown>, qName);
+            return vals.length > 0;
+          }).length;
+          questionStats[qName] = {
+            mean: 0,
+            median: 0,
+            min: 0,
+            max: 0,
+            stdDev: 0,
+            count: responsesWithSelection,
+            distribution,
+            deltaFromBaseline: 0
+          };
+        }
+        continue;
+      }
+
+      if (qConfig?.flagValues) {
+        const flagCounts = group.responses
+          .map((r) => extractCheckboxFlagValues(r.response as Record<string, unknown>, qName))
+          .flat()
+          .filter((v) => qConfig.flagValues!.includes(v));
+
+        if (flagCounts.length > 0) {
+          questionStats[qName] = getDistributionWithDelta(
+            { ...computeStats(values.length > 0 ? values : [0]), distribution: {} },
+            0
+          );
+          questionStats[qName].count = flagCounts.length;
+        }
+      }
+
+      if (values.length > 0) {
+        const baseStats = computeStats(values);
+        questionStats[qName] = getDistributionWithDelta(baseStats, 0);
+      }
+    }
+
+    const memberCount = new Set(group.responses.map((r) => r.profile_id)).size;
+    const responseCount = group.responses.length;
+    const responseRate = memberCount > 0 ? responseCount / memberCount : 0;
+
+    const groupStats: GroupAnalytics = {
+      groupId,
+      groupName: group.name,
+      mentorId: group.mentorId,
+      mentorName: group.mentorName,
+      labSectionId: group.responses[0]?.lab_section_id ?? null,
+      labSectionName: group.responses[0]?.lab_section_name ?? null,
+      memberCount,
+      responseCount,
+      responseRate,
+      questionStats,
+      alerts: [],
+      overallHealthScore: 0
+    };
+
+    groupStats.alerts = generateAlerts(groupStats, analyticsConfig);
+    const alertScore = groupStats.alerts.reduce(
+      (acc, a) => acc + (a.severity === "critical" ? 2 : a.severity === "warning" ? 1 : 0),
+      0
+    );
+    groupStats.overallHealthScore = Math.max(0, 10 - alertScore);
+
+    for (const [qName, stats] of Object.entries(groupStats.questionStats)) {
+      const baseline = courseStats[qName]?.mean ?? stats.mean;
+      stats.deltaFromBaseline = stats.mean - baseline;
+    }
+
+    groupAnalytics.push(groupStats);
+  }
+
+  return groupAnalytics;
+}
+
 function generateAlerts(groupStats: GroupAnalytics, analyticsConfig: SurveyAnalyticsConfig | null): Alert[] {
   const alerts: Alert[] = [];
   const varianceThreshold = analyticsConfig?.globalSettings?.varianceThreshold ?? 1.5;
@@ -196,170 +357,20 @@ export function useSurveyAnalytics(
     const surveyJson = options?.surveyJson ?? null;
     const submitted = responses.filter((r) => r.is_submitted);
 
-    const groupMap = new Map<
-      number,
-      { name: string; mentorId: string | null; mentorName: string | null; responses: SurveyResponseWithContext[] }
-    >();
-    const ungrouped: SurveyResponseWithContext[] = [];
-
-    submitted.forEach((r) => {
-      if (r.group_id && r.group_name) {
-        const key = r.group_id;
-        if (!groupMap.has(key)) {
-          groupMap.set(key, {
-            name: r.group_name,
-            mentorId: r.mentor_profile_id,
-            mentorName: r.mentor_name,
-            responses: []
-          });
-        }
-        groupMap.get(key)!.responses.push(r);
-      } else {
-        ungrouped.push(r);
-      }
-    });
-
-    const groupAnalytics: GroupAnalytics[] = [];
-    const allQuestionNames = new Set<string>();
-
-    for (const [groupId, group] of groupMap) {
-      const questionStats: Record<string, QuestionStats> = {};
-      for (const r of group.responses) {
-        const resp = r.response as Record<string, unknown>;
-        for (const key of Object.keys(resp)) {
-          const val = resp[key];
-          if (val !== null && val !== undefined && typeof val === "number" && !isNaN(val)) {
-            allQuestionNames.add(key);
-          }
-        }
-      }
-
-      const config = analyticsConfig?.questions;
-      const questionsToAnalyze = config
-        ? Object.keys(config).filter((k) => config[k]?.includeInAnalytics !== false)
-        : Array.from(allQuestionNames);
-
-      if (questionsToAnalyze.length === 0 && group.responses.length > 0) {
-        for (const r of group.responses) {
-          Object.keys(r.response as Record<string, unknown>).forEach((k) => allQuestionNames.add(k));
-        }
-      }
-
-      const allNumericKeys = new Set<string>();
-      group.responses.forEach((r) => {
-        const resp = r.response as Record<string, unknown>;
-        Object.keys(resp).forEach((k) => {
-          const v = resp[k];
-          if (v !== null && v !== undefined && typeof v === "number" && !isNaN(v)) return;
-          if (Array.isArray(v)) return;
-          const n = Number(v);
-          if (!isNaN(n)) allNumericKeys.add(k);
-        });
-      });
-
-      const keysToUse = questionsToAnalyze.length > 0 ? questionsToAnalyze : Array.from(allNumericKeys);
-
-      for (const qName of keysToUse) {
-        const questionType = surveyJson ? getQuestionType(surveyJson, qName) : null;
-        const values = group.responses
-          .map((r) => extractNumericValue(r.response as Record<string, unknown>, qName))
-          .filter((v): v is number => v !== null);
-
-        const qConfig = config?.[qName];
-
-        // Checkbox: count selections per choice across all responses
-        if (questionType === "checkbox") {
-          const allSelections = group.responses
-            .map((r) => extractCheckboxFlagValues(r.response as Record<string, unknown>, qName))
-            .flat();
-          const distribution: Record<number, number> = {};
-          allSelections.forEach((v) => {
-            distribution[v] = (distribution[v] ?? 0) + 1;
-          });
-          if (Object.keys(distribution).length > 0) {
-            const responsesWithSelection = group.responses.filter((r) => {
-              const vals = extractCheckboxFlagValues(r.response as Record<string, unknown>, qName);
-              return vals.length > 0;
-            }).length;
-            questionStats[qName] = {
-              mean: 0,
-              median: 0,
-              min: 0,
-              max: 0,
-              stdDev: 0,
-              count: responsesWithSelection,
-              distribution,
-              deltaFromBaseline: 0
-            };
-          }
-          continue;
-        }
-
-        if (qConfig?.flagValues) {
-          const flagCounts = group.responses
-            .map((r) => extractCheckboxFlagValues(r.response as Record<string, unknown>, qName))
-            .flat()
-            .filter((v) => qConfig.flagValues!.includes(v));
-
-          if (flagCounts.length > 0) {
-            questionStats[qName] = getDistributionWithDelta(
-              { ...computeStats(values.length > 0 ? values : [0]), distribution: {} },
-              0
-            );
-            questionStats[qName].count = flagCounts.length;
-          }
-        }
-
-        if (values.length > 0) {
-          const baseStats = computeStats(values);
-          questionStats[qName] = getDistributionWithDelta(baseStats, 0);
-        }
-      }
-
-      const memberCount = new Set(group.responses.map((r) => r.profile_id)).size;
-      const responseCount = group.responses.length;
-      const responseRate = memberCount > 0 ? responseCount / memberCount : 0;
-
-      const groupStats: GroupAnalytics = {
-        groupId,
-        groupName: group.name,
-        mentorId: group.mentorId,
-        mentorName: group.mentorName,
-        labSectionId: group.responses[0]?.lab_section_id ?? null,
-        labSectionName: group.responses[0]?.lab_section_name ?? null,
-        memberCount,
-        responseCount,
-        responseRate,
-        questionStats,
-        alerts: [],
-        overallHealthScore: 0
-      };
-
-      groupStats.alerts = generateAlerts(groupStats, analyticsConfig);
-      const alertScore = groupStats.alerts.reduce(
-        (acc, a) => acc + (a.severity === "critical" ? 2 : a.severity === "warning" ? 1 : 0),
-        0
-      );
-      groupStats.overallHealthScore = Math.max(0, 10 - alertScore);
-
-      groupAnalytics.push(groupStats);
-    }
+    const ungrouped: SurveyResponseWithContext[] = submitted.filter((r) => !r.group_id || !r.group_name);
 
     const courseStats: Record<string, QuestionStats> = {};
     const allKeys = new Set<string>();
-    groupAnalytics.forEach((g) => Object.keys(g.questionStats).forEach((k) => allKeys.add(k)));
-    if (allKeys.size === 0) {
-      submitted.forEach((r) => {
-        const resp = r.response as Record<string, unknown>;
-        Object.keys(resp).forEach((k) => {
-          const v = resp[k];
-          if (v !== null && v !== undefined) {
-            if (typeof v === "number" && !isNaN(v)) allKeys.add(k);
-            if (Array.isArray(v)) allKeys.add(k); // checkbox
-          }
-        });
+    submitted.forEach((r) => {
+      const resp = r.response as Record<string, unknown>;
+      Object.keys(resp).forEach((k) => {
+        const v = resp[k];
+        if (v !== null && v !== undefined) {
+          if (typeof v === "number" && !isNaN(v)) allKeys.add(k);
+          if (Array.isArray(v)) allKeys.add(k); // checkbox
+        }
       });
-    }
+    });
 
     for (const qName of allKeys) {
       const questionType = surveyJson ? getQuestionType(surveyJson, qName) : null;
@@ -398,12 +409,7 @@ export function useSurveyAnalytics(
       }
     }
 
-    for (const g of groupAnalytics) {
-      for (const [qName, stats] of Object.entries(g.questionStats)) {
-        const baseline = courseStats[qName]?.mean ?? stats.mean;
-        stats.deltaFromBaseline = stats.mean - baseline;
-      }
-    }
+    const groupAnalytics = computeGroupAnalyticsFromResponses(submitted, surveyJson, analyticsConfig, courseStats);
 
     const sectionAnalytics: SectionAnalytics[] = [];
     const labSectionMap = new Map<number, SurveyResponseWithContext[]>();
@@ -551,6 +557,7 @@ export function useSurveyAnalytics(
 export type SurveyAnalyticsSnapshot = {
   courseStats: Record<string, QuestionStats>;
   sectionAnalytics: SectionAnalytics[];
+  groupAnalytics: GroupAnalytics[];
   totalResponses: number;
 };
 
@@ -558,7 +565,8 @@ export type SurveyAnalyticsSnapshot = {
 export function useSurveySeriesAnalytics(
   surveyIds: string[],
   classId: number,
-  analyticsConfig: SurveyAnalyticsConfig | null
+  analyticsConfig: SurveyAnalyticsConfig | null,
+  options?: { surveyJsonBySurveyId?: Record<string, Json> }
 ): {
   dataBySurveyId: Record<string, SurveyAnalyticsSnapshot>;
   isLoading: boolean;
@@ -723,8 +731,17 @@ export function useSurveySeriesAnalytics(
       };
       addSection(labSectionMap, "lab", "lab_section_name");
       addSection(classSectionMap, "class", "class_section_name");
-      dataBySurveyId[surveyId] = { courseStats, sectionAnalytics, totalResponses: submitted.length };
+
+      const surveyJson = options?.surveyJsonBySurveyId?.[surveyId] ?? null;
+      const groupAnalytics = computeGroupAnalyticsFromResponses(submitted, surveyJson, analyticsConfig, courseStats);
+
+      dataBySurveyId[surveyId] = {
+        courseStats,
+        sectionAnalytics,
+        groupAnalytics,
+        totalResponses: submitted.length
+      };
     }
     return { dataBySurveyId, isLoading, error };
-  }, [surveyIds, responsesBySurvey, isLoading, error]);
+  }, [surveyIds, responsesBySurvey, isLoading, error, options?.surveyJsonBySurveyId]);
 }

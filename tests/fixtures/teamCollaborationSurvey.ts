@@ -22,10 +22,10 @@ export const TEAM_COLLABORATION_SURVEY = {
             { value: 1, text: "Completed all my assigned tasks" },
             { value: 4, text: "Completed some of my assigned tasks" },
             { value: 2, text: "Asked a teammate for help completing my task(s)" },
-            { value: 3, text: "Helped a teammate complete a portion of their task(s)" },
-            { value: 5, text: "Other" }
+            { value: 3, text: "Helped a teammate complete a portion of their task(s)" }
           ],
-          hasOther: true
+          showOtherItem: true,
+          otherPlaceholder: "Please describe"
         },
         {
           type: "checkbox",
@@ -48,10 +48,10 @@ export const TEAM_COLLABORATION_SURVEY = {
             {
               value: 5,
               text: "Reviewed technical artifacts (design, requirements, tests, or code) for my teammates"
-            },
-            { value: 6, text: "Other" }
+            }
           ],
-          hasOther: true
+          showOtherItem: true,
+          otherPlaceholder: "Please describe"
         }
       ]
     },
@@ -190,10 +190,10 @@ export const TEAM_COLLABORATION_SURVEY = {
               value: 6,
               text: "Difficulties scheduling tasks so that I wasn't waiting for my team to complete their work"
             },
-            { value: 7, text: "Other" },
-            { value: 8, text: "None of the above: I was able to work productively" }
+            { value: 7, text: "None of the above: I was able to work productively" }
           ],
-          hasOther: true
+          showOtherItem: true,
+          otherPlaceholder: "Please describe"
         },
         {
           type: "comment",
