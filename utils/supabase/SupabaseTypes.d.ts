@@ -10520,6 +10520,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      _submission_review_is_completable: {
+        Args: { p_submission_review_id: number };
+        Returns: boolean;
+      };
       admin_bulk_set_user_roles_disabled: {
         Args: {
           p_admin_user_id?: string;
@@ -10863,6 +10867,14 @@ export type Database = {
         Args: { topic_text: string };
         Returns: boolean;
       };
+      check_grading_completion_eligibility: {
+        Args: { p_assignment_id: number };
+        Returns: {
+          completable: number;
+          missing_required_checks: number;
+          total_incomplete: number;
+        }[];
+      };
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
@@ -10897,6 +10909,10 @@ export type Database = {
           p_student_tag_filters?: Json;
         };
         Returns: Json;
+      };
+      complete_eligible_grading_reviews: {
+        Args: { p_assignment_id: number };
+        Returns: number;
       };
       create_all_repos_for_assignment:
         | {
@@ -11193,6 +11209,10 @@ export type Database = {
         Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
       };
+      fix_assignment_repo_permissions: {
+        Args: { p_assignment_id: number; p_class_id: number };
+        Returns: Json;
+      };
       generate_anon_name: { Args: never; Returns: string };
       get_all_class_metrics: { Args: never; Returns: Json };
       get_assignment_llm_metrics: { Args: never; Returns: Json };
@@ -11376,6 +11396,7 @@ export type Database = {
           class_section_id: number;
           class_section_name: string;
           group_id: number;
+          group_member_count: number;
           group_name: string;
           is_submitted: boolean;
           lab_section_id: number;
@@ -11696,6 +11717,15 @@ export type Database = {
         Args: { p_class_id: number; p_grader_result_id: number };
         Returns: Json;
       };
+      publish_assignment_group_changes: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_groups_to_create?: Json;
+          p_moves_to_fulfill?: Json;
+        };
+        Returns: Json;
+      };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;
@@ -11730,17 +11760,13 @@ export type Database = {
         };
         Returns: undefined;
       };
-      check_grading_completion_eligibility: {
-        Args: { p_assignment_id: number };
-        Returns: { total_incomplete: number; completable: number; missing_required_checks: number }[];
-      };
-      complete_eligible_grading_reviews: {
-        Args: { p_assignment_id: number };
-        Returns: number;
-      };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
+      };
+      reorder_surveys_in_series: {
+        Args: { p_ordinal_updates: Json; p_series_id: string };
+        Returns: undefined;
       };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
