@@ -1,10 +1,14 @@
 /**
- * MCP Token Management Edge Function
+ * API Token Management Edge Function
  *
  * Endpoints:
  * - GET: List all tokens for the current user
- * - POST: Create a new API token
+ * - POST: Create a new API token (supports MCP and CLI scopes)
  * - DELETE: Revoke a token
+ *
+ * Available scopes:
+ * - mcp:read, mcp:write  - For MCP server access (AI assistants)
+ * - cli:read, cli:write   - For CLI edge function access
  *
  * Authentication: Requires valid Supabase session (dashboard login)
  */
