@@ -286,7 +286,6 @@ class AssignmentsDependencySource extends DependencySourceBase {
     // Gather target students in this batch
     const students = new Set<string>(keys.map((key) => key.student_id));
 
-    // Query optimized view that returns one row per student per assignment with scores by review round
     type ReviewsByRoundRow = {
       assignment_id: number;
       class_id: number;
@@ -294,6 +293,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
       assignment_slug: string | null;
       scores_by_round_private: Record<string, number | null> | null;
       scores_by_round_public: Record<string, number | null> | null;
+      individual_scores: Record<string, number> | null;
     };
 
     const allRows: ReviewsByRoundRow[] = [];
@@ -305,7 +305,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
       let query = supabase
         .from("submissions_with_reviews_by_round_for_assignment")
         .select(
-          "assignment_id, class_id, student_private_profile_id, assignment_slug, scores_by_round_private, scores_by_round_public"
+          "assignment_id, class_id, student_private_profile_id, assignment_slug, scores_by_round_private, scores_by_round_public, individual_scores"
         )
         .in("assignment_id", assignmentIds);
       // Only filter by students when the set is reasonably small to avoid exceeding IN limits
@@ -341,6 +341,16 @@ class AssignmentsDependencySource extends DependencySourceBase {
       if (row.scores_by_round_public) {
         for (const [round, score] of Object.entries(row.scores_by_round_public)) {
           publicByRound[round] = score === null ? undefined : (score as number);
+        }
+      }
+      // Use student-specific score from individual_scores when present
+      if (row.individual_scores && row.student_private_profile_id in row.individual_scores) {
+        const studentScore = row.individual_scores[row.student_private_profile_id];
+        if (studentScore !== undefined && studentScore !== null) {
+          privateByRound["grading-review"] = studentScore;
+          if (publicByRound["grading-review"] !== undefined) {
+            publicByRound["grading-review"] = studentScore;
+          }
         }
       }
       results.push({

@@ -73,7 +73,6 @@ import { format, formatRelative } from "date-fns";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TargetStudentContext, useTargetStudentProfileId } from "@/hooks/useTargetStudent";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
@@ -1223,7 +1222,6 @@ function SubmissionCommentForm({
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const graderPseudonymousMode = useGraderPseudonymousMode();
-  const targetStudentProfileId = useTargetStudentProfileId();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
@@ -1280,7 +1278,6 @@ function SubmissionCommentForm({
             submission_review_id: submissionReview?.id ?? null,
             eventually_visible: true,
             regrade_request_id: null,
-            target_student_profile_id: targetStudentProfileId ?? null,
             ...artifactInfo
           };
           onSuccess();
@@ -1674,23 +1671,21 @@ function IndividualGradingPartForStudent({
 }) {
   const profile = useUserProfile(memberProfileId);
   return (
-    <TargetStudentContext.Provider value={memberProfileId}>
-      <Box
-        w="100%"
-        borderLeft="3px solid"
-        borderColor="border.info"
-        pl={3}
-        role="region"
-        aria-label={`Individual grading: ${part.name} for ${profile?.name ?? memberProfileId}`}
-      >
-        <Box mb={1}>
-          <Badge variant="outline">
-            <PersonName uid={memberProfileId} />
-          </Badge>
-        </Box>
-        <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+    <Box
+      w="100%"
+      borderLeft="3px solid"
+      borderColor="border.info"
+      pl={3}
+      role="region"
+      aria-label={`Individual grading: ${part.name} for ${profile?.name ?? memberProfileId}`}
+    >
+      <Box mb={1}>
+        <Badge variant="outline">
+          <PersonName uid={memberProfileId} />
+        </Badge>
       </Box>
-    </TargetStudentContext.Provider>
+      <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+    </Box>
   );
 }
 

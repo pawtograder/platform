@@ -7095,7 +7095,6 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id: number | null;
-          target_student_profile_id: string | null;
           updated_at: string;
         };
         Insert: {
@@ -7115,7 +7114,6 @@ export type Database = {
           submission_artifact_id: number;
           submission_id: number;
           submission_review_id?: number | null;
-          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -7135,7 +7133,6 @@ export type Database = {
           submission_artifact_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
-          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -7429,7 +7426,6 @@ export type Database = {
           rubric_check_id: number | null;
           submission_id: number;
           submission_review_id: number | null;
-          target_student_profile_id: string | null;
           updated_at: string;
         };
         Insert: {
@@ -7448,7 +7444,6 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id: number;
           submission_review_id?: number | null;
-          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -7467,7 +7462,6 @@ export type Database = {
           rubric_check_id?: number | null;
           submission_id?: number;
           submission_review_id?: number | null;
-          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -7569,7 +7563,6 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id: number | null;
-          target_student_profile_id: string | null;
           updated_at: string;
         };
         Insert: {
@@ -7590,7 +7583,6 @@ export type Database = {
           submission_file_id: number;
           submission_id: number;
           submission_review_id?: number | null;
-          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -7611,7 +7603,6 @@ export type Database = {
           submission_file_id?: number;
           submission_id?: number;
           submission_review_id?: number | null;
-          target_student_profile_id?: string | null;
           updated_at?: string;
         };
         Relationships: [
