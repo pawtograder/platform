@@ -80,9 +80,11 @@ function buildDivergingRow(
   q: { name: string; title: string },
   questionStats: Record<string, QuestionStats>,
   valueLabelsByQuestion: Record<string, Record<number, string>>,
-  allValues: number[]
+  allValues: number[],
+  scaleMin: number,
+  scaleMax: number
 ) {
-  const { left, neutral, right } = partitionForDiverging(allValues);
+  const { left, neutral, right } = partitionForDiverging(allValues, scaleMin, scaleMax);
   const dist = questionStats[q.name]?.distribution;
   if (!dist || Object.keys(dist).length === 0) return null;
 
@@ -152,13 +154,19 @@ export function DivergingStackedChartMultiSeries({
     return Array.from(vals).sort((a, b) => a - b);
   }, [questions, series]);
 
-  const { left, neutral, right } = useMemo(() => partitionForDiverging(allValues), [allValues]);
+  const scaleMin = allValues.length > 0 ? (allValues[0] as number) : 0;
+  const scaleMax = allValues.length > 0 ? (allValues[allValues.length - 1] as number) : 0;
+
+  const { left, neutral, right } = useMemo(
+    () => partitionForDiverging(allValues, scaleMin, scaleMax),
+    [allValues, scaleMin, scaleMax]
+  );
 
   const chartData = useMemo(() => {
     const rows: (Record<string, number | string | unknown> & { _surveyIndex?: number })[] = [];
     series.forEach((s, surveyIndex) => {
       questions.forEach((q) => {
-        const row = buildDivergingRow(q, s.questionStats, s.valueLabelsByQuestion, allValues);
+        const row = buildDivergingRow(q, s.questionStats, s.valueLabelsByQuestion, allValues, scaleMin, scaleMax);
         if (row) {
           (row as Record<string, unknown>)._surveyIndex = surveyIndex;
           (row as Record<string, unknown>)._surveyLabel = s.surveyLabel;
@@ -167,7 +175,7 @@ export function DivergingStackedChartMultiSeries({
       });
     });
     return rows;
-  }, [questions, series, allValues]);
+  }, [questions, series, allValues, scaleMin, scaleMax]);
 
   const leftKeys = useMemo(() => {
     const keys: string[] = [];
@@ -188,9 +196,9 @@ export function DivergingStackedChartMultiSeries({
     return allValues.map((v) => ({
       value: labels[v] ?? String(v),
       type: "square" as const,
-      color: getDivergingColor(v, allValues)
+      color: getDivergingColor(v, allValues, scaleMin, scaleMax)
     }));
-  }, [allValues, questions, series]);
+  }, [allValues, questions, series, scaleMin, scaleMax]);
 
   const maxExtent = useMemo(() => {
     let max = 0;
@@ -359,7 +367,7 @@ export function DivergingStackedChartMultiSeries({
                       key={key}
                       dataKey={key}
                       stackId="stack"
-                      fill={getDivergingColor(rawVal, allValues)}
+                      fill={getDivergingColor(rawVal, allValues, scaleMin, scaleMax)}
                       radius={0}
                     />
                   );
@@ -372,7 +380,7 @@ export function DivergingStackedChartMultiSeries({
                       key={key}
                       dataKey={key}
                       stackId="stack"
-                      fill={getDivergingColor(rawVal, allValues)}
+                      fill={getDivergingColor(rawVal, allValues, scaleMin, scaleMax)}
                       radius={0}
                     />
                   );
@@ -390,9 +398,9 @@ export function DivergingStackedChartMultiSeries({
                     if (!arrowType) return null;
                     const min = allValues[0] as number;
                     const max = allValues[allValues.length - 1] as number;
-                    const range = max - min || 1;
-                    const normalizedMean = (courseMean - min) / range;
-                    const x = (2 * normalizedMean - 1) * maxExtent;
+                    const valueExtent = max - min || 1;
+                    const valueScale = (v: number) => ((v - min) / valueExtent) * 2 - 1;
+                    const x = valueScale(courseMean) * valueExtent;
                     const color =
                       arrowType === "up" || arrowType === "double-up" ? LIKERT_COLORS.positive : LIKERT_COLORS.negative;
                     return (

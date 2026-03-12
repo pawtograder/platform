@@ -100,10 +100,8 @@ export function computeGroupAnalyticsFromResponses(
     for (const r of group.responses) {
       const resp = r.response as Record<string, unknown>;
       for (const key of Object.keys(resp)) {
-        const val = resp[key];
-        if (val !== null && val !== undefined && typeof val === "number" && !isNaN(val)) {
-          allQuestionNames.add(key);
-        }
+        const n = extractNumericValue(resp, key);
+        if (n !== null) allQuestionNames.add(key);
       }
     }
 
@@ -121,11 +119,8 @@ export function computeGroupAnalyticsFromResponses(
     group.responses.forEach((r) => {
       const resp = r.response as Record<string, unknown>;
       Object.keys(resp).forEach((k) => {
-        const v = resp[k];
-        if (v !== null && v !== undefined && typeof v === "number" && !isNaN(v)) return;
-        if (Array.isArray(v)) return;
-        const n = Number(v);
-        if (!isNaN(n)) allNumericKeys.add(k);
+        const n = extractNumericValue(resp, k);
+        if (n !== null) allNumericKeys.add(k);
       });
     });
 
@@ -303,41 +298,8 @@ export function useSurveyAnalytics(
         p_class_id: classId
       });
       if (rpcError) {
-        if (rpcError.message?.includes("function") && rpcError.message?.includes("does not exist")) {
-          const { data: fallbackData, error: fallbackError } = await supabase.rpc(
-            "get_survey_responses_with_group_context",
-            { p_survey_id: surveyId, p_class_id: classId }
-          );
-          if (fallbackError) {
-            setError(fallbackError.message);
-            setResponses([]);
-          } else {
-            const mapped = (
-              fallbackData as {
-                response_id: string;
-                profile_id: string;
-                profile_name: string | null;
-                is_submitted: boolean;
-                submitted_at: string | null;
-                response: Record<string, unknown>;
-                group_id: number | null;
-                group_name: string | null;
-                mentor_profile_id: string | null;
-                mentor_name: string | null;
-              }[]
-            ).map((r) => ({
-              ...r,
-              lab_section_id: null,
-              lab_section_name: null,
-              class_section_id: null,
-              class_section_name: null
-            }));
-            setResponses(mapped as SurveyResponseWithContext[]);
-          }
-        } else {
-          setError(rpcError.message);
-          setResponses([]);
-        }
+        setError(rpcError.message);
+        setResponses([]);
       } else {
         setResponses((data as SurveyResponseWithContext[]) ?? []);
       }

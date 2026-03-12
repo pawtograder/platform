@@ -352,49 +352,35 @@ export function useClassSections() {
   return classSections;
 }
 
+/**
+ * Hook to get all survey series for the course with real-time updates (cached on course controller)
+ */
 export function useSurveySeries() {
   const controller = useCourseController();
-  const [series, setSeries] = useState<{ id: string; name: string; description: string | null }[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const fetchSeries = useCallback(() => {
-    setSeries([]);
-    setIsLoading(true);
-    createClient()
-      .from("survey_series")
-      .select("id, name, description, class_id, created_at, created_by")
-      .eq("class_id", controller.courseId)
-      .order("name")
-      .then(({ data, error }) => {
-        if (!error) setSeries((data as { id: string; name: string; description: string | null }[]) ?? []);
-        setIsLoading(false);
-      });
-  }, [controller.courseId]);
-  useEffect(() => {
-    fetchSeries();
-  }, [fetchSeries]);
-  return { series, isLoading, refetch: fetchSeries };
+  const series = useTableControllerTableValues(controller.surveySeries);
+  const isLoading = !useIsTableControllerReady(controller.surveySeries);
+  const refetch = useCallback(() => {
+    void controller.surveySeries.refetchAll();
+  }, [controller]);
+  return { series, isLoading, refetch };
 }
 
+/**
+ * Hook to get surveys in a specific series (cached on course controller's surveys TableController)
+ */
 export function useSurveysInSeries(seriesId: string | undefined) {
-  const [surveys, setSurveys] = useState<Database["public"]["Tables"]["surveys"]["Row"][]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  useEffect(() => {
-    if (!seriesId) {
-      setSurveys([]);
-      setIsLoading(false);
-      return;
-    }
-    createClient()
-      .from("surveys")
-      .select("*")
-      .eq("series_id", seriesId)
-      .is("deleted_at", null)
-      .order("series_ordinal", { ascending: true })
-      .then(({ data, error }) => {
-        if (!error) setSurveys((data as Database["public"]["Tables"]["surveys"]["Row"][]) ?? []);
-        setIsLoading(false);
-      });
-  }, [seriesId]);
+  const controller = useCourseController();
+  const predicate = useCallback(
+    (survey: Database["public"]["Tables"]["surveys"]["Row"]) => survey.series_id === seriesId && !survey.deleted_at,
+    [seriesId]
+  );
+  const rawSurveys = useListTableControllerValues(controller.surveys, predicate);
+  const surveys = useMemo(
+    () => [...rawSurveys].sort((a, b) => (a.series_ordinal ?? 0) - (b.series_ordinal ?? 0)),
+    [rawSurveys]
+  );
+  const isLoading = !useIsTableControllerReady(controller.surveys);
+
   return { surveys, isLoading };
 }
 
@@ -446,6 +432,7 @@ export class CourseController {
   private _discordMessages?: TableController<"discord_messages">;
   private _livePolls?: TableController<"live_polls">;
   private _surveys?: TableController<"surveys">;
+  private _surveySeries?: TableController<"survey_series">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -498,6 +485,7 @@ export class CourseController {
     }
     void this.livePolls; // Triggers lazy creation
     void this.surveys; // Triggers lazy creation
+    void this.surveySeries; // Triggers lazy creation
 
     // Clear initialData to free memory after all eager controllers are initialized
     this._initialData = undefined;
@@ -971,6 +959,19 @@ export class CourseController {
     return this._surveys;
   }
 
+  get surveySeries(): TableController<"survey_series"> {
+    if (!this._surveySeries) {
+      this._surveySeries = new TableController({
+        client: this.client,
+        table: "survey_series",
+        query: this.client.from("survey_series").select("*").eq("class_id", this.courseId).order("name"),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._surveySeries;
+  }
+
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
   private genericData: { [key in string]: Map<number, unknown> } = {};
   private genericDataListSubscribers: { [key in string]: UpdateCallback<unknown>[] } = {};
@@ -1405,6 +1406,7 @@ export class CourseController {
     this._discordMessages = undefined;
     this._livePolls?.close();
     this._surveys?.close();
+    this._surveySeries?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();

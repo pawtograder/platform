@@ -102,22 +102,27 @@ export default function SeriesManagementModal({
     if (idx < 0) return;
     const newIdx = direction === "up" ? idx - 1 : idx + 1;
     if (newIdx < 0 || newIdx >= surveys.length) return;
+    if (!existingSeries?.id) return;
 
     const reordered = [...surveys];
     [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
 
-    const supabase = createClient();
-    const updates = reordered.map((s, i) => ({
+    const ordinalUpdates = reordered.map((s, i) => ({
       id: s.id,
       series_ordinal: i + 1
     }));
 
-    for (const u of updates) {
-      const { error } = await supabase.from("surveys").update({ series_ordinal: u.series_ordinal }).eq("id", u.id);
-      if (error) {
-        toaster.error({ title: "Error", description: `Failed to reorder: ${error.message}` });
-        return;
-      }
+    const supabase = createClient();
+    const { error } = await supabase.rpc(
+      "reorder_surveys_in_series" as never,
+      {
+        p_series_id: existingSeries.id,
+        p_ordinal_updates: ordinalUpdates
+      } as never
+    );
+    if (error) {
+      toaster.error({ title: "Error", description: `Failed to reorder: ${error.message}` });
+      return;
     }
     toaster.success({ title: "Success", description: "Survey order updated" });
     onSuccess();

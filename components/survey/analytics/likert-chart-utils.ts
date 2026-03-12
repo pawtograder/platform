@@ -16,26 +16,35 @@ export const DIVERGING_COLORS = {
   positiveStrong: "#2563EB"
 } as const;
 
-/** Classify a Likert value as negative, neutral, or positive based on scale midpoint */
-export function getLikertDirection(value: number, allValues: number[]): "negative" | "neutral" | "positive" {
-  if (allValues.length === 0) return "neutral";
-  const sorted = [...allValues].sort((a, b) => a - b);
-  const min = sorted[0];
-  const max = sorted[sorted.length - 1];
-  const midpoint = (min + max) / 2;
+/** Classify a Likert value as negative, neutral, or positive based on scale midpoint.
+ * Uses fixed scale bounds (scaleMin/scaleMax) when provided so polarity is stable across filtered views.
+ * Falls back to allValues min/max when scale bounds are not provided. */
+export function getLikertDirection(
+  value: number,
+  allValues: number[],
+  scaleMin?: number,
+  scaleMax?: number
+): "negative" | "neutral" | "positive" {
+  const useFixedScale = scaleMin != null && scaleMax != null;
+  if (!useFixedScale && allValues.length === 0) return "neutral";
+  const midpoint = useFixedScale ? (scaleMin + scaleMax) / 2 : (Math.min(...allValues) + Math.max(...allValues)) / 2;
   const tolerance = 0.3;
   if (Math.abs(value - midpoint) <= tolerance) return "neutral";
   return value < midpoint ? "negative" : "positive";
 }
 
 /** Get color for a Likert value */
-export function getLikertColor(value: number, allValues: number[]): string {
-  const dir = getLikertDirection(value, allValues);
+export function getLikertColor(value: number, allValues: number[], scaleMin?: number, scaleMax?: number): string {
+  const dir = getLikertDirection(value, allValues, scaleMin, scaleMax);
   return LIKERT_COLORS[dir];
 }
 
 /** Partition values into left (negative), neutral, right (positive) for diverging chart */
-export function partitionForDiverging(allValues: number[]): {
+export function partitionForDiverging(
+  allValues: number[],
+  scaleMin?: number,
+  scaleMax?: number
+): {
   left: number[];
   neutral: number[];
   right: number[];
@@ -44,7 +53,7 @@ export function partitionForDiverging(allValues: number[]): {
   const neutral: number[] = [];
   const right: number[] = [];
   for (const v of allValues) {
-    const dir = getLikertDirection(v, allValues);
+    const dir = getLikertDirection(v, allValues, scaleMin, scaleMax);
     if (dir === "negative") left.push(v);
     else if (dir === "neutral") neutral.push(v);
     else right.push(v);
@@ -53,8 +62,8 @@ export function partitionForDiverging(allValues: number[]): {
 }
 
 /** Get diverging chart color (gradient within polarity) */
-export function getDivergingColor(value: number, allValues: number[]): string {
-  const { left, neutral, right } = partitionForDiverging(allValues);
+export function getDivergingColor(value: number, allValues: number[], scaleMin?: number, scaleMax?: number): string {
+  const { left, neutral, right } = partitionForDiverging(allValues, scaleMin, scaleMax);
   if (neutral.includes(value)) return DIVERGING_COLORS.neutral;
   if (left.includes(value)) {
     const idx = left.indexOf(value);

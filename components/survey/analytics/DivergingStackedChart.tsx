@@ -77,9 +77,11 @@ function buildDivergingData(
   questions: { name: string; title: string }[],
   questionStats: Record<string, QuestionStats>,
   allValues: number[],
-  valueLabelsByQuestion: Record<string, Record<number, string>>
+  valueLabelsByQuestion: Record<string, Record<number, string>>,
+  scaleMin: number,
+  scaleMax: number
 ) {
-  const { left, neutral, right } = partitionForDiverging(allValues);
+  const { left, neutral, right } = partitionForDiverging(allValues, scaleMin, scaleMax);
 
   const leftOrder = [...left].sort((a, b) => b - a);
   const rightOrder = [...right].sort((a, b) => a - b);
@@ -154,11 +156,17 @@ export function DivergingStackedChart({
     return Array.from(vals).sort((a, b) => a - b);
   }, [questions, questionStats]);
 
-  const { left, neutral, right } = useMemo(() => partitionForDiverging(allValues), [allValues]);
+  const scaleMin = allValues.length > 0 ? (allValues[0] as number) : 0;
+  const scaleMax = allValues.length > 0 ? (allValues[allValues.length - 1] as number) : 0;
+
+  const { left, neutral, right } = useMemo(
+    () => partitionForDiverging(allValues, scaleMin, scaleMax),
+    [allValues, scaleMin, scaleMax]
+  );
 
   const chartData = useMemo(
-    () => buildDivergingData(questions, questionStats, allValues, valueLabelsByQuestion),
-    [questions, questionStats, allValues, valueLabelsByQuestion]
+    () => buildDivergingData(questions, questionStats, allValues, valueLabelsByQuestion, scaleMin, scaleMax),
+    [questions, questionStats, allValues, valueLabelsByQuestion, scaleMin, scaleMax]
   );
 
   const leftKeys = useMemo(() => {
@@ -180,9 +188,9 @@ export function DivergingStackedChart({
     return allValues.map((v) => ({
       value: labels[v] ?? String(v),
       type: "square" as const,
-      color: getDivergingColor(v, allValues)
+      color: getDivergingColor(v, allValues, scaleMin, scaleMax)
     }));
-  }, [allValues, valueLabelsByQuestion, questions]);
+  }, [allValues, valueLabelsByQuestion, questions, scaleMin, scaleMax]);
 
   const maxExtent = useMemo(() => {
     let max = 0;
@@ -320,14 +328,26 @@ export function DivergingStackedChart({
               const match = key.match(/left_v(\d+)|left_neutral_(\d+)/);
               const rawVal = match ? Number(match[1] ?? match[2]) : 0;
               return (
-                <Bar key={key} dataKey={key} stackId="stack" fill={getDivergingColor(rawVal, allValues)} radius={0} />
+                <Bar
+                  key={key}
+                  dataKey={key}
+                  stackId="stack"
+                  fill={getDivergingColor(rawVal, allValues, scaleMin, scaleMax)}
+                  radius={0}
+                />
               );
             })}
             {rightKeys.map((key) => {
               const match = key.match(/right_v(\d+)|right_neutral_(\d+)/);
               const rawVal = match ? Number(match[1] ?? match[2]) : 0;
               return (
-                <Bar key={key} dataKey={key} stackId="stack" fill={getDivergingColor(rawVal, allValues)} radius={0} />
+                <Bar
+                  key={key}
+                  dataKey={key}
+                  stackId="stack"
+                  fill={getDivergingColor(rawVal, allValues, scaleMin, scaleMax)}
+                  radius={0}
+                />
               );
             })}
             {chartData.map((row) => {

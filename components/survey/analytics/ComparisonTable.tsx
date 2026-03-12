@@ -79,12 +79,22 @@ export function ComparisonTable({
                     bg: health === "critical" ? "red.900" : health === "warning" ? "yellow.900" : undefined
                   }}
                   cursor={onSelectGroup ? "pointer" : undefined}
+                  tabIndex={onSelectGroup ? 0 : undefined}
                   onClick={() => onSelectGroup?.(group.groupId)}
+                  onKeyDown={(e) => {
+                    if (onSelectGroup && (e.key === "Enter" || e.key === " ")) {
+                      e.preventDefault();
+                      onSelectGroup(group.groupId);
+                    }
+                  }}
                 >
                   <Table.Cell>
                     <Button
                       size="xs"
                       variant="ghost"
+                      aria-label={isExpanded ? "Collapse group" : "Expand group"}
+                      aria-expanded={isExpanded}
+                      aria-controls={`details-${group.groupId}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setExpandedGroupId(isExpanded ? null : group.groupId);
@@ -121,7 +131,7 @@ export function ComparisonTable({
                 </Table.Row>
                 {isExpanded && (
                   <Table.Row>
-                    <Table.Cell colSpan={9} bg="bg.subtle" py={4}>
+                    <Table.Cell id={`details-${group.groupId}`} colSpan={9} bg="bg.subtle" py={4}>
                       <VStack align="stretch" gap={2} pl={8}>
                         <Text fontSize="sm" fontWeight="medium">
                           Response distribution

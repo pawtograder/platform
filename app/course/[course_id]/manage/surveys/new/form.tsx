@@ -491,7 +491,13 @@ export default function SurveyForm({
                         <NativeSelect.Root size="sm">
                           <NativeSelect.Field
                             value={field.value ?? ""}
-                            onChange={(e) => field.onChange(e.target.value || null)}
+                            onChange={(e) => {
+                              const newValue = e.target.value || null;
+                              field.onChange(newValue);
+                              if (!newValue) {
+                                setValue("series_ordinal", null);
+                              }
+                            }}
                             bg="bg.subtle"
                             borderColor="border"
                             color="fg"
