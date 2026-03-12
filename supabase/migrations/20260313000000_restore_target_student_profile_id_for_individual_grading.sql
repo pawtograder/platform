@@ -33,6 +33,11 @@ declare
   the_submission submissions%ROWTYPE;
   existing_submission_review_id int8;
 begin
+  -- Avoid re-entrant work when our own UPDATEs fire triggers (lost-update races)
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;
+  END IF;
+
   if 'rubric_check_id' = any(select jsonb_object_keys(to_jsonb(new))) then 
     if  NEW.rubric_check_id is null and (OLD is null OR OLD.rubric_check_id is null) then 
      return NEW;

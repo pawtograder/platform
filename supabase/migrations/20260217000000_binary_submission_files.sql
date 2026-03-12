@@ -53,22 +53,22 @@ GRANT EXECUTE ON FUNCTION public.can_access_submission_storage_path(text) TO aut
 
 -- RLS policy for submission-files bucket: path-based access control
 -- Only allows read when user has access to the submission (owner, group member, or staff)
--- CREATE POLICY "Authenticated users can read submission files"
--- ON storage.objects FOR SELECT
--- TO authenticated
--- USING (
---   bucket_id = 'submission-files'
---   AND public.can_access_submission_storage_path(name)
--- );
+CREATE POLICY "Authenticated users can read submission files"
+ON storage.objects FOR SELECT
+TO authenticated
+USING (
+  bucket_id = 'submission-files'
+  AND public.can_access_submission_storage_path(name)
+);
 
--- -- Service role (used by edge functions) can insert
--- CREATE POLICY "Service role can insert submission files"
--- ON storage.objects FOR INSERT
--- TO service_role
--- WITH CHECK (bucket_id = 'submission-files');
+-- Service role (used by edge functions) can insert
+CREATE POLICY "Service role can insert submission files"
+ON storage.objects FOR INSERT
+TO service_role
+WITH CHECK (bucket_id = 'submission-files');
 
--- -- Service role can delete submission files
--- CREATE POLICY "Service role can delete submission files"
--- ON storage.objects FOR DELETE
--- TO service_role
--- USING (bucket_id = 'submission-files');
+-- Service role can delete submission files
+CREATE POLICY "Service role can delete submission files"
+ON storage.objects FOR DELETE
+TO service_role
+USING (bucket_id = 'submission-files');

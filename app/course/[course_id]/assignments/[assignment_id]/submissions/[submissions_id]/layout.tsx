@@ -1288,9 +1288,7 @@ function IndividualScoresDisplay({
 }) {
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const entries = Object.entries(individualScores).filter(
-    (entry): entry is [string, number] => entry[1] !== undefined
-  );
+  const entries = Object.entries(individualScores).filter((entry): entry is [string, number] => entry[1] !== undefined);
   if (entries.length === 0) return null;
 
   const myEntry = entries.find(([profileId]) => profileId === private_profile_id);

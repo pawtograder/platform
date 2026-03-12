@@ -256,13 +256,6 @@ export type Database = {
             foreignKeyName: "assignment_late_exception_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "assignment_late_exception_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -475,13 +468,6 @@ export type Database = {
             foreignKeyName: "assignment_group_join_request_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "assignment_group_join_request_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -612,13 +598,6 @@ export type Database = {
             foreignKeyName: "assignment_groups_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "assignment_groups_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -715,13 +694,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_groups_members_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "assignment_groups_members_assignment_id_fkey";
@@ -842,13 +814,6 @@ export type Database = {
             foreignKeyName: "assignment_handout_commit_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "assignment_handout_commit_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -917,13 +882,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "assignment_handout_file_hashes_assignment_id_fkey";
@@ -1003,13 +961,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignment_leaderboard_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "assignment_leaderboard_assignment_id_fkey";
@@ -1484,13 +1435,6 @@ export type Database = {
             foreignKeyName: "grader_configs_id_fkey";
             columns: ["id"];
             isOneToOne: true;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "grader_configs_id_fkey";
-            columns: ["id"];
-            isOneToOne: true;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           }
@@ -1555,13 +1499,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "autograder_commits_assignment_id_fkey";
-            columns: ["autograder_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "autograder_commits_assignment_id_fkey";
@@ -2787,13 +2724,6 @@ export type Database = {
             foreignKeyName: "discussion_topics_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "discussion_topics_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -3076,13 +3006,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "error_pins_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "error_pins_assignment_id_fkey";
@@ -4661,13 +4584,6 @@ export type Database = {
             foreignKeyName: "help_request_file_references_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "help_request_file_references_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -6226,13 +6142,6 @@ export type Database = {
             foreignKeyName: "repositories_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "repositories_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -6623,13 +6532,6 @@ export type Database = {
             foreignKeyName: "review_assignments_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "review_assignments_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -6795,13 +6697,6 @@ export type Database = {
             foreignKeyName: "rubric_check_references_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "rubric_check_references_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -6935,13 +6830,6 @@ export type Database = {
             foreignKeyName: "rubric_checks_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "rubric_checks_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -7053,13 +6941,6 @@ export type Database = {
             foreignKeyName: "rubric_criteria_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "rubric_criteria_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -7156,13 +7037,6 @@ export type Database = {
             foreignKeyName: "rubric_parts_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "rubric_parts_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -7251,13 +7125,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "rubrics_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "rubrics_assignment_id_fkey";
@@ -8530,13 +8397,6 @@ export type Database = {
             foreignKeyName: "submission_ordinal_counters_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "submission_ordinal_counters_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           }
@@ -8604,13 +8464,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_regrade_request_comments_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "submission_regrade_request_comments_assignment_id_fkey";
@@ -8822,13 +8675,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submission_regrade_requests_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "submission_regrade_requests_assignment_id_fkey";
@@ -9230,13 +9076,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submissio_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "submissio_assignment_id_fkey";
@@ -10347,13 +10186,6 @@ export type Database = {
             foreignKeyName: "workflow_runs_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "workflow_runs_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -10911,13 +10743,6 @@ export type Database = {
             foreignKeyName: "review_assignments_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "review_assignments_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -10981,13 +10806,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "submissio_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "submissio_assignment_id_fkey";
@@ -11067,11 +10885,14 @@ export type Database = {
           assignedgradername: string | null;
           assignedmetagradername: string | null;
           assignment_id: number | null;
+          assignment_slug: string | null;
           autograder_score: number | null;
           checked_at: string | null;
           checked_by: string | null;
           checkername: string | null;
           class_id: number | null;
+          class_section_id: number | null;
+          class_section_name: string | null;
           completed_at: string | null;
           completed_by: string | null;
           created_at: string | null;
@@ -11084,6 +10905,8 @@ export type Database = {
           hours: number | null;
           id: number | null;
           individual_scores: Json | null;
+          lab_section_id: number | null;
+          lab_section_name: string | null;
           late_due_date: string | null;
           meta_grader: string | null;
           name: string | null;
@@ -11159,13 +10982,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["student_private_profile_id"];
-          },
-          {
-            foreignKeyName: "user_roles_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
           }
         ];
       };
@@ -11383,13 +11199,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "repositories_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
           },
           {
             foreignKeyName: "repositories_assignment_id_fkey";
