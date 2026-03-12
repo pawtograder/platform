@@ -13,6 +13,11 @@ AS $$
 DECLARE
   v_class_id bigint;
   v_updated_count integer;
+  v_series_survey_count integer;
+  v_payload_count integer;
+  v_ordinal_min integer;
+  v_ordinal_max integer;
+  v_ordinal_distinct_count integer;
 BEGIN
   IF auth.uid() IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
@@ -42,6 +47,33 @@ BEGIN
     HAVING COUNT(*) > 1
   ) THEN
     RAISE EXCEPTION 'Duplicate survey IDs in ordinal updates';
+  END IF;
+
+  -- Payload must cover every non-deleted survey in the series
+  SELECT COUNT(*)::integer INTO v_series_survey_count
+  FROM public.surveys
+  WHERE series_id = p_series_id AND deleted_at IS NULL;
+
+  v_payload_count := COALESCE(jsonb_array_length(p_ordinal_updates), 0);
+
+  IF v_series_survey_count != v_payload_count THEN
+    RAISE EXCEPTION 'Payload count (%) does not match series survey count (%)', v_payload_count, v_series_survey_count;
+  END IF;
+
+  -- Ordinals must form a strict permutation 1..N (no gaps, no duplicates)
+  IF v_payload_count > 0 THEN
+    SELECT
+      MIN((elem->>'series_ordinal')::integer),
+      MAX((elem->>'series_ordinal')::integer),
+      COUNT(DISTINCT (elem->>'series_ordinal')::integer)
+    INTO v_ordinal_min, v_ordinal_max, v_ordinal_distinct_count
+    FROM jsonb_array_elements(p_ordinal_updates) AS elem;
+
+    IF v_ordinal_min IS NULL OR v_ordinal_max IS NULL OR
+       v_ordinal_min != 1 OR v_ordinal_max != v_payload_count OR
+       v_ordinal_distinct_count != v_payload_count THEN
+      RAISE EXCEPTION 'Ordinals must form a strict permutation 1..% with no gaps or duplicates', v_payload_count;
+    END IF;
   END IF;
 
   -- Single atomic UPDATE: only affects surveys in this series; RLS further restricts

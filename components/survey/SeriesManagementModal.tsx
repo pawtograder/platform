@@ -125,7 +125,6 @@ export default function SeriesManagementModal({
       return;
     }
     toaster.success({ title: "Success", description: "Survey order updated" });
-    onSuccess();
   };
 
   return (
