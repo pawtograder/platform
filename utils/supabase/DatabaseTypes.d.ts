@@ -2,7 +2,7 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database, Json } from "./SupabaseTypes";
 export type { Json };
 
-export type IndividualScores = Record<string, number>;
+export type IndividualScores = Partial<Record<string, number>>;
 
 export type GradebookColumnExternalData = {
   source: "csv";

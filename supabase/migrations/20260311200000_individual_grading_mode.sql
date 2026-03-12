@@ -202,7 +202,7 @@ as  SELECT activesubmissionsbystudent.id,
                     assignment_due_date_exceptions.assignment_group_id
                    FROM assignment_due_date_exceptions
                   GROUP BY assignment_due_date_exceptions.student_id, assignment_due_date_exceptions.assignment_group_id) lt ON ((((agm.assignment_group_id IS NULL) AND (lt.student_id = r.private_profile_id)) OR ((agm.assignment_group_id IS NOT NULL) AND (lt.assignment_group_id = agm.assignment_group_id)))))
-             LEFT JOIN submissions gsub ON (((gsub.assignment_group_id = agm.id) AND (gsub.is_active = true) AND (gsub.assignment_id = a.id))))
+             LEFT JOIN submissions gsub ON (((gsub.assignment_group_id = agm.assignment_group_id) AND (gsub.is_active = true) AND (gsub.assignment_id = a.id))))
           WHERE (r.role = 'student'::app_role)) activesubmissionsbystudent
      JOIN profiles p ON ((p.id = activesubmissionsbystudent.private_profile_id)))
      LEFT JOIN submissions s ON ((s.id = activesubmissionsbystudent.sub_id)))

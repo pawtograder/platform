@@ -293,7 +293,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
       assignment_slug: string | null;
       scores_by_round_private: Record<string, number | null> | null;
       scores_by_round_public: Record<string, number | null> | null;
-      individual_scores: Record<string, number> | null;
+      individual_scores: Partial<Record<string, number>> | null;
     };
 
     const allRows: ReviewsByRoundRow[] = [];
@@ -343,13 +343,30 @@ class AssignmentsDependencySource extends DependencySourceBase {
           publicByRound[round] = score === null ? undefined : (score as number);
         }
       }
-      // Use student-specific score from individual_scores when present
+      // Merge per-student individual score into existing round total (add, don't overwrite)
       if (row.individual_scores && row.student_private_profile_id in row.individual_scores) {
-        const studentScore = row.individual_scores[row.student_private_profile_id];
-        if (studentScore !== undefined && studentScore !== null) {
-          privateByRound["grading-review"] = studentScore;
+        const raw = row.individual_scores[row.student_private_profile_id];
+        const studentScore =
+          raw !== undefined && raw !== null ? Number(raw) : NaN;
+        if (!Number.isNaN(studentScore)) {
+          const existingPrivate = privateByRound["grading-review"];
+          const basePrivate =
+            existingPrivate !== undefined &&
+            existingPrivate !== null &&
+            !Number.isNaN(Number(existingPrivate))
+              ? Number(existingPrivate)
+              : 0;
+          privateByRound["grading-review"] = basePrivate + studentScore;
+
           if (publicByRound["grading-review"] !== undefined) {
-            publicByRound["grading-review"] = studentScore;
+            const existingPublic = publicByRound["grading-review"];
+            const basePublic =
+              existingPublic !== undefined &&
+              existingPublic !== null &&
+              !Number.isNaN(Number(existingPublic))
+                ? Number(existingPublic)
+                : 0;
+            publicByRound["grading-review"] = basePublic + studentScore;
           }
         }
       }

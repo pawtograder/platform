@@ -760,16 +760,22 @@ export function RubricCheckAnnotation({
   criteria,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
-  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, reviewForThisRubric?.id);
+  const rubricCheckComments = useRubricCheckInstances(
+    check as RubricChecks,
+    reviewForThisRubric?.id,
+    targetStudentProfileId
+  );
   const isGrader = useIsGraderOrInstructor();
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
@@ -873,7 +879,8 @@ export function RubricCheckGlobal({
   isSelected,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
@@ -881,12 +888,18 @@ export function RubricCheckGlobal({
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
-  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, reviewForThisRubric?.id);
+  const rubricCheckComments = useRubricCheckInstances(
+    check as RubricChecks,
+    reviewForThisRubric?.id,
+    targetStudentProfileId
+  );
   const criteriaCheckComments = useRubricCriteriaInstances({
     criteria: criteria,
-    review_id: reviewForThisRubric?.id
+    review_id: reviewForThisRubric?.id,
+    target_student_profile_id: targetStudentProfileId
   });
 
   // Move all useState calls before any early returns
@@ -1166,6 +1179,7 @@ export function RubricCheckGlobal({
           submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
+          targetStudentProfileId={targetStudentProfileId}
           onSuccess={onCommentSuccess}
         />
       )}
@@ -1208,12 +1222,14 @@ function SubmissionCommentForm({
   submissionReview,
   selectedOptionIndex,
   linkedArtifactId,
+  targetStudentProfileId,
   onSuccess
 }: {
   check: HydratedRubricCheck;
   submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
+  targetStudentProfileId?: string | null;
   onSuccess: () => void;
 }) {
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -1278,6 +1294,7 @@ function SubmissionCommentForm({
             submission_review_id: submissionReview?.id ?? null,
             eventually_visible: true,
             regrade_request_id: null,
+            ...(targetStudentProfileId != null ? { target_student_profile_id: targetStudentProfileId } : {}),
             ...artifactInfo
           };
           onSuccess();
@@ -1300,7 +1317,8 @@ function RubricCheck({
   isSelected,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   criteria: RubricCriteriaType;
   check: RubricCheckType;
@@ -1308,6 +1326,7 @@ function RubricCheck({
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   return (
     <Box p={0} w="100%">
@@ -1318,6 +1337,7 @@ function RubricCheck({
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
+          targetStudentProfileId={targetStudentProfileId}
         />
       ) : (
         <RubricCheckGlobal
@@ -1327,6 +1347,7 @@ function RubricCheck({
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
+          targetStudentProfileId={targetStudentProfileId}
         />
       )}
     </Box>
@@ -1337,17 +1358,20 @@ export function RubricCriteria({
   criteria,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   criteria: RubricCriteriaType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
   const comments = useRubricCriteriaInstances({
     criteria: criteria,
-    review_id: reviewForThisRubric?.id
+    review_id: reviewForThisRubric?.id,
+    target_student_profile_id: targetStudentProfileId
   });
   const totalPoints = comments.reduce((acc, comment) => acc + (comment.points || 0), 0);
   const isAdditive = criteria.is_additive;
@@ -1433,6 +1457,7 @@ export function RubricCriteria({
                   assignmentId={assignmentId}
                   classId={classId}
                   currentRubricId={currentRubricId}
+                  targetStudentProfileId={targetStudentProfileId}
                 />
               ))}
             </RadioGroup.Root>
@@ -1447,12 +1472,14 @@ export function RubricPart({
   part,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   part: RubricPartType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const unsortedCriteria = useRubricCriteriaByPart(part?.id);
   const criteria = [...unsortedCriteria].sort((a, b) => a.ordinal - b.ordinal);
@@ -1468,6 +1495,7 @@ export function RubricPart({
             assignmentId={assignmentId}
             classId={classId}
             currentRubricId={currentRubricId}
+            targetStudentProfileId={targetStudentProfileId}
           />
         ))}
       </VStack>
@@ -1684,7 +1712,13 @@ function IndividualGradingPartForStudent({
           <PersonName uid={memberProfileId} />
         </Badge>
       </Box>
-      <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+      <RubricPart
+        part={part}
+        assignmentId={assignmentId}
+        classId={classId}
+        currentRubricId={currentRubricId}
+        targetStudentProfileId={memberProfileId}
+      />
     </Box>
   );
 }
