@@ -63,9 +63,10 @@ function getQuestionsToAnalyze(surveyJson: Json, analyticsConfig: SurveyAnalytic
   });
 }
 
-/** Pure helper: compute group analytics from submitted responses. Reused by useSurveyAnalytics and useSurveySeriesAnalytics. */
+/** Pure helper: compute group analytics from responses. Pass full responses (submitted + unsubmitted)
+ * for correct memberCount/responseRate; per-question stats use only submitted responses. */
 export function computeGroupAnalyticsFromResponses(
-  submitted: SurveyResponseWithContext[],
+  allResponses: SurveyResponseWithContext[],
   surveyJson: Json | null,
   analyticsConfig: SurveyAnalyticsConfig | null,
   courseStats: Record<string, QuestionStats>
@@ -75,7 +76,7 @@ export function computeGroupAnalyticsFromResponses(
     { name: string; mentorId: string | null; mentorName: string | null; responses: SurveyResponseWithContext[] }
   >();
 
-  submitted.forEach((r) => {
+  allResponses.forEach((r) => {
     if (r.group_id && r.group_name) {
       const key = r.group_id;
       if (!groupMap.has(key)) {
@@ -94,10 +95,11 @@ export function computeGroupAnalyticsFromResponses(
   const config = analyticsConfig?.questions;
 
   for (const [groupId, group] of groupMap) {
+    const submittedInGroup = group.responses.filter((r) => r.is_submitted);
     const questionStats: Record<string, QuestionStats> = {};
     const allQuestionNames = new Set<string>();
 
-    for (const r of group.responses) {
+    for (const r of submittedInGroup) {
       const resp = r.response as Record<string, unknown>;
       for (const key of Object.keys(resp)) {
         const n = extractNumericValue(resp, key);
@@ -109,14 +111,14 @@ export function computeGroupAnalyticsFromResponses(
       ? Object.keys(config).filter((k) => config[k]?.includeInAnalytics !== false)
       : Array.from(allQuestionNames);
 
-    if (questionsToAnalyze.length === 0 && group.responses.length > 0) {
-      for (const r of group.responses) {
+    if (questionsToAnalyze.length === 0 && submittedInGroup.length > 0) {
+      for (const r of submittedInGroup) {
         Object.keys(r.response as Record<string, unknown>).forEach((k) => allQuestionNames.add(k));
       }
     }
 
     const allNumericKeys = new Set<string>();
-    group.responses.forEach((r) => {
+    submittedInGroup.forEach((r) => {
       const resp = r.response as Record<string, unknown>;
       Object.keys(resp).forEach((k) => {
         const n = extractNumericValue(resp, k);
@@ -128,14 +130,14 @@ export function computeGroupAnalyticsFromResponses(
 
     for (const qName of keysToUse) {
       const questionType = surveyJson ? getQuestionType(surveyJson, qName) : null;
-      const values = group.responses
+      const values = submittedInGroup
         .map((r) => extractNumericValue(r.response as Record<string, unknown>, qName))
         .filter((v): v is number => v !== null);
 
       const qConfig = config?.[qName];
 
       if (questionType === "checkbox") {
-        const allSelections = group.responses
+        const allSelections = submittedInGroup
           .map((r) => extractCheckboxFlagValues(r.response as Record<string, unknown>, qName))
           .flat();
         const distribution: Record<number, number> = {};
@@ -143,7 +145,7 @@ export function computeGroupAnalyticsFromResponses(
           distribution[v] = (distribution[v] ?? 0) + 1;
         });
         if (Object.keys(distribution).length > 0) {
-          const responsesWithSelection = group.responses.filter((r) => {
+          const responsesWithSelection = submittedInGroup.filter((r) => {
             const vals = extractCheckboxFlagValues(r.response as Record<string, unknown>, qName);
             return vals.length > 0;
           }).length;
@@ -162,7 +164,7 @@ export function computeGroupAnalyticsFromResponses(
       }
 
       if (qConfig?.flagValues) {
-        const flagCounts = group.responses
+        const flagCounts = submittedInGroup
           .map((r) => extractCheckboxFlagValues(r.response as Record<string, unknown>, qName))
           .flat()
           .filter((v) => qConfig.flagValues!.includes(v));
@@ -182,9 +184,11 @@ export function computeGroupAnalyticsFromResponses(
       }
     }
 
-    const memberCount = new Set(group.responses.map((r) => r.profile_id)).size;
-    const responseCount = group.responses.length;
-    const responseRate = memberCount > 0 ? responseCount / memberCount : 0;
+    const responseCount = submittedInGroup.length;
+    const actualMemberCount =
+      group.responses[0]?.group_member_count ?? new Set(group.responses.map((r) => r.profile_id)).size;
+    const memberCount = actualMemberCount;
+    const responseRate = actualMemberCount > 0 ? responseCount / actualMemberCount : 0;
 
     const groupStats: GroupAnalytics = {
       groupId,
@@ -329,6 +333,10 @@ export function useSurveyAnalytics(
         const v = resp[k];
         if (v !== null && v !== undefined) {
           if (typeof v === "number" && !isNaN(v)) allKeys.add(k);
+          if (typeof v === "string") {
+            const num = Number(v);
+            if (!isNaN(num)) allKeys.add(k);
+          }
           if (Array.isArray(v)) allKeys.add(k); // checkbox
         }
       });
@@ -371,7 +379,7 @@ export function useSurveyAnalytics(
       }
     }
 
-    const groupAnalytics = computeGroupAnalyticsFromResponses(submitted, surveyJson, analyticsConfig, courseStats);
+    const groupAnalytics = computeGroupAnalyticsFromResponses(responses, surveyJson, analyticsConfig, courseStats);
 
     const sectionAnalytics: SectionAnalytics[] = [];
     const labSectionMap = new Map<number, SurveyResponseWithContext[]>();
@@ -560,7 +568,7 @@ export function useSurveySeriesAnalytics(
       .then((results) => {
         const map: Record<string, SurveyResponseWithContext[]> = {};
         results.forEach((r) => {
-          map[r.surveyId] = r.responses.filter((x) => x.is_submitted);
+          map[r.surveyId] = r.responses;
         });
         setResponsesBySurvey(map);
       })
@@ -574,7 +582,8 @@ export function useSurveySeriesAnalytics(
   return useMemo(() => {
     const dataBySurveyId: Record<string, SurveyAnalyticsSnapshot> = {};
     for (const surveyId of surveyIds) {
-      const submitted = responsesBySurvey[surveyId] ?? [];
+      const allResponses = responsesBySurvey[surveyId] ?? [];
+      const submitted = allResponses.filter((r) => r.is_submitted);
       const courseStats: Record<string, QuestionStats> = {};
       const allKeys = new Set<string>();
       submitted.forEach((r) => {
@@ -583,6 +592,10 @@ export function useSurveySeriesAnalytics(
           const v = resp[k];
           if (v !== null && v !== undefined) {
             if (typeof v === "number" && !isNaN(v)) allKeys.add(k);
+            if (typeof v === "string") {
+              const num = Number(v);
+              if (!isNaN(num)) allKeys.add(k);
+            }
             if (Array.isArray(v)) allKeys.add(k); // checkbox
           }
         });
@@ -695,7 +708,7 @@ export function useSurveySeriesAnalytics(
       addSection(classSectionMap, "class", "class_section_name");
 
       const surveyJson = options?.surveyJsonBySurveyId?.[surveyId] ?? null;
-      const groupAnalytics = computeGroupAnalyticsFromResponses(submitted, surveyJson, analyticsConfig, courseStats);
+      const groupAnalytics = computeGroupAnalyticsFromResponses(allResponses, surveyJson, analyticsConfig, courseStats);
 
       dataBySurveyId[surveyId] = {
         courseStats,

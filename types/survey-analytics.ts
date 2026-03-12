@@ -7,6 +7,8 @@ export type SurveyResponseWithContext = {
   response: Record<string, unknown>;
   group_id: number | null;
   group_name: string | null;
+  /** Actual group membership count (from assignment_groups_members). Used for correct response rate. */
+  group_member_count?: number | null;
   mentor_profile_id: string | null;
   mentor_name: string | null;
   lab_section_id: number | null;

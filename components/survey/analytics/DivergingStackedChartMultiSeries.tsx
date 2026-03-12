@@ -192,9 +192,18 @@ export function DivergingStackedChartMultiSeries({
   }, [right, neutral]);
 
   const legendPayload = useMemo(() => {
-    const labels = (series[0]?.valueLabelsByQuestion ?? {})[questions[0]?.name ?? ""] ?? {};
+    const resolveLabel = (v: number): string => {
+      for (const q of questions) {
+        for (const s of series) {
+          const qLabels = s.valueLabelsByQuestion?.[q.name];
+          const label = qLabels?.[v];
+          if (label !== undefined && label !== "") return label;
+        }
+      }
+      return String(v);
+    };
     return allValues.map((v) => ({
-      value: labels[v] ?? String(v),
+      value: resolveLabel(v),
       type: "square" as const,
       color: getDivergingColor(v, allValues, scaleMin, scaleMax)
     }));
@@ -400,7 +409,7 @@ export function DivergingStackedChartMultiSeries({
                     const max = allValues[allValues.length - 1] as number;
                     const valueExtent = max - min || 1;
                     const valueScale = (v: number) => ((v - min) / valueExtent) * 2 - 1;
-                    const x = valueScale(courseMean) * valueExtent;
+                    const x = valueScale(courseMean) * maxExtent;
                     const color =
                       arrowType === "up" || arrowType === "double-up" ? LIKERT_COLORS.positive : LIKERT_COLORS.negative;
                     return (

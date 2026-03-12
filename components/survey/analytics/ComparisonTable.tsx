@@ -99,6 +99,11 @@ export function ComparisonTable({
                         e.stopPropagation();
                         setExpandedGroupId(isExpanded ? null : group.groupId);
                       }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.stopPropagation();
+                        }
+                      }}
                     >
                       {isExpanded ? "−" : "+"}
                     </Button>
@@ -119,7 +124,7 @@ export function ComparisonTable({
                   <Table.Cell>{stats ? stats.mean.toFixed(2) : "—"}</Table.Cell>
                   <Table.Cell>
                     {stats && (
-                      <Text color={delta > 0 ? "red.600" : delta < 0 ? "green.600" : "fg.muted"} fontSize="sm">
+                      <Text color={delta < 0 ? "red.600" : delta > 0 ? "green.600" : "fg.muted"} fontSize="sm">
                         {delta > 0 ? "+" : ""}
                         {delta.toFixed(2)}
                       </Text>

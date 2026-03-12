@@ -149,8 +149,10 @@ export default function SeriesManagementModal({
                   <Field.Label>Series Name</Field.Label>
                   <Input
                     {...register("name", {
-                      required: "Name is required",
-                      minLength: { value: 1, message: "Name is required" }
+                      validate: (v) => {
+                        const t = (typeof v === "string" ? v : "").trim();
+                        return t.length >= 1 || "Name is required";
+                      }
                     })}
                     placeholder="e.g., Weekly Team Collaboration Surveys"
                   />
@@ -186,16 +188,20 @@ export default function SeriesManagementModal({
                             </Text>
                             <HStack gap={1}>
                               <Button
+                                type="button"
                                 size="xs"
                                 variant="ghost"
+                                aria-label={`Move up ${survey.title ?? "Survey"}`}
                                 onClick={() => moveSurvey(survey.id, "up")}
                                 disabled={idx === 0}
                               >
                                 <Icon as={BsChevronUp} />
                               </Button>
                               <Button
+                                type="button"
                                 size="xs"
                                 variant="ghost"
+                                aria-label={`Move down ${survey.title ?? "Survey"}`}
                                 onClick={() => moveSurvey(survey.id, "down")}
                                 disabled={idx === surveys.length - 1}
                               >

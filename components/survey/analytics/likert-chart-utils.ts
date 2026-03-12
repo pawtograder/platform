@@ -66,13 +66,13 @@ export function getDivergingColor(value: number, allValues: number[], scaleMin?:
   const { left, neutral, right } = partitionForDiverging(allValues, scaleMin, scaleMax);
   if (neutral.includes(value)) return DIVERGING_COLORS.neutral;
   if (left.includes(value)) {
-    const idx = left.indexOf(value);
-    const isExtreme = idx === 0;
+    const leftMin = Math.min(...left);
+    const isExtreme = value === leftMin;
     return isExtreme ? DIVERGING_COLORS.negativeStrong : DIVERGING_COLORS.negativeLight;
   }
   if (right.includes(value)) {
-    const idx = right.indexOf(value);
-    const isExtreme = idx === right.length - 1;
+    const rightMax = Math.max(...right);
+    const isExtreme = value === rightMax;
     return isExtreme ? DIVERGING_COLORS.positiveStrong : DIVERGING_COLORS.positiveLight;
   }
   return DIVERGING_COLORS.neutral;

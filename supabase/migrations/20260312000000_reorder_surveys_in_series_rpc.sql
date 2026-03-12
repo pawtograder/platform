@@ -31,6 +31,19 @@ BEGIN
     RAISE EXCEPTION 'Permission denied: only instructors can reorder surveys in a series';
   END IF;
 
+  -- Reject duplicate IDs in payload
+  IF EXISTS (
+    SELECT 1
+    FROM (
+      SELECT (elem->>'id')::uuid AS id
+      FROM jsonb_array_elements(p_ordinal_updates) AS elem
+    ) t
+    GROUP BY id
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'Duplicate survey IDs in ordinal updates';
+  END IF;
+
   -- Single atomic UPDATE: only affects surveys in this series; RLS further restricts
   WITH updates AS (
     SELECT
@@ -46,8 +59,8 @@ BEGIN
     AND s.deleted_at IS NULL;
 
   GET DIAGNOSTICS v_updated_count = ROW_COUNT;
-  IF v_updated_count = 0 AND jsonb_array_length(p_ordinal_updates) > 0 THEN
-    RAISE EXCEPTION 'No surveys updated; verify survey IDs belong to this series';
+  IF v_updated_count != jsonb_array_length(p_ordinal_updates) THEN
+    RAISE EXCEPTION 'Partial update: expected % rows updated, got %', jsonb_array_length(p_ordinal_updates), v_updated_count;
   END IF;
 END;
 $$;
