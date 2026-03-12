@@ -4,17 +4,16 @@ import { useObfuscatedGradesMode, useSurveysInSeries } from "@/hooks/useCourseCo
 import { useSurveyAnalytics, useSurveySeriesAnalytics } from "@/hooks/useSurveyAnalytics";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Json } from "@/utils/supabase/SupabaseTypes";
-import { Box, Checkbox, HStack, Heading, NativeSelect, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
+import { Box, HStack, Heading, NativeSelect, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
-import {
-  ChoiceDistributionChart,
-  DivergingStackedChart,
-  GroupDetailPanel,
-  GroupSummaryCards,
-  SummaryCards
-} from "./analytics";
+import { GroupViewContent, ScaleGroupCharts, SeriesComparisonBlock, SummaryCards } from "./analytics";
 import { getAllQuestionsFromSurveyJson } from "./analytics/utils";
-import { getValueLabelsFromSurveyJson, getScaleGroupKey, getScaleGroupLabel } from "./analytics/utils";
+import {
+  formatResponseValue,
+  getValueLabelsFromSurveyJson,
+  getScaleGroupKey,
+  getScaleGroupLabel
+} from "./analytics/utils";
 
 type SurveyAnalyticsProps = {
   surveyId: string;
@@ -47,10 +46,16 @@ export default function SurveyAnalytics({
 
   const { surveys: surveysInSeries } = useSurveysInSeries(seriesId);
   const isComparing = surveysToCompare.length > 1;
+  const surveyJsonBySurveyId = useMemo(
+    () =>
+      surveysInSeries.length > 0 ? Object.fromEntries(surveysInSeries.map((s) => [s.id, s.json as Json])) : undefined,
+    [surveysInSeries]
+  );
   const { dataBySurveyId, isLoading: seriesLoading } = useSurveySeriesAnalytics(
     isComparing ? surveysToCompare : [],
     classId,
-    analyticsConfig
+    analyticsConfig,
+    { surveyJsonBySurveyId }
   );
 
   const sectionOptions = useMemo(() => {
@@ -100,12 +105,12 @@ export default function SurveyAnalytics({
     [groupAnalytics, selectedGroupId]
   );
 
-  const SERIES_COLORS = ["#3B82F6", "#22C55E", "#EAB308", "#A855F7", "#EC4899"];
-
   const valueLabelsByQuestion = useMemo(
     () => Object.fromEntries(questionsToShow.map((q) => [q.name, getValueLabelsFromSurveyJson(surveyJson, q.name)])),
     [questionsToShow, surveyJson]
   );
+
+  const freeTextQuestions = useMemo(() => allQuestions.filter((q) => q.type === "comment"), [allQuestions]);
 
   const questionsByScaleGroup = useMemo(() => {
     const groups = new Map<
@@ -132,6 +137,29 @@ export default function SurveyAnalytics({
     [groupAnalytics]
   );
   const alertsCount = groupsWithAlerts.size;
+
+  const isGroupMentor = useMemo(
+    () => !!currentUserProfileId && groupAnalytics.some((g) => g.mentorId === currentUserProfileId),
+    [groupAnalytics, currentUserProfileId]
+  );
+  const myGroupsAlertsCount = useMemo(
+    () =>
+      isGroupMentor && currentUserProfileId
+        ? groupAnalytics.filter((g) => g.mentorId === currentUserProfileId && g.alerts.length > 0).length
+        : undefined,
+    [groupAnalytics, currentUserProfileId, isGroupMentor]
+  );
+
+  const { displayResponses, displayStudents } = useMemo(() => {
+    if (viewMode !== "course" || sectionFilter === "overall") {
+      return { displayResponses: totalResponses, displayStudents: totalStudents };
+    }
+    const [type, idStr] = sectionFilter.split(":");
+    const id = Number(idStr);
+    const section = sectionAnalytics.find((s) => s.sectionType === type && s.sectionId === id);
+    if (!section) return { displayResponses: totalResponses, displayStudents: totalStudents };
+    return { displayResponses: section.responseCount, displayStudents: section.studentCount };
+  }, [viewMode, sectionFilter, sectionAnalytics, totalResponses, totalStudents]);
 
   if (isLoading) {
     return (
@@ -165,12 +193,14 @@ export default function SurveyAnalytics({
         </Text>
 
         <SummaryCards
-          totalResponses={totalResponses}
-          totalStudents={totalStudents}
+          totalResponses={displayResponses}
+          totalStudents={displayStudents}
           courseStats={courseStats}
           selectedQuestion={effectiveSelectedQuestion}
           questionTitle={questionTitle}
           alertsCount={alertsCount}
+          myGroupsAlertsCount={myGroupsAlertsCount}
+          isGroupMentor={isGroupMentor}
           obfuscateStats={obfuscateStats}
         />
 
@@ -205,224 +235,132 @@ export default function SurveyAnalytics({
                 </HStack>
               )}
 
-              {/* Survey series comparison */}
-              {surveysInSeries.length > 1 && (
-                <Box borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
-                  <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={3}>
-                    Compare across surveys in series
-                  </Text>
-                  <HStack gap={4} flexWrap="wrap" mb={4}>
-                    {surveysInSeries.map((s) => {
-                      const sid = s.id;
-                      const checked = surveysToCompare.includes(sid);
-                      return (
-                        <Checkbox.Root
-                          key={sid}
-                          checked={checked}
-                          onCheckedChange={(e) => {
-                            const v = e.checked as boolean;
-                            setSurveysToCompare((prev) => {
-                              const next = v ? [...prev, sid] : prev.filter((id) => id !== sid);
-                              return next.length > 0 ? next : [surveyId];
-                            });
-                          }}
-                        >
-                          <Checkbox.HiddenInput />
-                          <Checkbox.Control />
-                          <Checkbox.Label fontSize="sm">
-                            {(s as { title?: string }).title ?? `Survey ${sid.slice(0, 8)}`}
-                          </Checkbox.Label>
-                        </Checkbox.Root>
-                      );
-                    })}
-                  </HStack>
-                  {isComparing && (
-                    <>
-                      {seriesLoading ? (
-                        <HStack gap={2}>
-                          <Spinner size="sm" />
-                          <Text color="fg.muted">Loading comparison data...</Text>
-                        </HStack>
-                      ) : (
-                        <VStack align="stretch" gap={6}>
-                          {questionsByScaleGroup.map((group) => {
-                            const isCheckbox = group.questions[0]?.type === "checkbox";
-                            const monthLabelsFromDueDate = surveysToCompare.map((sid) => {
-                              const s = surveysInSeries.find((x) => x.id === sid);
-                              const dueDate = (s as { due_date?: string | null })?.due_date;
-                              return dueDate
-                                ? new Date(dueDate).toLocaleDateString("en-US", {
-                                    month: "short",
-                                    year: "2-digit"
-                                  })
-                                : null;
-                            });
-                            const hasDuplicateDueDateLabels =
-                              new Set(monthLabelsFromDueDate.filter(Boolean)).size <
-                              monthLabelsFromDueDate.filter(Boolean).length;
-                            const seriesData = surveysToCompare
-                              .map((sid, i) => {
-                                const snapshot = dataBySurveyId[sid];
-                                const s = surveysInSeries.find((x) => x.id === sid);
-                                const sectionStats =
-                                  sectionFilter === "overall"
-                                    ? snapshot?.courseStats
-                                    : (() => {
-                                        const [type, idStr] = sectionFilter.split(":");
-                                        const section = snapshot?.sectionAnalytics.find(
-                                          (sec) => sec.sectionType === type && sec.sectionId === Number(idStr)
-                                        );
-                                        return section?.questionStats;
-                                      })();
-                                const labels = s?.json
-                                  ? Object.fromEntries(
-                                      group.questions.map((q) => [
-                                        q.name,
-                                        getValueLabelsFromSurveyJson(s.json as Json, q.name)
-                                      ])
-                                    )
-                                  : Object.fromEntries(
-                                      group.questions.map((q) => [q.name, valueLabelsByQuestion[q.name] ?? {}])
-                                    );
-                                const dueDate = (s as { due_date?: string | null })?.due_date;
-                                const title = (s as { title?: string })?.title;
-                                const surveyLabel =
-                                  hasDuplicateDueDateLabels && title
-                                    ? title
-                                    : dueDate
-                                      ? new Date(dueDate).toLocaleDateString("en-US", {
-                                          month: "short",
-                                          year: "2-digit"
-                                        })
-                                      : (title ?? sid.slice(0, 8));
-                                return {
-                                  surveyId: sid,
-                                  surveyLabel,
-                                  surveyColor: SERIES_COLORS[i % SERIES_COLORS.length],
-                                  questionStats: sectionStats ?? {},
-                                  valueLabelsByQuestion: labels
-                                };
-                              })
-                              .filter((s) =>
-                                group.questions.some(
-                                  (q) =>
-                                    s.questionStats[q.name]?.distribution &&
-                                    Object.keys(s.questionStats[q.name].distribution).length > 0
-                                )
-                              );
-                            if (seriesData.length === 0) return null;
-                            return (
-                              <Box key={group.groupLabel}>
-                                <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={2}>
-                                  {group.groupLabel}
-                                </Text>
-                                <VStack align="stretch" gap={4}>
-                                  {seriesData.map((s) => (
-                                    <Box key={s.surveyId}>
-                                      <Text fontSize="xs" color="fg.muted" mb={1}>
-                                        {s.surveyLabel}
-                                      </Text>
-                                      {isCheckbox ? (
-                                        <ChoiceDistributionChart
-                                          questions={group.questions}
-                                          questionStats={s.questionStats}
-                                          valueLabelsByQuestion={Object.fromEntries(
-                                            group.questions.map((q) => [q.name, s.valueLabelsByQuestion[q.name] ?? {}])
-                                          )}
-                                        />
-                                      ) : (
-                                        <DivergingStackedChart
-                                          questions={group.questions}
-                                          questionStats={s.questionStats}
-                                          valueLabelsByQuestion={Object.fromEntries(
-                                            group.questions.map((q) => [q.name, s.valueLabelsByQuestion[q.name] ?? {}])
-                                          )}
-                                        />
-                                      )}
-                                    </Box>
-                                  ))}
-                                </VStack>
-                              </Box>
-                            );
-                          })}
-                        </VStack>
-                      )}
-                    </>
-                  )}
-                </Box>
+              <SeriesComparisonBlock
+                surveysInSeries={surveysInSeries}
+                surveysToCompare={surveysToCompare}
+                onSurveysToCompareChange={(ids: string[]) => setSurveysToCompare(ids.length > 0 ? ids : [surveyId])}
+                surveyId={surveyId}
+                isComparing={isComparing}
+                seriesLoading={seriesLoading}
+                questionsByScaleGroup={questionsByScaleGroup}
+                valueLabelsByQuestion={valueLabelsByQuestion}
+                dataBySurveyId={dataBySurveyId}
+                sectionFilter={sectionFilter}
+                selectedGroupId={null}
+                obfuscateStats={obfuscateStats}
+              />
+
+              {!isComparing && (
+                <ScaleGroupCharts
+                  mode="single"
+                  questionsByScaleGroup={questionsByScaleGroup}
+                  statsForCharts={statsForCharts}
+                  valueLabelsByQuestion={valueLabelsByQuestion}
+                  courseMeanByQuestion={
+                    !obfuscateStats && sectionFilter !== "overall" && courseStats
+                      ? Object.fromEntries(
+                          Object.entries(courseStats)
+                            .filter(([, s]) => s?.mean != null)
+                            .map(([q, s]) => [q, s!.mean!])
+                        )
+                      : undefined
+                  }
+                  obfuscateStats={obfuscateStats}
+                />
               )}
 
-              {/* Bar charts grouped by scale (diverging for Likert, choice distribution for checkbox) */}
-              {questionsByScaleGroup.map((group) => {
-                const isCheckbox = group.questions[0]?.type === "checkbox";
-                return (
-                  <Box key={group.groupLabel} borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
-                    <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={3}>
-                      {group.groupLabel}
-                    </Text>
-                    {isCheckbox ? (
-                      <ChoiceDistributionChart
-                        questions={group.questions}
-                        questionStats={statsForCharts}
-                        valueLabelsByQuestion={Object.fromEntries(
-                          group.questions.map((q) => [q.name, valueLabelsByQuestion[q.name] ?? {}])
-                        )}
-                      />
-                    ) : (
-                      <DivergingStackedChart
-                        questions={group.questions}
-                        questionStats={statsForCharts}
-                        valueLabelsByQuestion={Object.fromEntries(
-                          group.questions.map((q) => [q.name, valueLabelsByQuestion[q.name] ?? {}])
-                        )}
-                      />
-                    )}
-                  </Box>
-                );
-              })}
+              {/* Free text questions */}
+              {freeTextQuestions.length > 0 && (
+                <Box borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
+                  <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={3}>
+                    Free text responses
+                  </Text>
+                  <VStack align="stretch" gap={6}>
+                    {freeTextQuestions.map((q) => {
+                      const submittedResponses = responses.filter((r) => r.is_submitted);
+                      const valueLabels = getValueLabelsFromSurveyJson(surveyJson, q.name);
+                      return (
+                        <Box key={q.name} borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
+                          <Text fontSize="sm" fontWeight="medium" color="fg.muted" mb={2}>
+                            {q.title}
+                          </Text>
+                          <VStack align="stretch" gap={2}>
+                            {submittedResponses.map((r, i) => {
+                              const val = (r.response as Record<string, unknown>)[q.name];
+                              return (
+                                <HStack key={r.response_id} justify="space-between" align="start" gap={2}>
+                                  <Text fontSize="sm" color="fg.muted" minW="80px">
+                                    {obfuscateStats ? `Respondent ${i + 1}` : (r.profile_name ?? "Unknown")}
+                                  </Text>
+                                  <Text fontSize="sm" flex="1" textAlign="right">
+                                    {formatResponseValue(val, valueLabels)}
+                                  </Text>
+                                </HStack>
+                              );
+                            })}
+                            {submittedResponses.length === 0 && (
+                              <Text fontSize="sm" color="fg.muted">
+                                No responses
+                              </Text>
+                            )}
+                          </VStack>
+                        </Box>
+                      );
+                    })}
+                  </VStack>
+                </Box>
+              )}
             </VStack>
           </Tabs.Content>
 
           <Tabs.Content value="group">
-            <VStack align="stretch" gap={4} pt={4}>
-              <GroupSummaryCards
-                groupAnalytics={showMentorViewOnly && currentUserProfileId ? filteredGroupAnalytics : groupAnalytics}
-                selectedGroupId={selectedGroupId}
-                onSelectGroup={setSelectedGroupId}
-                obfuscateStats={obfuscateStats}
-              />
-              {selectedGroup && (
-                <GroupDetailPanel
-                  group={selectedGroup}
-                  responses={responses}
-                  numericQuestions={questionsToShow}
-                  allQuestions={allQuestions}
-                  surveyJson={surveyJson}
-                  obfuscateNames={obfuscateStats}
-                />
-              )}
-            </VStack>
+            <GroupViewContent
+              groupAnalytics={showMentorViewOnly && currentUserProfileId ? filteredGroupAnalytics : groupAnalytics}
+              selectedGroupId={selectedGroupId}
+              onSelectGroup={setSelectedGroupId}
+              responses={responses}
+              questionsToShow={questionsToShow}
+              allQuestions={allQuestions}
+              surveyJson={surveyJson}
+              obfuscateStats={obfuscateStats}
+              courseStats={courseStats}
+              selectedGroup={selectedGroup}
+              surveysInSeries={surveysInSeries}
+              surveysToCompare={surveysToCompare}
+              onSurveysToCompareChange={(ids: string[]) => setSurveysToCompare(ids.length > 0 ? ids : [surveyId])}
+              surveyId={surveyId}
+              isComparing={isComparing}
+              seriesLoading={seriesLoading}
+              dataBySurveyId={dataBySurveyId}
+              questionsByScaleGroup={questionsByScaleGroup}
+              valueLabelsByQuestion={valueLabelsByQuestion}
+              sectionFilter="overall"
+            />
           </Tabs.Content>
 
           <Tabs.Content value="mentor">
-            <VStack align="stretch" gap={4} pt={4}>
-              <GroupSummaryCards
-                groupAnalytics={filteredGroupAnalytics}
-                selectedGroupId={selectedGroupId}
-                onSelectGroup={setSelectedGroupId}
-                obfuscateStats={obfuscateStats}
-              />
-              {selectedGroup && (
-                <GroupDetailPanel
-                  group={selectedGroup}
-                  responses={responses}
-                  numericQuestions={questionsToShow}
-                  allQuestions={allQuestions}
-                  surveyJson={surveyJson}
-                  obfuscateNames={obfuscateStats}
-                />
-              )}
-            </VStack>
+            <GroupViewContent
+              groupAnalytics={filteredGroupAnalytics}
+              selectedGroupId={selectedGroupId}
+              onSelectGroup={setSelectedGroupId}
+              responses={responses}
+              questionsToShow={questionsToShow}
+              allQuestions={allQuestions}
+              surveyJson={surveyJson}
+              obfuscateStats={obfuscateStats}
+              courseStats={courseStats}
+              selectedGroup={selectedGroup}
+              surveysInSeries={surveysInSeries}
+              surveysToCompare={surveysToCompare}
+              onSurveysToCompareChange={(ids: string[]) => setSurveysToCompare(ids.length > 0 ? ids : [surveyId])}
+              surveyId={surveyId}
+              isComparing={isComparing}
+              seriesLoading={seriesLoading}
+              dataBySurveyId={dataBySurveyId}
+              questionsByScaleGroup={questionsByScaleGroup}
+              valueLabelsByQuestion={valueLabelsByQuestion}
+              sectionFilter="overall"
+            />
           </Tabs.Content>
         </Tabs.Root>
       </VStack>

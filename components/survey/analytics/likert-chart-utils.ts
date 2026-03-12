@@ -93,3 +93,21 @@ export function truncateTitle(title: string, maxLen = 50): string {
   if (title.length <= maxLen) return title;
   return title.slice(0, maxLen - 3) + "...";
 }
+
+/** Comparison indicator: group vs course mean. Returns arrow type or null if within tolerance. */
+export type ComparisonArrowType = "up" | "down" | "double-up" | "double-down";
+
+export function getComparisonArrowType(
+  groupMean: number,
+  courseMean: number,
+  tolerance = 0.15,
+  doubleThreshold = 0.6
+): ComparisonArrowType | null {
+  const diff = groupMean - courseMean;
+  if (Math.abs(diff) < tolerance) return null;
+  if (diff > doubleThreshold) return "double-up";
+  if (diff > tolerance) return "up";
+  if (diff < -doubleThreshold) return "double-down";
+  if (diff < -tolerance) return "down";
+  return null;
+}

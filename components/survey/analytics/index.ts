@@ -9,8 +9,12 @@ export { NormalizedStackedChart } from "./NormalizedStackedChart";
 export { ConsistentAxesChart } from "./ConsistentAxesChart";
 export { ComparisonTable } from "./ComparisonTable";
 export { GroupSummaryCards } from "./GroupSummaryCards";
+export { GroupViewContent } from "./GroupViewContent";
 export { AlertsPanel } from "./AlertsPanel";
 export { GroupDetailPanel } from "./GroupDetailPanel";
+export { ScaleGroupCharts, buildSeriesDataByGroup } from "./ScaleGroupCharts";
+export { SeriesComparisonBlock } from "./SeriesComparisonBlock";
+export { SeriesComparisonCheckboxes } from "./SeriesComparisonCheckboxes";
 export { TrendChart } from "./TrendChart";
 export { ViewSelector } from "./ViewSelector";
 export {

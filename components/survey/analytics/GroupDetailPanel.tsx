@@ -1,12 +1,17 @@
 "use client";
 
 import type { Json } from "@/utils/supabase/SupabaseTypes";
-import type { GroupAnalytics, SurveyResponseWithContext } from "@/types/survey-analytics";
+import type { GroupAnalytics, QuestionStats, SurveyResponseWithContext } from "@/types/survey-analytics";
 import type { SurveyQuestionInfo } from "./utils";
 import { Box, Card, HStack, Text, VStack } from "@chakra-ui/react";
 import { ChoiceDistributionChart } from "./ChoiceDistributionChart";
 import { DivergingStackedChart } from "./DivergingStackedChart";
-import { formatResponseValue, getValueLabelsFromSurveyJson } from "./utils";
+import {
+  extractCheckboxFlagValues,
+  extractNumericValue,
+  formatResponseValue,
+  getValueLabelsFromSurveyJson
+} from "./utils";
 import { getScaleGroupKey, getScaleGroupLabel } from "./utils";
 
 type GroupDetailPanelProps = {
@@ -16,6 +21,8 @@ type GroupDetailPanelProps = {
   allQuestions: SurveyQuestionInfo[];
   surveyJson: Json;
   obfuscateNames?: boolean;
+  /** Course-level stats for mean reference line on charts */
+  courseStats?: Record<string, QuestionStats>;
 };
 
 export function GroupDetailPanel({
@@ -24,7 +31,8 @@ export function GroupDetailPanel({
   numericQuestions,
   allQuestions,
   surveyJson,
-  obfuscateNames = false
+  obfuscateNames = false,
+  courseStats
 }: GroupDetailPanelProps) {
   if (!group) {
     return (
@@ -40,6 +48,32 @@ export function GroupDetailPanel({
   const valueLabelsByQuestion = Object.fromEntries(
     allQuestions.map((q) => [q.name, getValueLabelsFromSurveyJson(surveyJson, q.name)])
   );
+
+  const namesByValueByQuestion = (() => {
+    const map: Record<string, Record<number, string[]>> = {};
+    for (const q of numericQuestions) {
+      const byValue: Record<number, string[]> = {};
+      groupResponses.forEach((r, i) => {
+        const resp = r.response as Record<string, unknown>;
+        const displayName = obfuscateNames ? `Respondent ${i + 1}` : (r.profile_name ?? "Unknown");
+        if (q.type === "checkbox") {
+          const vals = extractCheckboxFlagValues(resp, q.name);
+          for (const v of vals) {
+            if (!byValue[v]) byValue[v] = [];
+            byValue[v].push(displayName);
+          }
+        } else {
+          const val = extractNumericValue(resp, q.name);
+          if (val !== null) {
+            if (!byValue[val]) byValue[val] = [];
+            byValue[val].push(displayName);
+          }
+        }
+      });
+      if (Object.keys(byValue).length > 0) map[q.name] = byValue;
+    }
+    return map;
+  })();
 
   const numericQuestionsByScale = (() => {
     const groups = new Map<string, SurveyQuestionInfo[]>();
@@ -72,7 +106,7 @@ export function GroupDetailPanel({
             return (
               <Box key={groupLabel} borderWidth="1px" borderColor="border" borderRadius="md" p={4}>
                 <Text fontSize="sm" fontWeight="semibold" color="fg.muted" mb={3}>
-                  {groupLabel}
+                  {isCheckbox ? (questions[0]?.title ?? groupLabel) : groupLabel}
                 </Text>
                 {isCheckbox ? (
                   <ChoiceDistributionChart
@@ -81,6 +115,7 @@ export function GroupDetailPanel({
                     valueLabelsByQuestion={Object.fromEntries(
                       questions.map((q) => [q.name, valueLabelsByQuestion[q.name] ?? {}])
                     )}
+                    namesByValueByQuestion={namesByValueByQuestion}
                   />
                 ) : (
                   <DivergingStackedChart
@@ -89,6 +124,16 @@ export function GroupDetailPanel({
                     valueLabelsByQuestion={Object.fromEntries(
                       questions.map((q) => [q.name, valueLabelsByQuestion[q.name] ?? {}])
                     )}
+                    namesByValueByQuestion={namesByValueByQuestion}
+                    courseMeanByQuestion={
+                      !obfuscateNames && courseStats
+                        ? Object.fromEntries(
+                            questions
+                              .filter((q) => courseStats[q.name]?.mean != null)
+                              .map((q) => [q.name, courseStats[q.name].mean])
+                          )
+                        : undefined
+                    }
                   />
                 )}
               </Box>

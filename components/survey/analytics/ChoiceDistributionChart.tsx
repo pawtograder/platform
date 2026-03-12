@@ -11,12 +11,15 @@ type ChoiceDistributionChartProps = {
   questions: { name: string; title: string }[];
   questionStats: Record<string, QuestionStats>;
   valueLabelsByQuestion?: Record<string, Record<number, string>>;
+  /** Per-question, per-value: student names who gave that response (for group view tooltips) */
+  namesByValueByQuestion?: Record<string, Record<number, string[]>>;
 };
 
 export function ChoiceDistributionChart({
   questions,
   questionStats,
-  valueLabelsByQuestion = {}
+  valueLabelsByQuestion = {},
+  namesByValueByQuestion
 }: ChoiceDistributionChartProps) {
   const tickColor = useColorModeValue("#1A202C", "#FFFFFF");
   const tooltipBg = useColorModeValue("#FFFFFF", "#1A1A1A");
@@ -58,7 +61,7 @@ export function ChoiceDistributionChart({
   }
 
   return (
-    <Box w="100%" h={Math.max(150, chartData.length * 44)}>
+    <Box w="100%" h={Math.max(150, chartData.length * 60)}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={chartData}
@@ -87,7 +90,25 @@ export function ChoiceDistributionChart({
           <Tooltip
             contentStyle={{ backgroundColor: tooltipBg, borderRadius: "8px" }}
             cursor={{ fill: "rgba(0,0,0,0.05)" }}
-            formatter={(value: number) => [value, "Selections"]}
+            content={({ payload }) => {
+              if (!payload?.[0]?.payload) return null;
+              const row = payload[0].payload as { qName?: string; choiceValue?: number; count?: number; name?: string };
+              const names =
+                row.qName && row.choiceValue != null && namesByValueByQuestion?.[row.qName]?.[row.choiceValue];
+              return (
+                <Box p={2} bg={tooltipBg} borderRadius="md" boxShadow="md" minW="140px">
+                  <Text fontSize="sm">
+                    {row.name ?? row.choiceValue}: {row.count ?? payload[0].value} selection
+                    {(row.count ?? payload[0].value) !== 1 ? "s" : ""}
+                  </Text>
+                  {names && names.length > 0 && (
+                    <Text fontSize="xs" color="fg.muted" mt={1} whiteSpace="pre-wrap">
+                      {names.join(", ")}
+                    </Text>
+                  )}
+                </Box>
+              );
+            }}
           />
           <Bar dataKey="count" fill={barColor} radius={[0, 4, 4, 0]} />
         </BarChart>

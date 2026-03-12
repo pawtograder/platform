@@ -10,6 +10,8 @@ type SummaryCardsProps = {
   selectedQuestion: string | null;
   questionTitle: string;
   alertsCount: number;
+  myGroupsAlertsCount?: number;
+  isGroupMentor?: boolean;
   obfuscateStats?: boolean;
 };
 
@@ -20,6 +22,8 @@ export function SummaryCards({
   selectedQuestion,
   questionTitle,
   alertsCount,
+  myGroupsAlertsCount,
+  isGroupMentor = false,
   obfuscateStats = false
 }: SummaryCardsProps) {
   const responseRate = totalStudents > 0 ? Math.round((totalResponses / totalStudents) * 100) : 0;
@@ -64,7 +68,9 @@ export function SummaryCards({
               Needs Attention
             </Text>
             <Text fontSize="2xl" fontWeight="bold" color="orange.600">
-              {alertsCount} group{alertsCount !== 1 ? "s" : ""}
+              {isGroupMentor && myGroupsAlertsCount != null
+                ? `${myGroupsAlertsCount} of your groups (${alertsCount} total)`
+                : `${alertsCount} group${alertsCount !== 1 ? "s" : ""}`}
             </Text>
           </Card.Body>
         </Card.Root>
