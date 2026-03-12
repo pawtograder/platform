@@ -483,7 +483,7 @@ function TableByGroups({
    * Export groups data to CSV
    */
   const exportToCSV = () => {
-    const headers = ["Group", "Members", "Status"];
+    const headers = ["Group", "Members", "Mentor", "Status"];
     const rows: string[][] = [];
 
     groupsData.forEach((group) => {
@@ -493,6 +493,10 @@ function TableByGroups({
           return profile?.profiles.name || member.profile_id;
         })
         .join(", ");
+
+      const mentorName = group.mentor_profile_id
+        ? (graders.find((g) => g.id === group.mentor_profile_id)?.name ?? "")
+        : "";
 
       let status = "OK";
       if (assignment.min_group_size !== null && group.assignment_groups_members.length < assignment.min_group_size) {
@@ -504,13 +508,13 @@ function TableByGroups({
         status = `Too large (max: ${assignment.max_group_size})`;
       }
 
-      rows.push([group.name, memberNames, status]);
+      rows.push([group.name, memberNames, mentorName, status]);
     });
 
     // Add ungrouped students
     const ungroupedProfiles = profiles?.filter((profile) => profile.profiles.assignment_groups_members.length === 0);
     ungroupedProfiles?.forEach((profile) => {
-      rows.push(["(Ungrouped)", profile.profiles.name || "Unknown", "Not in a group"]);
+      rows.push(["(Ungrouped)", profile.profiles.name || "Unknown", "", "Not in a group"]);
     });
 
     // Convert to CSV format
