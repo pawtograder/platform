@@ -773,7 +773,11 @@ export function RubricCheckAnnotation({
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
   const submission = useSubmissionMaybe();
+  const pathname = usePathname();
   const isPreviewMode = !submission;
+  const linkedArtifactId = check.artifact
+    ? submission?.submission_artifacts?.find((a) => a.name === check.artifact)?.id
+    : undefined;
   const activeAssignmentReview = useActiveReviewAssignment();
   const gradingIsPermitted =
     isGrader ||
@@ -827,6 +831,18 @@ export function RubricCheckAnnotation({
       >
         {check.description}
       </Markdown>
+      {linkedArtifactId && submission && check.artifact && (
+        <Box mt={1}>
+          <Link
+            prefetch={true}
+            href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedArtifactId.toString() }).toString()}`}
+          >
+            <Text as="span" fontSize="xs" color="fg.muted" wordWrap="break-word" wordBreak="break-all">
+              In: {check.artifact}
+            </Text>
+          </Link>
+        </Box>
+      )}
       {rubricCheckComments.map((comment) => (
         <RubricCheckComment
           key={comment.id}
@@ -896,7 +912,7 @@ export function RubricCheckGlobal({
   const pathname = usePathname();
   const isPreviewMode = !submission;
   const linkedAritfactId = check.artifact
-    ? submission?.submission_artifacts.find((artifact) => artifact.name === check.artifact)?.id
+    ? submission?.submission_artifacts?.find((artifact) => artifact.name === check.artifact)?.id
     : undefined;
   const linkedFileId = check.file
     ? submission?.submission_files.find((file) => file.name === check.file)?.id
