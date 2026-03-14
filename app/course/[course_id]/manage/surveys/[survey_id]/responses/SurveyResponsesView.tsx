@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Container, Heading, Text, VStack, HStack, Table, Button, Input, Badge, Icon } from "@chakra-ui/react";
+import { Box, Container, Heading, Text, VStack, HStack, Button, Input, Badge, Icon } from "@chakra-ui/react";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
 import { isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
@@ -9,20 +9,26 @@ import { Model } from "survey-core";
 import { useMemo, useCallback, useState, useEffect } from "react";
 import { FiX, FiFilter } from "react-icons/fi";
 import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSurveyResponses } from "@/hooks/useCourseController";
+import SurveyAnalytics from "@/components/survey/SurveyAnalytics";
+
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 
 type SurveyResponsesViewProps = {
   courseId: string;
-  surveyId: string; // The UUID (survey_id column)
-  surveyDbId: string; // The database ID (id column) - used for querying responses
+  surveyId: string;
+  surveyDbId: string;
   surveyTitle: Survey["title"];
   surveyVersion: number;
   surveyStatus: Survey["status"];
-  surveyJson: Survey["json"]; // The JSON configuration of the survey
-  surveyDueDate: Survey["due_date"]; // The deadline for the survey
-  initialResponses: SurveyResponseWithProfile[]; // SSR initial data
+  surveyJson: Survey["json"];
+  surveyDueDate: Survey["due_date"];
+  initialResponses: SurveyResponseWithProfile[];
   totalStudents: number;
-  timezone: string; // Course timezone for date formatting
+  timezone: string;
+  analyticsConfig?: SurveyAnalyticsConfig | null;
+  seriesId?: string | null;
 };
 
 /**
@@ -120,9 +126,12 @@ export default function SurveyResponsesView({
   surveyDueDate,
   initialResponses,
   totalStudents,
-  timezone
+  timezone,
+  analyticsConfig = null,
+  seriesId
 }: SurveyResponsesViewProps) {
   const router = useRouter();
+  const { private_profile_id } = useClassProfiles();
 
   // Use the hook for realtime response updates
   const { responses: liveResponses, isLoading: responsesLoading } = useSurveyResponses(surveyDbId);
@@ -185,14 +194,6 @@ export default function SurveyResponsesView({
 
     return filtered;
   }, [responses, dateRangeStart, dateRangeEnd]);
-
-  // Determine which questions to show in table
-  const visibleQuestions = useMemo(() => {
-    if (selectedQuestions.length > 0) {
-      return selectedQuestions;
-    }
-    return allQuestionNames;
-  }, [selectedQuestions, allQuestionNames]);
 
   // Count active filters
   const activeFilterCount = useMemo(() => {
@@ -504,97 +505,16 @@ export default function SurveyResponsesView({
         </Box>
       </HStack>
 
-      {/* Responses Table */}
-      <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">
-        <Table.Root variant="outline" size="md">
-          <Table.Header>
-            <Table.Row bg="bg.subtle">
-              {!anonymousMode && (
-                <>
-                  <Table.ColumnHeader
-                    color="fg.muted"
-                    fontSize="xs"
-                    fontWeight="semibold"
-                    textTransform="uppercase"
-                    py={3}
-                    pl={6}
-                  >
-                    STUDENT NAME
-                  </Table.ColumnHeader>
-                  <Table.ColumnHeader
-                    color="fg.muted"
-                    fontSize="xs"
-                    fontWeight="semibold"
-                    textTransform="uppercase"
-                    py={3}
-                  >
-                    SUBMITTED AT
-                  </Table.ColumnHeader>
-                </>
-              )}
-              {visibleQuestions.map((questionName, index) => (
-                <Table.ColumnHeader
-                  key={questionName}
-                  color="fg.muted"
-                  fontSize="xs"
-                  fontWeight="semibold"
-                  textTransform="uppercase"
-                  py={3}
-                  pl={anonymousMode && index === 0 ? 6 : undefined}
-                  pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
-                >
-                  {questionTitles[questionName] || questionName}
-                </Table.ColumnHeader>
-              ))}
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {filteredResponses.length === 0 ? (
-              <Table.Row bg="bg.muted" borderColor="border">
-                <Table.Cell colSpan={(anonymousMode ? 0 : 2) + visibleQuestions.length} py={4} textAlign="center">
-                  <Text color="fg.muted">
-                    {totalResponses === 0
-                      ? "Students haven't submitted any responses to this survey."
-                      : "No responses match the current filters."}
-                  </Text>
-                </Table.Cell>
-              </Table.Row>
-            ) : (
-              filteredResponses.map((response) => {
-                const answers = (response.response ?? {}) as Record<string, unknown>;
-                return (
-                  <Table.Row key={response.id} bg="bg.muted" borderColor="border">
-                    {!anonymousMode && (
-                      <>
-                        <Table.Cell py={4} pl={6}>
-                          <Text color="fg">{response.profiles?.name || "N/A"}</Text>
-                        </Table.Cell>
-                        <Table.Cell py={4}>
-                          <Text color="fg">
-                            {response.submitted_at
-                              ? formatInTimeZone(new TZDate(response.submitted_at), timezone, "MMM d, yyyy, h:mm a")
-                              : "—"}
-                          </Text>
-                        </Table.Cell>
-                      </>
-                    )}
-                    {visibleQuestions.map((questionName, index) => (
-                      <Table.Cell
-                        key={questionName}
-                        py={4}
-                        pl={anonymousMode && index === 0 ? 6 : undefined}
-                        pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
-                      >
-                        <Text color="fg">{formatResponseValue(answers[questionName])}</Text>
-                      </Table.Cell>
-                    ))}
-                  </Table.Row>
-                );
-              })
-            )}
-          </Table.Body>
-        </Table.Root>
-      </Box>
+      {/* Analytics - compare quantitative values across groups */}
+      <SurveyAnalytics
+        surveyId={surveyDbId}
+        surveyJson={surveyJson}
+        analyticsConfig={analyticsConfig}
+        classId={Number(courseId)}
+        currentUserProfileId={private_profile_id}
+        seriesId={seriesId ?? undefined}
+        totalStudents={totalStudents}
+      />
     </Container>
   );
 }

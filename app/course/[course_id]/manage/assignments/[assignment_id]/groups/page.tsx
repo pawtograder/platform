@@ -3,6 +3,7 @@ import { toaster } from "@/components/ui/toaster";
 
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import { useGradersAndInstructors } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
@@ -447,12 +448,42 @@ function TableByGroups({
   groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
 }) {
   const { modProfiles, movesToFulfill } = useGroupManagement();
+  const graders = useGradersAndInstructors();
+  const supabase = createClient();
+  const invalidate = useInvalidate();
+  const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
+
+  const updateMentor = async (groupId: number, mentorProfileId: string | null) => {
+    setUpdatingMentorGroupId(groupId);
+    try {
+      const { error } = await supabase
+        .from("assignment_groups")
+        .update({ mentor_profile_id: mentorProfileId })
+        .eq("id", groupId);
+      if (error) {
+        Sentry.captureException(error);
+        toaster.create({ title: "Error updating mentor", description: error.message, type: "error" });
+      } else {
+        toaster.create({ title: "Mentor updated", type: "success" });
+        invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+      }
+    } catch (e) {
+      Sentry.captureException(e);
+      toaster.create({
+        title: "Error updating mentor",
+        description: e instanceof Error ? e.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setUpdatingMentorGroupId(null);
+    }
+  };
 
   /**
    * Export groups data to CSV
    */
   const exportToCSV = () => {
-    const headers = ["Group", "Members", "Status"];
+    const headers = ["Group", "Members", "Mentor", "Status"];
     const rows: string[][] = [];
 
     groupsData.forEach((group) => {
@@ -462,6 +493,10 @@ function TableByGroups({
           return profile?.profiles.name || member.profile_id;
         })
         .join(", ");
+
+      const mentorName = group.mentor_profile_id
+        ? (graders.find((g) => g.id === group.mentor_profile_id)?.name ?? "")
+        : "";
 
       let status = "OK";
       if (assignment.min_group_size !== null && group.assignment_groups_members.length < assignment.min_group_size) {
@@ -473,13 +508,13 @@ function TableByGroups({
         status = `Too large (max: ${assignment.max_group_size})`;
       }
 
-      rows.push([group.name, memberNames, status]);
+      rows.push([group.name, memberNames, mentorName, status]);
     });
 
     // Add ungrouped students
     const ungroupedProfiles = profiles?.filter((profile) => profile.profiles.assignment_groups_members.length === 0);
     ungroupedProfiles?.forEach((profile) => {
-      rows.push(["(Ungrouped)", profile.profiles.name || "Unknown", "Not in a group"]);
+      rows.push(["(Ungrouped)", profile.profiles.name || "Unknown", "", "Not in a group"]);
     });
 
     // Convert to CSV format
@@ -544,6 +579,7 @@ function TableByGroups({
           <Table.Row>
             <Table.ColumnHeader>Group</Table.ColumnHeader>
             <Table.ColumnHeader>Members</Table.ColumnHeader>
+            <Table.ColumnHeader>Mentor</Table.ColumnHeader>
             <Table.ColumnHeader>Actions</Table.ColumnHeader>
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
@@ -599,6 +635,23 @@ function TableByGroups({
                     }
                   })}
                   {newProfilesForGroup(group.id)}
+                </Table.Cell>
+                <Table.Cell>
+                  <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
+                    <NativeSelect.Field
+                      value={group.mentor_profile_id ?? ""}
+                      onChange={(e) => {
+                        updateMentor(group.id, e.target.value || null);
+                      }}
+                    >
+                      <option value="">No mentor</option>
+                      {graders.map((grader) => (
+                        <option key={grader.id} value={grader.id}>
+                          {grader.name}
+                        </option>
+                      ))}
+                    </NativeSelect.Field>
+                  </NativeSelect.Root>
                 </Table.Cell>
                 <Table.Cell>
                   <BulkModifyGroup

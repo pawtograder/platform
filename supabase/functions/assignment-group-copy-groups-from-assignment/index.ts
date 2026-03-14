@@ -32,13 +32,15 @@ async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Prom
   // Process each source group
   for (const sourceGroup of sourceAssignmentGroups) {
     // Upsert group (create if doesn't exist, or return existing if conflict on assignment_id,name)
+    // Copy mentor_profile_id from source group
     const { data: targetGroup, error: upsertError } = await adminSupabase
       .from("assignment_groups")
       .upsert(
         {
           assignment_id: target_assignment_id,
           name: sourceGroup.name,
-          class_id: class_id
+          class_id: class_id,
+          mentor_profile_id: sourceGroup.mentor_profile_id
         },
         { onConflict: "assignment_id,name" }
       )

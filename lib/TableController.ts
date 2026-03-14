@@ -167,6 +167,7 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
   // Survey related tables
   surveys: ["staff"], // Survey metadata (staff-only management)
+  survey_series: [], // No realtime broadcasts; staff manage via surveys
   survey_responses: ["staff"], // Response data only to staff
   survey_assignments: ["staff"], // Assignment data only to staff
 

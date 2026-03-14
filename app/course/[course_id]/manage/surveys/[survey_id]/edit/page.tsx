@@ -10,6 +10,7 @@ import SurveyForm from "../../new/form";
 import { Box, Text } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
@@ -20,9 +21,14 @@ type SurveyFormData = {
   json: string;
   status: "draft" | "published";
   due_date?: string;
+  available_at?: string;
+  assignment_id?: number | null;
   allow_response_editing: boolean;
   assigned_to_all: boolean;
   assigned_students?: string[];
+  series_id?: string | null;
+  series_ordinal?: number | null;
+  analytics_config?: SurveyAnalyticsConfig | null;
 };
 
 type SurveyRow = Tables<"surveys">;
@@ -82,7 +88,10 @@ export default function EditSurveyPage() {
       due_date: "",
       allow_response_editing: false,
       assigned_to_all: true,
-      assigned_students: []
+      assigned_students: [],
+      series_id: null,
+      series_ordinal: null,
+      analytics_config: null
     }
   });
 
@@ -133,8 +142,13 @@ export default function EditSurveyPage() {
         // Convert due_date from ISO string to datetime-local format in course timezone
         let dueDateFormatted = "";
         if (data.due_date) {
-          // Convert ISO timestamp to datetime-local format in course timezone
           dueDateFormatted = formatInTimeZone(new Date(data.due_date), timezone, "yyyy-MM-dd'T'HH:mm");
+        }
+
+        // Convert available_at from ISO string to datetime-local format in course timezone
+        let availableAtFormatted = "";
+        if (data.available_at) {
+          availableAtFormatted = formatInTimeZone(new Date(data.available_at), timezone, "yyyy-MM-dd'T'HH:mm");
         }
 
         // Load existing survey assignments
@@ -146,15 +160,25 @@ export default function EditSurveyPage() {
         const assignedStudents = assignmentData?.map((a) => a.profile_id) || [];
 
         // Load the survey data into the form
+        const surveyRow = data as SurveyRow & {
+          series_id?: string | null;
+          series_ordinal?: number | null;
+          analytics_config?: unknown;
+        };
         reset({
           title: data.title || "",
           description: data.description || "",
           json: toJsonString(data.json),
           status: data.status || "draft",
           due_date: dueDateFormatted,
+          available_at: availableAtFormatted,
+          assignment_id: data.assignment_id ?? null,
           allow_response_editing: Boolean(data.allow_response_editing),
           assigned_to_all: data.assigned_to_all !== undefined ? data.assigned_to_all : true,
-          assigned_students: assignedStudents
+          assigned_students: assignedStudents,
+          series_id: surveyRow.series_id ?? null,
+          series_ordinal: surveyRow.series_ordinal ?? null,
+          analytics_config: surveyRow.analytics_config ?? null
         });
 
         hasLoadedSurvey.current = true; // Mark as loaded to prevent duplicate toasts
@@ -211,8 +235,13 @@ export default function EditSurveyPage() {
               status: "draft",
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: convertDueDateToISO(values.due_date as string),
-              validation_errors: null, // No validation errors for draft saves
-              assigned_to_all: Boolean(values.assigned_to_all)
+              available_at: convertDueDateToISO(values.available_at as string),
+              assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
+              validation_errors: null,
+              assigned_to_all: Boolean(values.assigned_to_all),
+              series_id: values.series_id ? values.series_id : null,
+              series_ordinal: values.series_ordinal != null ? Number(values.series_ordinal) : null,
+              analytics_config: values.analytics_config ?? null
             })
             .eq("id", rawSurveyId)
             .select("id, survey_id")
@@ -296,6 +325,20 @@ export default function EditSurveyPage() {
           }
         }
 
+        // Validate available_at is before due_date
+        if (values.available_at && values.due_date) {
+          const availableAtISO = convertDueDateToISO(values.available_at as string);
+          const dueDateISO = convertDueDateToISO(values.due_date as string);
+          if (availableAtISO && dueDateISO && new Date(availableAtISO) >= new Date(dueDateISO)) {
+            toaster.create({
+              title: "Invalid Dates",
+              description: "The 'Available At' date must be before the due date.",
+              type: "error"
+            });
+            return;
+          }
+        }
+
         // Validate student assignments
         if (!values.assigned_to_all && (!values.assigned_students || values.assigned_students.length === 0)) {
           toaster.create({
@@ -333,11 +376,16 @@ export default function EditSurveyPage() {
               title: values.title as string,
               description: (values.description as string) || null,
               json: parsedJson,
-              status: validationErrors ? "draft" : (values.status as SurveyFormData["status"]), // Force to draft if validation errors
+              status: validationErrors ? "draft" : (values.status as SurveyFormData["status"]),
               allow_response_editing: values.allow_response_editing as boolean,
               due_date: convertDueDateToISO(values.due_date as string),
+              available_at: convertDueDateToISO(values.available_at as string),
+              assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
               validation_errors: validationErrors,
-              assigned_to_all: Boolean(values.assigned_to_all)
+              assigned_to_all: Boolean(values.assigned_to_all),
+              series_id: values.series_id ? values.series_id : null,
+              series_ordinal: values.series_ordinal != null ? Number(values.series_ordinal) : null,
+              analytics_config: values.analytics_config ?? null
             })
             .eq("id", rawSurveyId)
             .select("id, survey_id")
@@ -355,8 +403,13 @@ export default function EditSurveyPage() {
                   status: "draft",
                   allow_response_editing: values.allow_response_editing as boolean,
                   due_date: convertDueDateToISO(values.due_date as string),
+                  available_at: convertDueDateToISO(values.available_at as string),
+                  assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
                   validation_errors: `Database error: ${error?.message || "Unknown error"}`,
-                  assigned_to_all: Boolean(values.assigned_to_all)
+                  assigned_to_all: Boolean(values.assigned_to_all),
+                  series_id: values.series_id ? values.series_id : null,
+                  series_ordinal: values.series_ordinal != null ? Number(values.series_ordinal) : null,
+                  analytics_config: values.analytics_config ?? null
                 })
                 .eq("id", rawSurveyId)
                 .select("id, survey_id")
