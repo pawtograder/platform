@@ -70,3 +70,6 @@ AS $$
         AND up.role IN ('instructor', 'grader')
     )
 $$;
+
+GRANT EXECUTE ON FUNCTION public.get_survey_responses_with_full_context(uuid, bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_survey_responses_with_full_context(uuid, bigint) TO service_role;
