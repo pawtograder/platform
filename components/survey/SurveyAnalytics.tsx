@@ -84,7 +84,7 @@ export default function SurveyAnalytics({
   );
   const questionsToShow = useMemo(() => {
     if (analyticsConfig?.questions) {
-      return numericQuestionInfos.filter((q) => analyticsConfig.questions[q.name]?.includeInAnalytics !== false);
+      return numericQuestionInfos.filter((q) => analyticsConfig.questions[q.name]?.includeInAnalytics === true);
     }
     return numericQuestionInfos;
   }, [numericQuestionInfos, analyticsConfig]);
