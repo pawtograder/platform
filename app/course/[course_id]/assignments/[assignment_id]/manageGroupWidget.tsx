@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "@/components/ui/link";
+import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -806,7 +807,25 @@ function GroupDetails({
 }) {
   return (
     <VStack alignItems="flex-start">
-      <Heading size="md">You are in group &quot;{group.name}&quot;</Heading>
+      <VStack alignItems="flex-start" gap={1}>
+        <Heading size="md">You are in group &quot;{group.name}&quot;</Heading>
+        {group.mentor_profile_id && (
+          <HStack
+            gap={2}
+            px={3}
+            py={1.5}
+            borderRadius="md"
+            bg="bg.muted"
+            borderWidth="1px"
+            borderColor="border"
+            fontSize="sm"
+            fontWeight="medium"
+          >
+            <Text color="fg.muted">Group mentor:</Text>
+            <PersonName uid={group.mentor_profile_id} showAvatar={false} />
+          </HStack>
+        )}
+      </VStack>
       <HStack>
         {group.assignment_groups_members.map((m) => (
           <GroupMember profile_id={m.profile_id} key={m.profile_id} />

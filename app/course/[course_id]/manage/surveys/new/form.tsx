@@ -1,6 +1,18 @@
 "use client";
 
-import { Box, Input, Textarea, Text, HStack, VStack, Button, Heading, Fieldset, Checkbox } from "@chakra-ui/react";
+import {
+  Box,
+  Input,
+  Textarea,
+  Text,
+  HStack,
+  VStack,
+  Button,
+  Heading,
+  Fieldset,
+  Checkbox,
+  NativeSelect
+} from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 import { Button as UIButton } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -21,6 +33,9 @@ import {
   DialogCloseTrigger
 } from "@/components/ui/dialog";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
+import { useAssignments, useSurveySeries } from "@/hooks/useCourseController";
+import { AnalyticsConfigEditor } from "@/components/survey/AnalyticsConfigEditor";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 
 // New modal wrapper around SurveyBuilder
 import SurveyBuilderModal from "@/components/survey/SurveyBuilderModal";
@@ -35,9 +50,14 @@ type SurveyFormData = {
   json: string;
   status: "draft" | "published";
   due_date?: string;
+  available_at?: string;
+  assignment_id?: number | null;
   allow_response_editing: boolean;
   assigned_to_all: boolean;
   assigned_students?: string[];
+  series_id?: string | null;
+  series_ordinal?: number | null;
+  analytics_config?: SurveyAnalyticsConfig | null;
 };
 
 const sampleJsonTemplate = `{
@@ -95,7 +115,11 @@ export default function SurveyForm({
   // Student selector modal state
   const [isStudentSelectorOpen, setIsStudentSelectorOpen] = useState(false);
 
+  const assignments = useAssignments();
+  const { series: surveySeries } = useSurveySeries();
   const currentJson = watch("json");
+  const watchSeriesId = watch("series_id");
+  const watchAnalyticsConfig = watch("analytics_config");
   const currentStatus = watch("status");
   const assignedStudents = watch("assigned_students") || [];
 
@@ -419,6 +443,140 @@ export default function SurveyForm({
                           </Radio>
                         </VStack>
                       </RadioGroup>
+                    )}
+                  />
+                </Field>
+              </Fieldset.Content>
+
+              {/* Link to Assignment */}
+              <Fieldset.Content>
+                <Field
+                  label="Link to Assignment"
+                  helperText="Optionally link this survey to an assignment. Students will see the survey status on their submission page."
+                >
+                  <Controller
+                    name="assignment_id"
+                    control={control}
+                    render={({ field }) => (
+                      <NativeSelect.Root size="sm">
+                        <NativeSelect.Field
+                          value={field.value ?? ""}
+                          onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : null)}
+                          bg="bg.subtle"
+                          borderColor="border"
+                          color="fg"
+                        >
+                          <option value="">No linked assignment</option>
+                          {assignments.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.title}
+                            </option>
+                          ))}
+                        </NativeSelect.Field>
+                      </NativeSelect.Root>
+                    )}
+                  />
+                </Field>
+              </Fieldset.Content>
+
+              {/* Survey Series */}
+              <Fieldset.Content>
+                <Fieldset.Legend>Survey Series (Optional)</Fieldset.Legend>
+                <VStack align="stretch" gap={4} mt={2}>
+                  <Field label="Link to Series" helperText="Link surveys to a series for trend analysis across weeks">
+                    <Controller
+                      name="series_id"
+                      control={control}
+                      render={({ field }) => (
+                        <NativeSelect.Root size="sm">
+                          <NativeSelect.Field
+                            value={field.value ?? ""}
+                            onChange={(e) => {
+                              const newValue = e.target.value || null;
+                              field.onChange(newValue);
+                              if (!newValue) {
+                                setValue("series_ordinal", null);
+                              }
+                            }}
+                            bg="bg.subtle"
+                            borderColor="border"
+                            color="fg"
+                          >
+                            <option value="">Not part of a series</option>
+                            {surveySeries.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </NativeSelect.Field>
+                        </NativeSelect.Root>
+                      )}
+                    />
+                  </Field>
+                  {watchSeriesId && (
+                    <Field label="Week Number" helperText="Position in the series (Week 1, Week 2, etc.)">
+                      <Controller
+                        name="series_ordinal"
+                        control={control}
+                        render={({ field }) => (
+                          <Input
+                            type="number"
+                            min={1}
+                            value={field.value ?? ""}
+                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : null)}
+                            bg="bg.subtle"
+                            borderColor="border"
+                            color="fg"
+                          />
+                        )}
+                      />
+                    </Field>
+                  )}
+                </VStack>
+              </Fieldset.Content>
+
+              {/* Analytics Config */}
+              <Fieldset.Content>
+                <Fieldset.Legend>Analytics Configuration</Fieldset.Legend>
+                <Box mt={2}>
+                  <AnalyticsConfigEditor
+                    surveyJson={
+                      currentJson
+                        ? (() => {
+                            try {
+                              return JSON.parse(currentJson);
+                            } catch {
+                              return {};
+                            }
+                          })()
+                        : {}
+                    }
+                    analyticsConfig={watchAnalyticsConfig ?? { questions: {}, globalSettings: {} }}
+                    onChange={(config: SurveyAnalyticsConfig) => setValue("analytics_config", config)}
+                  />
+                </Box>
+              </Fieldset.Content>
+
+              {/* Available At */}
+              <Fieldset.Content>
+                <Field
+                  label="Available At"
+                  helperText="When the survey becomes visible to students. Leave empty to make it available immediately upon publishing."
+                >
+                  <Controller
+                    name="available_at"
+                    control={control}
+                    render={({ field }) => (
+                      <Input
+                        type="datetime-local"
+                        value={field.value || ""}
+                        onChange={field.onChange}
+                        onBlur={field.onBlur}
+                        bg="bg.subtle"
+                        borderColor="border"
+                        color="fg"
+                        _focus={{ borderColor: "blue.solid" }}
+                      />
                     )}
                   />
                 </Field>

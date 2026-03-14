@@ -507,6 +507,7 @@ export type Database = {
           class_id: number;
           created_at: string;
           id: number;
+          mentor_profile_id: string | null;
           name: string;
         };
         Insert: {
@@ -514,6 +515,7 @@ export type Database = {
           class_id: number;
           created_at?: string;
           id?: number;
+          mentor_profile_id?: string | null;
           name: string;
         };
         Update: {
@@ -521,6 +523,7 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           id?: number;
+          mentor_profile_id?: string | null;
           name?: string;
         };
         Relationships: [
@@ -565,6 +568,20 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_groups_mentor_profile_id_fkey";
+            columns: ["mentor_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_groups_mentor_profile_id_fkey";
+            columns: ["mentor_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };
@@ -8966,6 +8983,55 @@ export type Database = {
           }
         ];
       };
+      survey_series: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by: string | null;
+          description: string | null;
+          id: string;
+          name: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by?: string | null;
+          description?: string | null;
+          id?: string;
+          name: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by?: string | null;
+          description?: string | null;
+          id?: string;
+          name?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "survey_series_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_series_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "survey_series_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_nice";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       survey_templates: {
         Row: {
           class_id: number;
@@ -9030,7 +9096,10 @@ export type Database = {
       surveys: {
         Row: {
           allow_response_editing: boolean;
+          analytics_config: Json | null;
           assigned_to_all: boolean;
+          assignment_id: number | null;
+          available_at: string | null;
           class_id: number;
           created_at: string;
           created_by: string;
@@ -9039,6 +9108,8 @@ export type Database = {
           due_date: string | null;
           id: string;
           json: Json;
+          series_id: string | null;
+          series_ordinal: number | null;
           status: Database["public"]["Enums"]["survey_status"];
           survey_id: string;
           title: string;
@@ -9049,7 +9120,10 @@ export type Database = {
         };
         Insert: {
           allow_response_editing?: boolean;
+          analytics_config?: Json | null;
           assigned_to_all?: boolean;
+          assignment_id?: number | null;
+          available_at?: string | null;
           class_id: number;
           created_at?: string;
           created_by: string;
@@ -9058,6 +9132,8 @@ export type Database = {
           due_date?: string | null;
           id?: string;
           json?: Json;
+          series_id?: string | null;
+          series_ordinal?: number | null;
           status?: Database["public"]["Enums"]["survey_status"];
           survey_id?: string;
           title: string;
@@ -9068,7 +9144,10 @@ export type Database = {
         };
         Update: {
           allow_response_editing?: boolean;
+          analytics_config?: Json | null;
           assigned_to_all?: boolean;
+          assignment_id?: number | null;
+          available_at?: string | null;
           class_id?: number;
           created_at?: string;
           created_by?: string;
@@ -9077,6 +9156,8 @@ export type Database = {
           due_date?: string | null;
           id?: string;
           json?: Json;
+          series_id?: string | null;
+          series_ordinal?: number | null;
           status?: Database["public"]["Enums"]["survey_status"];
           survey_id?: string;
           title?: string;
@@ -9086,6 +9167,34 @@ export type Database = {
           version?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id", "class_id"];
+          },
+          {
+            foreignKeyName: "surveys_assignment_id_fkey";
+            columns: ["assignment_id", "class_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id", "class_id"];
+          },
           {
             foreignKeyName: "surveys_class_id_fkey";
             columns: ["class_id"];
@@ -9106,6 +9215,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "surveys_series_id_fkey";
+            columns: ["series_id"];
+            isOneToOne: false;
+            referencedRelation: "survey_series";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -11585,6 +11701,67 @@ export type Database = {
         Args: { p_assignment_id: number };
         Returns: Json;
       };
+      get_survey_responses_with_full_context: {
+        Args: { p_class_id: number; p_survey_id: string };
+        Returns: {
+          class_section_id: number;
+          class_section_name: string;
+          group_id: number;
+          group_member_count: number;
+          group_name: string;
+          is_submitted: boolean;
+          lab_section_id: number;
+          lab_section_name: string;
+          mentor_name: string;
+          mentor_profile_id: string;
+          profile_id: string;
+          profile_name: string;
+          response: Json;
+          response_id: string;
+          submitted_at: string;
+        }[];
+      };
+      get_survey_responses_with_group_context: {
+        Args: { p_class_id: number; p_survey_id: string };
+        Returns: {
+          group_id: number;
+          group_name: string;
+          is_submitted: boolean;
+          mentor_name: string;
+          mentor_profile_id: string;
+          profile_id: string;
+          profile_name: string;
+          response: Json;
+          response_id: string;
+          submitted_at: string;
+        }[];
+      };
+      get_survey_series_trend_data: {
+        Args: { p_class_id: number; p_series_id: string };
+        Returns: {
+          due_date: string;
+          group_id: number;
+          group_name: string;
+          mean_value: number;
+          question_name: string;
+          response_count: number;
+          series_ordinal: number;
+          survey_id: string;
+          survey_title: string;
+        }[];
+      };
+      get_survey_status_for_assignment: {
+        Args: { p_assignment_id: number; p_profile_id: string };
+        Returns: {
+          available_at: string;
+          due_date: string;
+          is_submitted: boolean;
+          submitted_at: string;
+          survey_id: string;
+          survey_status: Database["public"]["Enums"]["survey_status"];
+          survey_title: string;
+        }[];
+      };
       get_system_notification_stats: {
         Args: { p_requested_by?: string };
         Returns: {
@@ -11897,6 +12074,10 @@ export type Database = {
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
+      };
+      reorder_surveys_in_series: {
+        Args: { p_ordinal_updates: Json; p_series_id: string };
+        Returns: undefined;
       };
       reset_all_flashcard_progress: {
         Args: { p_card_ids: number[]; p_class_id: number; p_student_id: string };
