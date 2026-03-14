@@ -2,8 +2,9 @@
 
 import { useSubmission } from "@/hooks/useSubmission";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
 import { useParams, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Tabs, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
@@ -18,11 +19,7 @@ import {
   FaSync
 } from "react-icons/fa";
 import { toaster } from "@/components/ui/toaster";
-import {
-  getRepositoryAnalyticsForSubmission,
-  requestAnalyticsRefreshForSubmission,
-  getAnalyticsCsvDataForSubmission
-} from "./actions";
+import { createClient } from "@/utils/supabase/client";
 import { AnalyticsChart } from "@/components/ui/repo-analytics-chart";
 
 const TYPE_ICONS: Record<string, typeof FaGitAlt> = {
@@ -49,13 +46,13 @@ const TYPE_LABELS: Record<string, string> = {
   pr_review_comment: "PR Review Comment"
 };
 
-const KPI_ITEM_TYPE_MAP: Record<string, string[]> = {
-  commits: ["commit"],
-  prs_opened: ["pr"],
-  pr_review_comments: ["pr_review_comment"],
-  issues_opened: ["issue"],
-  issues_closed: ["issue"],
-  issue_comments: ["issue_comment"]
+const KPI_ITEM_TYPE_MAP: Record<string, string> = {
+  commits: "commit",
+  prs_opened: "pr",
+  pr_review_comments: "pr_review_comment",
+  issues_opened: "issue",
+  issues_closed: "issue",
+  issue_comments: "issue_comment"
 };
 
 type AnalyticsItem = {
@@ -97,9 +94,11 @@ function sanitizeCell(value: unknown): string {
 export default function SubmissionRepoAnalyticsPage() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const course = useCourse();
   const { course_id } = useParams();
   const searchParams = useSearchParams();
   const courseId = Number(course_id);
+  const supabase = useMemo(() => createClient(), []);
   const initialFilter = searchParams.get("kpi_category");
 
   const [items, setItems] = useState<AnalyticsItem[]>([]);
@@ -107,9 +106,8 @@ export default function SubmissionRepoAnalyticsPage() {
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const [filterType, setFilterType] = useState<string | null>(
-    initialFilter ? (KPI_ITEM_TYPE_MAP[initialFilter]?.[0] ?? null) : null
+    initialFilter ? (KPI_ITEM_TYPE_MAP[initialFilter] ?? null) : null
   );
   const [activeTab, setActiveTab] = useState("items");
 
@@ -117,34 +115,60 @@ export default function SubmissionRepoAnalyticsPage() {
     if (!submission.repository_id) return;
     try {
       setLoading(true);
-      const data = await getRepositoryAnalyticsForSubmission(
-        courseId,
-        submission.repository_id,
-        submission.assignment_id
-      );
-      setItems(data.items);
-      setDaily(data.daily);
-      setFetchStatus(data.fetchStatus);
+      const [itemsRes, dailyRes, statusRes] = await Promise.all([
+        supabase
+          .from("repository_analytics_items")
+          .select("*")
+          .eq("repository_id", submission.repository_id)
+          .order("created_date", { ascending: false }),
+        supabase
+          .from("repository_analytics_daily")
+          .select("*")
+          .eq("repository_id", submission.repository_id)
+          .order("date", { ascending: true }),
+        supabase
+          .from("repository_analytics_fetch_status")
+          .select("*")
+          .eq("assignment_id", submission.assignment_id)
+          .maybeSingle()
+      ]);
+      if (itemsRes.error) throw itemsRes.error;
+      if (dailyRes.error) throw dailyRes.error;
+      setItems(itemsRes.data ?? []);
+      setDaily(dailyRes.data ?? []);
+      setFetchStatus(statusRes.data ?? null);
     } catch (e) {
       toaster.error({ title: "Failed to load analytics", description: String(e) });
     } finally {
       setLoading(false);
     }
-  }, [courseId, submission.repository_id, submission.assignment_id]);
+  }, [supabase, submission.repository_id, submission.assignment_id]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
   const handleRefresh = async () => {
+    if (!course.github_org) {
+      toaster.error({ title: "No GitHub org configured for this course" });
+      return;
+    }
     setRefreshing(true);
     try {
-      const result = await requestAnalyticsRefreshForSubmission(courseId, submission.assignment_id);
-      if (result.success) {
-        toaster.success({ title: result.message });
-        setTimeout(() => loadData(), 5000);
+      const { error } = await supabase.rpc("enqueue_repo_analytics_fetch", {
+        p_class_id: courseId,
+        p_assignment_id: submission.assignment_id,
+        p_org: course.github_org
+      });
+      if (error) {
+        if (error.message.includes("Rate limited")) {
+          toaster.info({ title: "Rate limited", description: error.message });
+        } else {
+          toaster.error({ title: "Refresh failed", description: error.message });
+        }
       } else {
-        toaster.info({ title: "Rate limited", description: result.message });
+        toaster.success({ title: "Analytics refresh has been queued" });
+        setTimeout(() => loadData(), 5000);
       }
     } catch (e) {
       toaster.error({ title: "Refresh failed", description: String(e) });
@@ -154,41 +178,32 @@ export default function SubmissionRepoAnalyticsPage() {
   };
 
   const handleExportCsv = async () => {
-    if (!submission.repository_id) return;
-    setExporting(true);
-    try {
-      const data = await getAnalyticsCsvDataForSubmission(courseId, submission.repository_id);
-      const headers = ["Type", "GitHub ID", "Title", "Author", "Date", "State", "URL"];
-      const rows = data.items.map((item: AnalyticsItem) => [
-        TYPE_LABELS[item.item_type] || item.item_type,
-        item.github_id,
-        item.title || "",
-        item.author || "",
-        item.created_date,
-        item.state || "",
-        item.url
-      ]);
-      const csv =
-        "\uFEFF" +
-        [headers.map(sanitizeCell), ...rows.map((r: string[]) => r.map(sanitizeCell))]
-          .map((row) => row.map((cell: string) => `"${cell}"`).join(","))
-          .join("\n");
+    const csvHeaders = ["Type", "GitHub ID", "Title", "Author", "Date", "State", "URL"];
+    const rows = items.map((item) => [
+      TYPE_LABELS[item.item_type] || item.item_type,
+      item.github_id,
+      item.title || "",
+      item.author || "",
+      item.created_date,
+      item.state || "",
+      item.url
+    ]);
+    const csv =
+      "\uFEFF" +
+      [csvHeaders.map(sanitizeCell), ...rows.map((r) => r.map(sanitizeCell))]
+        .map((row) => row.map((cell) => `"${cell}"`).join(","))
+        .join("\n");
 
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `repo-analytics-${submission.repository.split("/").pop()}-${new Date().toISOString().split("T")[0]}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toaster.success({ title: "CSV exported" });
-    } catch (e) {
-      toaster.error({ title: "Export failed", description: String(e) });
-    } finally {
-      setExporting(false);
-    }
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `repo-analytics-${submission.repository.split("/").pop()}-${new Date().toISOString().split("T")[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toaster.success({ title: "CSV exported" });
   };
 
   if (!isGraderOrInstructor) {
@@ -217,13 +232,7 @@ export default function SubmissionRepoAnalyticsPage() {
             <Icon as={FaSync} mr={2} />
             Refresh
           </Button>
-          <Button
-            onClick={handleExportCsv}
-            loading={exporting}
-            variant="outline"
-            size="sm"
-            disabled={items.length === 0}
-          >
+          <Button onClick={handleExportCsv} variant="outline" size="sm" disabled={items.length === 0}>
             <Icon as={FaDownload} mr={2} />
             Export CSV
           </Button>
