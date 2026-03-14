@@ -3,7 +3,7 @@
 import { useSubmission } from "@/hooks/useSubmission";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Tabs, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
@@ -46,14 +46,35 @@ const TYPE_LABELS: Record<string, string> = {
   pr_review_comment: "PR Review Comment"
 };
 
-const KPI_ITEM_TYPE_MAP: Record<string, string> = {
-  commits: "commit",
-  prs_opened: "pr",
-  pr_review_comments: "pr_review_comment",
-  issues_opened: "issue",
-  issues_closed: "issue",
-  issue_comments: "issue_comment"
+type FilterSpec = { item_type: string; state?: string | null } | null;
+
+const KPI_ITEM_TYPE_MAP: Record<string, { item_type: string; state?: string | null }> = {
+  commits: { item_type: "commit" },
+  prs: { item_type: "pr" },
+  prs_opened: { item_type: "pr", state: "open" },
+  prs_closed: { item_type: "pr", state: "closed" },
+  pr_review_comments: { item_type: "pr_review_comment" },
+  issues: { item_type: "issue" },
+  issues_opened: { item_type: "issue", state: "open" },
+  issues_closed: { item_type: "issue", state: "closed" },
+  issue_comments: { item_type: "issue_comment" }
 };
+
+function computeFilterFromSearchParams(searchParams: URLSearchParams): FilterSpec {
+  const kpi_category = searchParams.get("kpi_category");
+  if (!kpi_category) return null;
+  const spec = KPI_ITEM_TYPE_MAP[kpi_category];
+  return spec ?? null;
+}
+
+function itemMatchesFilter(item: AnalyticsItem, activeFilter: FilterSpec): boolean {
+  if (!activeFilter) return true;
+  if (item.item_type !== activeFilter.item_type) return false;
+  if (activeFilter.state !== undefined && activeFilter.state !== null) {
+    return item.state === activeFilter.state;
+  }
+  return true;
+}
 
 type AnalyticsItem = {
   id: number;
@@ -91,25 +112,47 @@ function sanitizeCell(value: unknown): string {
   return str;
 }
 
+const ITEM_TYPE_TO_KPI_CATEGORY: Record<string, string> = {
+  commit: "commits",
+  pr: "prs",
+  issue: "issues",
+  issue_comment: "issue_comments",
+  pr_review_comment: "pr_review_comments"
+};
+
 export default function SubmissionRepoAnalyticsPage() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const course = useCourse();
   const { course_id } = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const courseId = Number(course_id);
   const supabase = useMemo(() => createClient(), []);
-  const initialFilter = searchParams.get("kpi_category");
+
+  const activeFilter = useMemo(() => computeFilterFromSearchParams(searchParams), [searchParams]);
 
   const [items, setItems] = useState<AnalyticsItem[]>([]);
   const [daily, setDaily] = useState<DailyRow[]>([]);
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filterType, setFilterType] = useState<string | null>(
-    initialFilter ? (KPI_ITEM_TYPE_MAP[initialFilter] ?? null) : null
-  );
   const [activeTab, setActiveTab] = useState("items");
+
+  const setFilterFromKpiCategory = useCallback(
+    (kpi_category: string | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (kpi_category) {
+        params.set("kpi_category", kpi_category);
+      } else {
+        params.delete("kpi_category");
+      }
+      const qs = params.toString();
+      router.replace(pathname + (qs ? `?${qs}` : ""), { scroll: false });
+    },
+    [searchParams, router, pathname]
+  );
 
   const loadData = useCallback(async () => {
     if (!submission.repository_id) return;
@@ -222,7 +265,7 @@ export default function SubmissionRepoAnalyticsPage() {
     );
   }
 
-  const filteredItems = filterType ? items.filter((i) => i.item_type === filterType) : items;
+  const filteredItems = activeFilter ? items.filter((i) => itemMatchesFilter(i, activeFilter)) : items;
 
   return (
     <VStack align="stretch" gap={4} p={4}>
@@ -289,20 +332,26 @@ export default function SubmissionRepoAnalyticsPage() {
               <HStack gap={2} mb={4} flexWrap="wrap">
                 <Button
                   size="xs"
-                  variant={filterType === null ? "solid" : "outline"}
-                  onClick={() => setFilterType(null)}
+                  variant={activeFilter === null ? "solid" : "outline"}
+                  onClick={() => setFilterFromKpiCategory(null)}
                 >
                   All ({items.length})
                 </Button>
                 {["commit", "pr", "issue", "issue_comment", "pr_review_comment"].map((type) => {
-                  const count = items.filter((i) => i.item_type === type).length;
+                  const kpiCategory = ITEM_TYPE_TO_KPI_CATEGORY[type];
+                  const count = items.filter((i) =>
+                    itemMatchesFilter(i, kpiCategory ? (KPI_ITEM_TYPE_MAP[kpiCategory] ?? null) : null)
+                  ).length;
                   if (count === 0) return null;
+                  const isActive =
+                    activeFilter?.item_type === type &&
+                    (activeFilter.state === undefined || activeFilter.state === null);
                   return (
                     <Button
                       key={type}
                       size="xs"
-                      variant={filterType === type ? "solid" : "outline"}
-                      onClick={() => setFilterType(type)}
+                      variant={isActive ? "solid" : "outline"}
+                      onClick={() => setFilterFromKpiCategory(kpiCategory)}
                     >
                       {TYPE_LABELS[type]} ({count})
                     </Button>

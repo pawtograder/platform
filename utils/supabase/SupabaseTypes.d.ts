@@ -5991,7 +5991,8 @@ export type Database = {
           id: number;
           last_fetched_at: string | null;
           last_requested_at: string | null;
-          status: string;
+          repository_id: number;
+          status: Database["public"]["Enums"]["repo_analytics_fetch_status"];
         };
         Insert: {
           assignment_id: number;
@@ -6000,7 +6001,8 @@ export type Database = {
           id?: number;
           last_fetched_at?: string | null;
           last_requested_at?: string | null;
-          status?: string;
+          repository_id: number;
+          status?: Database["public"]["Enums"]["repo_analytics_fetch_status"];
         };
         Update: {
           assignment_id?: number;
@@ -6009,41 +6011,42 @@ export type Database = {
           id?: number;
           last_fetched_at?: string | null;
           last_requested_at?: string | null;
-          status?: string;
+          repository_id?: number;
+          status?: Database["public"]["Enums"]["repo_analytics_fetch_status"];
         };
         Relationships: [
           {
             foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: true;
+            isOneToOne: false;
             referencedRelation: "assignment_overview";
             referencedColumns: ["id"];
           },
           {
             foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: true;
+            isOneToOne: false;
             referencedRelation: "assignments";
             referencedColumns: ["id"];
           },
           {
             foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: true;
+            isOneToOne: false;
             referencedRelation: "assignments_for_student_dashboard";
             referencedColumns: ["id"];
           },
           {
             foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: true;
+            isOneToOne: false;
             referencedRelation: "assignments_with_effective_due_dates";
             referencedColumns: ["id"];
           },
           {
             foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
             columns: ["assignment_id"];
-            isOneToOne: true;
+            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },
@@ -6052,6 +6055,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
         ];
@@ -6064,7 +6074,7 @@ export type Database = {
           created_date: string;
           github_id: string;
           id: number;
-          item_type: string;
+          item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
           repository_id: number;
           state: string | null;
           title: string | null;
@@ -6078,7 +6088,7 @@ export type Database = {
           created_date: string;
           github_id: string;
           id?: number;
-          item_type: string;
+          item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
           repository_id: number;
           state?: string | null;
           title?: string | null;
@@ -6092,7 +6102,7 @@ export type Database = {
           created_date?: string;
           github_id?: string;
           id?: number;
-          item_type?: string;
+          item_type?: Database["public"]["Enums"]["repo_analytics_item_type"];
           repository_id?: number;
           state?: string | null;
           title?: string | null;
@@ -6146,6 +6156,32 @@ export type Database = {
             foreignKeyName: "repository_analytics_items_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      repository_analytics_repo_status: {
+        Row: {
+          last_commit_sha: string | null;
+          last_fetched_at: string | null;
+          repository_id: number;
+        };
+        Insert: {
+          last_commit_sha?: string | null;
+          last_fetched_at?: string | null;
+          repository_id: number;
+        };
+        Update: {
+          last_commit_sha?: string | null;
+          last_fetched_at?: string | null;
+          repository_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_repo_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: true;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -6658,7 +6694,7 @@ export type Database = {
           is_annotation: boolean;
           is_comment_required: boolean;
           is_required: boolean;
-          kpi_category: string | null;
+          kpi_category: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
           max_annotations: number | null;
           name: string;
           ordinal: number;
@@ -6681,7 +6717,7 @@ export type Database = {
           is_annotation: boolean;
           is_comment_required?: boolean;
           is_required?: boolean;
-          kpi_category?: string | null;
+          kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
           max_annotations?: number | null;
           name: string;
           ordinal: number;
@@ -6704,7 +6740,7 @@ export type Database = {
           is_annotation?: boolean;
           is_comment_required?: boolean;
           is_required?: boolean;
-          kpi_category?: string | null;
+          kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
           max_annotations?: number | null;
           name?: string;
           ordinal?: number;
@@ -10670,6 +10706,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      _submission_review_is_completable: {
+        Args: { p_submission_review_id: number };
+        Returns: boolean;
+      };
       admin_bulk_set_user_roles_disabled: {
         Args: {
           p_admin_user_id?: string;
@@ -11013,6 +11053,14 @@ export type Database = {
         Args: { topic_text: string };
         Returns: boolean;
       };
+      check_grading_completion_eligibility: {
+        Args: { p_assignment_id: number };
+        Returns: {
+          completable: number;
+          missing_required_checks: number;
+          total_incomplete: number;
+        }[];
+      };
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
@@ -11047,6 +11095,10 @@ export type Database = {
           p_student_tag_filters?: Json;
         };
         Returns: Json;
+      };
+      complete_eligible_grading_reviews: {
+        Args: { p_assignment_id: number };
+        Returns: number;
       };
       create_all_repos_for_assignment:
         | {
@@ -11327,7 +11379,12 @@ export type Database = {
         Returns: undefined;
       };
       enqueue_repo_analytics_fetch: {
-        Args: { p_assignment_id: number; p_class_id: number; p_org: string };
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_org: string;
+          p_repository_id?: number;
+        };
         Returns: number;
       };
       evaluate_error_pin_rule: {
@@ -11345,6 +11402,10 @@ export type Database = {
       };
       finalize_submission_early: {
         Args: { this_assignment_id: number; this_profile_id: string };
+        Returns: Json;
+      };
+      fix_assignment_repo_permissions: {
+        Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
       };
       generate_anon_name: { Args: never; Returns: string };
@@ -11478,19 +11539,27 @@ export type Database = {
           submissions_with_comments: number;
         }[];
       };
-      get_instructor_dashboard_metrics: {
+      get_instructor_dashboard_overview_metrics: {
         Args: { p_class_id: number; p_now?: string };
         Returns: {
           assignment_id: number;
+          class_student_count: number;
           closed_or_resolved_regrade_requests: number;
           due_date: string;
           graded_submissions: number;
+          grades_release_status: string;
+          grades_released_count: number;
+          grades_unreleased_count: number;
           open_regrade_requests: number;
           review_assignments_completed: number;
           review_assignments_incomplete: number;
           review_assignments_total: number;
           section: string;
           students_with_valid_extensions: number;
+          students_without_submissions: number;
+          submission_reviews_completed: number;
+          submission_reviews_incomplete: number;
+          submission_reviews_total: number;
           time_zone: string;
           title: string;
           total_submitters: number;
@@ -11782,6 +11851,15 @@ export type Database = {
         Args: { p_class_id: number; p_grader_result_id: number };
         Returns: Json;
       };
+      publish_assignment_group_changes: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_groups_to_create?: Json;
+          p_moves_to_fulfill?: Json;
+        };
+        Returns: Json;
+      };
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;
@@ -12070,6 +12148,15 @@ export type Database = {
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
+      repo_analytics_fetch_status: "idle" | "fetching" | "completed" | "error";
+      repo_analytics_item_type: "issue" | "pr" | "commit" | "issue_comment" | "pr_review_comment";
+      repo_analytics_kpi_category:
+        | "issues_opened"
+        | "issues_closed"
+        | "issue_comments"
+        | "prs_opened"
+        | "pr_review_comments"
+        | "commits";
       review_round: "self-review" | "grading-review" | "meta-grading-review" | "code-walk";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
       student_help_activity_type:
@@ -12261,6 +12348,16 @@ export const Constants = {
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
+      repo_analytics_fetch_status: ["idle", "fetching", "completed", "error"],
+      repo_analytics_item_type: ["issue", "pr", "commit", "issue_comment", "pr_review_comment"],
+      repo_analytics_kpi_category: [
+        "issues_opened",
+        "issues_closed",
+        "issue_comments",
+        "prs_opened",
+        "pr_review_comments",
+        "commits"
+      ],
       review_round: ["self-review", "grading-review", "meta-grading-review", "code-walk"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
       student_help_activity_type: [

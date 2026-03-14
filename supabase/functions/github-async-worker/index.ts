@@ -1185,7 +1185,8 @@ export async function processEnvelope(
                 assignment_id,
                 class_id: envelope.class_id!,
                 last_fetched_at: new Date().toISOString(),
-                status: "completed"
+                status: "completed",
+                error_message: null
               },
               { onConflict: "assignment_id" }
             );
@@ -1206,6 +1207,18 @@ export async function processEnvelope(
 
           const octokit = await github.getOctoKit(org, scope);
           if (!octokit) throw new Error(`No octokit found for org ${org}`);
+
+          const { data: fetchStatuses } = await adminSupabase
+            .from("repository_analytics_fetch_status")
+            .select("repository_id, last_fetched_at")
+            .eq("assignment_id", assignment_id)
+            .in(
+              "repository_id",
+              repos.map((r) => r.id)
+            );
+          const sinceByRepo = new Map<number, string | null>(
+            (fetchStatuses ?? []).map((f) => [f.repository_id, f.last_fetched_at])
+          );
 
           for (const repo of repos) {
             const repoFullName = repo.repository;
@@ -1320,31 +1333,37 @@ export async function processEnvelope(
                 });
               }
 
-              // Fetch PRs
+              // Fetch PRs (paginated iterator with early exit when PRs are older than sinceIso)
               try {
-                const prs = await octokit.paginate("GET /repos/{owner}/{repo}/pulls", {
+                const sinceIso = sinceByRepo.get(repo.id) ?? null;
+                const prsParams = {
                   owner: repoOwner,
                   repo: repoName,
                   state: "all",
-                  per_page: 100
-                });
-                for (const pr of prs) {
-                  const createdDay = ensureDay(pr.created_at);
-                  dailyMap.get(createdDay)!.prs_opened++;
-
-                  itemUpserts.push({
-                    repository_id: repo.id,
-                    class_id: repo.class_id,
-                    assignment_id: repo.assignment_id,
-                    item_type: "pr",
-                    github_id: String(pr.number),
-                    title: pr.title,
-                    url: pr.html_url,
-                    author: pr.user?.login || null,
-                    created_date: createdDay,
-                    state: pr.state,
-                    updated_at: now
-                  });
+                  per_page: 100,
+                  sort: "updated" as const,
+                  direction: "desc" as const
+                };
+                const iterator = octokit.paginate.iterator("GET /repos/{owner}/{repo}/pulls", prsParams);
+                outer: for await (const response of iterator) {
+                  for (const pr of response.data) {
+                    if (sinceIso && new Date(pr.updated_at) <= new Date(sinceIso)) break outer;
+                    const createdDay = ensureDay(pr.created_at);
+                    dailyMap.get(createdDay)!.prs_opened++;
+                    itemUpserts.push({
+                      repository_id: repo.id,
+                      class_id: repo.class_id,
+                      assignment_id: repo.assignment_id,
+                      item_type: "pr",
+                      github_id: String(pr.number),
+                      title: pr.title,
+                      url: pr.html_url,
+                      author: pr.user?.login || null,
+                      created_date: createdDay,
+                      state: pr.state,
+                      updated_at: now
+                    });
+                  }
                 }
               } catch (e) {
                 Sentry.addBreadcrumb({ message: `Error fetching PRs for ${repoFullName}: ${e}`, level: "warning" });
@@ -1451,7 +1470,8 @@ export async function processEnvelope(
               assignment_id,
               class_id: envelope.class_id!,
               last_fetched_at: new Date().toISOString(),
-              status: "completed"
+              status: "completed",
+              error_message: null
             },
             { onConflict: "assignment_id" }
           );
