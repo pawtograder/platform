@@ -233,6 +233,7 @@ function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): YmlRubricP
     data: valOrUndefined(part.data),
     description: valOrUndefined(part.description),
     name: part.name,
+    is_individual_grading: part.is_individual_grading || undefined,
     criteria: hydratedRubricCriteriaToYamlRubric(part.rubric_criteria)
   }));
 }
@@ -333,6 +334,7 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
     created_at: "",
     data: part.data,
     assignment_id: 0,
+    is_individual_grading: part.is_individual_grading ?? false,
     rubric_criteria: YamlCriteriaToHydratedCriteria(part.id || -1, part.criteria)
   }));
 }
@@ -1314,7 +1316,8 @@ function InnerRubricPage() {
           data: partData.data,
           class_id: assignmentDetails.class_id,
           rubric_id: currentEffectiveRubricId,
-          assignment_id: assignmentDetails.id
+          assignment_id: assignmentDetails.id,
+          is_individual_grading: partData.is_individual_grading ?? false
         };
         const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
         if (!createdPart.data.id) throw new Error("Failed to create part");

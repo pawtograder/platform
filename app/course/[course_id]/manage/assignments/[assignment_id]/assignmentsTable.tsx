@@ -18,6 +18,7 @@ import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
   GraderResultTest,
+  IndividualScores,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -35,6 +36,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { TZDate } from "@date-fns/tz";
 import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
@@ -104,6 +106,48 @@ function ScoreLink({
     return <Skeleton w="50px" h="1em" />;
   }
   return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
+}
+
+function TotalScoreCell({
+  getValue,
+  row,
+  course_id,
+  assignment_id
+}: {
+  getValue: () => unknown;
+  row: { original: ActiveSubmissionsWithGradesForAssignment };
+  course_id: string;
+  assignment_id: string;
+}) {
+  const individualScores = (row.original as { individual_scores?: IndividualScores | null }).individual_scores;
+  const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
+  const isObfuscated = useObfuscatedGradesMode();
+  const canShowGradeFor = useCanShowGradeFor(row.original.student_private_profile_id!);
+  const showTooltip = hasIndividual && (!isObfuscated || canShowGradeFor);
+
+  return (
+    <HStack gap={1}>
+      <ScoreLink
+        score={getValue() as number}
+        private_profile_id={row.original.student_private_profile_id!}
+        submission_id={row.original.activesubmissionid!}
+        course_id={course_id}
+        assignment_id={assignment_id}
+      />
+      {showTooltip && (
+        <Tooltip
+          content={Object.entries(individualScores!)
+            .filter(([, s]) => s !== undefined)
+            .map(([, score]) => `${score}`)
+            .join(" | ")}
+        >
+          <Text fontSize="xs" color="fg.info" cursor="help">
+            ⓘ
+          </Text>
+        </Tooltip>
+      )}
+    </HStack>
+  );
 }
 export default function AssignmentsTable({
   tableController: providedTableController
@@ -295,17 +339,14 @@ export default function AssignmentsTable({
         accessorKey: "total_score",
         header: "Total Score",
         enableColumnFilter: true,
-        cell: (props) => {
-          return (
-            <ScoreLink
-              score={props.getValue() as number}
-              private_profile_id={props.row.original.student_private_profile_id!}
-              submission_id={props.row.original.activesubmissionid!}
-              course_id={course_id as string}
-              assignment_id={assignment_id as string}
-            />
-          );
-        },
+        cell: (props) => (
+          <TotalScoreCell
+            getValue={props.getValue}
+            row={props.row}
+            course_id={course_id as string}
+            assignment_id={assignment_id as string}
+          />
+        ),
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];

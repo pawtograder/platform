@@ -2,6 +2,7 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
+  IndividualScores,
   SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
@@ -29,7 +30,7 @@ import {
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
   useAssignmentGroupWithMembers,
@@ -1278,6 +1279,52 @@ function UnGradedGradingSummary() {
   );
 }
 
+function IndividualScoresDisplay({
+  individualScores,
+  totalPoints
+}: {
+  individualScores: IndividualScores;
+  totalPoints: number | null;
+}) {
+  const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const entries = Object.entries(individualScores).filter((entry): entry is [string, number] => entry[1] !== undefined);
+  if (entries.length === 0) return null;
+
+  const myEntry = entries.find(([profileId]) => profileId === private_profile_id);
+  const otherEntries = entries.filter(([profileId]) => profileId !== private_profile_id);
+  const sortedEntries = isGraderOrInstructor ? entries : [...(myEntry ? [myEntry] : []), ...otherEntries];
+
+  return (
+    <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
+      <Text fontWeight="semibold" fontSize="sm" mb={2}>
+        Individual Scores
+      </Text>
+      <VStack align="start" gap={1}>
+        {sortedEntries.map(([profileId, score]) => {
+          const isMe = profileId === private_profile_id;
+          return (
+            <HStack key={profileId} w="100%" justifyContent="space-between">
+              <HStack>
+                <PersonName uid={profileId} />
+                {isMe && !isGraderOrInstructor && (
+                  <Text fontSize="xs" color="fg.info" fontWeight="bold">
+                    (You)
+                  </Text>
+                )}
+              </HStack>
+              <Text fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                {score}
+                {totalPoints !== null ? `/${totalPoints}` : ""}
+              </Text>
+            </HStack>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -1355,6 +1402,12 @@ function RubricView() {
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
+        {gradingReview?.individual_scores && (
+          <IndividualScoresDisplay
+            individualScores={gradingReview.individual_scores as unknown as IndividualScores}
+            totalPoints={assignment.total_points}
+          />
+        )}
         <SubmissionReviewScoreTweak />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
