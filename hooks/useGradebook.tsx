@@ -1590,7 +1590,8 @@ export class GradebookController {
   ): Promise<void> {
     return this.table.updateGradebookEntry(gcs_id, updates);
   }
-  exportGradebook(courseController: CourseController) {
+  exportGradebook(courseController: CourseController, options?: { useRenderExpressions?: boolean }) {
+    const useRenderExpressions = options?.useRenderExpressions ?? false;
     const roster = courseController.getRosterWithUserInfo().data;
     const columns = [...this.gradebook_columns.rows];
     columns.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -1616,7 +1617,23 @@ export class GradebookController {
       const tags = courseController.getTagsForProfile(student.private_profile_id).data || [];
       const tagNames = tags.map((tag) => tag.name).join(" ");
 
-      const gradesForStudent = columns.map((col) => getScore(studentGradebookController.getGradesForStudent(col.id)));
+      const gradesForStudent = columns.map((col) => {
+        const gradebookEntry = studentGradebookController.getGradesForStudent(col.id);
+        if (!useRenderExpressions || !col.render_expression || !gradebookEntry) {
+          return getScore(gradebookEntry);
+        }
+        const rendered = this.getRendererForColumn(col.id)({
+          ...gradebookEntry,
+          max_score: col.max_score
+        });
+        if (typeof rendered === "number" || typeof rendered === "string") {
+          return rendered;
+        }
+        if (rendered === null || rendered === undefined) {
+          return "";
+        }
+        return String(rendered);
+      });
       const row = [
         userProfile.data.name ?? "Unknown",
         student.users.email ?? "Unknown",

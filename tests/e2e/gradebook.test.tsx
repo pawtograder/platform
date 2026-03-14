@@ -3,6 +3,8 @@ import { test, expect } from "../global-setup";
 import type { Page, Locator } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
+import { promises as fs } from "node:fs";
+import Papa from "papaparse";
 import {
   createClass,
   createUsersInClass,
@@ -19,6 +21,8 @@ dotenv.config({ path: ".env.local" });
 let course: Course;
 let students: TestingUser[] = [];
 let instructor: TestingUser | undefined;
+const RENDER_EXPORT_COLUMN_NAME = "Final Grade (Letter)";
+const RENDER_EXPORT_COLUMN_SLUG = "rendered-final-grade-letter";
 
 // Helpers
 function escapeRegExp(text: string): string {
@@ -42,10 +46,44 @@ async function readCellNumber(page: Page, rowName: string, columnName: string) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-// async function readCellText(page: Page, rowName: string, columnName: string) {
-//   const cell = await getGridcellInRow(page, rowName, columnName);
-//   return (await cell.innerText()).trim();
-// }
+function parseCsv(csvText: string) {
+  const parsed = Papa.parse<string[]>(csvText, {
+    skipEmptyLines: true
+  });
+  if (parsed.errors.length > 0) {
+    const firstError = parsed.errors[0];
+    throw new Error(`Failed to parse CSV: ${firstError.message}`);
+  }
+  return parsed.data.map((row) => row.map((cell) => cell ?? ""));
+}
+
+function getCsvCellValue(csvRows: string[][], email: string, columnName: string) {
+  if (!Array.isArray(csvRows) || csvRows.length === 0) {
+    throw new Error("CSV parsing returned no rows");
+  }
+  const [headers, ...dataRows] = csvRows;
+  const emailIndex = headers.indexOf("Email");
+  const columnIndex = headers.indexOf(columnName);
+  if (emailIndex === -1 || columnIndex === -1) {
+    throw new Error(`Could not find Email or ${columnName} column in CSV headers`);
+  }
+  const studentRow = dataRows.find((row) => row[emailIndex] === email);
+  if (!studentRow) {
+    throw new Error(`Could not find CSV row for ${email}`);
+  }
+  return studentRow[columnIndex] ?? "";
+}
+
+async function downloadCsvFromGradebookPopover(page: Page) {
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download CSV" }).click();
+  const download = await downloadPromise;
+  const downloadPath = await download.path();
+  if (!downloadPath) {
+    throw new Error("Download path not available");
+  }
+  return fs.readFile(downloadPath, "utf8");
+}
 
 // Virtualization stability helpers
 async function waitForVirtualizerIdle(page: Page) {
@@ -779,5 +817,201 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
     await expect(unreleasedCard).toBeVisible();
     await expect(unreleasedCard).toContainText(/In Progress/i);
+  });
+});
+
+test.describe("Gradebook Page - CSV Render Export", () => {
+  test.describe.configure({ mode: "serial" });
+  let exportCourse: Course;
+  let exportStudents: TestingUser[] = [];
+  let exportInstructor: TestingUser;
+
+  test.beforeAll(async () => {
+    exportCourse = await createClass({
+      name: "Gradebook Export Render Expression Course"
+    });
+    const exportEmailSuffix = `${process.env.TEST_PARALLEL_INDEX || "0"}-${Math.random().toString(36).slice(2, 8)}`;
+    const users = await createUsersInClass([
+      {
+        name: "Export Student One",
+        email: `export-student-one-${exportEmailSuffix}@pawtograder.net`,
+        role: "student",
+        class_id: exportCourse.id
+      },
+      {
+        name: "Export Student Two",
+        email: `export-student-two-${exportEmailSuffix}@pawtograder.net`,
+        role: "student",
+        class_id: exportCourse.id
+      },
+      {
+        name: "Export Instructor",
+        email: `export-instructor-${exportEmailSuffix}@pawtograder.net`,
+        role: "instructor",
+        class_id: exportCourse.id
+      }
+    ]);
+    exportStudents = users.slice(0, 2);
+    exportInstructor = users[2];
+
+    await createAssignmentsAndGradebookColumns({
+      class_id: exportCourse.id,
+      numAssignments: 2,
+      numManualGradedColumns: 0,
+      manualGradedColumnSlugs: ["participation"],
+      groupConfig: "individual"
+    });
+
+    const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
+      .from("gradebook_columns")
+      .select("*")
+      .eq("class_id", exportCourse.id)
+      .eq("slug", "final-grade")
+      .single();
+    if (finalGradebookColumnError) {
+      throw new Error(`Failed to get final gradebook column for export test: ${finalGradebookColumnError.message}`);
+    }
+
+    await expect(async () => {
+      const { data: privateRecord, error: privateError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", exportCourse.id)
+        .eq("student_id", exportStudents[0].private_profile_id)
+        .eq("gradebook_column_id", finalGradebookColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (privateError) {
+        throw new Error(`Failed to get private final grade record for export test: ${privateError.message}`);
+      }
+      expect(privateRecord).toBeTruthy();
+    }).toPass();
+
+    const { error: setFinalGradePrivateError } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 92, is_recalculating: false })
+      .eq("class_id", exportCourse.id)
+      .eq("student_id", exportStudents[0].private_profile_id)
+      .eq("gradebook_column_id", finalGradebookColumn.id)
+      .eq("is_private", true);
+    if (setFinalGradePrivateError) {
+      throw new Error(`Failed to set private final grade for export test: ${setFinalGradePrivateError.message}`);
+    }
+    const { error: setFinalGradePublicError } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 88, is_recalculating: false })
+      .eq("class_id", exportCourse.id)
+      .eq("student_id", exportStudents[0].private_profile_id)
+      .eq("gradebook_column_id", finalGradebookColumn.id)
+      .eq("is_private", false);
+    if (setFinalGradePublicError) {
+      throw new Error(`Failed to set public final grade for export test: ${setFinalGradePublicError.message}`);
+    }
+
+    const { data: renderExportColumn, error: renderExportColumnError } = await supabase
+      .from("gradebook_columns")
+      .insert({
+        class_id: exportCourse.id,
+        gradebook_id: finalGradebookColumn.gradebook_id,
+        name: RENDER_EXPORT_COLUMN_NAME,
+        slug: RENDER_EXPORT_COLUMN_SLUG,
+        max_score: 100,
+        score_expression: "gradebook_columns('final-grade')",
+        render_expression: "letter(score)",
+        dependencies: { gradebook_columns: [finalGradebookColumn.id] },
+        sort_order: (finalGradebookColumn.sort_order ?? 0) + 1
+      })
+      .select("*")
+      .single();
+    if (renderExportColumnError) {
+      throw new Error(`Failed to create render export column for export test: ${renderExportColumnError.message}`);
+    }
+
+    await expect(async () => {
+      const { data: renderRecord, error: renderError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", exportCourse.id)
+        .eq("student_id", exportStudents[0].private_profile_id)
+        .eq("gradebook_column_id", renderExportColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (renderError) {
+        throw new Error(`Failed to get render export column record for export test: ${renderError.message}`);
+      }
+      expect(renderRecord).toBeTruthy();
+    }).toPass();
+
+    const { error: setRenderExportScoreError } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 92, released: true, is_recalculating: false })
+      .eq("class_id", exportCourse.id)
+      .eq("student_id", exportStudents[0].private_profile_id)
+      .eq("gradebook_column_id", renderExportColumn.id)
+      .eq("is_private", true);
+    if (setRenderExportScoreError) {
+      throw new Error(`Failed to set render export score for export test: ${setRenderExportScoreError.message}`);
+    }
+
+    await expect(async () => {
+      const { data: renderRecord, error: renderError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", exportCourse.id)
+        .eq("student_id", exportStudents[0].private_profile_id)
+        .eq("gradebook_column_id", renderExportColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (renderError) {
+        throw new Error(`Failed to read stabilized render export record: ${renderError.message}`);
+      }
+      expect(renderRecord?.is_recalculating).toBe(false);
+      expect(renderRecord?.score_override ?? renderRecord?.score).toBe(92);
+      expect(renderRecord?.incomplete_values).toBeNull();
+    }).toPass();
+  });
+
+  test("Download Gradebook can export render expression values to CSV", async ({ page }) => {
+    const student = exportStudents[0];
+    await loginAsUser(page, exportInstructor, exportCourse);
+    await page.goto(`/course/${exportCourse.id}/manage/gradebook`);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("region", { name: "Instructor Gradebook Table" })).toBeVisible();
+
+    const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await tableRegion.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await waitForVirtualizerIdle(page);
+
+    const renderedCell = await getGridcellInRow(page, student.private_profile_name, RENDER_EXPORT_COLUMN_NAME);
+    await expect(renderedCell).toHaveAttribute(
+      "aria-label",
+      new RegExp(`^Grade cell for ${escapeRegExp(RENDER_EXPORT_COLUMN_NAME)}: A-$`)
+    );
+
+    await page.getByRole("button", { name: "Download Gradebook" }).click();
+    const renderExpressionCheckbox = page.getByRole("checkbox", { name: "Use render expressions in CSV" });
+    const renderExpressionToggle = page.getByText("Use render expressions in CSV");
+    await expect(renderExpressionCheckbox).toBeVisible();
+    if (await renderExpressionCheckbox.isChecked()) {
+      await renderExpressionToggle.click();
+    }
+    const defaultCsv = await downloadCsvFromGradebookPopover(page);
+    const defaultCsvRows = parseCsv(defaultCsv);
+    const defaultValue = getCsvCellValue(defaultCsvRows, student.email, RENDER_EXPORT_COLUMN_NAME);
+    expect(Number(defaultValue)).toBeCloseTo(92, 5);
+
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Download Gradebook" }).click();
+    await expect(renderExpressionCheckbox).toBeVisible();
+    if (!(await renderExpressionCheckbox.isChecked())) {
+      await renderExpressionToggle.click();
+    }
+    await expect(renderExpressionCheckbox).toBeChecked();
+    const renderCsv = await downloadCsvFromGradebookPopover(page);
+    const renderCsvRows = parseCsv(renderCsv);
+    const renderedValue = getCsvCellValue(renderCsvRows, student.email, RENDER_EXPORT_COLUMN_NAME);
+    expect(renderedValue).toBe("A-");
   });
 });
