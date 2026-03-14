@@ -1161,6 +1161,11 @@ export async function processEnvelope(
       case "fetch_repo_analytics": {
         const { assignment_id, org } = envelope.args as FetchRepoAnalyticsArgs;
 
+        if (envelope.class_id == null) {
+          throw new Error("fetch_repo_analytics requires class_id in envelope");
+        }
+        const classId = envelope.class_id;
+
         scope.setTag("assignment_id", String(assignment_id));
         scope.setTag("org", org);
 
@@ -1183,7 +1188,7 @@ export async function processEnvelope(
             await adminSupabase.from("repository_analytics_fetch_status").upsert(
               {
                 assignment_id,
-                class_id: envelope.class_id!,
+                class_id: classId,
                 last_fetched_at: new Date().toISOString(),
                 status: "completed",
                 error_message: null
@@ -1195,7 +1200,7 @@ export async function processEnvelope(
               {
                 method: envelope.method,
                 status_code: 200,
-                class_id: envelope.class_id,
+                class_id: classId,
                 debug_id: envelope.debug_id,
                 enqueued_at: meta.enqueued_at,
                 log_id: envelope.log_id
@@ -1468,7 +1473,7 @@ export async function processEnvelope(
           await adminSupabase.from("repository_analytics_fetch_status").upsert(
             {
               assignment_id,
-              class_id: envelope.class_id!,
+              class_id: classId,
               last_fetched_at: new Date().toISOString(),
               status: "completed",
               error_message: null
@@ -1480,7 +1485,7 @@ export async function processEnvelope(
           await adminSupabase.from("repository_analytics_fetch_status").upsert(
             {
               assignment_id,
-              class_id: envelope.class_id!,
+              class_id: classId,
               status: "error",
               error_message: error instanceof Error ? error.message : String(error)
             },
@@ -1494,7 +1499,7 @@ export async function processEnvelope(
           {
             method: envelope.method,
             status_code: 200,
-            class_id: envelope.class_id,
+            class_id: classId,
             debug_id: envelope.debug_id,
             enqueued_at: meta.enqueued_at,
             log_id: envelope.log_id

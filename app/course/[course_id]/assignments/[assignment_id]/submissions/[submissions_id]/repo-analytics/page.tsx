@@ -51,11 +51,11 @@ type FilterSpec = { item_type: string; state?: string | null } | null;
 const KPI_ITEM_TYPE_MAP: Record<string, { item_type: string; state?: string | null }> = {
   commits: { item_type: "commit" },
   prs: { item_type: "pr" },
-  prs_opened: { item_type: "pr", state: "open" },
+  prs_opened: { item_type: "pr" },
   prs_closed: { item_type: "pr", state: "closed" },
   pr_review_comments: { item_type: "pr_review_comment" },
   issues: { item_type: "issue" },
-  issues_opened: { item_type: "issue", state: "open" },
+  issues_opened: { item_type: "issue" },
   issues_closed: { item_type: "issue", state: "closed" },
   issue_comments: { item_type: "issue_comment" }
 };
@@ -173,10 +173,12 @@ export default function SubmissionRepoAnalyticsPage() {
           .from("repository_analytics_fetch_status")
           .select("*")
           .eq("assignment_id", submission.assignment_id)
+          .eq("repository_id", submission.repository_id)
           .maybeSingle()
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (dailyRes.error) throw dailyRes.error;
+      if (statusRes.error) throw statusRes.error;
       setItems(itemsRes.data ?? []);
       setDaily(dailyRes.data ?? []);
       setFetchStatus(statusRes.data ?? null);
@@ -201,7 +203,8 @@ export default function SubmissionRepoAnalyticsPage() {
       const { error } = await supabase.rpc("enqueue_repo_analytics_fetch", {
         p_class_id: courseId,
         p_assignment_id: submission.assignment_id,
-        p_org: course.github_org
+        p_org: course.github_org,
+        p_repository_id: submission.repository_id
       });
       if (error) {
         if (error.message.includes("Rate limited")) {

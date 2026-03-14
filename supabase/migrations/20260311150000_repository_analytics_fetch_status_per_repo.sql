@@ -68,6 +68,7 @@ security definer
 as $$
 declare
     message_id bigint;
+    last_req timestamptz;
 begin
     -- Enforce caller privileges when called by authenticated user (skip for cron/service role)
     if auth.uid() is not null
@@ -81,6 +82,37 @@ begin
         raise exception 'Assignment % does not belong to class %', p_assignment_id, p_class_id;
     end if;
 
+    -- Manual refresh only: validate repository and enforce rate limit BEFORE sending
+    if p_repository_id is not null then
+        -- Verify repository exists and belongs to assignment
+        if not exists (
+            select 1 from public.repositories r
+            where r.id = p_repository_id and r.assignment_id = p_assignment_id
+        ) then
+            raise exception 'Repository % does not belong to assignment %', p_repository_id, p_assignment_id;
+        end if;
+
+        -- Rate limit: 10 minutes between requests for this repo
+        select last_requested_at into last_req
+        from public.repository_analytics_fetch_status
+        where assignment_id = p_assignment_id and repository_id = p_repository_id;
+
+        if last_req is not null and last_req > now() - interval '10 minutes' then
+            raise exception 'Rate limited: try again after %', last_req + interval '10 minutes';
+        end if;
+
+        -- Upsert fetch status (set last_requested_at for rate limiting)
+        insert into public.repository_analytics_fetch_status (
+            assignment_id, class_id, repository_id, last_requested_at, status
+        )
+        select p_assignment_id, p_class_id, p_repository_id, now(), 'fetching'
+        from public.repositories r
+        where r.id = p_repository_id and r.assignment_id = p_assignment_id
+        on conflict (assignment_id, repository_id)
+        do update set last_requested_at = now(), status = 'fetching';
+    end if;
+
+    -- Enqueue (only reached when repo is valid and not rate-limited, or when p_repository_id is null)
     select pgmq_public.send(
         'async_calls',
         jsonb_build_object(
@@ -93,18 +125,6 @@ begin
             )
         )
     ) into message_id;
-
-    -- Manual refresh only: set last_requested_at for rate limiting (cron skips this)
-    if p_repository_id is not null then
-        insert into public.repository_analytics_fetch_status (
-            assignment_id, class_id, repository_id, last_requested_at, status
-        )
-        select p_assignment_id, p_class_id, p_repository_id, now(), 'fetching'
-        from repositories r
-        where r.id = p_repository_id and r.assignment_id = p_assignment_id
-        on conflict (assignment_id, repository_id)
-        do update set last_requested_at = now(), status = 'fetching';
-    end if;
 
     return message_id;
 end;
