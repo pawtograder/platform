@@ -304,10 +304,12 @@ export default function SubmissionRepoAnalyticsPage() {
       if (dailyRes.error) throw dailyRes.error;
       if (statusRes.error) throw statusRes.error;
       if (submissionsRes.error) throw submissionsRes.error;
-      setItems(itemsRes.data?.map((item) => ({
-        ...item,
-        data: item.data as AnalyticsItemData | null | undefined
-      })) ?? []);
+      setItems(
+        itemsRes.data?.map((item) => ({
+          ...item,
+          data: item.data as AnalyticsItemData | null | undefined
+        })) ?? []
+      );
       setDaily(dailyRes.data ?? []);
       setFetchStatus(statusRes.data ?? null);
       const shaMap = new Map<string, number>();
