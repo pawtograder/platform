@@ -1467,22 +1467,47 @@ export async function processEnvelope(
                 });
               }
 
-              // Fetch commits
+              // Fetch commits from all branches (deduplicated by SHA)
               try {
-                const commits = await octokit.paginate("GET /repos/{owner}/{repo}/commits", {
+                const seenShas = new Set<string>();
+                const commitsToProcess: Array<{
+                  commit: Awaited<ReturnType<typeof octokit.rest.repos.listCommits>>["data"][number];
+                  day: string;
+                }> = [];
+
+                const branches = await octokit.paginate("GET /repos/{owner}/{repo}/branches", {
                   owner: repoOwner,
                   repo: repoName,
                   per_page: 100
                 });
-                for (let i = 0; i < commits.length; i++) {
-                  const commit = commits[i];
-                  const dateStr = commit.commit.author?.date || commit.commit.committer?.date;
-                  if (!dateStr) continue;
-                  const day = ensureDay(dateStr);
-                  dailyMap.get(day)!.commits++;
+                for (const branch of branches) {
+                  const branchCommits = await octokit.paginate("GET /repos/{owner}/{repo}/commits", {
+                    owner: repoOwner,
+                    repo: repoName,
+                    sha: branch.name,
+                    per_page: 100
+                  });
+                  for (const commit of branchCommits) {
+                    if (seenShas.has(commit.sha)) continue;
+                    seenShas.add(commit.sha);
+                    const dateStr = commit.commit.author?.date || commit.commit.committer?.date;
+                    if (!dateStr) continue;
+                    const day = ensureDay(dateStr);
+                    dailyMap.get(day)!.commits++;
+                    commitsToProcess.push({ commit, day });
+                  }
+                }
+
+                for (let i = 0; i < commitsToProcess.length; i++) {
+                  const { commit, day } = commitsToProcess[i];
 
                   let commitData: {
-                    files: Array<{ filename: string; status?: string; additions: number; deletions: number }>;
+                    files: Array<{
+                      filename: string;
+                      status?: string;
+                      additions: number;
+                      deletions: number;
+                    }>;
                   } | null = null;
                   try {
                     const fullCommit = await octokit.rest.repos.getCommit({
@@ -1498,7 +1523,7 @@ export async function processEnvelope(
                         deletions: f.deletions ?? 0
                       }))
                     };
-                    if (i < commits.length - 1) {
+                    if (i < commitsToProcess.length - 1) {
                       await new Promise((r) => setTimeout(r, 150));
                     }
                   } catch (e) {
@@ -1527,7 +1552,10 @@ export async function processEnvelope(
               } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 console.warn(`[fetch_repo_analytics] ${repoFullName}: commits fetch failed:`, msg);
-                Sentry.addBreadcrumb({ message: `Error fetching commits for ${repoFullName}: ${e}`, level: "warning" });
+                Sentry.addBreadcrumb({
+                  message: `Error fetching commits for ${repoFullName}: ${e}`,
+                  level: "warning"
+                });
               }
 
               // Upsert daily stats

@@ -105,16 +105,7 @@ begin
             raise exception 'Repository % does not belong to assignment %', p_repository_id, p_assignment_id;
         end if;
 
-        -- Rate limit: 10 minutes between requests for this repo
-        select last_requested_at into last_req
-        from public.repository_analytics_fetch_status
-        where assignment_id = p_assignment_id and repository_id = p_repository_id;
-
-        if last_req is not null and last_req > now() - interval '10 minutes' then
-            raise exception 'Rate limited: try again after %', last_req + interval '10 minutes';
-        end if;
-
-        -- Upsert fetch status (set last_requested_at for rate limiting)
+        -- Rate limit: atomic upsert; only update when last_requested_at is older than 10 minutes
         insert into public.repository_analytics_fetch_status (
             assignment_id, class_id, repository_id, last_requested_at, status
         )
@@ -122,7 +113,17 @@ begin
         from public.repositories r
         where r.id = p_repository_id and r.assignment_id = p_assignment_id
         on conflict (assignment_id, repository_id)
-        do update set last_requested_at = now(), status = 'fetching';
+        do update set last_requested_at = now(), status = 'fetching'
+        where repository_analytics_fetch_status.last_requested_at < now() - interval '10 minutes'
+           or repository_analytics_fetch_status.last_requested_at is null
+        returning last_requested_at into last_req;
+
+        if not found then
+            select last_requested_at into last_req
+            from public.repository_analytics_fetch_status
+            where assignment_id = p_assignment_id and repository_id = p_repository_id;
+            raise exception 'Rate limited: try again after %', last_req + interval '10 minutes';
+        end if;
     end if;
 
     -- Enqueue (only reached when repo is valid and not rate-limited, or when p_repository_id is null)
