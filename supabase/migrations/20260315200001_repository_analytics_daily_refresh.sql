@@ -96,7 +96,11 @@ BEGIN
               AND a.archived_at IS NULL
               AND nullif(trim(c.github_org), '') IS NOT NULL
         LOOP
-            PERFORM public.enqueue_repo_analytics_fetch(r.class_id, r.assignment_id, r.github_org, null);
+            BEGIN
+                PERFORM public.enqueue_repo_analytics_fetch(r.class_id, r.assignment_id, r.github_org, null);
+            EXCEPTION WHEN OTHERS THEN
+                RAISE WARNING 'enqueue_repo_analytics_fetch failed for assignment_id=% class_id=%: %', r.assignment_id, r.class_id, SQLERRM;
+            END;
         END LOOP;
     END IF;
 END;
