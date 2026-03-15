@@ -95,6 +95,7 @@ export type SyncRepoToHandoutArgs = {
 export type FetchRepoAnalyticsArgs = {
   assignment_id: number;
   org: string;
+  repository_id?: number | null; // when set, fetch only this repo (manual refresh); when null/absent, fetch all
 };
 
 export type GitHubAsyncArgs =

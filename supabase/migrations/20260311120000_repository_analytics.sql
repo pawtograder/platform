@@ -115,7 +115,18 @@ security definer
 as $$
 declare
     message_id bigint;
+    v_org text;
 begin
+    -- Resolve org: use p_org if provided, otherwise derive from class
+    v_org := nullif(trim(p_org), '');
+    if v_org is null then
+        select c.github_org into v_org from public.classes c where c.id = p_class_id;
+        v_org := nullif(trim(v_org), '');
+    end if;
+    if v_org is null then
+        raise exception 'Class % has no GitHub org configured; cannot enqueue repo analytics fetch', p_class_id;
+    end if;
+
     select pgmq_public.send(
         'async_calls',
         jsonb_build_object(
@@ -123,7 +134,7 @@ begin
             'class_id', p_class_id,
             'args', jsonb_build_object(
                 'assignment_id', p_assignment_id,
-                'org', p_org
+                'org', v_org
             )
         )
     ) into message_id;

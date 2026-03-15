@@ -1,4 +1,5 @@
 -- Per-repository fetch tracking for incremental analytics fetching
+ALTER TYPE public.github_async_method ADD VALUE IF NOT EXISTS 'fetch_repo_analytics';
 
 create table if not exists "public"."repository_analytics_repo_status" (
     "repository_id" bigint not null,

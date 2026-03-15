@@ -1,15 +1,19 @@
 "use client";
 
+import React from "react";
 import { useSubmission } from "@/hooks/useSubmission";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useCourse, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Box, Flex, HStack, Icon, Spinner, Table, Tabs, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   FaChartBar,
+  FaChevronDown,
+  FaChevronRight,
   FaCodeBranch,
   FaComment,
   FaDownload,
@@ -76,6 +80,17 @@ function itemMatchesFilter(item: AnalyticsItem, activeFilter: FilterSpec): boole
   return true;
 }
 
+type FileChange = { filename: string; additions?: number; deletions?: number; status?: string };
+
+type AnalyticsItemData = {
+  files?: FileChange[];
+  labels?: string[];
+  body_preview?: string | null;
+  assignees?: string[];
+  closed_at?: string | null;
+  state_reason?: string | null;
+};
+
 type AnalyticsItem = {
   id: number;
   item_type: string;
@@ -85,7 +100,16 @@ type AnalyticsItem = {
   author: string | null;
   created_date: string;
   state: string | null;
+  data?: AnalyticsItemData | null;
 };
+
+function formatFilesSummary(data: AnalyticsItemData | null | undefined): string | null {
+  const files = data?.files;
+  if (!files?.length) return null;
+  const add = files.reduce((s, f) => s + (f.additions ?? 0), 0);
+  const del = files.reduce((s, f) => s + (f.deletions ?? 0), 0);
+  return `${files.length} files (+${add} -${del})`;
+}
 
 type DailyRow = {
   date: string;
@@ -120,6 +144,34 @@ const ITEM_TYPE_TO_KPI_CATEGORY: Record<string, string> = {
   pr_review_comment: "pr_review_comments"
 };
 
+/** Ordered so adjacent indices are ~150° apart on the color wheel for maximum contrast. */
+const USER_PASTEL_COLORS = [
+  "orange.subtle",
+  "cyan.subtle",
+  "amber.subtle",
+  "blue.subtle",
+  "yellow.subtle",
+  "indigo.subtle",
+  "green.subtle",
+  "purple.subtle",
+  "teal.subtle",
+  "pink.subtle"
+] as const;
+
+const COLOR_STEP = 7; // Coprime to 10; spreads hash so similar authors get contrasting colors
+
+/** Deterministic color from author string so the same author always gets the same color. */
+function getAuthorColor(author: string): string {
+  let h = 0;
+  const s = author.toLowerCase();
+  for (let i = 0; i < s.length; i++) {
+    h = (h << 5) - h + s.charCodeAt(i);
+    h |= 0;
+  }
+  const idx = (Math.abs(h) * COLOR_STEP) % USER_PASTEL_COLORS.length;
+  return USER_PASTEL_COLORS[idx];
+}
+
 export default function SubmissionRepoAnalyticsPage() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -136,9 +188,76 @@ export default function SubmissionRepoAnalyticsPage() {
   const [items, setItems] = useState<AnalyticsItem[]>([]);
   const [daily, setDaily] = useState<DailyRow[]>([]);
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>(null);
+  const [submissionsBySha, setSubmissionsBySha] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState("items");
+  const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
+
+  const toggleExpanded = useCallback((id: number) => {
+    setExpandedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const userRoles = useUserRolesWithProfiles();
+  const githubToName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const role of userRoles) {
+      const gh = role.users?.github_username;
+      const name = role.profiles?.name;
+      if (gh && name) {
+        map.set(gh.toLowerCase(), name);
+      }
+    }
+    return map;
+  }, [userRoles]);
+
+  const contributionsByUser = useMemo(() => {
+    const contributionsByUser = new Map<
+      string,
+      {
+        displayName: string;
+        commits: number;
+        prs: number;
+        issues: number;
+        issueComments: number;
+        prReviewComments: number;
+      }
+    >();
+    for (const item of items) {
+      const key = item.author ?? "—";
+      const existing = contributionsByUser.get(key);
+      const displayName = key === "—" ? "Unknown" : githubToName.get(key.toLowerCase()) || key;
+      const delta = {
+        commits: item.item_type === "commit" ? 1 : 0,
+        prs: item.item_type === "pr" ? 1 : 0,
+        issues: item.item_type === "issue" ? 1 : 0,
+        issueComments: item.item_type === "issue_comment" ? 1 : 0,
+        prReviewComments: item.item_type === "pr_review_comment" ? 1 : 0
+      };
+      if (existing) {
+        existing.commits += delta.commits;
+        existing.prs += delta.prs;
+        existing.issues += delta.issues;
+        existing.issueComments += delta.issueComments;
+        existing.prReviewComments += delta.prReviewComments;
+      } else {
+        contributionsByUser.set(key, {
+          displayName,
+          commits: delta.commits,
+          prs: delta.prs,
+          issues: delta.issues,
+          issueComments: delta.issueComments,
+          prReviewComments: delta.prReviewComments
+        });
+      }
+    }
+    return contributionsByUser;
+  }, [items, githubToName]);
 
   const setFilterFromKpiCategory = useCallback(
     (kpi_category: string | null) => {
@@ -158,7 +277,7 @@ export default function SubmissionRepoAnalyticsPage() {
     if (!submission.repository_id) return;
     try {
       setLoading(true);
-      const [itemsRes, dailyRes, statusRes] = await Promise.all([
+      const [itemsRes, dailyRes, statusRes, submissionsRes] = await Promise.all([
         supabase
           .from("repository_analytics_items")
           .select("*")
@@ -174,14 +293,25 @@ export default function SubmissionRepoAnalyticsPage() {
           .select("*")
           .eq("assignment_id", submission.assignment_id)
           .eq("repository_id", submission.repository_id)
-          .maybeSingle()
+          .maybeSingle(),
+        supabase
+          .from("submissions")
+          .select("id, sha")
+          .eq("repository_id", submission.repository_id)
+          .eq("assignment_id", submission.assignment_id)
       ]);
       if (itemsRes.error) throw itemsRes.error;
       if (dailyRes.error) throw dailyRes.error;
       if (statusRes.error) throw statusRes.error;
+      if (submissionsRes.error) throw submissionsRes.error;
       setItems(itemsRes.data ?? []);
       setDaily(dailyRes.data ?? []);
       setFetchStatus(statusRes.data ?? null);
+      const shaMap = new Map<string, number>();
+      for (const s of submissionsRes.data ?? []) {
+        if (s.sha) shaMap.set(s.sha, s.id);
+      }
+      setSubmissionsBySha(shaMap);
     } catch (e) {
       toaster.error({ title: "Failed to load analytics", description: String(e) });
     } finally {
@@ -204,7 +334,7 @@ export default function SubmissionRepoAnalyticsPage() {
         p_class_id: courseId,
         p_assignment_id: submission.assignment_id,
         p_org: course.github_org,
-        p_repository_id: submission.repository_id
+        p_repository_id: submission.repository_id || undefined
       });
       if (error) {
         if (error.message.includes("Rate limited")) {
@@ -224,7 +354,18 @@ export default function SubmissionRepoAnalyticsPage() {
   };
 
   const handleExportCsv = async () => {
-    const csvHeaders = ["Type", "GitHub ID", "Title", "Author", "Date", "State", "URL"];
+    const csvHeaders = [
+      "Type",
+      "GitHub ID",
+      "Title",
+      "Author",
+      "Date",
+      "State",
+      "Files/Changes",
+      "Labels",
+      "Body Preview",
+      "URL"
+    ];
     const rows = items.map((item) => [
       TYPE_LABELS[item.item_type] || item.item_type,
       item.github_id,
@@ -232,6 +373,9 @@ export default function SubmissionRepoAnalyticsPage() {
       item.author || "",
       item.created_date,
       item.state || "",
+      formatFilesSummary(item.data) || "",
+      (item.data?.labels ?? []).join("; ") || "",
+      item.data?.body_preview || "",
       item.url
     ]);
     const csv =
@@ -332,6 +476,66 @@ export default function SubmissionRepoAnalyticsPage() {
 
           <Tabs.Content value="items">
             <Box pt={4}>
+              {contributionsByUser.size > 0 && (
+                <Box mb={4}>
+                  <Text fontWeight="semibold" mb={2} fontSize="sm">
+                    Contributions by user
+                  </Text>
+                  <Box overflowX="auto">
+                    <Table.Root size="sm">
+                      <Table.Header>
+                        <Table.Row>
+                          <Table.ColumnHeader w="140px">User</Table.ColumnHeader>
+                          <Table.ColumnHeader w="70px" textAlign="right">
+                            Commits
+                          </Table.ColumnHeader>
+                          <Table.ColumnHeader w="70px" textAlign="right">
+                            PRs
+                          </Table.ColumnHeader>
+                          <Table.ColumnHeader w="70px" textAlign="right">
+                            Issues
+                          </Table.ColumnHeader>
+                          <Table.ColumnHeader w="90px" textAlign="right">
+                            Issue cmts
+                          </Table.ColumnHeader>
+                          <Table.ColumnHeader w="90px" textAlign="right">
+                            PR cmts
+                          </Table.ColumnHeader>
+                          <Table.ColumnHeader w="70px" textAlign="right">
+                            Total
+                          </Table.ColumnHeader>
+                        </Table.Row>
+                      </Table.Header>
+                      <Table.Body>
+                        {[...contributionsByUser.entries()]
+                          .sort(([, a], [, b]) => {
+                            const totalA = a.commits + a.prs + a.issues + a.issueComments + a.prReviewComments;
+                            const totalB = b.commits + b.prs + b.issues + b.issueComments + b.prReviewComments;
+                            return totalB - totalA;
+                          })
+                          .map(([authorKey, stats]) => {
+                            const total =
+                              stats.commits + stats.prs + stats.issues + stats.issueComments + stats.prReviewComments;
+                            const bg = authorKey === "—" ? "bg.subtle" : getAuthorColor(authorKey);
+                            return (
+                              <Table.Row key={authorKey} bg={bg}>
+                                <Table.Cell fontWeight="medium">{stats.displayName}</Table.Cell>
+                                <Table.Cell textAlign="right">{stats.commits}</Table.Cell>
+                                <Table.Cell textAlign="right">{stats.prs}</Table.Cell>
+                                <Table.Cell textAlign="right">{stats.issues}</Table.Cell>
+                                <Table.Cell textAlign="right">{stats.issueComments}</Table.Cell>
+                                <Table.Cell textAlign="right">{stats.prReviewComments}</Table.Cell>
+                                <Table.Cell textAlign="right" fontWeight="semibold">
+                                  {total}
+                                </Table.Cell>
+                              </Table.Row>
+                            );
+                          })}
+                      </Table.Body>
+                    </Table.Root>
+                  </Box>
+                </Box>
+              )}
               <HStack gap={2} mb={4} flexWrap="wrap">
                 <Button
                   size="xs"
@@ -383,55 +587,169 @@ export default function SubmissionRepoAnalyticsPage() {
                         </Table.Cell>
                       </Table.Row>
                     ) : (
-                      filteredItems.map((item) => (
-                        <Table.Row key={item.id}>
-                          <Table.Cell>
-                            <HStack>
-                              <Icon as={TYPE_ICONS[item.item_type] || FaGitAlt} />
-                              <Badge colorPalette={TYPE_COLORS[item.item_type] || "gray"} size="sm">
-                                {TYPE_LABELS[item.item_type] || item.item_type}
-                              </Badge>
-                            </HStack>
-                          </Table.Cell>
-                          <Table.Cell>
-                            <Link
-                              href={item.url}
-                              target="_blank"
-                              color="blue.fg"
-                              fontSize="sm"
-                              display="block"
-                              maxW="500px"
-                              overflow="hidden"
-                              textOverflow="ellipsis"
-                              whiteSpace="nowrap"
-                            >
-                              {item.item_type === "commit"
-                                ? `${item.github_id.substring(0, 7)} — ${item.title || "No message"}`
-                                : item.item_type === "pr" || item.item_type === "issue"
-                                  ? `#${item.github_id} — ${item.title || "No title"}`
-                                  : item.title || "View on GitHub"}
-                            </Link>
-                          </Table.Cell>
-                          <Table.Cell>
-                            <Text fontSize="sm">{item.author || "—"}</Text>
-                          </Table.Cell>
-                          <Table.Cell>
-                            <Text fontSize="sm">{item.created_date}</Text>
-                          </Table.Cell>
-                          <Table.Cell>
-                            {item.state && (
-                              <Badge
-                                size="sm"
-                                colorPalette={
-                                  item.state === "open" ? "green" : item.state === "closed" ? "red" : "gray"
-                                }
-                              >
-                                {item.state}
-                              </Badge>
+                      filteredItems.map((item) => {
+                        const rowBg = !item.author ? "bg.subtle" : getAuthorColor(item.author);
+                        const hasFiles =
+                          (item.item_type === "commit" || item.item_type === "pr") && item.data?.files?.length;
+                        const hasIssueData =
+                          item.item_type === "issue" &&
+                          (item.data?.labels?.length || item.data?.body_preview || item.data?.assignees?.length);
+                        const hasExpandable = hasFiles || hasIssueData;
+                        const isExpanded = expandedItems.has(item.id);
+                        return (
+                          <React.Fragment key={item.id}>
+                            <Table.Row bg={rowBg}>
+                              <Table.Cell>
+                                <HStack>
+                                  {hasExpandable && (
+                                    <Box
+                                      as="button"
+                                      onClick={() => toggleExpanded(item.id)}
+                                      cursor="pointer"
+                                      p={0}
+                                      lineHeight={1}
+                                      aria-label={isExpanded ? "Collapse" : "Expand"}
+                                    >
+                                      <Icon
+                                        as={isExpanded ? FaChevronDown : FaChevronRight}
+                                        fontSize="xs"
+                                        color="fg.muted"
+                                      />
+                                    </Box>
+                                  )}
+                                  <Icon as={TYPE_ICONS[item.item_type] || FaGitAlt} />
+                                  <Badge colorPalette={TYPE_COLORS[item.item_type] || "gray"} size="sm">
+                                    {TYPE_LABELS[item.item_type] || item.item_type}
+                                  </Badge>
+                                </HStack>
+                              </Table.Cell>
+                              <Table.Cell>
+                                <VStack align="stretch" gap={1}>
+                                  <HStack gap={2} align="center" flexWrap="nowrap">
+                                    <Link
+                                      href={item.url}
+                                      target="_blank"
+                                      color="blue.fg"
+                                      fontSize="sm"
+                                      display="block"
+                                      maxW="500px"
+                                      overflow="hidden"
+                                      textOverflow="ellipsis"
+                                      whiteSpace="nowrap"
+                                    >
+                                      {item.item_type === "commit"
+                                        ? `${item.github_id.substring(0, 7)} — ${item.title || "No message"}`
+                                        : item.item_type === "pr" || item.item_type === "issue"
+                                          ? `#${item.github_id} — ${item.title || "No title"}`
+                                          : item.title || "View on GitHub"}
+                                    </Link>
+                                    {item.item_type === "commit" && submissionsBySha.has(item.github_id) && (
+                                      <Link
+                                        href={`/course/${courseId}/assignments/${submission.assignment_id}/submissions/${submissionsBySha.get(item.github_id)}`}
+                                        fontSize="xs"
+                                        color="blue.fg"
+                                        whiteSpace="nowrap"
+                                      >
+                                        View submission →
+                                      </Link>
+                                    )}
+                                  </HStack>
+                                  {hasFiles && (
+                                    <Badge size="sm" colorPalette="gray" fontWeight="normal">
+                                      {formatFilesSummary(item.data)}
+                                    </Badge>
+                                  )}
+                                  {item.item_type === "issue" && item.data?.labels?.length ? (
+                                    <HStack gap={1} flexWrap="wrap">
+                                      {item.data.labels.map((l) => (
+                                        <Badge key={l} size="sm" colorPalette="blue">
+                                          {l}
+                                        </Badge>
+                                      ))}
+                                    </HStack>
+                                  ) : null}
+                                  {item.item_type === "issue" && item.data?.assignees?.length ? (
+                                    <Text fontSize="xs" color="fg.muted">
+                                      Assignees: {item.data.assignees.join(", ")}
+                                    </Text>
+                                  ) : null}
+                                </VStack>
+                              </Table.Cell>
+                              <Table.Cell>
+                                <Tooltip
+                                  content={item.author ? `GitHub: @${item.author}` : undefined}
+                                  disabled={!item.author}
+                                >
+                                  <Text fontSize="sm" cursor={item.author ? "help" : undefined}>
+                                    {item.author ? githubToName.get(item.author.toLowerCase()) || item.author : "—"}
+                                  </Text>
+                                </Tooltip>
+                              </Table.Cell>
+                              <Table.Cell>
+                                <Tooltip
+                                  content={new Date(item.created_date + "T00:00:00").toLocaleString(undefined, {
+                                    dateStyle: "full",
+                                    timeStyle: "medium"
+                                  })}
+                                >
+                                  <Text fontSize="sm" cursor="help">
+                                    {item.created_date}
+                                  </Text>
+                                </Tooltip>
+                              </Table.Cell>
+                              <Table.Cell>
+                                {item.state && (
+                                  <Badge
+                                    size="sm"
+                                    colorPalette={
+                                      item.state === "open" ? "green" : item.state === "closed" ? "red" : "gray"
+                                    }
+                                  >
+                                    {item.state}
+                                  </Badge>
+                                )}
+                              </Table.Cell>
+                            </Table.Row>
+                            {hasExpandable && isExpanded && (
+                              <Table.Row key={`${item.id}-detail`} bg={rowBg}>
+                                <Table.Cell colSpan={5} py={2} pl={12}>
+                                  {hasFiles && item.data?.files?.length ? (
+                                    <Box mb={hasIssueData ? 3 : 0}>
+                                      <Text fontSize="xs" fontWeight="semibold" mb={2} color="fg.muted">
+                                        Files changed
+                                      </Text>
+                                      <Box as="ul" listStyleType="none" m={0} p={0} fontSize="xs" fontFamily="mono">
+                                        {item.data.files.map((f, idx) => (
+                                          <Box key={idx} as="li" py={0.5}>
+                                            {f.filename}{" "}
+                                            <Text as="span" color="green.600">
+                                              +{f.additions ?? 0}
+                                            </Text>{" "}
+                                            <Text as="span" color="red.600">
+                                              -{f.deletions ?? 0}
+                                            </Text>
+                                          </Box>
+                                        ))}
+                                      </Box>
+                                    </Box>
+                                  ) : null}
+                                  {hasIssueData && item.data?.body_preview ? (
+                                    <Box>
+                                      <Text fontSize="xs" fontWeight="semibold" mb={2} color="fg.muted">
+                                        Body preview
+                                      </Text>
+                                      <Text fontSize="sm" whiteSpace="pre-wrap" color="fg.muted">
+                                        {item.data.body_preview}
+                                        {item.data.body_preview.length >= 400 ? "…" : ""}
+                                      </Text>
+                                    </Box>
+                                  ) : null}
+                                </Table.Cell>
+                              </Table.Row>
                             )}
-                          </Table.Cell>
-                        </Table.Row>
-                      ))
+                          </React.Fragment>
+                        );
+                      })
                     )}
                   </Table.Body>
                 </Table.Root>

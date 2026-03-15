@@ -1,6 +1,10 @@
 -- Add repository_id to repository_analytics_fetch_status so status is unique per repository
 -- instead of shared across all repos in an assignment.
 
+-- 0. Drop 3-param enqueue function first so it cannot be invoked with old ON CONFLICT (assignment_id)
+--    after we change the unique constraint to (assignment_id, repository_id)
+drop function if exists public.enqueue_repo_analytics_fetch(bigint, bigint, text);
+
 -- 1. Add repository_id column (nullable for migration)
 alter table "public"."repository_analytics_fetch_status"
   add column if not exists "repository_id" bigint;
@@ -55,8 +59,6 @@ create index if not exists "idx_repo_analytics_fetch_status_repository"
 -- 9. Update enqueue RPC to accept optional repository_id and upsert per-repo
 -- p_repository_id null = fetch all (cron), no status update here; worker updates on completion
 -- p_repository_id non-null = manual refresh for one repo, set last_requested_at for rate limiting
--- Drop the 3-parameter overload to avoid ambiguous resolution; only the 4-parameter variant remains
-drop function if exists public.enqueue_repo_analytics_fetch(bigint, bigint, text);
 create or replace function public.enqueue_repo_analytics_fetch(
     p_class_id bigint,
     p_assignment_id bigint,
@@ -69,7 +71,18 @@ as $$
 declare
     message_id bigint;
     last_req timestamptz;
+    v_org text;
 begin
+    -- Resolve org: use p_org if provided, otherwise derive from class
+    v_org := nullif(trim(p_org), '');
+    if v_org is null then
+        select c.github_org into v_org from public.classes c where c.id = p_class_id;
+        v_org := nullif(trim(v_org), '');
+    end if;
+    if v_org is null then
+        raise exception 'Class % has no GitHub org configured; cannot enqueue repo analytics fetch', p_class_id;
+    end if;
+
     -- Enforce caller privileges when called by authenticated user (skip for cron/service role)
     if auth.uid() is not null
         and not (public.authorizeforclassgrader(p_class_id) or public.authorizeforclassinstructor(p_class_id))
@@ -120,7 +133,7 @@ begin
             'class_id', p_class_id,
             'args', jsonb_build_object(
                 'assignment_id', p_assignment_id,
-                'org', p_org,
+                'org', v_org,
                 'repository_id', p_repository_id
             )
         )

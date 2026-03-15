@@ -6089,6 +6089,7 @@ export type Database = {
           author: string | null;
           class_id: number;
           created_date: string;
+          data: Record<string, unknown> | null;
           github_id: string;
           id: number;
           item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
@@ -6103,6 +6104,7 @@ export type Database = {
           author?: string | null;
           class_id: number;
           created_date: string;
+          data?: Record<string, unknown> | null;
           github_id: string;
           id?: number;
           item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
@@ -6117,6 +6119,7 @@ export type Database = {
           author?: string | null;
           class_id?: number;
           created_date?: string;
+          data?: Record<string, unknown> | null;
           github_id?: string;
           id?: number;
           item_type?: Database["public"]["Enums"]["repo_analytics_item_type"];
