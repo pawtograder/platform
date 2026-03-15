@@ -1186,11 +1186,6 @@ export async function processEnvelope(
             .eq("is_github_ready", true);
           if (singleRepoId != null) {
             query.eq("id", singleRepoId);
-            console.log(
-              `[fetch_repo_analytics] Fetching single repo ${singleRepoId} for assignment ${assignment_id}...`
-            );
-          } else {
-            console.log(`[fetch_repo_analytics] Fetching all repos for assignment ${assignment_id}...`);
           }
           const { data: reposData, error: reposError } = await query;
 
@@ -1198,10 +1193,6 @@ export async function processEnvelope(
           repos = reposData ?? [];
           if (repos.length === 0) {
             Sentry.addBreadcrumb({ message: "No repositories found for assignment", level: "info" });
-            console.log(
-              "[fetch_repo_analytics] No repos: skipping fetch_status upsert (schema requires repository_id)"
-            );
-            console.log("[fetch_repo_analytics] Recording metric (status 200, no repos)");
             recordMetric(
               adminSupabase,
               {
@@ -1217,7 +1208,6 @@ export async function processEnvelope(
             return true;
           }
 
-          console.log(`[fetch_repo_analytics] Found ${repos.length} repos, getting Octokit for org ${org}...`);
           const octokit = await github.getOctoKit(org, scope);
           if (!octokit) throw new Error(`No octokit found for org ${org}`);
 
@@ -1242,8 +1232,7 @@ export async function processEnvelope(
           ): Promise<{ repoFullName: string; repoId: number; error?: unknown }> => {
             const repoFullName = repo.repository;
             const [repoOwner, repoName] = repoFullName.split("/");
-            console.log(`[fetch_repo_analytics] Processing repo ${idx + 1}/${repos.length}: ${repoFullName}`);
-
+            const sinceIso = sinceByRepo.get(repo.id) ?? null;
             try {
               const issues = await octokit.paginate("GET /repos/{owner}/{repo}/issues", {
                 owner: repoOwner,
@@ -1364,8 +1353,6 @@ export async function processEnvelope(
                   });
                 }
               } catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                console.warn(`[fetch_repo_analytics] ${repoFullName}: issue comments fetch failed:`, msg);
                 Sentry.addBreadcrumb({
                   message: `Error fetching issue comments for ${repoFullName}: ${e}`,
                   level: "warning"
@@ -1374,7 +1361,6 @@ export async function processEnvelope(
 
               // Fetch PRs (paginated iterator with early exit when PRs are older than sinceIso)
               try {
-                const sinceIso = sinceByRepo.get(repo.id) ?? null;
                 const prsParams = {
                   owner: repoOwner,
                   repo: repoName,
@@ -1406,9 +1392,8 @@ export async function processEnvelope(
                           deletions: f.deletions ?? 0
                         }))
                       };
-                    } catch (e) {
-                      const msg = e instanceof Error ? e.message : String(e);
-                      console.warn(`[fetch_repo_analytics] ${repoFullName}: PR #${pr.number} files fetch failed:`, msg);
+                    } catch {
+                      // Continue without file data
                     }
                     itemUpserts.push({
                       repository_id: repo.id,
@@ -1427,8 +1412,6 @@ export async function processEnvelope(
                   }
                 }
               } catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                console.warn(`[fetch_repo_analytics] ${repoFullName}: PRs fetch failed:`, msg);
                 Sentry.addBreadcrumb({ message: `Error fetching PRs for ${repoFullName}: ${e}`, level: "warning" });
               }
 
@@ -1459,8 +1442,6 @@ export async function processEnvelope(
                   });
                 }
               } catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                console.warn(`[fetch_repo_analytics] ${repoFullName}: PR review comments fetch failed:`, msg);
                 Sentry.addBreadcrumb({
                   message: `Error fetching PR review comments for ${repoFullName}: ${e}`,
                   level: "warning"
@@ -1527,11 +1508,7 @@ export async function processEnvelope(
                       await new Promise((r) => setTimeout(r, 150));
                     }
                   } catch (e) {
-                    const msg = e instanceof Error ? e.message : String(e);
-                    console.warn(
-                      `[fetch_repo_analytics] ${repoFullName}: commit ${commit.sha.substring(0, 7)} files fetch failed:`,
-                      msg
-                    );
+                    // Continue without file data
                   }
 
                   itemUpserts.push({
@@ -1550,16 +1527,32 @@ export async function processEnvelope(
                   });
                 }
               } catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                console.warn(`[fetch_repo_analytics] ${repoFullName}: commits fetch failed:`, msg);
                 Sentry.addBreadcrumb({
                   message: `Error fetching commits for ${repoFullName}: ${e}`,
                   level: "warning"
                 });
               }
 
+              // When using incremental PR fetch (sinceIso), dailyMap.prs_opened only contains new PRs
+              // since last fetch. Merge existing stored prs_opened so we don't overwrite with partial counts.
+              if (sinceIso && dailyMap.size > 0) {
+                const days = Array.from(dailyMap.keys());
+                const { data: existingRows } = await adminSupabase
+                  .from("repository_analytics_daily")
+                  .select("date, prs_opened")
+                  .eq("repository_id", repo.id)
+                  .in("date", days);
+                if (existingRows) {
+                  for (const row of existingRows) {
+                    const day = String(row.date);
+                    const existing = Number(row.prs_opened) || 0;
+                    const entry = dailyMap.get(day);
+                    if (entry) entry.prs_opened += existing;
+                  }
+                }
+              }
+
               // Upsert daily stats
-              const dailyRows = dailyMap.size;
               for (const [day, stats] of dailyMap.entries()) {
                 const { error: dailyErr } = await adminSupabase.from("repository_analytics_daily").upsert(
                   {
@@ -1572,37 +1565,18 @@ export async function processEnvelope(
                   },
                   { onConflict: "repository_id,date" }
                 );
-                if (dailyErr) {
-                  console.error(`[fetch_repo_analytics] daily upsert failed for ${repoFullName} ${day}:`, dailyErr);
-                  throw dailyErr;
-                }
+                if (dailyErr) throw dailyErr;
               }
-              console.log(`[fetch_repo_analytics] ${repoFullName}: upserted ${dailyRows} daily rows`);
 
               // Upsert items in batches of 100
-              const itemBatches = Math.ceil(itemUpserts.length / 100);
               for (let i = 0; i < itemUpserts.length; i += 100) {
                 const batch = itemUpserts.slice(i, i + 100);
                 const { error: itemsErr } = await adminSupabase
                   .from("repository_analytics_items")
                   .upsert(batch, { onConflict: "repository_id,item_type,github_id" });
-                if (itemsErr) {
-                  console.error(
-                    `[fetch_repo_analytics] items upsert failed for ${repoFullName} batch ${i / 100 + 1}:`,
-                    itemsErr
-                  );
-                  throw itemsErr;
-                }
+                if (itemsErr) throw itemsErr;
               }
-              console.log(
-                `[fetch_repo_analytics] ${repoFullName}: upserted ${itemUpserts.length} items in ${itemBatches} batch(es)`
-              );
             } catch (repoError) {
-              const errMsg = repoError instanceof Error ? repoError.message : String(repoError);
-              console.error(`[fetch_repo_analytics] ${repoFullName} FAILED:`, errMsg);
-              if (repoError instanceof Error && repoError.stack) {
-                console.error(`[fetch_repo_analytics] ${repoFullName} stack:`, repoError.stack);
-              }
               Sentry.addBreadcrumb({
                 message: `Error processing repo ${repoFullName}: ${repoError}`,
                 level: "error"
@@ -1619,23 +1593,15 @@ export async function processEnvelope(
           const failedByRepoId = new Map<number, string>();
           for (const s of settled) {
             if (s.status === "rejected") {
-              const errMsg = s.reason instanceof Error ? s.reason.message : String(s.reason);
-              console.error("[fetch_repo_analytics] Repo processing rejected (no repo id):", errMsg);
+              // Rejected promises don't have repo context; error already captured by Sentry if from processRepo
             } else if (s.status === "fulfilled" && s.value.error) {
               const errMsg = s.value.error instanceof Error ? s.value.error.message : String(s.value.error);
               failedByRepoId.set(s.value.repoId, errMsg);
-              console.error(`[fetch_repo_analytics] ${s.value.repoFullName} (id=${s.value.repoId}) error:`, errMsg);
             }
-          }
-          if (failedByRepoId.size > 0) {
-            console.log(
-              `[fetch_repo_analytics] ${failedByRepoId.size}/${repos.length} repo(s) failed — see errors above`
-            );
           }
 
           // Update fetch status (one row per repository; schema unique is assignment_id, repository_id)
           const nowIso = new Date().toISOString();
-          console.log(`[fetch_repo_analytics] Updating fetch_status for ${repos.length} repos...`);
           const fetchStatusRows = repos.map((r) => {
             const failedErr = failedByRepoId.get(r.id);
             return {
@@ -1650,23 +1616,16 @@ export async function processEnvelope(
           const { error: statusErr } = await adminSupabase
             .from("repository_analytics_fetch_status")
             .upsert(fetchStatusRows, { onConflict: "assignment_id,repository_id" });
-          if (statusErr) {
-            console.error("[fetch_repo_analytics] fetch_status upsert failed:", statusErr.message, statusErr);
-            throw statusErr;
-          }
-          const completedCount = repos.length - failedByRepoId.size;
-          console.log(
-            `[fetch_repo_analytics] Updated fetch_status: ${completedCount} completed, ${failedByRepoId.size} error`
-          );
+          if (statusErr) throw statusErr;
         } catch (error) {
           // Update fetch status with error (one row per repository; repos may be undefined if error was before query)
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.error("[fetch_repo_analytics] Error, updating fetch_status:", errMsg);
           const reposForStatus = repos;
           const fetchStatusErrorRows = reposForStatus.map((r) => ({
             assignment_id,
             class_id: classId,
             repository_id: r.id,
+            last_fetched_at: new Date().toISOString(),
             status: "error" as const,
             error_message: errMsg
           }));
@@ -1674,18 +1633,11 @@ export async function processEnvelope(
             const { error: statusErr } = await adminSupabase
               .from("repository_analytics_fetch_status")
               .upsert(fetchStatusErrorRows, { onConflict: "assignment_id,repository_id" });
-            if (statusErr) {
-              console.error("[fetch_repo_analytics] fetch_status error upsert failed:", statusErr);
-            } else {
-              console.log(
-                `[fetch_repo_analytics] Updated fetch_status (error) for ${fetchStatusErrorRows.length} repos`
-              );
-            }
+            // Best-effort; ignore statusErr
           }
           throw error;
         }
 
-        console.log("[fetch_repo_analytics] Recording metric (status 200, success)");
         recordMetric(
           adminSupabase,
           {

@@ -83,8 +83,10 @@ begin
         raise exception 'Class % has no GitHub org configured; cannot enqueue repo analytics fetch', p_class_id;
     end if;
 
-    -- Enforce caller privileges when called by authenticated user (skip for cron/service role)
-    if auth.uid() is not null
+    -- Deny anonymous (anon key with no user); allow service_role (cron) or authenticated grader/instructor
+    if auth.role() = 'anon' then
+        raise exception 'Access denied: authentication required';
+    elsif auth.uid() is not null
         and not (public.authorizeforclassgrader(p_class_id) or public.authorizeforclassinstructor(p_class_id))
     then
         raise exception 'Access denied: insufficient permissions for class %', p_class_id;
@@ -143,3 +145,6 @@ begin
     return message_id;
 end;
 $$;
+
+-- Revoke execute from anon so anonymous callers cannot invoke the function
+revoke execute on function public.enqueue_repo_analytics_fetch(bigint, bigint, text, bigint) from anon;

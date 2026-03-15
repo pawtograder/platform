@@ -92,7 +92,7 @@ BEGIN
             FROM public.assignments a
             JOIN public.classes c ON c.id = a.class_id
             WHERE (a.release_date IS NULL OR a.release_date <= now())
-              AND a.due_date >= (now() - interval '1 day')
+              AND (a.due_date AT TIME ZONE 'UTC')::date >= (now() AT TIME ZONE 'UTC')::date
               AND a.archived_at IS NULL
               AND nullif(trim(c.github_org), '') IS NOT NULL
         LOOP
