@@ -6089,7 +6089,7 @@ export type Database = {
           author: string | null;
           class_id: number;
           created_date: string;
-          data: Record<string, unknown> | null;
+          data: Json | null;
           github_id: string;
           id: number;
           item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
@@ -6104,7 +6104,7 @@ export type Database = {
           author?: string | null;
           class_id: number;
           created_date: string;
-          data?: Record<string, unknown> | null;
+          data?: Json | null;
           github_id: string;
           id?: number;
           item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
@@ -6119,7 +6119,7 @@ export type Database = {
           author?: string | null;
           class_id?: number;
           created_date?: string;
-          data?: Record<string, unknown> | null;
+          data?: Json | null;
           github_id?: string;
           id?: number;
           item_type?: Database["public"]["Enums"]["repo_analytics_item_type"];
@@ -12324,7 +12324,8 @@ export type Database = {
         | "sync_repo_permissions"
         | "archive_repo_and_lock"
         | "rerun_autograder"
-        | "sync_repo_to_handout";
+        | "sync_repo_to_handout"
+        | "fetch_repo_analytics";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_resolution_status: "self_solved" | "staff_helped" | "peer_helped" | "no_time" | "other";
@@ -12523,7 +12524,8 @@ export const Constants = {
         "sync_repo_permissions",
         "archive_repo_and_lock",
         "rerun_autograder",
-        "sync_repo_to_handout"
+        "sync_repo_to_handout",
+        "fetch_repo_analytics"
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],
