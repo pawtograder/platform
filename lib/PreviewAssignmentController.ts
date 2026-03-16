@@ -79,6 +79,7 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
           rubric_criteria_id: crit.id,
           class_id: hydrated.class_id,
           assignment_id: hydrated.assignment_id,
+          kpi_category: check.kpi_category,
           created_at: check.created_at
         });
       }

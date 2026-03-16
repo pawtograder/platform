@@ -5,7 +5,8 @@ export type GitHubAsyncMethod =
   | "sync_repo_permissions"
   | "archive_repo_and_lock"
   | "rerun_autograder"
-  | "sync_repo_to_handout";
+  | "sync_repo_to_handout"
+  | "fetch_repo_analytics";
 
 export type SyncTeamArgs = {
   org: string;
@@ -91,13 +92,20 @@ export type SyncRepoToHandoutArgs = {
   assignment_title: string;
 };
 
+export type FetchRepoAnalyticsArgs = {
+  assignment_id: number;
+  org: string;
+  repository_id?: number | null; // when set, fetch only this repo (manual refresh); when null/absent, fetch all
+};
+
 export type GitHubAsyncArgs =
   | SyncTeamArgs
   | CreateRepoArgs
   | SyncRepoPermissionsArgs
   | ArchiveRepoAndLockArgs
   | RerunAutograderArgs
-  | SyncRepoToHandoutArgs;
+  | SyncRepoToHandoutArgs
+  | FetchRepoAnalyticsArgs;
 
 export type GitHubAsyncEnvelope = {
   method: GitHubAsyncMethod;

@@ -61,46 +61,64 @@ function ensureServiceRoleKeyNotHS256(): void {
 }
 // ensureServiceRoleKeyNotHS256();
 
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 1000): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const isTransient = msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ETIMEDOUT");
+      if (!isTransient || attempt === maxRetries) throw error;
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      console.log(`Transient error (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${msg}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("withRetry: unreachable");
+}
+
 export async function createClass({
   name,
   rateLimitManager
 }: { name?: string; rateLimitManager?: RateLimitManager } = {}) {
-  const className = name ?? `E2E Test Class`;
-  const { data: classDataList, error: classError } = await (
-    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
-  ).trackAndLimit("classes", () =>
-    supabase
-      .from("classes")
-      .insert({
-        name: className,
-        slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
-        github_org: "pawtograder-playground",
-        start_date: addDays(new Date(), -30).toISOString(),
-        end_date: addDays(new Date(), 180).toISOString(),
-        late_tokens_per_student: 10,
-        time_zone: "America/New_York"
-      })
-      .select("*")
-  );
-  if (classError) {
-    throw new Error(`Failed to create class: ${classError.message}`);
-  }
-  const classData = classDataList[0];
-  if (!classData) {
-    throw new Error("Failed to create class");
-  }
-  //Update slug to include class_id
-  const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
-    supabase
-      .from("classes")
-      .update({ slug: `${classData.slug}-${classData.id}` })
-      .eq("id", classData.id)
-      .select("id")
-  );
-  if (classError2) {
-    throw new Error(`Failed to update class slug: ${classError2.message}`);
-  }
-  return classData;
+  return withRetry(async () => {
+    const className = name ?? `E2E Test Class`;
+    const { data: classDataList, error: classError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("classes", () =>
+      supabase
+        .from("classes")
+        .insert({
+          name: className,
+          slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
+          github_org: "pawtograder-playground",
+          start_date: addDays(new Date(), -30).toISOString(),
+          end_date: addDays(new Date(), 180).toISOString(),
+          late_tokens_per_student: 10,
+          time_zone: "America/New_York"
+        })
+        .select("*")
+    );
+    if (classError) {
+      throw new Error(`Failed to create class: ${classError.message}`);
+    }
+    const classData = classDataList[0];
+    if (!classData) {
+      throw new Error("Failed to create class");
+    }
+    //Update slug to include class_id
+    const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
+      supabase
+        .from("classes")
+        .update({ slug: `${classData.slug}-${classData.id}` })
+        .eq("id", classData.id)
+        .select("id")
+    );
+    if (classError2) {
+      throw new Error(`Failed to update class slug: ${classError2.message}`);
+    }
+    return classData;
+  });
 }
 let sectionIdx = 1;
 export async function createClassSection({

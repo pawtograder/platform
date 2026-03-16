@@ -73,12 +73,21 @@ import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
-import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
+import { FaCheckCircle, FaChartLine, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
 import { Tooltip } from "./tooltip";
+
+const KPI_LABELS: Record<string, string> = {
+  commits: "commits",
+  prs_opened: "pull requests",
+  pr_review_comments: "PR review comments",
+  issues_opened: "issues opened",
+  issues_closed: "issues closed",
+  issue_comments: "issue comments"
+};
 
 interface CheckOptionType extends OptionBase {
   value: number;
@@ -843,6 +852,16 @@ export function RubricCheckAnnotation({
           </Link>
         </Box>
       )}
+      {check.kpi_category && submission && (
+        <Link href={`${linkToSubPage(pathname, "repo-analytics")}?kpi_category=${check.kpi_category}`}>
+          <HStack gap={1} mt={1}>
+            <Icon as={FaChartLine} color="blue.fg" boxSize={3} />
+            <Text fontSize="xs" color="blue.fg">
+              View {KPI_LABELS[check.kpi_category] || "analytics"}
+            </Text>
+          </HStack>
+        </Link>
+      )}
       {rubricCheckComments.map((comment) => (
         <RubricCheckComment
           key={comment.id}
@@ -1159,6 +1178,16 @@ export function RubricCheckGlobal({
           </Box>
         </HStack>
       </Field.Root>
+      {check.kpi_category && submission && (
+        <Link href={`${linkToSubPage(pathname, "repo-analytics")}?kpi_category=${check.kpi_category}`}>
+          <HStack gap={1} mt={1}>
+            <Icon as={FaChartLine} color="blue.fg" boxSize={3} />
+            <Text fontSize="xs" color="blue.fg">
+              View {KPI_LABELS[check.kpi_category] || "analytics"}
+            </Text>
+          </HStack>
+        </Link>
+      )}
       {isEditing && (
         <SubmissionCommentForm
           check={check}
