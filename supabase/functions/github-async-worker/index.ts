@@ -1165,6 +1165,23 @@ export async function processEnvelope(
         }
       }
       case "fetch_repo_analytics": {
+        const FETCH_REPO_ANALYTICS_DISABLED = true; // TEMPORARILY DISABLED: set to false to re-enable
+        if (FETCH_REPO_ANALYTICS_DISABLED) {
+          recordMetric(
+            adminSupabase,
+            {
+              method: envelope.method,
+              status_code: 200,
+              class_id: envelope.class_id,
+              debug_id: envelope.debug_id,
+              enqueued_at: meta.enqueued_at,
+              log_id: envelope.log_id
+            },
+            scope
+          );
+          return true;
+        }
+
         const { assignment_id, org, repository_id: singleRepoId } = envelope.args as FetchRepoAnalyticsArgs;
 
         if (envelope.class_id == null) {
