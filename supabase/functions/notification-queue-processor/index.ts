@@ -42,6 +42,7 @@ export type DiscussionThreadNotification = NotificationEnvelope & {
   root_thread_id: number;
   reply_author_profile_id: string;
   teaser: string;
+  message_body?: string;
   thread_name: string;
   reply_author_name: string;
   topic_id?: number;
@@ -319,17 +320,25 @@ function buildEmailContent(
   let emailBody = template.body;
 
   // Replace basic template variables
-  const variables = Object.keys(body);
-  if ("subject" in body) {
-    emailSubject = emailSubject.replaceAll("{subject}", body["subject" as keyof NotificationEnvelope]);
+  // For discussion_thread, ensure message_body has fallback for backwards compat
+  const bodyForReplace = { ...body } as NotificationEnvelope & { message_body?: string };
+  if (body.type === "discussion_thread") {
+    const d = body as DiscussionThreadNotification;
+    bodyForReplace.message_body = d.message_body ?? d.teaser ?? "";
   }
-  if ("body" in body) {
-    emailBody = emailBody.replaceAll("{body}", body["body" as keyof NotificationEnvelope]);
+  const variables = Object.keys(bodyForReplace);
+  if ("subject" in bodyForReplace) {
+    emailSubject = emailSubject.replaceAll("{subject}", bodyForReplace["subject" as keyof NotificationEnvelope]);
+  }
+  if ("body" in bodyForReplace) {
+    emailBody = emailBody.replaceAll("{body}", bodyForReplace["body" as keyof NotificationEnvelope]);
   }
 
   for (const variable of variables) {
-    emailSubject = emailSubject.replaceAll(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
-    emailBody = emailBody.replaceAll(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
+    const val = bodyForReplace[variable as keyof NotificationEnvelope];
+    const strVal = val != null ? String(val) : "";
+    emailSubject = emailSubject.replaceAll(`{${variable}}`, strVal);
+    emailBody = emailBody.replaceAll(`{${variable}}`, strVal);
   }
 
   // Replace course information
@@ -728,6 +737,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         `
         user_id,
         class_id,
+        role,
         class_section_id,
         lab_section_id,
         class_sections(name),
@@ -779,9 +789,12 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     // Create a Set of active user_id+class_id combinations to filter emails
     // This ensures we only send emails to users who have active (non-disabled) roles in the relevant classes
     const activeUserClassSet = new Set<string>();
+    const userRoleMap = new Map<string, string>();
     if (userRoles) {
       for (const role of userRoles) {
-        activeUserClassSet.add(`${role.user_id}|${role.class_id}`);
+        const key = `${role.user_id}|${role.class_id}`;
+        activeUserClassSet.add(key);
+        userRoleMap.set(key, role.role);
       }
     }
 
@@ -1101,6 +1114,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           thread_name: body.thread_name || "Untitled",
           author_name: body.reply_author_name || "Unknown",
           teaser: body.teaser,
+          body: body.message_body ?? body.teaser ?? null,
           thread_url: urls.thread_url,
           topic_id: body.topic_id,
           notification_reason: body.notification_reason,
@@ -1195,6 +1209,31 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
             continue;
           }
 
+          // Defense in depth: filter out digest items for instructors_only threads when recipient is a student
+          const recipientRole = userRoleMap.get(`${user_id}|${class_id}`);
+          let filteredDigestItems = digestItems;
+          if (recipientRole === "student" && digestItems.length > 0) {
+            const threadIds = [...new Set(digestItems.map((it) => it.thread_id))];
+            const { data: threads } = await adminSupabase
+              .schema("public")
+              .from("discussion_threads")
+              .select("id, instructors_only")
+              .in("id", threadIds);
+            const instructorsOnlyThreadIds = new Set(
+              (threads ?? []).filter((t) => t.instructors_only).map((t) => t.id)
+            );
+            filteredDigestItems = digestItems.filter((it) => !instructorsOnlyThreadIds.has(it.thread_id));
+          }
+          if (filteredDigestItems.length === 0) {
+            await adminSupabase
+              .schema("public")
+              .from("discussion_digest_items")
+              .delete()
+              .eq("user_id", user_id)
+              .eq("class_id", class_id);
+            continue;
+          }
+
           // Send the digest
           const recipient = recipientByUserId(user_id, class_id);
           const course = courses?.find((c) => c.id === class_id);
@@ -1203,7 +1242,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           const emailScope: Sentry.Scope =
             typeof baseScope.clone === "function" ? baseScope.clone!() : new Sentry.Scope();
           emailScope.setTag("digest", "discussion_thread");
-          emailScope.setContext("digest_meta", { user_id, class_id, count: digestItems.length });
+          emailScope.setContext("digest_meta", { user_id, class_id, count: filteredDigestItems.length });
 
           if (!recipient || !recipient.email) {
             // Check if we have explicit evidence the user is disabled in this class
@@ -1236,21 +1275,22 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
             continue;
           }
 
-          const subject = `${course?.name || "Course"} - Discussion digest (${digestItems.length})`;
+          const subject = `${course?.name || "Course"} - Discussion digest (${filteredDigestItems.length})`;
           const lines: string[] = [];
-          lines.push(`You have ${digestItems.length} new discussion notification(s) from the past hour.`);
+          lines.push(`You have ${filteredDigestItems.length} new discussion notification(s) from the past hour.`);
           lines.push("");
 
           // Group by notification reason
-          const topicFollows = digestItems.filter((it) => it.notification_reason === "topic_follow");
-          const threadWatches = digestItems.filter((it) => it.notification_reason === "thread_watch");
+          const topicFollows = filteredDigestItems.filter((it) => it.notification_reason === "topic_follow");
+          const threadWatches = filteredDigestItems.filter((it) => it.notification_reason === "thread_watch");
 
           if (topicFollows.length > 0) {
             lines.push(`New posts in topics you follow (${topicFollows.length}):`);
             for (const it of topicFollows) {
-              const teaser = it.teaser ? ` - ${it.teaser}` : "";
+              const bodyContent = it.body || it.teaser || "";
+              const bodyLine = bodyContent ? `\n  ${bodyContent}` : "";
               const urlLine = it.thread_url ? `\n  ${it.thread_url}` : "";
-              lines.push(`- ${it.thread_name} by ${it.author_name}${teaser}${urlLine}`);
+              lines.push(`- ${it.thread_name} by ${it.author_name}${bodyLine}${urlLine}`);
             }
             lines.push("");
           }
@@ -1258,9 +1298,10 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           if (threadWatches.length > 0) {
             lines.push(`Replies to posts you follow (${threadWatches.length}):`);
             for (const it of threadWatches) {
-              const teaser = it.teaser ? ` - ${it.teaser}` : "";
+              const bodyContent = it.body || it.teaser || "";
+              const bodyLine = bodyContent ? `\n  ${bodyContent}` : "";
               const urlLine = it.thread_url ? `\n  ${it.thread_url}` : "";
-              lines.push(`- ${it.thread_name} by ${it.author_name}${teaser}${urlLine}`);
+              lines.push(`- ${it.thread_name} by ${it.author_name}${bodyLine}${urlLine}`);
             }
             lines.push("");
           }

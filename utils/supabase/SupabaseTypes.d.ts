@@ -2107,6 +2107,7 @@ export type Database = {
         Row: {
           action: string | null;
           author_name: string;
+          body: string | null;
           class_id: number;
           created_at: string;
           id: number;
@@ -2122,6 +2123,7 @@ export type Database = {
         Insert: {
           action?: string | null;
           author_name: string;
+          body?: string | null;
           class_id: number;
           created_at?: string;
           id?: number;
@@ -2137,6 +2139,7 @@ export type Database = {
         Update: {
           action?: string | null;
           author_name?: string;
+          body?: string | null;
           class_id?: number;
           created_at?: string;
           id?: number;
