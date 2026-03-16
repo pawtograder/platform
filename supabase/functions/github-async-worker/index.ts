@@ -15,7 +15,12 @@ import type {
 } from "../_shared/GitHubAsyncTypes.ts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as github from "../_shared/GitHubWrapper.ts";
-import { PrimaryRateLimitError, SecondaryRateLimitError, getCreateContentLimiter } from "../_shared/GitHubWrapper.ts";
+import {
+  PrimaryRateLimitError,
+  SecondaryRateLimitError,
+  getCreateContentLimiter,
+  getRepoAnalyticsLimiter
+} from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 // Declare EdgeRuntime for type safety
@@ -1223,8 +1228,9 @@ export async function processEnvelope(
             (fetchStatuses ?? []).map((f) => [f.repository_id, f.last_fetched_at])
           );
 
-          const REPO_CONCURRENCY = 10;
-          const limiter = new Bottleneck({ maxConcurrent: REPO_CONCURRENCY });
+          const REPO_CONCURRENCY = 5;
+          const concurrencyLimiter = new Bottleneck({ maxConcurrent: REPO_CONCURRENCY });
+          const apiRateLimiter = getRepoAnalyticsLimiter(org);
 
           const processRepo = async (
             repo: (typeof repos)[0],
@@ -1234,12 +1240,14 @@ export async function processEnvelope(
             const [repoOwner, repoName] = repoFullName.split("/");
             const sinceIso = sinceByRepo.get(repo.id) ?? null;
             try {
-              const issues = await octokit.paginate("GET /repos/{owner}/{repo}/issues", {
-                owner: repoOwner,
-                repo: repoName,
-                state: "all",
-                per_page: 100
-              });
+              const issues = await apiRateLimiter.schedule(() =>
+                octokit.paginate("GET /repos/{owner}/{repo}/issues", {
+                  owner: repoOwner,
+                  repo: repoName,
+                  state: "all",
+                  per_page: 100
+                })
+              );
 
               const dailyMap = new Map<
                 string,
@@ -1328,11 +1336,13 @@ export async function processEnvelope(
 
               // Fetch issue comments
               try {
-                const issueComments = await octokit.paginate("GET /repos/{owner}/{repo}/issues/comments", {
-                  owner: repoOwner,
-                  repo: repoName,
-                  per_page: 100
-                });
+                const issueComments = await apiRateLimiter.schedule(() =>
+                  octokit.paginate("GET /repos/{owner}/{repo}/issues/comments", {
+                    owner: repoOwner,
+                    repo: repoName,
+                    per_page: 100
+                  })
+                );
                 for (const comment of issueComments) {
                   if (!comment.created_at) continue;
                   const day = ensureDay(comment.created_at);
@@ -1370,7 +1380,9 @@ export async function processEnvelope(
                   direction: "desc" as const
                 };
                 const iterator = octokit.paginate.iterator("GET /repos/{owner}/{repo}/pulls", prsParams);
-                outer: for await (const response of iterator) {
+                let iterResult = await apiRateLimiter.schedule(() => iterator.next());
+                outer: while (!iterResult.done) {
+                  const response = iterResult.value;
                   for (const pr of response.data) {
                     if (sinceIso && new Date(pr.updated_at) <= new Date(sinceIso)) break outer;
                     const createdDay = ensureDay(pr.created_at);
@@ -1379,11 +1391,13 @@ export async function processEnvelope(
                       files: Array<{ filename: string; status?: string; additions: number; deletions: number }>;
                     } | null = null;
                     try {
-                      const filesRes = await octokit.rest.pulls.listFiles({
-                        owner: repoOwner,
-                        repo: repoName,
-                        pull_number: pr.number
-                      });
+                      const filesRes = await apiRateLimiter.schedule(() =>
+                        octokit.rest.pulls.listFiles({
+                          owner: repoOwner,
+                          repo: repoName,
+                          pull_number: pr.number
+                        })
+                      );
                       prData = {
                         files: (filesRes.data ?? []).map((f) => ({
                           filename: f.filename,
@@ -1410,6 +1424,7 @@ export async function processEnvelope(
                       data: prData
                     });
                   }
+                  iterResult = await apiRateLimiter.schedule(() => iterator.next());
                 }
               } catch (e) {
                 Sentry.addBreadcrumb({ message: `Error fetching PRs for ${repoFullName}: ${e}`, level: "warning" });
@@ -1417,11 +1432,13 @@ export async function processEnvelope(
 
               // Fetch PR review comments
               try {
-                const reviewComments = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/comments", {
-                  owner: repoOwner,
-                  repo: repoName,
-                  per_page: 100
-                });
+                const reviewComments = await apiRateLimiter.schedule(() =>
+                  octokit.paginate("GET /repos/{owner}/{repo}/pulls/comments", {
+                    owner: repoOwner,
+                    repo: repoName,
+                    per_page: 100
+                  })
+                );
                 for (const comment of reviewComments) {
                   if (!comment.created_at) continue;
                   const day = ensureDay(comment.created_at);
@@ -1456,18 +1473,22 @@ export async function processEnvelope(
                   day: string;
                 }> = [];
 
-                const branches = await octokit.paginate("GET /repos/{owner}/{repo}/branches", {
-                  owner: repoOwner,
-                  repo: repoName,
-                  per_page: 100
-                });
-                for (const branch of branches) {
-                  const branchCommits = await octokit.paginate("GET /repos/{owner}/{repo}/commits", {
+                const branches = await apiRateLimiter.schedule(() =>
+                  octokit.paginate("GET /repos/{owner}/{repo}/branches", {
                     owner: repoOwner,
                     repo: repoName,
-                    sha: branch.name,
                     per_page: 100
-                  });
+                  })
+                );
+                for (const branch of branches) {
+                  const branchCommits = await apiRateLimiter.schedule(() =>
+                    octokit.paginate("GET /repos/{owner}/{repo}/commits", {
+                      owner: repoOwner,
+                      repo: repoName,
+                      sha: branch.name,
+                      per_page: 100
+                    })
+                  );
                   for (const commit of branchCommits) {
                     if (seenShas.has(commit.sha)) continue;
                     seenShas.add(commit.sha);
@@ -1491,11 +1512,13 @@ export async function processEnvelope(
                     }>;
                   } | null = null;
                   try {
-                    const fullCommit = await octokit.rest.repos.getCommit({
-                      owner: repoOwner,
-                      repo: repoName,
-                      ref: commit.sha
-                    });
+                    const fullCommit = await apiRateLimiter.schedule(() =>
+                      octokit.rest.repos.getCommit({
+                        owner: repoOwner,
+                        repo: repoName,
+                        ref: commit.sha
+                      })
+                    );
                     commitData = {
                       files: (fullCommit.data.files ?? []).map((f) => ({
                         filename: f.filename,
@@ -1588,7 +1611,7 @@ export async function processEnvelope(
           };
 
           const settled = await Promise.allSettled(
-            repos.map((repo, idx) => limiter.schedule(() => processRepo(repo, idx)))
+            repos.map((repo, idx) => concurrencyLimiter.schedule(() => processRepo(repo, idx)))
           );
           const failedByRepoId = new Map<number, string>();
           for (const s of settled) {

@@ -185,6 +185,57 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   return limiter;
 }
 
+const repoAnalyticsLimiters = new Map<string, Bottleneck>();
+/**
+ * Redis-backed rate limiter for fetch_repo_analytics to prevent GitHub API rate limit hits.
+ * Conservative limits (30 req/min) leave headroom for other operations.
+ * @param org GitHub organization
+ * @returns Bottleneck limiter instance
+ */
+export function getRepoAnalyticsLimiter(org: string): Bottleneck {
+  const key = org || "unknown";
+  const existing = repoAnalyticsLimiters.get(key);
+  if (existing) return existing;
+  let limiter: Bottleneck;
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
+  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+  if (upstashUrl && upstashToken) {
+    const host = upstashUrl.replace("https://", "");
+    const password = upstashToken;
+    limiter = new Bottleneck({
+      id: `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 30,
+      reservoirRefreshAmount: 30,
+      reservoirRefreshInterval: 60_000,
+      maxConcurrent: 5,
+      datastore: "ioredis",
+      timeout: 600000, // 10 minutes
+      clearDatastore: false,
+      clientOptions: {
+        host,
+        password,
+        username: "default",
+        tls: {},
+        port: 6379
+      },
+      Redis
+    });
+    limiter.on("error", (err: Error) => console.error(err));
+  } else {
+    console.log("No Upstash URL or token found for repo analytics, using local limiter");
+    Sentry.captureMessage("No Upstash URL or token found for repo analytics, using local limiter");
+    limiter = new Bottleneck({
+      id: `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
+      reservoir: 15,
+      maxConcurrent: 3,
+      reservoirRefreshAmount: 15,
+      reservoirRefreshInterval: 60_000
+    });
+  }
+  repoAnalyticsLimiters.set(key, limiter);
+  return limiter;
+}
+
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GitHubOIDCToken = {
   jti: string;
