@@ -125,12 +125,24 @@ BEGIN
             );
         else
           -- For replies: notify thread watchers (existing behavior)
+          -- For instructors_only threads: only notify staff (instructor, grader), not students
           INSERT INTO notifications (class_id, subject, body, style, user_id)
-          SELECT NEW.class_id, subject, body, style, user_id
+          SELECT NEW.class_id, subject, body, style, discussion_thread_watchers.user_id
           FROM discussion_thread_watchers
           WHERE discussion_thread_root_id = NEW.root
             AND enabled = true
             AND user_id != current_user_id
+            -- For instructors_only threads: only notify staff
+            AND (
+              (NOT COALESCE((SELECT dt.instructors_only FROM discussion_threads dt WHERE dt.id = NEW.root), false))
+              OR EXISTS (
+                SELECT 1 FROM user_roles ur
+                WHERE ur.user_id = discussion_thread_watchers.user_id
+                  AND ur.class_id = NEW.class_id
+                  AND ur.role IN ('instructor', 'grader')
+                  AND ur.disabled = false
+              )
+            )
             -- Check notification preferences - only send if not disabled
             AND NOT EXISTS (
               SELECT 1 FROM notification_preferences np

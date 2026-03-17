@@ -1209,10 +1209,11 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
             continue;
           }
 
-          // Defense in depth: filter out digest items for instructors_only threads when recipient is a student
+          // Defense in depth: filter out digest items for instructors_only threads when recipient is not staff
+          // Mirror DB trigger allowlist: only instructor and grader may see instructors_only threads
           const recipientRole = userRoleMap.get(`${user_id}|${class_id}`);
           let filteredDigestItems = digestItems;
-          if (recipientRole === "student" && digestItems.length > 0) {
+          if (!["instructor", "grader"].includes(recipientRole ?? "") && digestItems.length > 0) {
             const threadIds = [...new Set(digestItems.map((it) => it.thread_id))];
             const { data: threads } = await adminSupabase
               .schema("public")
