@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 See [AGENTS.md](./AGENTS.md) for build/test/lint commands, local Supabase setup, seeding, ports, and known issues. Everything there applies here too.
 
 Additional commands not in AGENTS.md:
+
 ```bash
 npm run client-local          # Regenerate TS types from local Supabase schema
 npm run client                # Regenerate TS types from remote staging schema
@@ -20,6 +21,7 @@ npx playwright test path.spec.ts  # Run a single Playwright test
 ### Supabase Client Patterns
 
 Two typed client factories (both use generated `Database` type from `utils/supabase/SupabaseTypes.d.ts`):
+
 - `utils/supabase/server.ts` — server-side client using Next.js cookies (Server Components, Route Handlers)
 - `utils/supabase/client.ts` — browser client with Realtime worker; also exports `createAdminClient` using service role key (server-only)
 
@@ -30,6 +32,7 @@ Two typed client factories (both use generated `Database` type from `utils/supab
 ### Realtime Controllers (`lib/`)
 
 Stateful classes managing Supabase Realtime subscriptions, consumed by hooks in `hooks/`:
+
 - `ClassRealTimeController` — class-wide updates
 - `OfficeHoursRealTimeController` — help queue
 - `DiscussionThreadRealTimeController` — discussion threads
@@ -39,6 +42,7 @@ Stateful classes managing Supabase Realtime subscriptions, consumed by hooks in 
 ### Frontend Routes (`app/`)
 
 Next.js App Router:
+
 - `(auth-pages)/` — login/signup
 - `course/[course_id]/` — student-facing (assignments, office hours, discussion, gradebook)
 - `course/[course_id]/manage/` — instructor management views
