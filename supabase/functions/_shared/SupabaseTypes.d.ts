@@ -10917,6 +10917,14 @@ export type Database = {
         Args: { p_assignment_id: number };
         Returns: number;
       };
+      copy_groups_from_assignment: {
+        Args: {
+          p_class_id: number;
+          p_source_assignment_id: number;
+          p_target_assignment_id: number;
+        };
+        Returns: Json;
+      };
       create_all_repos_for_assignment:
         | {
             Args: {
@@ -11194,6 +11202,15 @@ export type Database = {
       enqueue_gradebook_row_recalculation_batch: {
         Args: { p_rows: Json[] };
         Returns: undefined;
+      };
+      enqueue_repo_analytics_fetch: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_org: string;
+          p_repository_id?: number;
+        };
+        Returns: number;
       };
       evaluate_error_pin_rule: {
         Args: {
