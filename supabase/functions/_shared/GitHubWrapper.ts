@@ -204,10 +204,10 @@ export function getRepoAnalyticsLimiter(org: string): Bottleneck {
     const password = upstashToken;
     limiter = new Bottleneck({
       id: `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 30,
-      reservoirRefreshAmount: 30,
+      reservoir: 15,
+      reservoirRefreshAmount: 15,
       reservoirRefreshInterval: 60_000,
-      maxConcurrent: 5,
+      maxConcurrent: 2,
       datastore: "ioredis",
       timeout: 600000, // 10 minutes
       clearDatastore: false,
@@ -226,9 +226,9 @@ export function getRepoAnalyticsLimiter(org: string): Bottleneck {
     Sentry.captureMessage("No Upstash URL or token found for repo analytics, using local limiter");
     limiter = new Bottleneck({
       id: `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 15,
-      maxConcurrent: 3,
-      reservoirRefreshAmount: 15,
+      reservoir: 10,
+      maxConcurrent: 2,
+      reservoirRefreshAmount: 10,
       reservoirRefreshInterval: 60_000
     });
   }
