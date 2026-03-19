@@ -226,3 +226,63 @@ export interface FlashcardsCopyParams {
   all?: boolean;
   dry_run?: boolean;
 }
+
+/** One file-level comment row sent to cli_import_submission_comments_batch */
+export interface CliFileCommentRow {
+  submission_id: number;
+  file_name: string;
+  line: number;
+  comment: string;
+  rubric_check_id?: number | null;
+  points?: number | null;
+  author: string;
+}
+
+export interface CliArtifactCommentRow {
+  submission_id: number;
+  artifact_name: string;
+  comment: string;
+  rubric_check_id?: number | null;
+  points?: number | null;
+  author: string;
+}
+
+export interface CliSubmissionCommentRow {
+  submission_id: number;
+  comment: string;
+  rubric_check_id?: number | null;
+  points?: number | null;
+  author: string;
+}
+
+export interface ImportCommentsPayload {
+  file_comments: CliFileCommentRow[];
+  artifact_comments: CliArtifactCommentRow[];
+  submission_comments: CliSubmissionCommentRow[];
+  /** Submissions to include in sync delete scope (e.g. all students in batch file). */
+  sync_submission_ids: number[];
+}
+
+export interface SubmissionsCommentsImportParams {
+  class: string;
+  assignment: string;
+  payload: ImportCommentsPayload;
+  mode: "import" | "sync";
+  dry_run?: boolean;
+}
+
+export interface CliArtifactBlobRow {
+  submission_id: number;
+  name: string;
+  data: { format: string; display: string };
+  /** Base64-encoded file bytes */
+  content_base64: string;
+}
+
+export interface SubmissionsArtifactsImportParams {
+  class: string;
+  assignment: string;
+  artifacts: CliArtifactBlobRow[];
+  overwrite?: boolean;
+  dry_run?: boolean;
+}

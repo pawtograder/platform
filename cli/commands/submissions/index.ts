@@ -1,19 +1,27 @@
 /**
- * Submissions command group (stub)
+ * Submissions command group
  *
  * Usage:
- *   pawtograder submissions list --assignment <identifier> --class <identifier>
- *   pawtograder submissions export --assignment <identifier> --class <identifier>
+ *   pawtograder submissions comments import --file batch-results.json --class <id> --assignment <id> --author-profile-id <uuid>
+ *   pawtograder submissions artifacts import --file manifest.json --class <id> --assignment <id> [--overwrite]
  */
 
 import type { Argv } from "yargs";
 import { logger } from "../../utils/logger";
+import { buildCommentsCommands } from "./comments";
+import { buildArtifactsCommands } from "./artifacts";
 
 export const command = "submissions <action>";
 export const describe = "Manage submissions";
 
 export const builder = (yargs: Argv) => {
   return yargs
+    .command("comments", "Batch import or sync submission comments (file / artifact / submission-level)", (y) =>
+      buildCommentsCommands(y)
+    )
+    .command("artifacts", "Import submission artifact blobs from a manifest", (y) =>
+      buildArtifactsCommands(y).demandCommand(1, "Specify artifacts import")
+    )
     .command(
       "list",
       "List submissions for an assignment (stub)",

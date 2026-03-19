@@ -21,6 +21,9 @@
  *     - assignments.delete
  *     - rubrics.import
  *     - flashcards.copy
+ *     - submissions.comments.import
+ *     - submissions.comments.sync
+ *     - submissions.artifacts.import
  */
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -38,6 +41,7 @@ import "./commands/classes.ts";
 import "./commands/assignments.ts";
 import "./commands/rubrics.ts";
 import "./commands/flashcards.ts";
+import "./commands/submissions.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({

@@ -10782,6 +10782,23 @@ export type Database = {
         };
         Returns: Json;
       };
+      cli_import_submission_comments_batch: {
+        Args: {
+          p_artifact_comments: Json;
+          p_assignment_id: number;
+          p_authors_by_submission?: Json;
+          p_class_id: number;
+          p_default_author?: string;
+          p_dry_run: boolean;
+          p_file_comments: Json;
+          p_mode: string;
+          p_run_sync_only?: boolean;
+          p_skip_sync?: boolean;
+          p_submission_comments: Json;
+          p_sync_submission_ids?: number[];
+        };
+        Returns: Json;
+      };
       create_all_repos_for_assignment:
         | {
             Args: {
