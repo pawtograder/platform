@@ -113,6 +113,7 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.copy_groups_from_assignment(bigint, bigint, bigint) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.copy_groups_from_assignment(bigint, bigint, bigint) TO authenticated;
 
 COMMENT ON FUNCTION public.copy_groups_from_assignment IS
