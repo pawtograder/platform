@@ -5,7 +5,20 @@ ADD COLUMN enable_repo_analytics boolean NOT NULL DEFAULT false;
 COMMENT ON COLUMN public.assignments.enable_repo_analytics IS
   'When true, enables GitHub repository analytics collection and display for this assignment';
 
--- Update enqueue_repo_analytics_fetch to reject requests for assignments without the flag
+-- Low-priority queue for bulk per-repo analytics (worker drains async_calls first)
+DO $$
+BEGIN
+  PERFORM pgmq.create('async_calls_low_priority');
+EXCEPTION
+  WHEN OTHERS THEN
+    NULL;
+END
+$$;
+
+GRANT INSERT, SELECT, DELETE, UPDATE ON TABLE pgmq.q_async_calls_low_priority TO service_role;
+GRANT INSERT, SELECT, DELETE, UPDATE ON TABLE pgmq.a_async_calls_low_priority TO service_role;
+
+-- Update enqueue_repo_analytics_fetch: single-repo -> main queue; bulk -> one message per ready repo on low-priority queue
 CREATE OR REPLACE FUNCTION public.enqueue_repo_analytics_fetch(
     p_class_id bigint,
     p_assignment_id bigint,
@@ -19,6 +32,7 @@ DECLARE
     message_id bigint;
     last_req timestamptz;
     v_org text;
+    v_msgs jsonb[];
 BEGIN
     v_org := nullif(trim(p_org), '');
     IF v_org IS NULL THEN
@@ -70,24 +84,87 @@ BEGIN
             WHERE assignment_id = p_assignment_id AND repository_id = p_repository_id;
             RAISE EXCEPTION 'Rate limited: try again after %', last_req + interval '10 minutes';
         END IF;
+
+        SELECT pgmq_public.send(
+            'async_calls',
+            jsonb_build_object(
+                'method', 'fetch_repo_analytics',
+                'class_id', p_class_id,
+                'args', jsonb_build_object(
+                    'assignment_id', p_assignment_id,
+                    'org', v_org,
+                    'repository_id', p_repository_id
+                )
+            )
+        ) INTO message_id;
+
+        RETURN message_id;
     END IF;
 
-    SELECT pgmq_public.send(
-        'async_calls',
-        jsonb_build_object(
-            'method', 'fetch_repo_analytics',
-            'class_id', p_class_id,
-            'args', jsonb_build_object(
-                'assignment_id', p_assignment_id,
-                'org', v_org,
-                'repository_id', p_repository_id
-            )
-        )
-    ) INTO message_id;
+    -- Bulk: one PGMQ message per GitHub-ready repo on the low-priority queue
+    SELECT COALESCE(
+        array_agg(sub.env ORDER BY sub.rid),
+        ARRAY[]::jsonb[]
+    )
+    INTO v_msgs
+    FROM (
+        SELECT r.id AS rid,
+            jsonb_build_object(
+                'method', 'fetch_repo_analytics',
+                'class_id', p_class_id,
+                'args', jsonb_build_object(
+                    'assignment_id', p_assignment_id,
+                    'org', v_org,
+                    'repository_id', r.id
+                )
+            ) AS env
+        FROM public.repositories r
+        WHERE r.assignment_id = p_assignment_id AND r.is_github_ready = true
+    ) sub;
 
-    RETURN message_id;
+    IF v_msgs IS NULL OR cardinality(v_msgs) = 0 THEN
+        RETURN 0;
+    END IF;
+
+    PERFORM pgmq_public.send_batch(
+        queue_name := 'async_calls_low_priority',
+        messages := v_msgs,
+        sleep_seconds := 0
+    );
+
+    RETURN cardinality(v_msgs)::bigint;
 END;
 $$;
+
+DROP FUNCTION IF EXISTS public.get_async_queue_sizes();
+
+CREATE OR REPLACE FUNCTION public.get_async_queue_sizes()
+RETURNS TABLE (
+    async_queue_size bigint,
+    dlq_queue_size bigint,
+    gradebook_row_recalculate_queue_size bigint,
+    discord_queue_size bigint,
+    discord_dlq_queue_size bigint,
+    async_low_priority_queue_size bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pgmq
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        (SELECT count(*)::bigint FROM pgmq.q_async_calls WHERE vt <= now()) AS async_queue_size,
+        (SELECT count(*)::bigint FROM pgmq.q_async_calls_dlq WHERE vt <= now()) AS dlq_queue_size,
+        (SELECT count(*)::bigint FROM pgmq.q_gradebook_row_recalculate WHERE vt <= now()) AS gradebook_row_recalculate_queue_size,
+        (SELECT count(*)::bigint FROM pgmq.q_discord_async_calls WHERE vt <= now()) AS discord_queue_size,
+        (SELECT count(*)::bigint FROM pgmq.q_discord_async_calls_dlq WHERE vt <= now()) AS discord_dlq_queue_size,
+        (SELECT count(*)::bigint FROM pgmq.q_async_calls_low_priority WHERE vt <= now()) AS async_low_priority_queue_size;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_async_queue_sizes() FROM public;
+GRANT EXECUTE ON FUNCTION public.get_async_queue_sizes() TO service_role;
 
 -- Update check_assignment_deadlines_passed to only enqueue for assignments with the flag
 CREATE OR REPLACE FUNCTION "public"."check_assignment_deadlines_passed"() RETURNS "void"

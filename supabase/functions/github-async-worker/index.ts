@@ -49,10 +49,15 @@ function toMsLatency(enqueuedAt: string): number {
   }
 }
 
-async function archiveMessage(adminSupabase: SupabaseClient<Database>, msgId: number, scope: Sentry.Scope) {
+async function archiveMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msgId: number,
+  scope: Sentry.Scope,
+  queueName: string = "async_calls"
+) {
   try {
     await adminSupabase.schema("pgmq_public").rpc("archive", {
-      queue_name: "async_calls",
+      queue_name: queueName,
       message_id: msgId
     });
   } catch (error) {
@@ -201,14 +206,15 @@ async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   delaySeconds: number,
-  scope: Sentry.Scope
+  scope: Sentry.Scope,
+  queueName: string = "async_calls"
 ) {
   const newEnvelope: GitHubAsyncEnvelope = {
     ...envelope,
     retry_count: (envelope.retry_count ?? 0) + 1
   };
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
-    queue_name: "async_calls",
+    queue_name: queueName,
     message: newEnvelope as unknown as Json,
     sleep_seconds: delaySeconds
   });
@@ -515,9 +521,10 @@ async function checkAndTripErrorCircuitBreaker(
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
-  meta: { msg_id: number; enqueued_at: string },
+  meta: { msg_id: number; enqueued_at: string; queue_name?: string },
   _scope: Sentry.Scope
 ): Promise<boolean> {
+  const queueName = meta.queue_name ?? "async_calls";
   const scope = _scope?.clone();
   scope.setTag("msg_id", String(meta.msg_id));
   scope.setTag("async_api_log_id", envelope.log_id);
@@ -558,7 +565,7 @@ export async function processEnvelope(
             const error = new Error(`Circuit breaker open for org ${org} after ${currentRetryCount} retries`);
             const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
             if (dlqSuccess) {
-              await archiveMessage(adminSupabase, meta.msg_id, scope);
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
             } else {
               console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
               scope.setContext("dlq_archive_skipped", {
@@ -574,8 +581,8 @@ export async function processEnvelope(
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org");
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
       }
@@ -595,7 +602,7 @@ export async function processEnvelope(
             const error = new Error(`Circuit breaker open for ${envelope.method} after ${currentRetryCount} retries`);
             const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
             if (dlqSuccess) {
-              await archiveMessage(adminSupabase, meta.msg_id, scope);
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
             } else {
               console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
               scope.setContext("dlq_archive_skipped", {
@@ -612,8 +619,8 @@ export async function processEnvelope(
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org_method");
           scope.setTag("circuit_method", envelope.method);
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
       }
@@ -1232,7 +1239,7 @@ export async function processEnvelope(
               console.log(
                 `[repo-analytics] Rate limit budget low (${remaining} remaining). Requeuing for later. Reset at ${resetAt.toISOString()}`
               );
-              await requeueWithDelay(adminSupabase, envelope, 300, scope);
+              await requeueWithDelay(adminSupabase, envelope, 300, scope, queueName);
               return false;
             }
           } catch (e) {
@@ -1940,7 +1947,7 @@ export async function processEnvelope(
         if (currentRetryCount >= 5) {
           const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
           if (dlqSuccess) {
-            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           } else {
             console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
             scope.setContext("dlq_archive_skipped", {
@@ -1960,14 +1967,14 @@ export async function processEnvelope(
           : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
 
         // Requeue with computed backoff delay for rate limit
-        await requeueWithDelay(adminSupabase, envelope, delay, scope);
-        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        await requeueWithDelay(adminSupabase, envelope, delay, scope, queueName);
+        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
         return false;
       }
 
@@ -2006,7 +2013,7 @@ export async function processEnvelope(
         if (currentRetryCount >= 5) {
           const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
           if (dlqSuccess) {
-            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           } else {
             console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
             scope.setContext("dlq_archive_skipped", {
@@ -2024,14 +2031,14 @@ export async function processEnvelope(
         const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
 
         // For immediate circuit breaker, requeue with 30-second delay
-        await requeueWithDelay(adminSupabase, envelope, 30, scope); // 30 seconds
-        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName); // 30 seconds
+        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
         return false;
       }
 
@@ -2060,7 +2067,7 @@ export async function processEnvelope(
       if (currentRetryCount >= 5) {
         const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
         if (dlqSuccess) {
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
         } else {
           console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
           scope.setContext("dlq_archive_skipped", {
@@ -2084,8 +2091,8 @@ export async function processEnvelope(
       Sentry.captureException(error, scope);
 
       // Requeue with 2-minute delay and archive the current message
-      await requeueWithDelay(adminSupabase, envelope, 120, scope); // 2 minutes
-      await archiveMessage(adminSupabase, meta.msg_id, scope);
+      await requeueWithDelay(adminSupabase, envelope, 120, scope, queueName); // 2 minutes
+      await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
       return false;
     } catch (e) {
       console.error("error", e);
@@ -2097,7 +2104,7 @@ export async function processEnvelope(
 }
 
 export async function processBatch(adminSupabase: SupabaseClient<Database>, scope: Sentry.Scope) {
-  const result = await adminSupabase.schema("pgmq_public").rpc("read", {
+  let result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "async_calls",
     sleep_seconds: 60,
     n: 4
@@ -2107,7 +2114,24 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
     Sentry.captureException(result.error, scope);
     return false;
   }
-  const messages = (result.data || []) as QueueMessage<GitHubAsyncEnvelope>[];
+
+  let messages = (result.data || []) as QueueMessage<GitHubAsyncEnvelope>[];
+  let queueName: "async_calls" | "async_calls_low_priority" = "async_calls";
+
+  if (messages.length === 0) {
+    result = await adminSupabase.schema("pgmq_public").rpc("read", {
+      queue_name: "async_calls_low_priority",
+      sleep_seconds: 60,
+      n: 4
+    });
+    if (result.error) {
+      Sentry.captureException(result.error, scope);
+      return false;
+    }
+    messages = (result.data || []) as QueueMessage<GitHubAsyncEnvelope>[];
+    queueName = "async_calls_low_priority";
+  }
+
   if (messages.length === 0) return false;
 
   await Promise.allSettled(
@@ -2115,11 +2139,11 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
       const ok = await processEnvelope(
         adminSupabase,
         msg.message,
-        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at },
+        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, queue_name: queueName },
         scope
       );
       if (ok) {
-        await archiveMessage(adminSupabase, msg.msg_id, scope);
+        await archiveMessage(adminSupabase, msg.msg_id, scope, queueName);
       }
     })
   );

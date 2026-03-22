@@ -29,6 +29,7 @@ async function generatePrometheusMetrics(): Promise<Response> {
     }
 
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
+    const asyncLowPriorityQueueCount = queueSizes?.[0]?.async_low_priority_queue_size || 0;
     const dlqQueueCount = queueSizes?.[0]?.dlq_queue_size || 0;
     const gradebookRowRecalculateQueueCount = queueSizes?.[0]?.gradebook_row_recalculate_queue_size || 0;
     const discordQueueCount = queueSizes?.[0]?.discord_queue_size || 0;
@@ -54,6 +55,10 @@ pawtograder_info{version="1.0.0"} 1 ${timestamp}
 # HELP pawtograder_async_queue_size Current number of messages in the github async worker queue
 # TYPE pawtograder_async_queue_size gauge
 pawtograder_async_queue_size ${asyncQueueCount} ${timestamp}
+
+# HELP pawtograder_async_low_priority_queue_size Current number of messages in the github async worker low-priority queue (bulk repo analytics)
+# TYPE pawtograder_async_low_priority_queue_size gauge
+pawtograder_async_low_priority_queue_size ${asyncLowPriorityQueueCount} ${timestamp}
 
 # HELP pawtograder_async_dlq_size Current number of messages in the github async worker dead letter queue
 # TYPE pawtograder_async_dlq_size gauge

@@ -11547,6 +11547,7 @@ export type Database = {
       get_async_queue_sizes: {
         Args: never;
         Returns: {
+          async_low_priority_queue_size: number;
           async_queue_size: number;
           discord_dlq_queue_size: number;
           discord_queue_size: number;
