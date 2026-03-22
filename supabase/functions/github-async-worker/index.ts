@@ -49,24 +49,67 @@ function toMsLatency(enqueuedAt: string): number {
   }
 }
 
+const PGMQ_ARCHIVE_MAX_ATTEMPTS = 3;
+
+/**
+ * Moves a processed message from the active queue to PGMQ archive.
+ * Retries on transient failures. Returns false if the message could still be in the queue (will redeliver after VT).
+ */
 async function archiveMessage(
   adminSupabase: SupabaseClient<Database>,
   msgId: number,
   scope: Sentry.Scope,
   queueName: string = "async_calls"
-) {
-  try {
-    await adminSupabase.schema("pgmq_public").rpc("archive", {
-      queue_name: queueName,
-      message_id: msgId
-    });
-  } catch (error) {
-    scope.setContext("archive_error", {
-      msg_id: msgId,
-      error_message: error instanceof Error ? error.message : String(error)
-    });
-    Sentry.captureException(error, scope);
+): Promise<boolean> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= PGMQ_ARCHIVE_MAX_ATTEMPTS; attempt++) {
+    try {
+      const { error } = await adminSupabase.schema("pgmq_public").rpc("archive", {
+        queue_name: queueName,
+        message_id: msgId
+      });
+
+      if (error) {
+        lastError = error;
+        console.warn(
+          `[pgmq] archive attempt ${attempt}/${PGMQ_ARCHIVE_MAX_ATTEMPTS} failed msg_id=${msgId} queue=${queueName}: ${error.message}`
+        );
+      } else {
+        if (attempt > 1) {
+          console.log(`[pgmq] archived msg_id=${msgId} queue=${queueName} (after ${attempt} attempts)`);
+        } else {
+          console.log(`[pgmq] archived msg_id=${msgId} queue=${queueName}`);
+        }
+        return true;
+      }
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[pgmq] archive attempt ${attempt}/${PGMQ_ARCHIVE_MAX_ATTEMPTS} threw msg_id=${msgId} queue=${queueName}:`,
+        error
+      );
+    }
+
+    if (attempt < PGMQ_ARCHIVE_MAX_ATTEMPTS) {
+      const backoffMs = 150 * Math.pow(3, attempt - 1);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
   }
+
+  const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
+  console.error(
+    `[pgmq] archive FAILED after ${PGMQ_ARCHIVE_MAX_ATTEMPTS} attempts msg_id=${msgId} queue=${queueName}: ${errMsg}`
+  );
+  scope.setContext("archive_error", {
+    msg_id: msgId,
+    queue_name: queueName,
+    attempts: PGMQ_ARCHIVE_MAX_ATTEMPTS,
+    error_message: errMsg
+  });
+  scope.setTag("pgmq_archive_failed", "true");
+  Sentry.captureException(lastError instanceof Error ? lastError : new Error(String(lastError)), scope);
+  return false;
 }
 
 function recordMetric(
@@ -1240,6 +1283,12 @@ export async function processEnvelope(
                 `[repo-analytics] Rate limit budget low (${remaining} remaining). Requeuing for later. Reset at ${resetAt.toISOString()}`
               );
               await requeueWithDelay(adminSupabase, envelope, 300, scope, queueName);
+              const archived = await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+              if (!archived) {
+                console.error(
+                  `[repo-analytics] requeued delayed copy but failed to archive original msg_id=${meta.msg_id} queue=${queueName}`
+                );
+              }
               return false;
             }
           } catch (e) {
@@ -2143,7 +2192,19 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
         scope
       );
       if (ok) {
-        await archiveMessage(adminSupabase, msg.msg_id, scope, queueName);
+        const archived = await archiveMessage(adminSupabase, msg.msg_id, scope, queueName);
+        if (!archived) {
+          console.error(
+            `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
+          );
+          Sentry.captureMessage(
+            "github-async-worker: processed message but failed to archive after retries; expect redelivery",
+            {
+              level: "error",
+              extra: { msg_id: msg.msg_id, queue_name: queueName }
+            }
+          );
+        }
       }
     })
   );
