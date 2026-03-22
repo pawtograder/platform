@@ -2,11 +2,13 @@ import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/Da
 import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
+import { argosScreenshot } from "@argos-ci/playwright";
 import {
   createClass,
   createUsersInClass,
   insertAssignment,
   insertPreBakedSubmission,
+  loginAsUser,
   supabase,
   TestingUser
 } from "./TestingUtils";
@@ -68,6 +70,24 @@ async function getReviewScore(review_id: number) {
   return data;
 }
 
+async function releaseReview(review_id: number) {
+  const { error } = await supabase.from("submission_reviews").update({ released: true }).eq("id", review_id);
+  if (error) throw new Error(`Failed to release review: ${error.message}`);
+}
+
+async function loginAndGoto(page: import("@playwright/test").Page, user: TestingUser, course: Course, url: string) {
+  await loginAsUser(page, user, course);
+  await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
+}
+
+async function releaseSubmission(submission_id: number) {
+  const { error } = await supabase
+    .from("submissions")
+    .update({ released: new Date().toISOString() })
+    .eq("id", submission_id);
+  if (error) throw new Error(`Failed to release submission: ${error.message}`);
+}
+
 async function createGroupSubmission({
   student_profiles,
   assignment,
@@ -124,10 +144,34 @@ test.describe("Manual grading score calculation", () => {
   test.beforeAll(async () => {
     course = await createClass({ name: "Manual Grading Score Test" });
     [instructor, studentA, studentB, studentC] = await createUsersInClass([
-      { name: "Score Instructor", email: "score-instructor@pawtograder.net", role: "instructor", class_id: course.id },
-      { name: "Score Student A", email: "score-student-a@pawtograder.net", role: "student", class_id: course.id },
-      { name: "Score Student B", email: "score-student-b@pawtograder.net", role: "student", class_id: course.id },
-      { name: "Score Student C", email: "score-student-c@pawtograder.net", role: "student", class_id: course.id }
+      {
+        name: "Score Instructor",
+        email: "score-instructor@pawtograder.net",
+        role: "instructor",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Score Student A",
+        email: "score-student-a@pawtograder.net",
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Score Student B",
+        email: "score-student-b@pawtograder.net",
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Score Student C",
+        email: "score-student-c@pawtograder.net",
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      }
     ]);
   });
 
@@ -203,6 +247,22 @@ test.describe("Manual grading score calculation", () => {
       const review = await getReviewScore(reviewId);
       expect(review.individual_scores).toBeNull();
     });
+
+    test("student sees their individual score after release", async ({ page }) => {
+      await releaseSubmission(submissionId);
+      await releaseReview(reviewId);
+
+      await loginAndGoto(
+        page,
+        studentA,
+        course,
+        `/course/${course.id}/assignments/${assignment.id}/submissions/${submissionId}/files`
+      );
+
+      const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
+      await expect(scoreHeading).toBeVisible({ timeout: 15000 });
+      await argosScreenshot(page, "Individual grading - student view with score");
+    });
   });
 
   // ──────────────── Group assignment grading (shared) ────────────────
@@ -262,6 +322,22 @@ test.describe("Manual grading score calculation", () => {
     test("group submissions without individual grading have null individual_scores", async () => {
       const review = await getReviewScore(reviewId);
       expect(review.individual_scores).toBeNull();
+    });
+
+    test("group student sees shared score after release", async ({ page }) => {
+      await releaseSubmission(submissionId);
+      await releaseReview(reviewId);
+
+      await loginAndGoto(
+        page,
+        studentA,
+        course,
+        `/course/${course.id}/assignments/${assignment.id}/submissions/${submissionId}/files`
+      );
+
+      const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
+      await expect(scoreHeading).toBeVisible({ timeout: 15000 });
+      await argosScreenshot(page, "Group grading shared - student view with score");
     });
   });
 
@@ -441,6 +517,43 @@ test.describe("Manual grading score calculation", () => {
       const scores = review.individual_scores as Record<string, number>;
       expect(scores[studentA.private_profile_id]).toBe(30);
       expect(scores[studentC.private_profile_id]).toBe(10);
+    });
+
+    test("student sees their own individual score after release", async ({ page }) => {
+      await releaseSubmission(submissionId);
+      await releaseReview(reviewId);
+
+      await loginAndGoto(
+        page,
+        studentA,
+        course,
+        `/course/${course.id}/assignments/${assignment.id}/submissions/${submissionId}/files`
+      );
+
+      const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
+      await expect(scoreHeading).toBeVisible({ timeout: 15000 });
+
+      await expect(page.getByText("Individual Scores")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("(You)")).toBeVisible();
+      await argosScreenshot(page, "Group individual grading - student view with individual score");
+    });
+
+    test("instructor sees all individual scores", async ({ page }) => {
+      await loginAndGoto(
+        page,
+        instructor,
+        course,
+        `/course/${course.id}/assignments/${assignment.id}/submissions/${submissionId}/files`
+      );
+
+      const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
+      await expect(scoreHeading).toBeVisible({ timeout: 15000 });
+
+      await expect(page.getByText("Individual Scores")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("Score Student A")).toBeVisible();
+      await expect(page.getByText("Score Student B")).toBeVisible();
+      await expect(page.getByText("Score Student C")).toBeVisible();
+      await argosScreenshot(page, "Group individual grading - instructor view with all scores");
     });
 
     test("removing individual grading comments clears individual_scores", async () => {
