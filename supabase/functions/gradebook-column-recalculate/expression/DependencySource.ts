@@ -343,25 +343,16 @@ class AssignmentsDependencySource extends DependencySourceBase {
           publicByRound[round] = score === null ? undefined : (score as number);
         }
       }
-      // Merge per-student individual score into existing round total (add, don't overwrite)
+      // When individual_scores exists for this student, use the student-specific
+      // score instead of the group-wide total_score (which includes all students'
+      // individual-grading contributions).
       if (row.individual_scores && row.student_private_profile_id in row.individual_scores) {
         const raw = row.individual_scores[row.student_private_profile_id];
         const studentScore = raw !== undefined && raw !== null ? Number(raw) : NaN;
         if (!Number.isNaN(studentScore)) {
-          const existingPrivate = privateByRound["grading-review"];
-          const basePrivate =
-            existingPrivate !== undefined && existingPrivate !== null && !Number.isNaN(Number(existingPrivate))
-              ? Number(existingPrivate)
-              : 0;
-          privateByRound["grading-review"] = basePrivate + studentScore;
-
+          privateByRound["grading-review"] = studentScore;
           if (publicByRound["grading-review"] !== undefined) {
-            const existingPublic = publicByRound["grading-review"];
-            const basePublic =
-              existingPublic !== undefined && existingPublic !== null && !Number.isNaN(Number(existingPublic))
-                ? Number(existingPublic)
-                : 0;
-            publicByRound["grading-review"] = basePublic + studentScore;
+            publicByRound["grading-review"] = studentScore;
           }
         }
       }

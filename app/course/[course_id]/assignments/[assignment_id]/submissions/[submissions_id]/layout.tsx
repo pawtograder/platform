@@ -1279,21 +1279,23 @@ function UnGradedGradingSummary() {
   );
 }
 
-function IndividualScoresDisplay({
-  individualScores,
-  totalPoints
-}: {
-  individualScores: IndividualScores;
-  totalPoints: number | null;
-}) {
+function isIndividualScores(value: unknown): value is IndividualScores {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(
+    (v) => typeof v === "number" || v === undefined || v === null
+  );
+}
+
+function IndividualScoresDisplay({ individualScores }: { individualScores: IndividualScores }) {
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const entries = Object.entries(individualScores).filter((entry): entry is [string, number] => entry[1] !== undefined);
   if (entries.length === 0) return null;
 
   const myEntry = entries.find(([profileId]) => profileId === private_profile_id);
-  const otherEntries = entries.filter(([profileId]) => profileId !== private_profile_id);
-  const sortedEntries = isGraderOrInstructor ? entries : [...(myEntry ? [myEntry] : []), ...otherEntries];
+  const sortedEntries = isGraderOrInstructor ? entries : myEntry ? [myEntry] : [];
+
+  if (sortedEntries.length === 0) return null;
 
   return (
     <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
@@ -1315,7 +1317,6 @@ function IndividualScoresDisplay({
               </HStack>
               <Text fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
                 {score}
-                {totalPoints !== null ? `/${totalPoints}` : ""}
               </Text>
             </HStack>
           );
@@ -1402,11 +1403,8 @@ function RubricView() {
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
-        {gradingReview?.individual_scores && (
-          <IndividualScoresDisplay
-            individualScores={gradingReview.individual_scores as unknown as IndividualScores}
-            totalPoints={assignment.total_points}
-          />
+        {gradingReview?.individual_scores && isIndividualScores(gradingReview.individual_scores) && (
+          <IndividualScoresDisplay individualScores={gradingReview.individual_scores} />
         )}
         <SubmissionReviewScoreTweak />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
