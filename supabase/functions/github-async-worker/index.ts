@@ -13,14 +13,8 @@ import type {
   SyncRepoToHandoutArgs,
   SyncTeamArgs
 } from "../_shared/GitHubAsyncTypes.ts";
-import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as github from "../_shared/GitHubWrapper.ts";
-import {
-  PrimaryRateLimitError,
-  SecondaryRateLimitError,
-  getCreateContentLimiter,
-  getRepoAnalyticsLimiter
-} from "../_shared/GitHubWrapper.ts";
+import { PrimaryRateLimitError, SecondaryRateLimitError, getCreateContentLimiter } from "../_shared/GitHubWrapper.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepositoryToHandout, getFirstCommit } from "../_shared/GitHubSyncHelpers.ts";
 // Declare EdgeRuntime for type safety
@@ -1266,10 +1260,7 @@ export async function processEnvelope(
           const octokit = await github.getOctoKit(org, scope);
           if (!octokit) throw new Error(`No octokit found for org ${org}`);
 
-          console.log(
-            `[repo-analytics] Starting: assignment ${assignment_id}, org ${org}, ${repos.length} repo(s)` +
-              (Deno.env.get("DEBUG_REPO_ANALYTICS_SKIP_LIMITER") ? " (rate limiter bypassed)" : "")
-          );
+          console.log(`[repo-analytics] Starting: assignment ${assignment_id}, org ${org}, ${repos.length} repo(s)`);
 
           // Fix 7: Rate limit budget check before starting analytics
           const RATE_LIMIT_BUDGET_THRESHOLD = 1000;
@@ -1309,9 +1300,6 @@ export async function processEnvelope(
           const sinceByRepo = new Map<number, string | null>(
             (fetchStatuses ?? []).map((f) => [f.repository_id, f.last_fetched_at])
           );
-
-          const skipLimiter = !!Deno.env.get("DEBUG_REPO_ANALYTICS_SKIP_LIMITER");
-          const apiRateLimiter = getRepoAnalyticsLimiter(org);
 
           // Fix 0: Per-repo API call counter for audit logging
           class ApiCallCounter {
@@ -1361,7 +1349,7 @@ export async function processEnvelope(
               `[repo-analytics] Processing ${repoFullName}${sinceIso ? ` (incremental since ${sinceIso})` : " (full fetch)"}`
             );
             try {
-              // Fix 5: Use paginate.iterator + per-page schedule for accurate rate limiting
+              // Fix 5: Use paginate.iterator (GitHub throttling via Octokit plugin handles rate limits)
               // Fix 1: Add since param for incremental fetching
               const issuesParams: Record<string, unknown> = {
                 owner: repoOwner,
@@ -1374,14 +1362,12 @@ export async function processEnvelope(
                 .iterator("GET /repos/{owner}/{repo}/issues", issuesParams)
                 [Symbol.asyncIterator]();
               const issues: Awaited<ReturnType<typeof octokit.rest.issues.listForRepo>>["data"] = [];
-              const wrapWithLimiter = <T>(fn: () => Promise<T>): Promise<T> =>
-                skipLimiter ? fn() : apiRateLimiter.schedule(fn);
               console.log(`[repo-analytics] ${repoFullName}: fetching issues...`);
-              let iterResult = await wrapWithLimiter(() => issuesIterator.next());
+              let iterResult = await issuesIterator.next();
               while (!iterResult.done) {
                 counter.increment("issues_pages");
                 issues.push(...iterResult.value.data);
-                iterResult = await wrapWithLimiter(() => issuesIterator.next());
+                iterResult = await issuesIterator.next();
               }
               console.log(
                 `[repo-analytics] ${repoFullName}: issues done (${issues.length} items, ${counter.total} API calls so far)`
@@ -1483,7 +1469,7 @@ export async function processEnvelope(
                 const issueCommentsIterator = octokit.paginate
                   .iterator("GET /repos/{owner}/{repo}/issues/comments", issueCommentsParams)
                   [Symbol.asyncIterator]();
-                let issueCommentsIter = await wrapWithLimiter(() => issueCommentsIterator.next());
+                let issueCommentsIter = await issueCommentsIterator.next();
                 while (!issueCommentsIter.done) {
                   counter.increment("issue_comments_pages");
                   for (const comment of issueCommentsIter.value.data) {
@@ -1505,7 +1491,7 @@ export async function processEnvelope(
                       updated_at: now
                     });
                   }
-                  issueCommentsIter = await wrapWithLimiter(() => issueCommentsIterator.next());
+                  issueCommentsIter = await issueCommentsIterator.next();
                 }
               } catch (e) {
                 Sentry.addBreadcrumb({
@@ -1535,7 +1521,7 @@ export async function processEnvelope(
                 const iterator = octokit.paginate
                   .iterator("GET /repos/{owner}/{repo}/pulls", prsParams)
                   [Symbol.asyncIterator]();
-                let iterResult = await wrapWithLimiter(() => iterator.next());
+                let iterResult = await iterator.next();
                 outer: while (!iterResult.done) {
                   counter.increment("prs_pages");
                   const response = iterResult.value;
@@ -1551,13 +1537,11 @@ export async function processEnvelope(
                     if (isNewPr) {
                       try {
                         counter.increment("pr_files");
-                        const filesRes = await wrapWithLimiter(() =>
-                          octokit.rest.pulls.listFiles({
-                            owner: repoOwner,
-                            repo: repoName,
-                            pull_number: pr.number
-                          })
-                        );
+                        const filesRes = await octokit.rest.pulls.listFiles({
+                          owner: repoOwner,
+                          repo: repoName,
+                          pull_number: pr.number
+                        });
                         prData = {
                           files: (filesRes.data ?? []).map((f) => ({
                             filename: f.filename,
@@ -1585,7 +1569,7 @@ export async function processEnvelope(
                       data: prData
                     });
                   }
-                  iterResult = await wrapWithLimiter(() => iterator.next());
+                  iterResult = await iterator.next();
                 }
               } catch (e) {
                 Sentry.addBreadcrumb({ message: `Error fetching PRs for ${repoFullName}: ${e}`, level: "warning" });
@@ -1602,7 +1586,7 @@ export async function processEnvelope(
                 const reviewCommentsIterator = octokit.paginate
                   .iterator("GET /repos/{owner}/{repo}/pulls/comments", reviewCommentsParams)
                   [Symbol.asyncIterator]();
-                let reviewCommentsIter = await wrapWithLimiter(() => reviewCommentsIterator.next());
+                let reviewCommentsIter = await reviewCommentsIterator.next();
                 while (!reviewCommentsIter.done) {
                   counter.increment("pr_review_comments_pages");
                   for (const comment of reviewCommentsIter.value.data) {
@@ -1624,7 +1608,7 @@ export async function processEnvelope(
                       updated_at: now
                     });
                   }
-                  reviewCommentsIter = await wrapWithLimiter(() => reviewCommentsIterator.next());
+                  reviewCommentsIter = await reviewCommentsIterator.next();
                 }
               } catch (e) {
                 Sentry.addBreadcrumb({
@@ -1649,7 +1633,7 @@ export async function processEnvelope(
                   commit: Awaited<ReturnType<typeof octokit.rest.repos.listCommits>>["data"][number];
                   day: string;
                 }> = [];
-                let commitsIter = await wrapWithLimiter(() => commitsIterator.next());
+                let commitsIter = await commitsIterator.next();
                 while (!commitsIter.done) {
                   counter.increment("commits_pages");
                   for (const commit of commitsIter.value.data) {
@@ -1659,7 +1643,7 @@ export async function processEnvelope(
                     dailyMap.get(day)!.commits++;
                     commitsToProcess.push({ commit, day });
                   }
-                  commitsIter = await wrapWithLimiter(() => commitsIterator.next());
+                  commitsIter = await commitsIterator.next();
                 }
 
                 // Fix 3: Only fetch commit details for new commits (not already in DB)
@@ -1685,13 +1669,11 @@ export async function processEnvelope(
                   if (isNewCommit) {
                     try {
                       counter.increment("commit_details");
-                      const fullCommit = await wrapWithLimiter(() =>
-                        octokit.rest.repos.getCommit({
-                          owner: repoOwner,
-                          repo: repoName,
-                          ref: commit.sha
-                        })
-                      );
+                      const fullCommit = await octokit.rest.repos.getCommit({
+                        owner: repoOwner,
+                        repo: repoName,
+                        ref: commit.sha
+                      });
                       commitData = {
                         files: (fullCommit.data.files ?? []).map((f) => ({
                           filename: f.filename,
