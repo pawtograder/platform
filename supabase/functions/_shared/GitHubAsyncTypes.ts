@@ -95,7 +95,10 @@ export type SyncRepoToHandoutArgs = {
 export type FetchRepoAnalyticsArgs = {
   assignment_id: number;
   org: string;
-  repository_id?: number | null; // when set, fetch only this repo (manual refresh); when null/absent, fetch all
+  /** Manual refresh: single repo (main queue). Mutually exclusive with `repository_ids` batch. */
+  repository_id?: number | null;
+  /** Bulk enqueue: fixed batch of repository PKs (e.g. 20 per message from SQL). */
+  repository_ids?: number[] | null;
 };
 
 export type GitHubAsyncArgs =

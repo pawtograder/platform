@@ -5,7 +5,7 @@ ADD COLUMN enable_repo_analytics boolean NOT NULL DEFAULT false;
 COMMENT ON COLUMN public.assignments.enable_repo_analytics IS
   'When true, enables GitHub repository analytics collection and display for this assignment';
 
--- Low-priority queue for bulk per-repo analytics (worker drains async_calls first)
+-- Low-priority queue for bulk repo analytics in batches of 20 repos per message (worker drains async_calls first)
 DO $$
 BEGIN
   PERFORM pgmq.create('async_calls_low_priority');
@@ -18,7 +18,7 @@ $$;
 GRANT INSERT, SELECT, DELETE, UPDATE ON TABLE pgmq.q_async_calls_low_priority TO service_role;
 GRANT INSERT, SELECT, DELETE, UPDATE ON TABLE pgmq.a_async_calls_low_priority TO service_role;
 
--- Update enqueue_repo_analytics_fetch: single-repo -> main queue; bulk -> one message per ready repo on low-priority queue
+-- Update enqueue_repo_analytics_fetch: single-repo -> main queue; bulk -> one low-priority message per 20 GitHub-ready repos
 CREATE OR REPLACE FUNCTION public.enqueue_repo_analytics_fetch(
     p_class_id bigint,
     p_assignment_id bigint,
@@ -101,26 +101,40 @@ BEGIN
         RETURN message_id;
     END IF;
 
-    -- Bulk: one PGMQ message per GitHub-ready repo on the low-priority queue
-    SELECT COALESCE(
-        array_agg(sub.env ORDER BY sub.rid),
-        ARRAY[]::jsonb[]
+    -- Bulk: chunk GitHub-ready repos into batches of 20; one PGMQ message per batch (repository_ids in args)
+    WITH repo_ids AS (
+        SELECT r.id
+        FROM public.repositories r
+        WHERE r.assignment_id = p_assignment_id AND r.is_github_ready = true
+    ),
+    numbered AS (
+        SELECT
+            id,
+            ((row_number() OVER (ORDER BY id)) - 1) / 20 AS batch_no
+        FROM repo_ids
+    ),
+    batches AS (
+        SELECT batch_no, array_agg(id ORDER BY id) AS ids
+        FROM numbered
+        GROUP BY batch_no
     )
-    INTO v_msgs
-    FROM (
-        SELECT r.id AS rid,
+    SELECT COALESCE(
+        array_agg(
             jsonb_build_object(
                 'method', 'fetch_repo_analytics',
                 'class_id', p_class_id,
                 'args', jsonb_build_object(
                     'assignment_id', p_assignment_id,
                     'org', v_org,
-                    'repository_id', r.id
+                    'repository_ids', to_jsonb(ids)
                 )
-            ) AS env
-        FROM public.repositories r
-        WHERE r.assignment_id = p_assignment_id AND r.is_github_ready = true
-    ) sub;
+            )
+            ORDER BY batch_no
+        ),
+        ARRAY[]::jsonb[]
+    )
+    INTO v_msgs
+    FROM batches;
 
     IF v_msgs IS NULL OR cardinality(v_msgs) = 0 THEN
         RETURN 0;

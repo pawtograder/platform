@@ -1209,7 +1209,12 @@ export async function processEnvelope(
         }
       }
       case "fetch_repo_analytics": {
-        const { assignment_id, org, repository_id: singleRepoId } = envelope.args as FetchRepoAnalyticsArgs;
+        const {
+          assignment_id,
+          org,
+          repository_id: singleRepoId,
+          repository_ids: repositoryIdBatch
+        } = envelope.args as FetchRepoAnalyticsArgs;
 
         if (envelope.class_id == null) {
           throw new Error("fetch_repo_analytics requires class_id in envelope");
@@ -1219,15 +1224,24 @@ export async function processEnvelope(
         scope.setTag("assignment_id", String(assignment_id));
         scope.setTag("org", org);
         if (singleRepoId != null) scope.setTag("repository_id", String(singleRepoId));
+        if (repositoryIdBatch != null && repositoryIdBatch.length > 0) {
+          scope.setTag("repository_batch_size", String(repositoryIdBatch.length));
+        }
 
         Sentry.addBreadcrumb({
-          message: `Fetching repo analytics for assignment ${assignment_id} in org ${org}${singleRepoId != null ? ` (repo ${singleRepoId} only)` : ""}`,
+          message: `Fetching repo analytics for assignment ${assignment_id} in org ${org}${
+            singleRepoId != null
+              ? ` (repo ${singleRepoId} only)`
+              : repositoryIdBatch != null && repositoryIdBatch.length > 0
+                ? ` (batch of ${repositoryIdBatch.length} repos)`
+                : ""
+          }`,
           level: "info"
         });
 
         let repos: { id: number; repository: string; assignment_id: number; class_id: number }[] = [];
         try {
-          // Get repositories: either the single one specified, or all for the assignment
+          // Repos: single (UI), explicit batch (bulk enqueue), or all ready for assignment (legacy)
           const query = adminSupabase
             .from("repositories")
             .select("id, repository, assignment_id, class_id")
@@ -1235,6 +1249,8 @@ export async function processEnvelope(
             .eq("is_github_ready", true);
           if (singleRepoId != null) {
             query.eq("id", singleRepoId);
+          } else if (repositoryIdBatch != null && repositoryIdBatch.length > 0) {
+            query.in("id", repositoryIdBatch);
           }
           const { data: reposData, error: reposError } = await query;
 
@@ -1262,8 +1278,9 @@ export async function processEnvelope(
 
           console.log(`[repo-analytics] Starting: assignment ${assignment_id}, org ${org}, ${repos.length} repo(s)`);
 
-          // Fix 7: Rate limit budget check before starting analytics
-          const RATE_LIMIT_BUDGET_THRESHOLD = 1000;
+          // Fix 7: Rate limit budget — if too low, requeue whole job (bulk or single-repo) to avoid partial runs
+          const RATE_LIMIT_BUDGET_THRESHOLD = 10_000;
+          const RATE_LIMIT_REQUEUE_DELAY_SECONDS = 1800; // 30 minutes
           try {
             const { data: rateLimit } = await octokit.request("GET /rate_limit");
             const remaining = rateLimit.resources.core.remaining;
@@ -1271,9 +1288,9 @@ export async function processEnvelope(
             if (remaining < RATE_LIMIT_BUDGET_THRESHOLD) {
               const resetAt = new Date(rateLimit.resources.core.reset * 1000);
               console.log(
-                `[repo-analytics] Rate limit budget low (${remaining} remaining). Requeuing for later. Reset at ${resetAt.toISOString()}`
+                `[repo-analytics] Rate limit below ${RATE_LIMIT_BUDGET_THRESHOLD} (${remaining} remaining). Requeuing in ${RATE_LIMIT_REQUEUE_DELAY_SECONDS}s. Core reset at ${resetAt.toISOString()}`
               );
-              await requeueWithDelay(adminSupabase, envelope, 300, scope, queueName);
+              await requeueWithDelay(adminSupabase, envelope, RATE_LIMIT_REQUEUE_DELAY_SECONDS, scope, queueName);
               const archived = await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
               if (!archived) {
                 console.error(
