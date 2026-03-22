@@ -5,7 +5,7 @@ alter table "public"."rubric_parts" add column "is_individual_grading" boolean n
 
 alter table "public"."submission_reviews" add column "individual_scores" jsonb;
 
--- Per-student scope on comment tables so individual-grading checks can be attributed to a student
+-- Per-student scope on comment tables
 alter table "public"."submission_comments" add column "target_student_profile_id" uuid;
 alter table "public"."submission_comments" add constraint "submission_comments_target_student_profile_id_fkey"
   FOREIGN KEY (target_student_profile_id) REFERENCES profiles(id) not valid;
@@ -21,79 +21,121 @@ alter table "public"."submission_artifact_comments" add constraint "submission_a
   FOREIGN KEY (target_student_profile_id) REFERENCES profiles(id) not valid;
 alter table "public"."submission_artifact_comments" validate constraint "submission_artifact_comments_target_student_profile_id_fkey";
 
--- Trigger: compute total_score (including artifact comments) and individual_scores
+-- Extend submissionreviewrecompute to also compute individual_scores.
+-- Preserves ALL existing logic (advisory lock, is_deduction_only, score capping, autograde, tweak).
 CREATE OR REPLACE FUNCTION public.submissionreviewrecompute()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
-AS $function$
-declare
-  calculated_score int;
-  individual_scores_result jsonb;
+AS $function$declare
+  calculated_score numeric;
+  calculated_autograde_score numeric;
   the_submission submissions%ROWTYPE;
   existing_submission_review_id int8;
+  v_submission_id bigint;
+  is_grading_review boolean;
+  should_cap boolean;
+  assignment_total_points numeric;
+  current_tweak numeric;
+  individual_scores_result jsonb;
 begin
+  calculated_score=0;
+  calculated_autograde_score=0;
+  
   IF pg_trigger_depth() > 1 THEN
     RETURN NEW;
   END IF;
-
-  if 'rubric_check_id' = any(select jsonb_object_keys(to_jsonb(new))) then
-    if  NEW.rubric_check_id is null and (OLD is null OR OLD.rubric_check_id is null) then
+  
+  if 'rubric_check_id' = any(select jsonb_object_keys(to_jsonb(new))) then 
+    if  NEW.rubric_check_id is null and (OLD is null OR OLD.rubric_check_id is null) then 
      return NEW;
     end if;
   end if;
 
-  if 'submission_review_id' = any(select jsonb_object_keys(to_jsonb(new))) then
+  if 'submission_review_id' = any(select jsonb_object_keys(to_jsonb(new))) then 
     if NEW.submission_review_id is null then
       return NEW;
     end if;
     existing_submission_review_id = NEW.submission_review_id;
   else
-    select * into the_submission from public.submissions where id=NEW.submission_id;
-    if the_submission.submission_review_id is null then
-      INSERT INTO submission_reviews (total_score,tweak, class_id, submission_id, name) VALUES(0,0, the_submission.class_id, the_submission.id, 'Grading') RETURNING id into existing_submission_review_id;
-      UPDATE public.submissions set submission_review_id=existing_submission_review_id where id=the_submission.id;
-    else
-      existing_submission_review_id = the_submission.submission_review_id;
-    end if;
+    select grading_review_id into existing_submission_review_id from public.submissions where id=NEW.submission_id;
   end if;
 
-  -- total_score: file comments + submission comments + artifact comments + autograder
-  select sum(score) into calculated_score from (
-    select c.id, c.name,
-      case when c.is_additive then LEAST(sum(sfc.points),c.total_points)
-           else GREATEST(c.total_points - sum(sfc.points), 0) end as score
-    from public.submission_file_comments sfc
-    inner join public.rubric_checks ch on ch.id=sfc.rubric_check_id
-    inner join public.rubric_criteria c on c.id=ch.rubric_criteria_id
-    where sfc.submission_review_id=existing_submission_review_id and sfc.deleted_at is null group by c.id
+  IF existing_submission_review_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  
+  SELECT submission_id INTO v_submission_id
+  FROM submission_reviews
+  WHERE id = existing_submission_review_id;
+  
+  IF v_submission_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  
+  perform pg_advisory_xact_lock(existing_submission_review_id);
 
-    union
-    select -1 as id, 'autograder' as name, r.score from grader_results r where r.submission_id=NEW.submission_id
+  select EXISTS(select 1 from submissions where grading_review_id = existing_submission_review_id) into is_grading_review;
 
-    union
-    select c.id, c.name,
-      case when c.is_additive then LEAST(sum(sfc.points),c.total_points)
-           else GREATEST(c.total_points - sum(sfc.points), 0) end as score
-    from public.submission_comments sfc
-    inner join public.rubric_checks ch on ch.id=sfc.rubric_check_id
-    inner join public.rubric_criteria c on c.id=ch.rubric_criteria_id
-    where sfc.submission_review_id=existing_submission_review_id and sfc.deleted_at is null group by c.id
+  if is_grading_review then
+    select sum(t.score) into calculated_autograde_score from grader_results r 
+      inner join grader_result_tests t on t.grader_result_id=r.id
+      where r.submission_id=v_submission_id
+        and r.rerun_for_submission_id IS NULL
+        and r.autograder_regression_test IS NULL;
+  end if;
 
-    union
-    select c.id, c.name,
-      case when c.is_additive then LEAST(sum(sac.points),c.total_points)
-           else GREATEST(c.total_points - sum(sac.points), 0) end as score
-    from public.submission_artifact_comments sac
-    inner join public.rubric_checks ch on ch.id=sac.rubric_check_id
-    inner join public.rubric_criteria c on c.id=ch.rubric_criteria_id
-    where sac.submission_review_id=existing_submission_review_id and sac.deleted_at is null group by c.id
-  ) as combo;
+select sum(score) into calculated_score from (
+  select c.id,c.name,
+  case
+    when c.is_deduction_only then GREATEST(-COALESCE(sum(comments.points),0), -c.total_points)
+    when c.is_additive then LEAST(COALESCE(sum(comments.points),0),c.total_points)
+    else GREATEST(c.total_points - COALESCE(sum(comments.points),0), 0)
+    end as score
+  from public.submission_reviews sr
+  inner join public.rubric_criteria c on c.rubric_id=sr.rubric_id
+  inner join public.rubric_checks ch on ch.rubric_criteria_id=c.id
+    left join (select sum(sc.points) as points,sc.rubric_check_id from submission_comments sc where sc.submission_review_id=existing_submission_review_id and sc.deleted_at is null and sc.points is not null group by sc.rubric_check_id
+    UNION ALL
+    select sum(sfc.points) as points,sfc.rubric_check_id from submission_file_comments sfc where sfc.submission_review_id=existing_submission_review_id and sfc.deleted_at is null and sfc.points is not null group by sfc.rubric_check_id
+    UNION all
+    select sum(sac.points) as points,sac.rubric_check_id from submission_artifact_comments sac where sac.submission_review_id=existing_submission_review_id and sac.deleted_at is null and sac.points is not null group by sac.rubric_check_id
+    ) as comments on comments.rubric_check_id=ch.id
+  where sr.id=existing_submission_review_id 
+   group by c.id) as combo;
 
-  UPDATE public.submission_reviews SET total_score=calculated_score WHERE id=existing_submission_review_id;
+  if calculated_score is null then
+    calculated_score = 0;
+  end if;
+  if calculated_autograde_score is null then
+    calculated_autograde_score = 0;
+  end if;
 
-  -- individual_scores: aggregate per target_student_profile_id for individual grading parts
-  -- Two-stage: first union raw points, then cap per criteria, then sum per student.
+  SELECT COALESCE(tweak, 0) 
+  INTO current_tweak 
+  FROM submission_reviews 
+  WHERE id = existing_submission_review_id;
+
+  SELECT r.cap_score_to_assignment_points INTO should_cap
+  FROM public.rubrics r
+  INNER JOIN public.submission_reviews sr ON sr.rubric_id = r.id
+  WHERE sr.id = existing_submission_review_id;
+
+  calculated_score = calculated_score + calculated_autograde_score + current_tweak;
+
+  IF should_cap THEN
+    SELECT a.total_points INTO assignment_total_points
+    FROM public.assignments a
+    INNER JOIN public.submissions s ON s.assignment_id = a.id
+    WHERE s.id = v_submission_id;
+    
+    IF assignment_total_points IS NOT NULL THEN
+      calculated_score = LEAST(calculated_score, assignment_total_points);
+    END IF;
+  END IF;
+
+  -- individual_scores: per target_student_profile_id for individual grading parts.
+  -- Two-stage: union raw points, merge per criteria, cap, sum per student.
   WITH raw_points AS (
     SELECT sfc.target_student_profile_id, ch.rubric_criteria_id, sum(sfc.points) as pts
     FROM public.submission_file_comments sfc
@@ -104,9 +146,7 @@ begin
       AND sfc.deleted_at IS NULL AND sfc.target_student_profile_id IS NOT NULL
       AND rp.is_individual_grading = true
     GROUP BY sfc.target_student_profile_id, ch.rubric_criteria_id
-
     UNION ALL
-
     SELECT sc.target_student_profile_id, ch.rubric_criteria_id, sum(sc.points)
     FROM public.submission_comments sc
     INNER JOIN public.rubric_checks ch ON ch.id = sc.rubric_check_id
@@ -116,9 +156,7 @@ begin
       AND sc.deleted_at IS NULL AND sc.target_student_profile_id IS NOT NULL
       AND rp.is_individual_grading = true
     GROUP BY sc.target_student_profile_id, ch.rubric_criteria_id
-
     UNION ALL
-
     SELECT sac.target_student_profile_id, ch.rubric_criteria_id, sum(sac.points)
     FROM public.submission_artifact_comments sac
     INNER JOIN public.rubric_checks ch ON ch.id = sac.rubric_check_id
@@ -135,8 +173,9 @@ begin
   ),
   capped_scores AS (
     SELECT mp.target_student_profile_id,
-      CASE WHEN c.is_additive THEN LEAST(mp.total_pts, c.total_points)
-           ELSE GREATEST(c.total_points - mp.total_pts, 0) END as score
+      CASE WHEN c.is_deduction_only THEN GREATEST(-COALESCE(mp.total_pts, 0), -c.total_points)
+           WHEN c.is_additive THEN LEAST(COALESCE(mp.total_pts, 0), c.total_points)
+           ELSE GREATEST(c.total_points - COALESCE(mp.total_pts, 0), 0) END as score
     FROM merged_points mp
     INNER JOIN public.rubric_criteria c ON c.id = mp.rubric_criteria_id
   ),
@@ -149,12 +188,11 @@ begin
   FROM student_scores;
 
   UPDATE public.submission_reviews
-  SET individual_scores = individual_scores_result
-  WHERE id = existing_submission_review_id;
+  SET total_score=calculated_score, total_autograde_score=calculated_autograde_score, individual_scores=individual_scores_result
+  WHERE id=existing_submission_review_id;
 
   return NEW;
-end;
-$function$;
+end;$function$;
 
 -- View: include individual_scores for gradebook
 DROP VIEW IF EXISTS public.submissions_with_reviews_by_round_for_assignment;
@@ -210,39 +248,23 @@ DROP VIEW IF EXISTS "public"."submissions_with_grades_for_assignment_nice";
 CREATE VIEW "public"."submissions_with_grades_for_assignment_nice" WITH ("security_invoker"='true') AS
  WITH "assignment_students" AS (
          SELECT DISTINCT "ur"."id" AS "user_role_id",
-            "ur"."private_profile_id",
-            "a"."class_id",
-            "a"."id" AS "assignment_id",
-            "a"."due_date",
-            "a"."slug" AS "assignment_slug",
-            "ur"."class_section_id",
-            "ur"."lab_section_id"
+            "ur"."private_profile_id", "a"."class_id", "a"."id" AS "assignment_id",
+            "a"."due_date", "a"."slug" AS "assignment_slug",
+            "ur"."class_section_id", "ur"."lab_section_id"
            FROM ("public"."assignments" "a"
              JOIN "public"."user_roles" "ur" ON ((("ur"."class_id" = "a"."class_id") AND ("ur"."role" = 'student'::"public"."app_role") AND ("ur"."disabled" = false))))
         ), "individual_submissions" AS (
-         SELECT "ast"."user_role_id",
-            "ast"."private_profile_id",
-            "ast"."class_id",
-            "ast"."assignment_id",
-            "s_1"."id" AS "submission_id",
-            NULL::bigint AS "assignment_group_id",
-            "ast"."due_date",
-            "ast"."assignment_slug",
-            "ast"."class_section_id",
-            "ast"."lab_section_id"
+         SELECT "ast"."user_role_id", "ast"."private_profile_id", "ast"."class_id",
+            "ast"."assignment_id", "s_1"."id" AS "submission_id",
+            NULL::bigint AS "assignment_group_id", "ast"."due_date",
+            "ast"."assignment_slug", "ast"."class_section_id", "ast"."lab_section_id"
            FROM ("assignment_students" "ast"
              JOIN "public"."submissions" "s_1" ON ((("s_1"."assignment_id" = "ast"."assignment_id") AND ("s_1"."profile_id" = "ast"."private_profile_id") AND ("s_1"."is_active" = true) AND ("s_1"."assignment_group_id" IS NULL))))
         ), "group_submissions" AS (
-         SELECT "ast"."user_role_id",
-            "ast"."private_profile_id",
-            "ast"."class_id",
-            "ast"."assignment_id",
-            "s_1"."id" AS "submission_id",
-            "agm"."assignment_group_id",
-            "ast"."due_date",
-            "ast"."assignment_slug",
-            "ast"."class_section_id",
-            "ast"."lab_section_id"
+         SELECT "ast"."user_role_id", "ast"."private_profile_id", "ast"."class_id",
+            "ast"."assignment_id", "s_1"."id" AS "submission_id",
+            "agm"."assignment_group_id", "ast"."due_date",
+            "ast"."assignment_slug", "ast"."class_section_id", "ast"."lab_section_id"
            FROM (("assignment_students" "ast"
              JOIN "public"."assignment_groups_members" "agm" ON ((("agm"."assignment_id" = "ast"."assignment_id") AND ("agm"."profile_id" = "ast"."private_profile_id"))))
              JOIN "public"."submissions" "s_1" ON ((("s_1"."assignment_id" = "ast"."assignment_id") AND ("s_1"."assignment_group_id" = "agm"."assignment_group_id") AND ("s_1"."is_active" = true))))
@@ -260,59 +282,34 @@ CREATE VIEW "public"."submissions_with_grades_for_assignment_nice" WITH ("securi
              LEFT JOIN "public"."assignment_groups_members" "ag_1" ON (("ade"."assignment_group_id" = "ag_1"."assignment_group_id")))
           GROUP BY COALESCE("ade"."student_id", "ag_1"."profile_id"), COALESCE("ade"."assignment_group_id", "ag_1"."assignment_group_id"), "ade"."assignment_id"
         ), "submissions_with_extensions" AS (
-         SELECT "asub"."user_role_id",
-            "asub"."private_profile_id",
-            "asub"."class_id",
-            "asub"."assignment_id",
-            "asub"."submission_id",
-            "asub"."assignment_group_id",
-            "asub"."due_date",
-            "asub"."assignment_slug",
+         SELECT "asub"."user_role_id", "asub"."private_profile_id", "asub"."class_id",
+            "asub"."assignment_id", "asub"."submission_id", "asub"."assignment_group_id",
+            "asub"."due_date", "asub"."assignment_slug",
             COALESCE("dde"."tokens_consumed", (0)::bigint) AS "tokens_consumed",
             COALESCE("dde"."hours", (0)::bigint) AS "hours",
-            "asub"."class_section_id",
-            "asub"."lab_section_id"
+            "asub"."class_section_id", "asub"."lab_section_id"
            FROM ("all_submissions" "asub"
              LEFT JOIN "due_date_extensions" "dde" ON ((("dde"."effective_student_id" = "asub"."private_profile_id") AND ("dde"."assignment_id" = "asub"."assignment_id") AND ((("asub"."assignment_group_id" IS NULL) AND ("dde"."effective_assignment_group_id" IS NULL)) OR ("asub"."assignment_group_id" = "dde"."effective_assignment_group_id")))))
         )
- SELECT "swe"."user_role_id" AS "id",
-    "swe"."class_id",
-    "swe"."assignment_id",
-    "p"."id" AS "student_private_profile_id",
-    "p"."name",
-    "p"."sortable_name",
-    "s"."id" AS "activesubmissionid",
-    "s"."ordinal",
-    "s"."created_at",
-    "s"."released",
-    "s"."repository",
-    "s"."sha",
+ SELECT "swe"."user_role_id" AS "id", "swe"."class_id", "swe"."assignment_id",
+    "p"."id" AS "student_private_profile_id", "p"."name", "p"."sortable_name",
+    "s"."id" AS "activesubmissionid", "s"."ordinal", "s"."created_at", "s"."released",
+    "s"."repository", "s"."sha",
     "rev"."total_autograde_score" AS "autograder_score",
-    "rev"."grader",
-    "rev"."meta_grader",
-    "rev"."total_score",
-    "rev"."tweak",
-    "rev"."completed_by",
-    "rev"."completed_at",
-    "rev"."checked_at",
-    "rev"."checked_by",
+    "rev"."grader", "rev"."meta_grader", "rev"."total_score", "rev"."tweak",
+    "rev"."completed_by", "rev"."completed_at", "rev"."checked_at", "rev"."checked_by",
     "rev"."individual_scores",
     "graderprofile"."name" AS "assignedgradername",
     "metagraderprofile"."name" AS "assignedmetagradername",
     "completerprofile"."name" AS "gradername",
     "checkgraderprofile"."name" AS "checkername",
     "ag"."name" AS "groupname",
-    "swe"."tokens_consumed",
-    "swe"."hours",
-    "swe"."due_date",
+    "swe"."tokens_consumed", "swe"."hours", "swe"."due_date",
     ("swe"."due_date" + ('01:00:00'::interval * ("swe"."hours")::double precision)) AS "late_due_date",
-    "ar"."grader_sha",
-    "ar"."grader_action_sha",
-    "swe"."assignment_slug",
-    "swe"."class_section_id",
+    "ar"."grader_sha", "ar"."grader_action_sha",
+    "swe"."assignment_slug", "swe"."class_section_id",
     "cs"."name" AS "class_section_name",
-    "swe"."lab_section_id",
-    "ls"."name" AS "lab_section_name"
+    "swe"."lab_section_id", "ls"."name" AS "lab_section_name"
    FROM ((((((((((("submissions_with_extensions" "swe"
      JOIN "public"."profiles" "p" ON (("p"."id" = "swe"."private_profile_id")))
      JOIN "public"."submissions" "s" ON (("s"."id" = "swe"."submission_id")))
