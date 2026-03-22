@@ -81,6 +81,10 @@ export async function apiCall(command: string, params: Record<string, unknown> =
   }
 
   const start = Date.now();
+  const timeoutMs = Number(process.env.PAWTOGRADER_HTTP_TIMEOUT_MS ?? "0");
+  const controller = timeoutMs > 0 ? new AbortController() : undefined;
+  const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+
   let response: Response;
   try {
     response = await fetch(creds.api_url, {
@@ -89,11 +93,21 @@ export async function apiCall(command: string, params: Record<string, unknown> =
         Authorization: `Bearer ${creds.token}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ command, params })
+      body: JSON.stringify({ command, params }),
+      signal: controller?.signal
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const aborted = err instanceof Error && (err.name === "AbortError" || /aborted|AbortError/i.test(err.message));
+    if (aborted) {
+      throw new CLIError(
+        `Request aborted after ${timeoutMs}ms (PAWTOGRADER_HTTP_TIMEOUT_MS). ` +
+          "Increase the timeout or use a smaller --batch-size for artifact imports."
+      );
+    }
     throw new CLIError(`Failed to connect to API at ${creds.api_url}: ${msg}`);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);

@@ -8,7 +8,7 @@ import * as path from "path";
 import { apiCall } from "../../utils/api";
 import { logger, handleError, CLIError } from "../../utils/logger";
 
-const BATCH = 15;
+const DEFAULT_BATCH = 5;
 
 interface ManifestEntry {
   submission_id: number;
@@ -51,6 +51,11 @@ export function buildArtifactsCommands(yargs: Argv): Argv {
           describe: "Preview counts only",
           type: "boolean",
           default: false
+        })
+        .option("batch-size", {
+          describe: "Artifacts per API request (smaller = smaller payloads, less gateway timeout risk). Default 5.",
+          type: "number",
+          default: DEFAULT_BATCH
         }),
     async (args) => {
       try {
@@ -92,12 +97,31 @@ export function buildArtifactsCommands(yargs: Argv): Argv {
           });
         }
 
-        logger.step(`Importing ${resolved.length} artifact(s) in batches of ${BATCH}…`);
+        const batchSize = Math.max(1, Math.floor(Number(args["batch-size"]) || DEFAULT_BATCH));
+        const totalBatches = Math.ceil(resolved.length / batchSize);
+        logger.step(`Importing ${resolved.length} artifact(s) in ${totalBatches} batch(es) of up to ${batchSize}…`);
+        if (process.env.PAWTOGRADER_HTTP_TIMEOUT_MS === undefined) {
+          logger.info(
+            "Tip: set PAWTOGRADER_HTTP_TIMEOUT_MS=600000 (10 min) if requests time out; use DEBUG=1 to log each HTTP call."
+          );
+        }
         const totals = { uploaded: 0, skipped: 0, overwritten: 0, errors: 0 };
         const allErrors: unknown[] = [];
 
-        for (let i = 0; i < resolved.length; i += BATCH) {
-          const batch = resolved.slice(i, i + BATCH);
+        for (let i = 0; i < resolved.length; i += batchSize) {
+          const batch = resolved.slice(i, i + batchSize);
+          const batchNum = Math.floor(i / batchSize) + 1;
+          const estChars = batch.reduce((n, a) => n + a.content_base64.length, 0);
+          const estMb = estChars / (1024 * 1024);
+          logger.info(
+            `Batch ${batchNum}/${totalBatches}: ${batch.length} artifact(s), ~${estMb.toFixed(2)} MiB base64 payload…`
+          );
+          if (estMb > 5) {
+            logger.warning(
+              "This batch is large; the gateway may reject or time out. Try --batch-size 1 or split the manifest."
+            );
+          }
+          const t0 = Date.now();
           const data = await apiCall("submissions.artifacts.import", {
             class: args.class as string,
             assignment: args.assignment as string,
@@ -105,6 +129,7 @@ export function buildArtifactsCommands(yargs: Argv): Argv {
             overwrite: args.overwrite === true,
             dry_run: args["dry-run"] === true
           });
+          logger.info(`Batch ${batchNum} finished in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
           const s = data.summary;
           if (s) {
             totals.uploaded += Number(s.uploaded ?? 0);

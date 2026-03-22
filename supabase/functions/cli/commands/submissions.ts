@@ -2,6 +2,7 @@
  * CLI submissions — batch comment import/sync (Postgres RPC) and artifact blob import.
  */
 
+import { Buffer } from "node:buffer";
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import type { Json } from "../../_shared/SupabaseTypes.d.ts";
 import { registerCommand } from "../router.ts";
@@ -334,13 +335,16 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
   }
 
   let file_comments = [...(p.raw.file_comments ?? []), ...fileFromLegacy];
-  const artifact_comments = [...(p.raw.artifact_comments ?? [])];
-  const submission_comments = [...(p.raw.submission_comments ?? [])];
+  let artifact_comments = [...(p.raw.artifact_comments ?? [])];
+  let submission_comments = [...(p.raw.submission_comments ?? [])];
 
   const submissionIds = new Set<number>();
   for (const r of file_comments) submissionIds.add(r.submission_id);
   for (const r of artifact_comments) submissionIds.add(r.submission_id);
   for (const r of submission_comments) submissionIds.add(r.submission_id);
+
+  /** Submissions skipped: no review assignee for the chosen rubric part */
+  const skippedNoReviewAssignee = new Set<number>();
 
   if (p.author_profile_id) {
     const aid = p.author_profile_id;
@@ -352,22 +356,23 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
       row.author = aid;
     }
   } else if (p.rubric_part_id != null) {
-    const assignees = await fetchAssigneesForRubricPart(Array.from(submissionIds), p.rubric_part_id);
-    for (const row of file_comments) {
-      const a = assignees.get(row.submission_id);
-      if (!a) throw new CLICommandError(`No review assignee for submission ${row.submission_id}`, 400);
-      row.author = a;
+    const ids = Array.from(submissionIds);
+    const assignees = await fetchAssigneesForRubricPart(ids, p.rubric_part_id);
+
+    for (const sid of ids) {
+      if (!assignees.has(sid)) skippedNoReviewAssignee.add(sid);
     }
-    for (const row of artifact_comments) {
-      const a = assignees.get(row.submission_id);
-      if (!a) throw new CLICommandError(`No review assignee for submission ${row.submission_id}`, 400);
-      row.author = a;
-    }
-    for (const row of submission_comments) {
-      const a = assignees.get(row.submission_id);
-      if (!a) throw new CLICommandError(`No review assignee for submission ${row.submission_id}`, 400);
-      row.author = a;
-    }
+
+    const keep = (sid: number) => !skippedNoReviewAssignee.has(sid);
+    file_comments = file_comments
+      .filter((row) => keep(row.submission_id))
+      .map((row) => ({ ...row, author: assignees.get(row.submission_id)! }));
+    artifact_comments = artifact_comments
+      .filter((row) => keep(row.submission_id))
+      .map((row) => ({ ...row, author: assignees.get(row.submission_id)! }));
+    submission_comments = submission_comments
+      .filter((row) => keep(row.submission_id))
+      .map((row) => ({ ...row, author: assignees.get(row.submission_id)! }));
   }
 
   let sync_submission_ids = p.raw.sync_submission_ids;
@@ -377,6 +382,10 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
     sync_submission_ids = Array.from(submissionIds);
   }
 
+  if (skippedNoReviewAssignee.size > 0 && sync_submission_ids?.length) {
+    sync_submission_ids = sync_submission_ids.filter((id) => !skippedNoReviewAssignee.has(id));
+  }
+
   const payload: ImportCommentsPayload = {
     file_comments,
     artifact_comments,
@@ -384,13 +393,21 @@ async function handleCommentsPrepare(ctx: MCPAuthContext, params: Record<string,
     sync_submission_ids: sync_submission_ids ?? []
   };
 
-  return runCommentsImportOrSync(ctx, {
+  const rpcResult = await runCommentsImportOrSync(ctx, {
     class: p.class,
     assignment: p.assignment,
     payload,
     mode: p.mode,
     dry_run: p.dry_run
   });
+
+  if (rpcResult.success && rpcResult.data && typeof rpcResult.data === "object" && skippedNoReviewAssignee.size > 0) {
+    (rpcResult.data as Record<string, unknown>).skipped_without_review_assignee = Array.from(
+      skippedNoReviewAssignee
+    ).sort((a, b) => a - b);
+  }
+
+  return rpcResult;
 }
 
 async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
@@ -445,16 +462,11 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       continue;
     }
 
-    let bytes: Uint8Array;
-    try {
-      const bin = atob(art.content_base64);
-      bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    } catch {
+    if (typeof art.content_base64 !== "string" || art.content_base64.length === 0) {
       errors.push({
         submission_id: art.submission_id,
         artifact_name: art.name,
-        reason: "invalid_base64"
+        reason: "missing_content_base64"
       });
       continue;
     }
@@ -469,6 +481,18 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
       if (existing && !overwrite) skipped++;
       else if (existing && overwrite) overwritten++;
       else uploaded++;
+      continue;
+    }
+
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(Buffer.from(art.content_base64, "base64"));
+    } catch {
+      errors.push({
+        submission_id: art.submission_id,
+        artifact_name: art.name,
+        reason: "invalid_base64"
+      });
       continue;
     }
 

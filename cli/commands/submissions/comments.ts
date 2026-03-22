@@ -94,6 +94,12 @@ async function runCommentsCommand(args: Record<string, unknown>, mode: "import" 
     });
 
     logger.success("Done");
+    const skippedNoAssignee = data.skipped_without_review_assignee ?? data.skipped_inactive_without_review_assignee;
+    if (Array.isArray(skippedNoAssignee) && skippedNoAssignee.length > 0) {
+      logger.warning(
+        `Skipped comments for ${skippedNoAssignee.length} submission(s) with no review assignee: ${skippedNoAssignee.join(", ")}`
+      );
+    }
     logger.info(JSON.stringify(data.summary, null, 2));
     if (Array.isArray(data.errors) && data.errors.length > 0) {
       logger.warning(`${data.errors.length} error detail row(s); see JSON`);

@@ -1,5 +1,7 @@
 -- CLI batch import/sync for submission comments (file, artifact, submission-level).
 -- One atomic transaction per RPC call. Invoke from edge function using service_role only.
+-- Import is idempotent: skips when an active row already exists with the same
+-- file/artifact/submission scope, comment body, line (file only), and rubric_check_id (all IS NOT DISTINCT FROM).
 
 CREATE OR REPLACE FUNCTION public._cli_resolve_submission_file_id(
   p_submission_id bigint,
@@ -211,26 +213,42 @@ BEGIN
     eff_points = coalesce(
       fc.points,
       (SELECT rc.points FROM rubric_checks rc WHERE rc.id = fc.rubric_check_id LIMIT 1)
-    );
+    )
+  WHERE true;
 
   UPDATE _cli_fc fc
   SET should_insert = (
     fc.err IS NULL
     AND fc.submission_file_id IS NOT NULL
-    AND NOT (
-      fc.rubric_check_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM submission_file_comments sfc
-        WHERE sfc.submission_id = fc.submission_id
-          AND sfc.rubric_check_id = fc.rubric_check_id
-          AND sfc.deleted_at IS NULL
-      )
+    AND NOT EXISTS (
+      SELECT 1 FROM submission_file_comments sfc
+      WHERE sfc.submission_file_id = fc.submission_file_id
+        AND sfc.submission_id = fc.submission_id
+        AND sfc.deleted_at IS NULL
+        AND sfc.line IS NOT DISTINCT FROM fc.line
+        AND sfc.comment IS NOT DISTINCT FROM fc.comment
+        AND sfc.rubric_check_id IS NOT DISTINCT FROM fc.rubric_check_id
     )
-  );
+  )
+  WHERE true;
+
+  -- Within-batch dedupe: same file + line + body + rubric_check (import idempotency)
+  UPDATE _cli_fc fc
+  SET should_insert = false
+  WHERE fc.should_insert
+    AND EXISTS (
+      SELECT 1 FROM _cli_fc fc2
+      WHERE fc2.should_insert
+        AND fc2.submission_file_id = fc.submission_file_id
+        AND fc2.line IS NOT DISTINCT FROM fc.line
+        AND fc2.comment IS NOT DISTINCT FROM fc.comment
+        AND fc2.rubric_check_id IS NOT DISTINCT FROM fc.rubric_check_id
+        AND fc2.ctid < fc.ctid
+    );
 
   SELECT count(*) FILTER (WHERE should_insert) INTO v_file_ins FROM _cli_fc;
   SELECT count(*) FILTER (
-    WHERE err IS NULL AND submission_file_id IS NOT NULL AND NOT should_insert AND rubric_check_id IS NOT NULL
+    WHERE err IS NULL AND submission_file_id IS NOT NULL AND NOT should_insert
   ) INTO v_file_skip FROM _cli_fc;
   SELECT count(*) FILTER (
     WHERE err IS NOT NULL OR (err IS NULL AND submission_file_id IS NULL)
@@ -346,27 +364,39 @@ BEGIN
     eff_points = coalesce(
       ac.points,
       (SELECT rc.points FROM rubric_checks rc WHERE rc.id = ac.rubric_check_id LIMIT 1)
-    );
+    )
+  WHERE true;
 
   UPDATE _cli_ac ac
   SET should_insert = (
     ac.err IS NULL
     AND ac.submission_artifact_id IS NOT NULL
-    AND NOT (
-      ac.rubric_check_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM submission_artifact_comments sac
-        WHERE sac.submission_id = ac.submission_id
-          AND sac.rubric_check_id = ac.rubric_check_id
-          AND sac.submission_artifact_id = ac.submission_artifact_id
-          AND sac.deleted_at IS NULL
-      )
+    AND NOT EXISTS (
+      SELECT 1 FROM submission_artifact_comments sac
+      WHERE sac.submission_artifact_id = ac.submission_artifact_id
+        AND sac.submission_id = ac.submission_id
+        AND sac.deleted_at IS NULL
+        AND sac.comment IS NOT DISTINCT FROM ac.comment
+        AND sac.rubric_check_id IS NOT DISTINCT FROM ac.rubric_check_id
     )
-  );
+  )
+  WHERE true;
+
+  UPDATE _cli_ac ac
+  SET should_insert = false
+  WHERE ac.should_insert
+    AND EXISTS (
+      SELECT 1 FROM _cli_ac ac2
+      WHERE ac2.should_insert
+        AND ac2.submission_artifact_id = ac.submission_artifact_id
+        AND ac2.comment IS NOT DISTINCT FROM ac.comment
+        AND ac2.rubric_check_id IS NOT DISTINCT FROM ac.rubric_check_id
+        AND ac2.ctid < ac.ctid
+    );
 
   SELECT count(*) FILTER (WHERE should_insert) INTO v_art_ins FROM _cli_ac;
   SELECT count(*) FILTER (
-    WHERE err IS NULL AND submission_artifact_id IS NOT NULL AND NOT should_insert AND rubric_check_id IS NOT NULL
+    WHERE err IS NULL AND submission_artifact_id IS NOT NULL AND NOT should_insert
   ) INTO v_art_skip FROM _cli_ac;
   SELECT count(*) FILTER (
     WHERE err IS NOT NULL OR (err IS NULL AND submission_artifact_id IS NULL)
@@ -470,25 +500,37 @@ BEGIN
     eff_points = coalesce(
       sc.points,
       (SELECT rc.points FROM rubric_checks rc WHERE rc.id = sc.rubric_check_id LIMIT 1)
-    );
+    )
+  WHERE true;
 
   UPDATE _cli_sc sc
   SET should_insert = (
     sc.err IS NULL
-    AND NOT (
-      sc.rubric_check_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM submission_comments c
-        WHERE c.submission_id = sc.submission_id
-          AND c.rubric_check_id = sc.rubric_check_id
-          AND c.deleted_at IS NULL
-      )
+    AND NOT EXISTS (
+      SELECT 1 FROM submission_comments c
+      WHERE c.submission_id = sc.submission_id
+        AND c.deleted_at IS NULL
+        AND c.comment IS NOT DISTINCT FROM sc.comment
+        AND c.rubric_check_id IS NOT DISTINCT FROM sc.rubric_check_id
     )
-  );
+  )
+  WHERE true;
+
+  UPDATE _cli_sc sc
+  SET should_insert = false
+  WHERE sc.should_insert
+    AND EXISTS (
+      SELECT 1 FROM _cli_sc sc2
+      WHERE sc2.should_insert
+        AND sc2.submission_id = sc.submission_id
+        AND sc2.comment IS NOT DISTINCT FROM sc.comment
+        AND sc2.rubric_check_id IS NOT DISTINCT FROM sc.rubric_check_id
+        AND sc2.ctid < sc.ctid
+    );
 
   SELECT count(*) FILTER (WHERE should_insert) INTO v_sub_ins FROM _cli_sc;
   SELECT count(*) FILTER (
-    WHERE err IS NULL AND NOT should_insert AND rubric_check_id IS NOT NULL
+    WHERE err IS NULL AND NOT should_insert
   ) INTO v_sub_skip FROM _cli_sc;
   SELECT count(*) FILTER (WHERE err IS NOT NULL) INTO v_sub_err FROM _cli_sc;
 
@@ -756,4 +798,4 @@ GRANT EXECUTE ON FUNCTION public.cli_import_submission_comments_batch(
 
 COMMENT ON FUNCTION public.cli_import_submission_comments_batch(
   bigint, bigint, text, boolean, jsonb, jsonb, jsonb, bigint[], uuid, jsonb, boolean, boolean
-) IS 'Batch import/sync submission comments for CLI edge function; service_role only.';
+) IS 'Batch import/sync submission comments for CLI edge function; service_role only. Import skips duplicate active rows matching file/line/body/rubric_check (or artifact/submission equivalents).';
