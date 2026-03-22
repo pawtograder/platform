@@ -101,6 +101,39 @@ export class Redis {
     return this;
   }
 
+  // ioredis API: pipeline(commands?) creates a pipeline that buffers commands and runs them with exec()
+  // Bottleneck's __runCommand__ calls client.pipeline([["del", key]]).exec()
+  pipeline(commands?: (string | number)[][]) {
+    const client = this.client;
+    const buffered: { cmd: string; args: (string | number)[] }[] = [];
+    if (commands) {
+      for (const cmd of commands) {
+        buffered.push({ cmd: String(cmd[0]).toLowerCase(), args: cmd.slice(1) });
+      }
+    }
+    const self = {
+      exec: async (): Promise<[null | Error, unknown][]> => {
+        const results: [null | Error, unknown][] = [];
+        for (const { cmd, args } of buffered) {
+          try {
+            const clientAny = client as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+            const fn = clientAny[cmd];
+            if (typeof fn === "function") {
+              const result = await fn.bind(client)(...args);
+              results.push([null, result]);
+            } else {
+              results.push([new Error(`Unknown command: ${cmd}`), null]);
+            }
+          } catch (e) {
+            results.push([e instanceof Error ? e : new Error(String(e)), null]);
+          }
+        }
+        return results;
+      }
+    };
+    return self;
+  }
+
   // ioredis API: duplicate returns a new connection with same options
   duplicate() {
     const newRedis = new Redis(this.initOptions);
@@ -206,6 +239,36 @@ export class Redis {
             // If this is the last attempt, don't wait
             if (attempt < maxRetries - 1) {
               const backoffMs = Math.pow(2, attempt) * 100; // 100ms, 200ms, 400ms
+              await new Promise((resolve) => setTimeout(resolve, backoffMs));
+            }
+            continue;
+          }
+
+          // Settings not yet initialized (race between heartbeat and init) — retry with backoff
+          if (errorMessage.includes("SETTINGS_KEY_NOT_FOUND")) {
+            Sentry.addBreadcrumb({
+              category: "redis",
+              message: "Bottleneck settings not found, retrying (init may still be running)",
+              data: { name, attempt },
+              level: "warning"
+            });
+            if (attempt < maxRetries - 1) {
+              const backoffMs = Math.pow(2, attempt) * 500; // 500ms, 1000ms, 2000ms
+              await new Promise((resolve) => setTimeout(resolve, backoffMs));
+            }
+            continue;
+          }
+
+          // Pipeline is empty — transient Upstash error, retry with backoff
+          if (errorMessage.includes("Pipeline is empty")) {
+            Sentry.addBreadcrumb({
+              category: "redis",
+              message: "Pipeline is empty, retrying",
+              data: { name, attempt },
+              level: "warning"
+            });
+            if (attempt < maxRetries - 1) {
+              const backoffMs = Math.pow(2, attempt) * 500;
               await new Promise((resolve) => setTimeout(resolve, backoffMs));
             }
             continue;

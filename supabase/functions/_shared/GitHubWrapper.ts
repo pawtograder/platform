@@ -135,6 +135,46 @@ async function retryWithBackoff<T>(
 }
 
 const createContentLimiters = new Map<string, Bottleneck>();
+
+function buildRedisBottleneck(
+  id: string,
+  opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
+  clearDatastore: boolean
+): Bottleneck {
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL")!;
+  const host = upstashUrl.replace("https://", "");
+  const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN")!;
+  return new Bottleneck({
+    id,
+    ...opts,
+    datastore: "ioredis",
+    timeout: 600000,
+    clearDatastore,
+    clientOptions: { host, password, username: "default", tls: {}, port: 6379 },
+    Redis
+  });
+}
+
+function withSettingsKeyRecovery(
+  limiter: Bottleneck,
+  id: string,
+  opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
+  cache: Map<string, Bottleneck>,
+  cacheKey: string
+): void {
+  limiter.on("error", (err: Error) => {
+    if (String(err).includes("SETTINGS_KEY_NOT_FOUND")) {
+      console.warn(`[rate-limiter] Settings keys missing for ${id}, reinitializing`);
+      limiter.disconnect();
+      const fresh = buildRedisBottleneck(id, opts, true);
+      fresh.on("error", (e: Error) => console.error(`[rate-limiter] ${id}:`, e));
+      cache.set(cacheKey, fresh);
+    } else {
+      console.error(`[rate-limiter] ${id}:`, err);
+    }
+  });
+}
+
 /**
  * GitHub limits the number of content-creating requests per organization per-minute and per-hour
  * This includes repository creation and organization invitations (same rate limit bucket)
@@ -145,41 +185,16 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   const key = org || "unknown";
   const existing = createContentLimiters.get(key);
   if (existing) return existing;
+  const id = `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
+  const opts = { reservoir: 50, maxConcurrent: 50, reservoirRefreshAmount: 50, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 50,
-      reservoirRefreshAmount: 50,
-      reservoirRefreshInterval: 60_000,
-      maxConcurrent: 50,
-      datastore: "ioredis",
-      timeout: 600000, // 10 minutes
-      clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default",
-        tls: {},
-        port: 6379
-      },
-      Redis
-    });
-    limiter.on("error", (err: Error) => console.error(err));
+  if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+    limiter = buildRedisBottleneck(id, opts, false);
+    withSettingsKeyRecovery(limiter, id, opts, createContentLimiters, key);
   } else {
     console.log("No Upstash URL or token found, using local limiter");
     Sentry.captureMessage("No Upstash URL or token found, using local limiter");
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 10,
-      maxConcurrent: 10,
-      reservoirRefreshAmount: 10,
-      reservoirRefreshInterval: 60_000
-    });
+    limiter = new Bottleneck({ id, ...opts });
   }
   createContentLimiters.set(key, limiter);
   return limiter;
@@ -196,41 +211,16 @@ export function getRepoAnalyticsLimiter(org: string): Bottleneck {
   const key = org || "unknown";
   const existing = repoAnalyticsLimiters.get(key);
   if (existing) return existing;
+  const id = `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
+  const opts = { reservoir: 50, maxConcurrent: 20, reservoirRefreshAmount: 50, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
-    limiter = new Bottleneck({
-      id: `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 15,
-      reservoirRefreshAmount: 15,
-      reservoirRefreshInterval: 60_000,
-      maxConcurrent: 2,
-      datastore: "ioredis",
-      timeout: 600000, // 10 minutes
-      clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default",
-        tls: {},
-        port: 6379
-      },
-      Redis
-    });
-    limiter.on("error", (err: Error) => console.error(err));
+  if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+    limiter = buildRedisBottleneck(id, opts, false);
+    withSettingsKeyRecovery(limiter, id, opts, repoAnalyticsLimiters, key);
   } else {
     console.log("No Upstash URL or token found for repo analytics, using local limiter");
     Sentry.captureMessage("No Upstash URL or token found for repo analytics, using local limiter");
-    limiter = new Bottleneck({
-      id: `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 10,
-      maxConcurrent: 2,
-      reservoirRefreshAmount: 10,
-      reservoirRefreshInterval: 60_000
-    });
+    limiter = new Bottleneck({ id, ...opts });
   }
   repoAnalyticsLimiters.set(key, limiter);
   return limiter;
