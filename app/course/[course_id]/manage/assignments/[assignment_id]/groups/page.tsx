@@ -76,6 +76,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
       { field: "role", operator: "eq", value: "student" },
+      { field: "disabled", operator: "eq", value: false },
       { field: "profiles.assignment_groups_members.assignment_id", operator: "eq", value: assignment.id }
     ],
     pagination: { pageSize: 1000 }
