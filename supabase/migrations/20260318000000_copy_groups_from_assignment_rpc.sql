@@ -36,7 +36,26 @@ BEGIN
       USING ERRCODE = 'data_exception';
   END IF;
 
-  -- 3. Validate source has groups
+  -- 3. Both assignments must belong to this class
+  IF NOT EXISTS (
+    SELECT 1 FROM assignments
+    WHERE id = p_source_assignment_id
+      AND class_id = p_class_id
+  ) THEN
+    RAISE EXCEPTION 'Source assignment not found in this class'
+      USING ERRCODE = 'data_exception';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM assignments
+    WHERE id = p_target_assignment_id
+      AND class_id = p_class_id
+  ) THEN
+    RAISE EXCEPTION 'Target assignment not found in this class'
+      USING ERRCODE = 'data_exception';
+  END IF;
+
+  -- 4. Validate source has groups
   IF NOT EXISTS (
     SELECT 1 FROM assignment_groups
     WHERE assignment_id = p_source_assignment_id
@@ -46,7 +65,7 @@ BEGIN
       USING ERRCODE = 'data_exception';
   END IF;
 
-  -- 4. Bulk upsert groups (preserving mentor_profile_id)
+  -- 5. Bulk upsert groups (preserving mentor_profile_id)
   WITH inserted_groups AS (
     INSERT INTO assignment_groups (assignment_id, class_id, name, mentor_profile_id)
     SELECT p_target_assignment_id, class_id, name, mentor_profile_id
@@ -59,7 +78,7 @@ BEGIN
   )
   SELECT COUNT(*) INTO v_groups_processed FROM inserted_groups;
 
-  -- 5. Bulk upsert members (mapping source groups to target groups via name)
+  -- 6. Bulk upsert members (mapping source groups to target groups via name)
   WITH inserted_members AS (
     INSERT INTO assignment_groups_members (
       assignment_id,
