@@ -29,6 +29,38 @@ export type TestingUser = {
   password: string;
 };
 
+/**
+ * Supabase CLI 2.71.1+ uses ES256 JWT signing. If your .env.local has HS256 keys
+ * (from CLI < 2.71 or an older local project), the API rejects them with
+ * "signing method HS256 is invalid". You must use ES256 keys:
+ * 1. Upgrade CLI: npm install supabase@latest  (or use npx supabase@latest)
+ * 2. Full reset (wipes local DB): npx supabase stop --no-backup && npx supabase start
+ * 3. Export keys: npx supabase status -o env
+ * 4. Update .env.local with SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+ */
+function ensureServiceRoleKeyNotHS256(): void {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return;
+  const parts = key.split(".");
+  if (parts.length < 2) return;
+  try {
+    const b64 = parts[0].replace(/-/g, "+").replace(/_/g, "/");
+    const header = JSON.parse(Buffer.from(b64, "base64").toString("utf8")) as { alg?: string };
+    if (header.alg === "HS256") {
+      throw new Error(
+        "SUPABASE_SERVICE_ROLE_KEY is HS256; local Supabase expects ES256. " +
+          "Upgrade CLI (npm install supabase@latest), then run: " +
+          "npx supabase stop --no-backup && npx supabase start && npx supabase status -o env " +
+          "and update .env.local with the new keys."
+      );
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("SUPABASE_SERVICE_ROLE_KEY")) throw e;
+    throw new Error(`Malformed SUPABASE_SERVICE_ROLE_KEY: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+// ensureServiceRoleKeyNotHS256();
+
 export async function createClass({
   name,
   rateLimitManager

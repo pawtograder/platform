@@ -17,7 +17,7 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   // Fetch survey data to get title, status, version, JSON, due_date, and assignment mode (latest version)
   const { data: survey, error: surveyError } = await supabase
     .from("surveys")
-    .select("id, title, status, json, due_date, assigned_to_all")
+    .select("id, title, status, json, due_date, assigned_to_all, analytics_config, series_id")
     .eq("survey_id", survey_id)
     .eq("class_id", Number(course_id))
     .limit(1)
@@ -113,16 +113,21 @@ export default async function SurveyResponsesPage({ params }: SurveyResponsesPag
   return (
     <SurveyResponsesView
       courseId={course_id}
-      surveyId={survey_id} // The UUID (survey_id column)
-      surveyDbId={survey.id} // The database ID (id column)
+      surveyId={survey_id}
+      surveyDbId={survey.id}
       surveyTitle={survey.title}
-      surveyVersion={1} // Temporarily hardcode since we're not selecting version
+      surveyVersion={1}
       surveyStatus={survey.status}
       surveyJson={survey.json}
       surveyDueDate={survey.due_date}
       initialResponses={responses || []}
       totalStudents={assignedStudentCount}
       timezone={timezone}
+      analyticsConfig={
+        (survey as { analytics_config?: import("@/types/survey-analytics").SurveyAnalyticsConfig | null })
+          .analytics_config ?? null
+      }
+      seriesId={(survey as { series_id?: string | null }).series_id ?? undefined}
     />
   );
 }
