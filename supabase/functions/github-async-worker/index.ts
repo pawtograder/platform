@@ -1318,7 +1318,9 @@ export async function processEnvelope(
             const [repoOwner, repoName] = repoFullName.split("/");
             const sinceIso = sinceByRepo.get(repo.id) ?? null;
             const counter = new ApiCallCounter();
-            console.log(`[repo-analytics] Processing ${repoFullName}${sinceIso ? ` (incremental since ${sinceIso})` : " (full fetch)"}`);
+            console.log(
+              `[repo-analytics] Processing ${repoFullName}${sinceIso ? ` (incremental since ${sinceIso})` : " (full fetch)"}`
+            );
             try {
               // Fix 5: Use paginate.iterator + per-page schedule for accurate rate limiting
               // Fix 1: Add since param for incremental fetching
@@ -1341,7 +1343,9 @@ export async function processEnvelope(
                 issues.push(...iterResult.value.data);
                 iterResult = await wrapWithLimiter(() => issuesIterator.next());
               }
-              console.log(`[repo-analytics] ${repoFullName}: issues done (${issues.length} items, ${counter.total} API calls so far)`);
+              console.log(
+                `[repo-analytics] ${repoFullName}: issues done (${issues.length} items, ${counter.total} API calls so far)`
+              );
               await logRateLimit(octokit, `${repoFullName} after issues`);
 
               const dailyMap = new Map<
@@ -1750,7 +1754,10 @@ export async function processEnvelope(
             try {
               const result = await processRepo(repo);
               if (result.error) {
-                failedByRepoId.set(result.repoId, result.error instanceof Error ? result.error.message : String(result.error));
+                failedByRepoId.set(
+                  result.repoId,
+                  result.error instanceof Error ? result.error.message : String(result.error)
+                );
               } else if (result.apiCalls) {
                 const summary = result.apiCalls.summary();
                 console.log(`[repo-analytics] ${result.repoFullName}: ${JSON.stringify(summary)}`);

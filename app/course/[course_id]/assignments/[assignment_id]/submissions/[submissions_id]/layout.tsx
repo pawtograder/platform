@@ -1528,7 +1528,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             Files
           </Button>
         </NextLink>
-        {isGraderOrInstructor && (
+        {isGraderOrInstructor && assignment.enable_repo_analytics && (
           <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
             <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
               <Icon as={FaGithub} />

@@ -1043,6 +1043,7 @@ export type Database = {
           release_date: string | null;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
+          enable_repo_analytics: boolean;
           show_leaderboard: boolean;
           slug: string | null;
           student_repo_prefix: string | null;
@@ -1080,6 +1081,7 @@ export type Database = {
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
+          enable_repo_analytics?: boolean;
           show_leaderboard?: boolean;
           slug?: string | null;
           student_repo_prefix?: string | null;
@@ -1117,6 +1119,7 @@ export type Database = {
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
+          enable_repo_analytics?: boolean;
           show_leaderboard?: boolean;
           slug?: string | null;
           student_repo_prefix?: string | null;
