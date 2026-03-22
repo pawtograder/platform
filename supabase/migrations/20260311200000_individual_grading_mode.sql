@@ -1,9 +1,13 @@
--- Individual grading mode for group submissions
--- Rubric parts marked is_individual_grading are graded per-student in a group.
+-- Individual grading modes for group submissions.
+-- is_individual_grading: part is duplicated for every student in the group.
+-- is_assign_to_student: grader picks which student the part applies to (or skips it).
 
 alter table "public"."rubric_parts" add column "is_individual_grading" boolean not null default false;
+alter table "public"."rubric_parts" add column "is_assign_to_student" boolean not null default false;
 
 alter table "public"."submission_reviews" add column "individual_scores" jsonb;
+-- Maps rubric_part_id → assigned student profile_id (or null if skipped)
+alter table "public"."submission_reviews" add column "rubric_part_student_assignments" jsonb;
 
 -- Per-student scope on comment tables
 alter table "public"."submission_comments" add column "target_student_profile_id" uuid;
@@ -134,10 +138,18 @@ select sum(score) into calculated_score from (
     END IF;
   END IF;
 
-  -- individual_scores: per target_student_profile_id for individual grading parts.
-  -- Two-stage: union raw points, merge per criteria, cap, sum per student.
-  WITH raw_points AS (
-    SELECT sfc.target_student_profile_id, ch.rubric_criteria_id, sum(sfc.points) as pts
+  -- individual_scores: combine two sources of per-student scores.
+  -- Source 1: is_individual_grading parts — comments have target_student_profile_id.
+  -- Source 2: is_assign_to_student parts — student comes from rubric_part_student_assignments JSON.
+  WITH
+  -- Read the current assignments mapping from the review
+  part_assignments AS (
+    SELECT (jsonb_each_text(COALESCE(sr.rubric_part_student_assignments, '{}'::jsonb))).*
+    FROM public.submission_reviews sr WHERE sr.id = existing_submission_review_id
+  ),
+  -- Source 1: per-student comments (is_individual_grading parts)
+  individual_raw AS (
+    SELECT sfc.target_student_profile_id::text as student_id, ch.rubric_criteria_id, sum(sfc.points) as pts
     FROM public.submission_file_comments sfc
     INNER JOIN public.rubric_checks ch ON ch.id = sfc.rubric_check_id
     INNER JOIN public.rubric_criteria c ON c.id = ch.rubric_criteria_id
@@ -147,7 +159,7 @@ select sum(score) into calculated_score from (
       AND rp.is_individual_grading = true
     GROUP BY sfc.target_student_profile_id, ch.rubric_criteria_id
     UNION ALL
-    SELECT sc.target_student_profile_id, ch.rubric_criteria_id, sum(sc.points)
+    SELECT sc.target_student_profile_id::text, ch.rubric_criteria_id, sum(sc.points)
     FROM public.submission_comments sc
     INNER JOIN public.rubric_checks ch ON ch.id = sc.rubric_check_id
     INNER JOIN public.rubric_criteria c ON c.id = ch.rubric_criteria_id
@@ -157,7 +169,7 @@ select sum(score) into calculated_score from (
       AND rp.is_individual_grading = true
     GROUP BY sc.target_student_profile_id, ch.rubric_criteria_id
     UNION ALL
-    SELECT sac.target_student_profile_id, ch.rubric_criteria_id, sum(sac.points)
+    SELECT sac.target_student_profile_id::text, ch.rubric_criteria_id, sum(sac.points)
     FROM public.submission_artifact_comments sac
     INNER JOIN public.rubric_checks ch ON ch.id = sac.rubric_check_id
     INNER JOIN public.rubric_criteria c ON c.id = ch.rubric_criteria_id
@@ -167,12 +179,37 @@ select sum(score) into calculated_score from (
       AND rp.is_individual_grading = true
     GROUP BY sac.target_student_profile_id, ch.rubric_criteria_id
   ),
+  -- Source 2: assign-to-student parts — use rubric_part_student_assignments to map part → student
+  assigned_raw AS (
+    SELECT pa.value as student_id, ch.rubric_criteria_id, sum(comments.points) as pts
+    FROM part_assignments pa
+    INNER JOIN public.rubric_parts rp ON rp.id = pa.key::bigint AND rp.is_assign_to_student = true
+    INNER JOIN public.rubric_criteria c ON c.rubric_part_id = rp.id
+    INNER JOIN public.rubric_checks ch ON ch.rubric_criteria_id = c.id
+    LEFT JOIN (
+      SELECT sc.rubric_check_id, sc.points FROM public.submission_comments sc
+      WHERE sc.submission_review_id = existing_submission_review_id AND sc.deleted_at IS NULL AND sc.points IS NOT NULL
+      UNION ALL
+      SELECT sfc.rubric_check_id, sfc.points FROM public.submission_file_comments sfc
+      WHERE sfc.submission_review_id = existing_submission_review_id AND sfc.deleted_at IS NULL AND sfc.points IS NOT NULL
+      UNION ALL
+      SELECT sac.rubric_check_id, sac.points FROM public.submission_artifact_comments sac
+      WHERE sac.submission_review_id = existing_submission_review_id AND sac.deleted_at IS NULL AND sac.points IS NOT NULL
+    ) comments ON comments.rubric_check_id = ch.id
+    WHERE pa.value IS NOT NULL AND pa.value != ''
+    GROUP BY pa.value, ch.rubric_criteria_id
+  ),
+  all_raw AS (
+    SELECT * FROM individual_raw
+    UNION ALL
+    SELECT * FROM assigned_raw
+  ),
   merged_points AS (
-    SELECT target_student_profile_id, rubric_criteria_id, sum(pts) as total_pts
-    FROM raw_points GROUP BY target_student_profile_id, rubric_criteria_id
+    SELECT student_id, rubric_criteria_id, sum(pts) as total_pts
+    FROM all_raw GROUP BY student_id, rubric_criteria_id
   ),
   capped_scores AS (
-    SELECT mp.target_student_profile_id,
+    SELECT mp.student_id,
       CASE WHEN c.is_deduction_only THEN GREATEST(-COALESCE(mp.total_pts, 0), -c.total_points)
            WHEN c.is_additive THEN LEAST(COALESCE(mp.total_pts, 0), c.total_points)
            ELSE GREATEST(c.total_points - COALESCE(mp.total_pts, 0), 0) END as score
@@ -180,10 +217,10 @@ select sum(score) into calculated_score from (
     INNER JOIN public.rubric_criteria c ON c.id = mp.rubric_criteria_id
   ),
   student_scores AS (
-    SELECT target_student_profile_id, sum(score) as student_score
-    FROM capped_scores GROUP BY target_student_profile_id
+    SELECT student_id, sum(score) as student_score
+    FROM capped_scores GROUP BY student_id
   )
-  SELECT jsonb_object_agg(target_student_profile_id, student_score)
+  SELECT jsonb_object_agg(student_id, student_score)
   INTO individual_scores_result
   FROM student_scores;
 

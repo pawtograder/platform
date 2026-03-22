@@ -6,6 +6,7 @@ import {
   RubricCheck as RubricCheckType,
   RubricCriteria as RubricCriteriaType,
   RubricPart as RubricPartType,
+  RubricPartStudentAssignments,
   SubmissionArtifactComment,
   SubmissionComments,
   SubmissionFileComment,
@@ -1684,6 +1685,94 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   );
 }
 
+function AssignToStudentPart({
+  part,
+  groupMembers,
+  assignmentId,
+  classId,
+  currentRubricId,
+  reviewId
+}: {
+  part: RubricPartType;
+  groupMembers: { profile_id: string }[];
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+  reviewId?: number;
+}) {
+  const submissionController = useSubmissionController();
+  const review = useSubmissionReviewForRubric(currentRubricId);
+  const isGrader = useIsGraderOrInstructor();
+  const assignments: RubricPartStudentAssignments =
+    (review?.rubric_part_student_assignments as RubricPartStudentAssignments) ?? {};
+  const assignedStudentId = assignments[String(part.id)] ?? null;
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(assignedStudentId);
+
+  useEffect(() => {
+    setSelectedStudent(assignedStudentId);
+  }, [assignedStudentId]);
+
+  const handleAssign = useCallback(
+    async (studentId: string | null) => {
+      setSelectedStudent(studentId);
+      if (!review) return;
+      const updated = { ...assignments, [String(part.id)]: studentId };
+      await submissionController.submission_reviews.update(review.id, {
+        rubric_part_student_assignments: updated
+      });
+    },
+    [review, assignments, part.id, submissionController]
+  );
+
+  if (!isGrader) {
+    if (!selectedStudent) return null;
+    return (
+      <Box w="100%" borderLeft="3px solid" borderColor="border.warning" pl={3}>
+        <Box mb={1}>
+          <Badge variant="outline">
+            <PersonName uid={selectedStudent} />
+          </Badge>
+        </Box>
+        <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+      </Box>
+    );
+  }
+
+  return (
+    <Box w="100%">
+      <HStack mb={2} gap={2} align="center">
+        <Heading size="md">{part.name}</Heading>
+        <Badge variant="secondary">Assign</Badge>
+      </HStack>
+      {part.description && <Markdown>{part.description}</Markdown>}
+      <Box my={2}>
+        <NativeSelectRoot>
+          <NativeSelectField
+            aria-label={`Assign ${part.name} to student`}
+            value={selectedStudent ?? "__skip__"}
+            onChange={(e) => {
+              const val = e.target.value;
+              handleAssign(val === "__skip__" ? null : val);
+            }}
+          >
+            <option value="__skip__">Skip (hide this part)</option>
+            {groupMembers.map((member) => (
+              <option key={member.profile_id} value={member.profile_id}>
+                {member.profile_id}
+              </option>
+            ))}
+          </NativeSelectField>
+        </NativeSelectRoot>
+      </Box>
+      {selectedStudent && (
+        <Box borderLeft="3px solid" borderColor="border.warning" pl={3}>
+          <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 function IndividualGradingPartForStudent({
   part,
   memberProfileId,
@@ -1829,6 +1918,19 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
                   ))}
                 </VStack>
               </Box>
+            );
+          }
+          if (part.is_assign_to_student && groupMembers.length > 0) {
+            return (
+              <AssignToStudentPart
+                key={part.name + "-" + part.id}
+                part={part}
+                groupMembers={groupMembers}
+                assignmentId={assignmentController.assignment.id}
+                classId={assignmentController.assignment.class_id}
+                currentRubricId={rubric?.id}
+                reviewId={reviewForThisRubric?.id}
+              />
             );
           }
           return (

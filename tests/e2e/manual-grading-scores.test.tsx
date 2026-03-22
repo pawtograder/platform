@@ -580,4 +580,211 @@ test.describe("Manual grading score calculation", () => {
       expect(review.individual_scores).toBeNull();
     });
   });
+
+  // ──────────────── Assign-to-student grading ────────────────
+
+  test.describe("Assign-to-student grading mode", () => {
+    test.describe.configure({ mode: "serial" });
+
+    let assignment: AssignmentWithRubric;
+    let submissionId: number;
+    let reviewId: number;
+    let assignPart1Id: number;
+    let assignPart2Id: number;
+    let assignCheck1Id: number;
+    let assignCheck2Id: number;
+
+    test("setup: create group assignment with assign-to-student parts", async () => {
+      assignment = await insertAssignment({
+        due_date: addDays(new Date(), 7).toUTCString(),
+        class_id: course.id,
+        name: "Assign-to-Student Test"
+      });
+
+      await supabase.from("assignments").update({ group_config: "groups" }).eq("id", assignment.id);
+
+      const rubricId = assignment.grading_rubric_id!;
+
+      const { data: parts } = await supabase
+        .from("rubric_parts")
+        .insert([
+          {
+            class_id: course.id,
+            name: "Task A",
+            description: "Assigned to one student",
+            ordinal: 10,
+            rubric_id: rubricId,
+            assignment_id: assignment.id,
+            is_assign_to_student: true
+          },
+          {
+            class_id: course.id,
+            name: "Task B",
+            description: "Assigned to another student",
+            ordinal: 11,
+            rubric_id: rubricId,
+            assignment_id: assignment.id,
+            is_assign_to_student: true
+          }
+        ])
+        .select("id, name");
+
+      assignPart1Id = parts!.find((p) => p.name === "Task A")!.id;
+      assignPart2Id = parts!.find((p) => p.name === "Task B")!.id;
+
+      for (const [partId, idx] of [
+        [assignPart1Id, 1],
+        [assignPart2Id, 2]
+      ] as const) {
+        const { data: criteria } = await supabase
+          .from("rubric_criteria")
+          .insert({
+            class_id: course.id,
+            name: `Task ${idx} Criteria`,
+            ordinal: 0,
+            total_points: 20,
+            is_additive: true,
+            rubric_part_id: partId,
+            rubric_id: rubricId,
+            assignment_id: assignment.id
+          })
+          .select("id")
+          .single();
+
+        const { data: check } = await supabase
+          .from("rubric_checks")
+          .insert({
+            rubric_criteria_id: criteria!.id,
+            name: `Task ${idx} Check`,
+            ordinal: 0,
+            points: 20,
+            is_annotation: false,
+            is_comment_required: false,
+            class_id: course.id,
+            is_required: false,
+            assignment_id: assignment.id,
+            rubric_id: rubricId
+          })
+          .select("id")
+          .single();
+
+        if (idx === 1) assignCheck1Id = check!.id;
+        else assignCheck2Id = check!.id;
+      }
+
+      const sub = await createGroupSubmission({
+        student_profiles: [studentA, studentB],
+        assignment,
+        course,
+        instructor
+      });
+      submissionId = sub.submission_id;
+      reviewId = sub.grading_review_id;
+    });
+
+    test("assigning parts to students and grading produces individual_scores", async () => {
+      // Assign Task A to Student A, Task B to Student B
+      await supabase
+        .from("submission_reviews")
+        .update({
+          rubric_part_student_assignments: {
+            [String(assignPart1Id)]: studentA.private_profile_id,
+            [String(assignPart2Id)]: studentB.private_profile_id
+          }
+        })
+        .eq("id", reviewId);
+
+      // Grade Task A check (assigned to Student A)
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: assignCheck1Id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 15
+      });
+
+      // Grade Task B check (assigned to Student B)
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: assignCheck2Id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 12
+      });
+
+      await new Promise((r) => setTimeout(r, 1000));
+      const review = await getReviewScore(reviewId);
+
+      expect(review.individual_scores).not.toBeNull();
+      const scores = review.individual_scores as Record<string, number>;
+      expect(scores[studentA.private_profile_id]).toBe(15);
+      expect(scores[studentB.private_profile_id]).toBe(12);
+    });
+
+    test("skipping a part (null assignment) excludes it from individual_scores", async () => {
+      // Skip Task B (set to null)
+      await supabase
+        .from("submission_reviews")
+        .update({
+          rubric_part_student_assignments: {
+            [String(assignPart1Id)]: studentA.private_profile_id,
+            [String(assignPart2Id)]: null
+          }
+        })
+        .eq("id", reviewId);
+
+      // Trigger recompute by touching a comment
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: assignCheck1Id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 1
+      });
+
+      await new Promise((r) => setTimeout(r, 1000));
+      const review = await getReviewScore(reviewId);
+
+      const scores = review.individual_scores as Record<string, number>;
+      // Student A: 15 (original) + 1 (new) = 16, capped at 20
+      expect(scores[studentA.private_profile_id]).toBe(16);
+      // Student B should not be in individual_scores since their part is skipped
+      expect(scores[studentB.private_profile_id]).toBeUndefined();
+    });
+
+    test("reassigning a part to a different student moves the score", async () => {
+      // Reassign Task A from Student A to Student B
+      await supabase
+        .from("submission_reviews")
+        .update({
+          rubric_part_student_assignments: {
+            [String(assignPart1Id)]: studentB.private_profile_id,
+            [String(assignPart2Id)]: null
+          }
+        })
+        .eq("id", reviewId);
+
+      // Trigger recompute
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: assignCheck2Id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 1
+      });
+
+      await new Promise((r) => setTimeout(r, 1000));
+      const review = await getReviewScore(reviewId);
+
+      const scores = review.individual_scores as Record<string, number>;
+      // Task A's score now goes to Student B
+      expect(scores[studentB.private_profile_id]).toBe(16);
+      // Student A should have no individual score
+      expect(scores[studentA.private_profile_id]).toBeUndefined();
+    });
+  });
 });

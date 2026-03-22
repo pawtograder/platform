@@ -6975,6 +6975,7 @@ export type Database = {
           data: Json | null;
           description: string | null;
           id: number;
+          is_assign_to_student: boolean;
           is_individual_grading: boolean;
           name: string;
           ordinal: number;
@@ -6987,6 +6988,7 @@ export type Database = {
           data?: Json | null;
           description?: string | null;
           id?: number;
+          is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
           name: string;
           ordinal: number;
@@ -6999,6 +7001,7 @@ export type Database = {
           data?: Json | null;
           description?: string | null;
           id?: number;
+          is_assign_to_student?: boolean;
           is_individual_grading?: boolean;
           name?: string;
           ordinal?: number;
@@ -8826,6 +8829,7 @@ export type Database = {
           name: string;
           released: boolean;
           rubric_id: number;
+          rubric_part_student_assignments: Json | null;
           submission_id: number;
           total_autograde_score: number;
           total_score: number;
@@ -8846,6 +8850,7 @@ export type Database = {
           name: string;
           released?: boolean;
           rubric_id: number;
+          rubric_part_student_assignments?: Json | null;
           submission_id: number;
           total_autograde_score?: number;
           total_score: number;
@@ -8866,6 +8871,7 @@ export type Database = {
           name?: string;
           released?: boolean;
           rubric_id?: number;
+          rubric_part_student_assignments?: Json | null;
           submission_id?: number;
           total_autograde_score?: number;
           total_score?: number;

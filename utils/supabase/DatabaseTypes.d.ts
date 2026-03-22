@@ -3,6 +3,7 @@ import { Database, Json } from "./SupabaseTypes";
 export type { Json };
 
 export type IndividualScores = Partial<Record<string, number>>;
+export type RubricPartStudentAssignments = Record<string, string | null>;
 
 export type GradebookColumnExternalData = {
   source: "csv";
@@ -737,11 +738,13 @@ export type YmlRubricPartType = Omit<
   | "rubric_id"
   | "assignment_id"
   | "is_individual_grading"
+  | "is_assign_to_student"
 > & {
   criteria: YmlRubricCriteriaType[];
   id?: number;
   description?: string;
   is_individual_grading?: boolean;
+  is_assign_to_student?: boolean;
 };
 export type YmlRubricCriteriaType = Omit<
   HydratedRubricCriteria,
