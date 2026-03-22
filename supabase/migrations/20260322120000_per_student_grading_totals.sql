@@ -200,7 +200,7 @@ begin
     SELECT mp.student_id,
       CASE WHEN c.is_deduction_only THEN greatest(-coalesce(mp.total_pts, 0), -c.total_points)
            WHEN c.is_additive THEN least(coalesce(mp.total_pts, 0), c.total_points)
-           ELSE greatest(c.total_pts - coalesce(mp.total_pts, 0), 0) END as score
+           ELSE greatest(c.total_points - coalesce(mp.total_pts, 0), 0) END as score
     FROM merged_points mp
     INNER JOIN public.rubric_criteria c ON c.id = mp.rubric_criteria_id
   ),

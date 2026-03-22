@@ -3,6 +3,12 @@
 -- total_autograde_score, so split-rubric per-student lines missed tweak/autograde until a
 -- hand-grading comment fired the full trigger.
 
+ALTER TABLE public.submission_reviews
+  ADD COLUMN IF NOT EXISTS per_student_grading_shared_base numeric;
+
+COMMENT ON COLUMN public.submission_reviews.per_student_grading_shared_base IS
+  'When rubric has individual/assign-to-student parts: shared hand rubric + autograder + tweak (same for all group members). NULL when not in split-rubric grading mode.';
+
 CREATE OR REPLACE FUNCTION public._submission_review_recompute_scores(p_submission_review_id bigint)
 RETURNS void
 LANGUAGE plpgsql
@@ -26,6 +32,7 @@ DECLARE
   v_ind numeric;
   v_line numeric;
   shared_base numeric;
+  v_shared_base_stored numeric;
 BEGIN
   IF p_submission_review_id IS NULL THEN
     RETURN;
@@ -181,7 +188,7 @@ BEGIN
     SELECT mp.student_id,
       CASE WHEN c.is_deduction_only THEN greatest(-coalesce(mp.total_pts, 0), -c.total_points)
            WHEN c.is_additive THEN least(coalesce(mp.total_pts, 0), c.total_points)
-           ELSE greatest(c.total_pts - coalesce(mp.total_pts, 0), 0) END AS score
+           ELSE greatest(c.total_points - coalesce(mp.total_pts, 0), 0) END AS score
     FROM merged_points mp
     INNER JOIN public.rubric_criteria c ON c.id = mp.rubric_criteria_id
   ),
@@ -194,6 +201,7 @@ BEGIN
   FROM student_scores;
 
   per_student_totals := NULL;
+  v_shared_base_stored := NULL;
 
   SELECT EXISTS (
     SELECT 1 FROM public.rubric_parts rp
@@ -238,6 +246,7 @@ BEGIN
 
     -- Same tweak + autograde applied to every group member's line (shared_base + individual slice).
     shared_base := shared_hand_score + calculated_autograde_score + current_tweak;
+    v_shared_base_stored := shared_base;
 
     v_targets := public._grade_targets_for_submission(v_submission_id);
 
@@ -259,13 +268,14 @@ BEGIN
   SET total_score = calculated_score,
       total_autograde_score = calculated_autograde_score,
       individual_scores = individual_scores_result,
-      per_student_grading_totals = per_student_totals
+      per_student_grading_totals = per_student_totals,
+      per_student_grading_shared_base = v_shared_base_stored
   WHERE id = p_submission_review_id;
 END;
 $function$;
 
 COMMENT ON FUNCTION public._submission_review_recompute_scores(bigint) IS
-  'Internal: recompute total_score, total_autograde_score, individual_scores, and per_student_grading_totals for a submission_review. Tweak and autograde are included in each per-student total when the rubric has split parts.';
+  'Internal: recompute total_score, autograde, individual_scores, per_student_grading_totals, and per_student_grading_shared_base.';
 
 CREATE OR REPLACE FUNCTION public.submissionreviewrecompute()
 RETURNS trigger
@@ -339,3 +349,95 @@ $$;
 
 COMMENT ON FUNCTION public.submissionreviewrecompute_bulk_grader_tests() IS
   'Statement-level trigger: full score recompute (including individual_scores and per_student_grading_totals) for affected grading reviews after grader_result_tests changes.';
+
+-- Expose shared base on instructor grade table view
+DROP VIEW IF EXISTS public.submissions_with_grades_for_assignment_nice;
+
+CREATE VIEW public.submissions_with_grades_for_assignment_nice WITH (security_invoker = 'true') AS
+ WITH assignment_students AS (
+         SELECT DISTINCT ur.id AS user_role_id,
+            ur.private_profile_id, a.class_id, a.id AS assignment_id,
+            a.due_date, a.slug AS assignment_slug,
+            ur.class_section_id, ur.lab_section_id
+           FROM public.assignments a
+             JOIN public.user_roles ur ON ((ur.class_id = a.class_id AND ur.role = 'student'::public.app_role AND ur.disabled = false))
+        ), individual_submissions AS (
+         SELECT ast.user_role_id, ast.private_profile_id, ast.class_id,
+            ast.assignment_id, s_1.id AS submission_id,
+            NULL::bigint AS assignment_group_id, ast.due_date,
+            ast.assignment_slug, ast.class_section_id, ast.lab_section_id
+           FROM assignment_students ast
+             JOIN public.submissions s_1 ON ((s_1.assignment_id = ast.assignment_id AND s_1.profile_id = ast.private_profile_id AND s_1.is_active = true AND s_1.assignment_group_id IS NULL))
+        ), group_submissions AS (
+         SELECT ast.user_role_id, ast.private_profile_id, ast.class_id,
+            ast.assignment_id, s_1.id AS submission_id,
+            agm.assignment_group_id, ast.due_date,
+            ast.assignment_slug, ast.class_section_id, ast.lab_section_id
+           FROM assignment_students ast
+             JOIN public.assignment_groups_members agm ON ((agm.assignment_id = ast.assignment_id AND agm.profile_id = ast.private_profile_id))
+             JOIN public.submissions s_1 ON ((s_1.assignment_id = ast.assignment_id AND s_1.assignment_group_id = agm.assignment_group_id AND s_1.is_active = true))
+        ), all_submissions AS (
+         SELECT * FROM individual_submissions
+        UNION ALL
+         SELECT * FROM group_submissions
+        ), due_date_extensions AS (
+         SELECT COALESCE(ade.student_id, ag_1.profile_id) AS effective_student_id,
+            COALESCE(ade.assignment_group_id, ag_1.assignment_group_id) AS effective_assignment_group_id,
+            ade.assignment_id,
+            sum(ade.tokens_consumed) AS tokens_consumed,
+            sum(ade.hours) AS hours
+           FROM public.assignment_due_date_exceptions ade
+             LEFT JOIN public.assignment_groups_members ag_1 ON ((ade.assignment_group_id = ag_1.assignment_group_id))
+          GROUP BY COALESCE(ade.student_id, ag_1.profile_id), COALESCE(ade.assignment_group_id, ag_1.assignment_group_id), ade.assignment_id
+        ), submissions_with_extensions AS (
+         SELECT asub.user_role_id, asub.private_profile_id, asub.class_id,
+            asub.assignment_id, asub.submission_id, asub.assignment_group_id,
+            asub.due_date, asub.assignment_slug,
+            COALESCE(dde.tokens_consumed, (0)::bigint) AS tokens_consumed,
+            COALESCE(dde.hours, (0)::bigint) AS hours,
+            asub.class_section_id, asub.lab_section_id
+           FROM all_submissions asub
+             LEFT JOIN due_date_extensions dde ON (
+               (dde.effective_student_id = asub.private_profile_id)
+               AND (dde.assignment_id = asub.assignment_id)
+               AND (
+                 (asub.assignment_group_id IS NULL AND dde.effective_assignment_group_id IS NULL)
+                 OR (asub.assignment_group_id = dde.effective_assignment_group_id)
+               )
+             )
+        )
+ SELECT swe.user_role_id AS id, swe.class_id, swe.assignment_id,
+    p.id AS student_private_profile_id, p.name, p.sortable_name,
+    s.id AS activesubmissionid, s.ordinal, s.created_at, s.released,
+    s.repository, s.sha,
+    rev.total_autograde_score AS autograder_score,
+    rev.grader, rev.meta_grader, rev.total_score, rev.tweak,
+    rev.completed_by, rev.completed_at, rev.checked_at, rev.checked_by,
+    rev.individual_scores,
+    rev.per_student_grading_totals,
+    rev.per_student_grading_shared_base,
+    graderprofile.name AS assignedgradername,
+    metagraderprofile.name AS assignedmetagradername,
+    completerprofile.name AS gradername,
+    checkgraderprofile.name AS checkername,
+    ag.name AS groupname,
+    swe.tokens_consumed, swe.hours, swe.due_date,
+    (swe.due_date + ('01:00:00'::interval * (swe.hours)::double precision)) AS late_due_date,
+    ar.grader_sha, ar.grader_action_sha,
+    swe.assignment_slug, swe.class_section_id,
+    cs.name AS class_section_name,
+    swe.lab_section_id, ls.name AS lab_section_name
+   FROM submissions_with_extensions swe
+     JOIN public.profiles p ON ((p.id = swe.private_profile_id))
+     JOIN public.submissions s ON ((s.id = swe.submission_id))
+     LEFT JOIN public.submission_reviews rev ON ((rev.id = s.grading_review_id))
+     LEFT JOIN public.grader_results ar ON ((ar.submission_id = s.id))
+     LEFT JOIN public.assignment_groups ag ON ((ag.id = swe.assignment_group_id))
+     LEFT JOIN public.profiles completerprofile ON ((completerprofile.id = rev.completed_by))
+     LEFT JOIN public.profiles graderprofile ON ((graderprofile.id = rev.grader))
+     LEFT JOIN public.profiles metagraderprofile ON ((metagraderprofile.id = rev.meta_grader))
+     LEFT JOIN public.profiles checkgraderprofile ON ((checkgraderprofile.id = rev.checked_by))
+     LEFT JOIN public.class_sections cs ON ((cs.id = swe.class_section_id))
+     LEFT JOIN public.lab_sections ls ON ((ls.id = swe.lab_section_id));
+
+ALTER VIEW public.submissions_with_grades_for_assignment_nice OWNER TO postgres;
