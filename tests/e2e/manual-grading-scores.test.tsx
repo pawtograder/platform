@@ -546,9 +546,10 @@ test.describe("Manual grading score calculation", () => {
 
       await expect(page.getByText("Scores by student")).toBeVisible({ timeout: 15000 });
       await expect(page.getByRole("heading", { name: /Overall Score/ })).not.toBeVisible();
-      await expect(page.getByText("Score Student A")).toBeVisible();
-      await expect(page.getByText("Score Student B")).toBeVisible();
-      await expect(page.getByText("Score Student C")).toBeVisible();
+      const scoresSection = page.locator("text=Scores by student").locator("..");
+      await expect(scoresSection.getByText("Score Student A").first()).toBeVisible();
+      await expect(scoresSection.getByText("Score Student B").first()).toBeVisible();
+      await expect(scoresSection.getByText("Score Student C").first()).toBeVisible();
       await argosScreenshot(page, "Group individual grading - instructor view with all scores");
     });
 
