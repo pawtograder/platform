@@ -5,16 +5,38 @@ import {
   useReviewAssignmentRubricParts,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric,
+  useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import {
+  computeRubricAnnotationTargetMeta,
+  countFileCommentsForCheckScopedToTarget,
+  effectiveAnnotationTargetStudentProfileId,
+  useRubricAnnotationTargetMeta
+} from "@/hooks/useRubricAnnotationTargetMeta";
 import { useSubmission, useSubmissionController, useSubmissionFileComments } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import type { SubmissionWithGraderResultsAndFiles } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import rehypeSourcePositions from "@/lib/rehype-source-positions";
-import { Box, Badge, Button, Flex, Heading, HStack, Icon, Separator, Spinner, Text, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  Badge,
+  Button,
+  Flex,
+  Heading,
+  HStack,
+  Icon,
+  NativeSelectField,
+  NativeSelectRoot,
+  Separator,
+  Spinner,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import type { Element } from "hast";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -316,6 +338,16 @@ function MarkdownLineActionPopup({
   const existingComments = useSubmissionFileComments({ file_id: file.id });
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
+  const rubricParts = useRubricParts(rubric?.id ?? null);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id ?? undefined
+  });
+  const groupMembers = useMemo(
+    () => assignmentGroupWithMembers?.assignment_groups_members ?? [],
+    [assignmentGroupWithMembers]
+  );
+  const [pickedAnnotationStudentId, setPickedAnnotationStudentId] = useState<string | null>(null);
+  const annotationTargetMeta = useRubricAnnotationTargetMeta(selectedCheckOption?.criteria ?? null);
 
   const criteria: RubricCriteriaSelectGroupOption[] = useMemo(() => {
     let criteriaWithAnnotationChecks: RubricCriteria[] = [];
@@ -351,9 +383,19 @@ function MarkdownLineActionPopup({
             )
             .sort((a, b) => a.ordinal - b.ordinal)
             .map((check) => {
-              const existingAnnotationsForCheck = existingComments.filter(
-                (comment) => comment.rubric_check_id === check.id
-              ).length;
+              const rubricPart = rubricParts?.find((p) => p.id === criteria.rubric_part_id);
+              const targetMeta = computeRubricAnnotationTargetMeta({
+                criteria: criteria as RubricCriteria,
+                part: rubricPart,
+                members: groupMembers,
+                review
+              });
+              const existingAnnotationsForCheck = countFileCommentsForCheckScopedToTarget(
+                existingComments,
+                check.id,
+                targetMeta,
+                pickedAnnotationStudentId
+              );
               const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
               const option: RubricCheckSelectOption = {
                 label: check.name,
@@ -385,7 +427,20 @@ function MarkdownLineActionPopup({
       options: [{ label: "Leave a comment", value: "comment" }]
     });
     return criteriaOptions;
-  }, [assignedPartIds, existingComments, rubricCriteria, rubricChecks]);
+  }, [
+    assignedPartIds,
+    existingComments,
+    rubricCriteria,
+    rubricChecks,
+    rubricParts,
+    groupMembers,
+    review,
+    pickedAnnotationStudentId
+  ]);
+
+  useEffect(() => {
+    setPickedAnnotationStudentId(null);
+  }, [selectedCheckOption?.criteria?.id, selectedCheckOption?.check?.id]);
 
   useEffect(() => {
     if (!visible) return;
@@ -514,6 +569,27 @@ function MarkdownLineActionPopup({
                 size="sm"
               />
             )}
+            {selectedCheckOption.check && annotationTargetMeta.mode === "individual" && (
+              <NativeSelectRoot size="sm">
+                <NativeSelectField
+                  aria-label="Group member this annotation is for"
+                  value={pickedAnnotationStudentId ?? ""}
+                  onChange={(e) => setPickedAnnotationStudentId(e.target.value || null)}
+                >
+                  <option value="">Select group member…</option>
+                  {annotationTargetMeta.members.map((m) => (
+                    <option key={m.profile_id} value={m.profile_id}>
+                      {m.profile_id}
+                    </option>
+                  ))}
+                </NativeSelectField>
+              </NativeSelectRoot>
+            )}
+            {selectedCheckOption.check && annotationTargetMeta.mode === "assign_blocked" && (
+              <Text fontSize="sm" color="fg.error">
+                {annotationTargetMeta.reason}
+              </Text>
+            )}
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
@@ -540,6 +616,14 @@ function MarkdownLineActionPopup({
                   });
                   return;
                 }
+                const targetEff = effectiveAnnotationTargetStudentProfileId(
+                  annotationTargetMeta,
+                  pickedAnnotationStudentId
+                );
+                if (targetEff.error) {
+                  toaster.error({ title: "Cannot save annotation", description: targetEff.error });
+                  return;
+                }
                 const values = {
                   comment,
                   line: lineNumber,
@@ -554,7 +638,8 @@ function MarkdownLineActionPopup({
                   eventually_visible: selectedCheckOption.check
                     ? selectedCheckOption.check.student_visibility !== "never"
                     : true,
-                  regrade_request_id: null
+                  regrade_request_id: null,
+                  target_student_profile_id: targetEff.targetId
                 };
                 try {
                   await submissionController.submission_file_comments.create(values);

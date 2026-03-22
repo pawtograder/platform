@@ -34,10 +34,15 @@ import {
   useRubricById,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric,
+  useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
+import {
+  computeRubricAnnotationTargetMetaFromParts,
+  effectiveAnnotationTargetStudentProfileId
+} from "@/hooks/useRubricAnnotationTargetMeta";
 import {
   useRubricCheck,
   useSubmission,
@@ -71,6 +76,8 @@ import {
   Heading,
   HStack,
   Icon,
+  NativeSelectField,
+  NativeSelectRoot,
   Separator,
   Spinner,
   Table,
@@ -526,6 +533,14 @@ function ArtifactCheckPopover({
   const rubric = useRubricWithParts(reviewContext?.rubric_id);
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
+  const rubricParts = useRubricParts(reviewContext?.rubric_id ?? null);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id ?? undefined
+  });
+  const groupMembers = useMemo(
+    () => assignmentGroupWithMembers?.assignment_groups_members ?? [],
+    [assignmentGroupWithMembers]
+  );
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -535,6 +550,22 @@ function ArtifactCheckPopover({
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
+  const [pickedArtifactAnnotationStudentId, setPickedArtifactAnnotationStudentId] = useState<string | null>(null);
+
+  const artifactAnnotationTargetMeta = useMemo(
+    () =>
+      computeRubricAnnotationTargetMetaFromParts({
+        criteria: selectedCheckOption?.criteria ?? null,
+        parts: rubricParts ?? null,
+        members: groupMembers,
+        review: reviewContext ?? null
+      }),
+    [selectedCheckOption?.criteria, rubricParts, groupMembers, reviewContext]
+  );
+
+  useEffect(() => {
+    setPickedArtifactAnnotationStudentId(null);
+  }, [selectedCheckOption?.criteria?.id, selectedCheckOption?.check?.id]);
 
   useEffect(() => {
     if (isOpen && messageInputRef.current && selectedCheckOption) {
@@ -685,6 +716,27 @@ function ArtifactCheckPopover({
                     Visible to student when submission is released
                   </Checkbox>
                 )}
+                {selectedCheckOption.check && artifactAnnotationTargetMeta.mode === "individual" && (
+                  <NativeSelectRoot size="sm">
+                    <NativeSelectField
+                      aria-label="Group member this annotation is for"
+                      value={pickedArtifactAnnotationStudentId ?? ""}
+                      onChange={(e) => setPickedArtifactAnnotationStudentId(e.target.value || null)}
+                    >
+                      <option value="">Select group member…</option>
+                      {artifactAnnotationTargetMeta.members.map((m) => (
+                        <option key={m.profile_id} value={m.profile_id}>
+                          {m.profile_id}
+                        </option>
+                      ))}
+                    </NativeSelectField>
+                  </NativeSelectRoot>
+                )}
+                {selectedCheckOption.check && artifactAnnotationTargetMeta.mode === "assign_blocked" && (
+                  <Text fontSize="sm" color="fg.error">
+                    {artifactAnnotationTargetMeta.reason}
+                  </Text>
+                )}
                 <MessageInput
                   textAreaRef={messageInputRef}
                   placeholder={
@@ -713,6 +765,15 @@ function ArtifactCheckPopover({
                       return;
                     }
 
+                    const targetEff = effectiveAnnotationTargetStudentProfileId(
+                      artifactAnnotationTargetMeta,
+                      pickedArtifactAnnotationStudentId
+                    );
+                    if (targetEff.error) {
+                      toaster.error({ title: "Cannot save annotation", description: targetEff.error });
+                      return;
+                    }
+
                     const values = {
                       comment: commentText,
                       rubric_check_id: selectedCheckOption.check?.id ?? null,
@@ -724,7 +785,8 @@ function ArtifactCheckPopover({
                       points: points ?? null,
                       submission_review_id: finalSubmissionReviewId ?? null,
                       eventually_visible: eventuallyVisible,
-                      regrade_request_id: null
+                      regrade_request_id: null,
+                      target_student_profile_id: targetEff.targetId
                     };
                     await submissionController.submission_artifact_comments.create(values);
                     setIsOpen(false);

@@ -28,7 +28,7 @@ import {
 } from "@chakra-ui/react";
 
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useAssignmentGroupWithMembers, useCourse } from "@/hooks/useCourseController";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -45,6 +45,7 @@ import {
   useSetActiveSubmissionReviewId,
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
+import { computeRubricGradingCompletion, gradeTargetsForSubmission } from "@/lib/rubricGradingCompletion";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { formatDate } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
@@ -91,65 +92,71 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
   const reviewAssignment = useReviewAssignment(reviewAssignmentId);
   const reviewAssignmentRubricParts = useReviewAssignmentRubricParts(reviewAssignmentId);
   const activeSubmissionReview = useActiveSubmissionReview();
+  const submission = useSubmission();
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
 
-  // Get all rubric data for this rubric using hooks filtered by rubric_id
-  const rubricParts = useRubricParts(reviewAssignment?.rubric_id);
-  const allCriteriaForRubric = useRubricCriteriaByRubric(reviewAssignment?.rubric_id);
-  const allChecksForRubric = useRubricChecksByRubric(reviewAssignment?.rubric_id);
+  const rubricPartsRaw = useRubricParts(reviewAssignment?.rubric_id);
+  const rubricPartsList = useMemo(() => rubricPartsRaw ?? [], [rubricPartsRaw]);
+  const allCriteriaRaw = useRubricCriteriaByRubric(reviewAssignment?.rubric_id);
+  const allCriteriaForRubric = useMemo(() => allCriteriaRaw ?? [], [allCriteriaRaw]);
+  const allChecksRaw = useRubricChecksByRubric(reviewAssignment?.rubric_id);
+  const allChecksForRubric = useMemo(() => allChecksRaw ?? [], [allChecksRaw]);
 
   const assignedRubricPartIds = reviewAssignmentRubricParts.map((part) => part.rubric_part_id);
 
-  // Filter criteria by assigned parts (or all parts if none assigned)
-  const assignedCriteria = useMemo(() => {
-    const partIds = assignedRubricPartIds.length > 0 ? assignedRubricPartIds : rubricParts?.map((p) => p.id) || [];
-    return allCriteriaForRubric?.filter((c) => partIds.includes(c.rubric_part_id)) || [];
-  }, [allCriteriaForRubric, assignedRubricPartIds, rubricParts]);
+  const rubricPartIdsInScope = useMemo(() => {
+    const partIds = assignedRubricPartIds.length > 0 ? assignedRubricPartIds : rubricPartsList.map((p) => p.id);
+    return partIds;
+  }, [assignedRubricPartIds, rubricPartsList]);
 
-  // Get checks for assigned criteria
-  const rubricChecksForAssignedParts = useMemo(() => {
-    const criteriaIds = assignedCriteria.map((c) => c.id);
-    return allChecksForRubric?.filter((check) => criteriaIds.includes(check.rubric_criteria_id)) || [];
-  }, [allChecksForRubric, assignedCriteria]);
+  const groupRow = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id ?? undefined
+  });
+  const groupMemberProfileIds = (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id);
 
-  const { missing_required_checks, missing_optional_checks } = useMemo(() => {
-    return {
-      missing_required_checks: rubricChecksForAssignedParts?.filter(
-        (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
-      ),
-      missing_optional_checks: rubricChecksForAssignedParts?.filter(
-        (check) => !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
-      )
-    };
-  }, [rubricChecksForAssignedParts, comments]);
+  const gradeTargets = useMemo(
+    () =>
+      gradeTargetsForSubmission({
+        assignmentGroupId: submission.assignment_group_id,
+        profileId: submission.profile_id,
+        groupMemberProfileIds
+      }),
+    [submission.assignment_group_id, submission.profile_id, groupMemberProfileIds]
+  );
 
-  const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    // Get checks for each criteria
-    const criteriaEvaluation = assignedCriteria?.map((criteria) => {
-      const checksForCriteria = allChecksForRubric?.filter((check) => check.rubric_criteria_id === criteria.id) || [];
-      const check_count_applied = checksForCriteria.filter((check) =>
-        comments.some((comment) => comment.rubric_check_id === check.id)
-      ).length;
+  const rubricPartStudentAssignments =
+    (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
+  return useMemo(() => {
+    if (!reviewAssignment || !activeSubmissionReview || !allChecksForRubric.length) {
       return {
-        criteria,
-        check_count_applied
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: []
       };
+    }
+
+    return computeRubricGradingCompletion({
+      rubricChecks: allChecksForRubric,
+      allCriteria: allCriteriaForRubric,
+      rubricParts: rubricPartsList,
+      comments,
+      rubricPartStudentAssignments,
+      gradeTargets,
+      rubricPartIdsInScope
     });
-
-    return {
-      missing_required_criteria: criteriaEvaluation?.filter(
-        (item) =>
-          item.criteria.min_checks_per_submission !== null &&
-          item.check_count_applied < item.criteria.min_checks_per_submission
-      ),
-      missing_optional_criteria: criteriaEvaluation?.filter(
-        (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
-      )
-    };
-  }, [comments, assignedCriteria, allChecksForRubric]);
-
-  return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
+  }, [
+    reviewAssignment,
+    activeSubmissionReview,
+    allChecksForRubric,
+    allCriteriaForRubric,
+    rubricPartsList,
+    comments,
+    rubricPartStudentAssignments,
+    gradeTargets,
+    rubricPartIdsInScope
+  ]);
 }
 
 /**

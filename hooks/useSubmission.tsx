@@ -682,13 +682,14 @@ export function useRubricCriteriaInstances({
 }) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
+  const artifactComments = useSubmissionArtifactComments({});
   const allChecks = useAllRubricChecks();
 
   const filteredComments = useMemo(() => {
     if (!review_id) {
       return [];
     }
-    const comments = [...fileComments, ...submissionComments];
+    const comments = [...fileComments, ...submissionComments, ...artifactComments];
     let filtered: typeof comments;
     if (criteria) {
       filtered = comments.filter(
@@ -716,7 +717,16 @@ export function useRubricCriteriaInstances({
       );
     }
     return filtered;
-  }, [fileComments, submissionComments, review_id, criteria, rubric_id, allChecks, target_student_profile_id]);
+  }, [
+    fileComments,
+    submissionComments,
+    artifactComments,
+    review_id,
+    criteria,
+    rubric_id,
+    allChecks,
+    target_student_profile_id
+  ]);
 
   return filteredComments;
 }

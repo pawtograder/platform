@@ -73,7 +73,7 @@ import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
@@ -1690,15 +1690,13 @@ function AssignToStudentPart({
   groupMembers,
   assignmentId,
   classId,
-  currentRubricId,
-  reviewId
+  currentRubricId
 }: {
   part: RubricPartType;
   groupMembers: { profile_id: string }[];
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
-  reviewId?: number;
 }) {
   const submissionController = useSubmissionController();
   const review = useSubmissionReviewForRubric(currentRubricId);
@@ -1773,15 +1771,185 @@ function AssignToStudentPart({
   );
 }
 
-function IndividualGradingPartForStudent({
-  part,
-  memberProfileId,
+type RubricSidebarSegment =
+  | { type: "individual_run"; parts: RubricPartType[] }
+  | { type: "entire_group_run"; parts: RubricPartType[] }
+  | { type: "single"; part: RubricPartType };
+
+/**
+ * When grading a group, every `is_individual_grading` part is merged into one run (preserving rubric order),
+ * placed where the first such part appears. Other parts stay in order. That way the UI is always
+ * Student1: A,B,C — Student2: A,B,C, not PartA: Stu1,Stu2 — PartB: Stu1,Stu2 when a shared part sits between individuals.
+ */
+function segmentRubricSidebarParts(parts: RubricPartType[], hasGroupMembers: boolean): RubricSidebarSegment[] {
+  const qualifies = (p: RubricPartType) => Boolean(p.is_individual_grading && hasGroupMembers);
+  const individualPartsInOrder = parts.filter(qualifies);
+  if (individualPartsInOrder.length === 0) {
+    return parts.map((part) => ({ type: "single" as const, part }));
+  }
+  const segments: RubricSidebarSegment[] = [];
+  let insertedRun = false;
+  for (const part of parts) {
+    if (qualifies(part)) {
+      if (!insertedRun) {
+        segments.push({ type: "individual_run", parts: individualPartsInOrder });
+        insertedRun = true;
+      }
+      continue;
+    }
+    segments.push({ type: "single", part });
+  }
+  return segments;
+}
+
+/**
+ * When the rubric mixes individual-graded parts with shared parts, merge consecutive plain (full-group)
+ * segments so we show one "Entire Group" banner for each contiguous block of shared criteria.
+ */
+function withEntireGroupRuns(segments: RubricSidebarSegment[], enabled: boolean): RubricSidebarSegment[] {
+  if (!enabled) return segments;
+  const out: RubricSidebarSegment[] = [];
+  let buffer: RubricPartType[] = [];
+  const flushBuffer = () => {
+    if (buffer.length === 0) return;
+    out.push({ type: "entire_group_run", parts: buffer });
+    buffer = [];
+  };
+  for (const seg of segments) {
+    if (seg.type === "individual_run") {
+      flushBuffer();
+      out.push(seg);
+      continue;
+    }
+    if (seg.type === "entire_group_run") {
+      flushBuffer();
+      out.push(seg);
+      continue;
+    }
+    if (seg.part.is_assign_to_student) {
+      flushBuffer();
+      out.push(seg);
+    } else {
+      buffer.push(seg.part);
+    }
+  }
+  flushBuffer();
+  return out;
+}
+
+function RubricGradingScopeBanner({ kicker, title }: { kicker: string; title: ReactNode }) {
+  return (
+    <Box
+      position="sticky"
+      top="3rem"
+      zIndex={2}
+      py={2}
+      mb={2}
+      ml={-3}
+      pl={3}
+      pr={2}
+      bg="bg.muted"
+      borderBottomWidth="1px"
+      borderColor="border.emphasized"
+      shadow="sm"
+    >
+      <Text
+        fontSize="xs"
+        fontWeight="semibold"
+        color="text.muted"
+        textTransform="uppercase"
+        letterSpacing="wider"
+        mb={1}
+      >
+        {kicker}
+      </Text>
+      <Heading size="md">{title}</Heading>
+    </Box>
+  );
+}
+
+function EntireGroupRubricBlock({
+  parts,
   assignmentId,
   classId,
   currentRubricId
 }: {
-  part: RubricPartType;
+  parts: RubricPartType[];
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+}) {
+  return (
+    <Box
+      w="100%"
+      borderLeft="3px solid"
+      borderColor="border.emphasized"
+      pl={3}
+      role="region"
+      aria-label="Rubric criteria for the entire group"
+    >
+      <RubricGradingScopeBanner kicker="Applies to" title="Entire Group" />
+      <VStack align="stretch" w="100%" gap={4}>
+        {parts.map((part) => (
+          <RubricPart
+            key={part.id}
+            part={part}
+            assignmentId={assignmentId}
+            classId={classId}
+            currentRubricId={currentRubricId}
+          />
+        ))}
+      </VStack>
+    </Box>
+  );
+}
+
+function IndividualGradingRunBlock({
+  parts,
+  groupMembers,
+  assignmentId,
+  classId,
+  currentRubricId
+}: {
+  parts: RubricPartType[];
+  groupMembers: { profile_id: string }[];
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+}) {
+  return (
+    <Box w="100%">
+      <HStack mb={2} gap={2} align="center" flexWrap="wrap">
+        <Badge variant="secondary">Individual</Badge>
+        <Text fontSize="sm" color="text.muted">
+          Graded separately for each group member
+        </Text>
+      </HStack>
+      <VStack align="stretch" w="100%" gap={5}>
+        {groupMembers.map((member) => (
+          <IndividualGradingStudentBlock
+            key={member.profile_id}
+            memberProfileId={member.profile_id}
+            parts={parts}
+            assignmentId={assignmentId}
+            classId={classId}
+            currentRubricId={currentRubricId}
+          />
+        ))}
+      </VStack>
+    </Box>
+  );
+}
+
+function IndividualGradingStudentBlock({
+  memberProfileId,
+  parts,
+  assignmentId,
+  classId,
+  currentRubricId
+}: {
   memberProfileId: string;
+  parts: RubricPartType[];
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -1794,20 +1962,21 @@ function IndividualGradingPartForStudent({
       borderColor="border.info"
       pl={3}
       role="region"
-      aria-label={`Individual grading: ${part.name} for ${profile?.name ?? memberProfileId}`}
+      aria-label={`Individual grading for ${profile?.name ?? memberProfileId}`}
     >
-      <Box mb={1}>
-        <Badge variant="outline">
-          <PersonName uid={memberProfileId} />
-        </Badge>
-      </Box>
-      <RubricPart
-        part={part}
-        assignmentId={assignmentId}
-        classId={classId}
-        currentRubricId={currentRubricId}
-        targetStudentProfileId={memberProfileId}
-      />
+      <RubricGradingScopeBanner kicker="Grading for" title={<PersonName uid={memberProfileId} />} />
+      <VStack align="stretch" w="100%" gap={4}>
+        {parts.map((part) => (
+          <RubricPart
+            key={part.id}
+            part={part}
+            assignmentId={assignmentId}
+            classId={classId}
+            currentRubricId={currentRubricId}
+            targetStudentProfileId={memberProfileId}
+          />
+        ))}
+      </VStack>
     </Box>
   );
 }
@@ -1897,29 +2066,34 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
             )}
           </Box>
         )}
-        {partsToDisplay.map((part) => {
-          if (part.is_individual_grading && groupMembers.length > 0) {
+        {withEntireGroupRuns(
+          segmentRubricSidebarParts(partsToDisplay, groupMembers.length > 0),
+          groupMembers.length > 0 && partsToDisplay.some((p) => p.is_individual_grading)
+        ).map((segment) => {
+          if (segment.type === "individual_run") {
             return (
-              <Box key={part.name + "-" + part.id} w="100%">
-                <Heading size="md" mb={2}>
-                  {part.name} <Badge variant="secondary">Individual</Badge>
-                </Heading>
-                {part.description && <Markdown>{part.description}</Markdown>}
-                <VStack align="start" w="100%" gap={3} mt={2}>
-                  {groupMembers.map((member) => (
-                    <IndividualGradingPartForStudent
-                      key={`${part.id}-${member.profile_id}`}
-                      part={part}
-                      memberProfileId={member.profile_id}
-                      assignmentId={assignmentController.assignment.id}
-                      classId={assignmentController.assignment.class_id}
-                      currentRubricId={rubric?.id}
-                    />
-                  ))}
-                </VStack>
-              </Box>
+              <IndividualGradingRunBlock
+                key={segment.parts.map((p) => p.id).join("-")}
+                parts={segment.parts}
+                groupMembers={groupMembers}
+                assignmentId={assignmentController.assignment.id}
+                classId={assignmentController.assignment.class_id}
+                currentRubricId={rubric?.id}
+              />
             );
           }
+          if (segment.type === "entire_group_run") {
+            return (
+              <EntireGroupRubricBlock
+                key={segment.parts.map((p) => p.id).join("-")}
+                parts={segment.parts}
+                assignmentId={assignmentController.assignment.id}
+                classId={assignmentController.assignment.class_id}
+                currentRubricId={rubric?.id}
+              />
+            );
+          }
+          const part = segment.part;
           if (part.is_assign_to_student && groupMembers.length > 0) {
             return (
               <AssignToStudentPart
@@ -1929,7 +2103,6 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
                 assignmentId={assignmentController.assignment.id}
                 classId={assignmentController.assignment.class_id}
                 currentRubricId={rubric?.id}
-                reviewId={reviewForThisRubric?.id}
               />
             );
           }
