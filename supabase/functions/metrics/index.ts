@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { BottleneckLimiterSnapshot, collectBottleneckRedisSnapshots } from "../_shared/BottleneckRedisMetrics.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -26,6 +27,14 @@ async function generatePrometheusMetrics(): Promise<Response> {
     if (circuitBreakerError) {
       console.error("Error fetching circuit breaker statuses:", circuitBreakerError);
       throw circuitBreakerError;
+    }
+
+    let bottleneckSnapshots: BottleneckLimiterSnapshot[] = [];
+    try {
+      bottleneckSnapshots = await collectBottleneckRedisSnapshots();
+    } catch (redisMetricsError) {
+      console.error("Error collecting Bottleneck/Upstash metrics:", redisMetricsError);
+      Sentry.captureException(redisMetricsError);
     }
 
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
@@ -82,6 +91,23 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
         const labels = `scope="${escapeLabel(cb.scope)}",key="${escapeLabel(cb.key)}",state="${escapeLabel(cb.state)}"`;
         output += `pawtograder_circuit_breaker_open{${labels}} ${isOpen} ${timestamp}\n`;
       }
+    }
+
+    output += `
+# HELP pawtograder_bottleneck_running Total running job weight for a Bottleneck limiter (Upstash Redis)
+# TYPE pawtograder_bottleneck_running gauge
+# HELP pawtograder_bottleneck_concurrent_clients Number of Bottleneck clients with active running work (Redis ZSET score greater than zero)
+# TYPE pawtograder_bottleneck_concurrent_clients gauge
+# HELP pawtograder_bottleneck_queued Total queued jobs for a Bottleneck limiter (valid clients; matches Bottleneck queued.lua)
+# TYPE pawtograder_bottleneck_queued gauge
+`;
+
+    for (const snap of bottleneckSnapshots) {
+      const lid = escapeLabel(snap.limiter_id);
+      const labels = `limiter_id="${lid}"`;
+      output += `pawtograder_bottleneck_running{${labels}} ${snap.running} ${timestamp}\n`;
+      output += `pawtograder_bottleneck_concurrent_clients{${labels}} ${snap.concurrent_clients} ${timestamp}\n`;
+      output += `pawtograder_bottleneck_queued{${labels}} ${snap.queued} ${timestamp}\n`;
     }
 
     output += "\n";
