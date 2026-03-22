@@ -203,7 +203,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
 const repoAnalyticsLimiters = new Map<string, Bottleneck>();
 /**
  * Redis-backed rate limiter for fetch_repo_analytics to prevent GitHub API rate limit hits.
- * Conservative limits (30 req/min) leave headroom for other operations.
+ * Conservative limits (100 req/min) leave headroom for other operations.
  * @param org GitHub organization
  * @returns Bottleneck limiter instance
  */
@@ -212,7 +212,7 @@ export function getRepoAnalyticsLimiter(org: string): Bottleneck {
   const existing = repoAnalyticsLimiters.get(key);
   if (existing) return existing;
   const id = `fetch_repo_analytics:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
-  const opts = { reservoir: 50, maxConcurrent: 20, reservoirRefreshAmount: 50, reservoirRefreshInterval: 60_000 };
+  const opts = { reservoir: 100, maxConcurrent: 20, reservoirRefreshAmount: 100, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
   if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
     limiter = buildRedisBottleneck(id, opts, false);
