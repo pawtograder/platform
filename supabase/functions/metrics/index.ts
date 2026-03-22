@@ -93,7 +93,8 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
       }
     }
 
-    output += `
+    if (bottleneckSnapshots.length > 0) {
+      output += `
 # HELP pawtograder_bottleneck_running Total running job weight for a Bottleneck limiter (Upstash Redis)
 # TYPE pawtograder_bottleneck_running gauge
 # HELP pawtograder_bottleneck_concurrent_clients Number of Bottleneck clients with active running work (Redis ZSET score greater than zero)
@@ -102,12 +103,13 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
 # TYPE pawtograder_bottleneck_queued gauge
 `;
 
-    for (const snap of bottleneckSnapshots) {
-      const lid = escapeLabel(snap.limiter_id);
-      const labels = `limiter_id="${lid}"`;
-      output += `pawtograder_bottleneck_running{${labels}} ${snap.running} ${timestamp}\n`;
-      output += `pawtograder_bottleneck_concurrent_clients{${labels}} ${snap.concurrent_clients} ${timestamp}\n`;
-      output += `pawtograder_bottleneck_queued{${labels}} ${snap.queued} ${timestamp}\n`;
+      for (const snap of bottleneckSnapshots) {
+        const lid = escapeLabel(snap.limiter_id);
+        const labels = `limiter_id="${lid}"`;
+        output += `pawtograder_bottleneck_running{${labels}} ${snap.running} ${timestamp}\n`;
+        output += `pawtograder_bottleneck_concurrent_clients{${labels}} ${snap.concurrent_clients} ${timestamp}\n`;
+        output += `pawtograder_bottleneck_queued{${labels}} ${snap.queued} ${timestamp}\n`;
+      }
     }
 
     output += "\n";

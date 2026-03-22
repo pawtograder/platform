@@ -50,7 +50,19 @@ function settingsKeyToLimiterId(key: string): string | null {
   return key.slice(2, -suffix.length);
 }
 
+/** Upper bound on limiters exported per scrape (cardinality / latency). Override via METRICS_MAX_BOTTLENECK_LIMITERS. */
+const DEFAULT_MAX_BOTTLENECK_LIMITERS = 200;
+const ABSOLUTE_MAX_BOTTLENECK_LIMITERS = 5000;
+
+function readMaxExportedLimiters(): number {
+  const raw = Deno.env.get("METRICS_MAX_BOTTLENECK_LIMITERS");
+  const parsed = raw != null && raw !== "" ? Number.parseInt(raw, 10) : DEFAULT_MAX_BOTTLENECK_LIMITERS;
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_BOTTLENECK_LIMITERS;
+  return Math.min(parsed, ABSOLUTE_MAX_BOTTLENECK_LIMITERS);
+}
+
 async function scanAllSettingsKeys(redis: Redis): Promise<string[]> {
+  const maxLimiters = readMaxExportedLimiters();
   let cursor = 0;
   const ids = new Set<string>();
   do {
@@ -61,7 +73,15 @@ async function scanAllSettingsKeys(redis: Redis): Promise<string[]> {
       if (id) ids.add(id);
     }
   } while (cursor !== 0);
-  return Array.from(ids);
+
+  const sorted = Array.from(ids).sort();
+  if (sorted.length > maxLimiters) {
+    console.warn(
+      `Bottleneck Redis metrics: capping exported limiters from ${sorted.length} to ${maxLimiters} (raise METRICS_MAX_BOTTLENECK_LIMITERS if needed)`
+    );
+    return sorted.slice(0, maxLimiters);
+  }
+  return sorted;
 }
 
 function safeNum(v: unknown): number {
@@ -80,8 +100,15 @@ function parseEvalTriple(raw: unknown): { running: number; concurrent_clients: n
 }
 
 /**
- * Snapshot all Bottleneck limiters that have Redis keys (shared Upstash store).
- * Requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.
+ * Snapshot Bottleneck limiters from the shared Upstash store.
+ *
+ * Requires `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Returns [] if unset.
+ *
+ * Discovery is capped per scrape (default 200, max 5000) via `METRICS_MAX_BOTTLENECK_LIMITERS`
+ * to bound Prometheus cardinality and scrape time.
+ *
+ * Throws if at least one limiter was discovered but every EVAL failed or returned no data,
+ * so callers can record a single error in Sentry.
  */
 export async function collectBottleneckRedisSnapshots(): Promise<BottleneckLimiterSnapshot[]> {
   const url = Deno.env.get("UPSTASH_REDIS_REST_URL");
@@ -99,18 +126,28 @@ export async function collectBottleneckRedisSnapshots(): Promise<BottleneckLimit
       try {
         const raw = await redis.eval(METRICS_LUA, [], [limiter_id, String(now)]);
         const parsed = parseEvalTriple(raw);
-        if (!parsed) return null;
+        if (!parsed) {
+          console.warn(
+            `Bottleneck metrics: EVAL returned no data for limiter_id=${limiter_id} (settings key likely removed after scan)`
+          );
+          return null;
+        }
         return {
           limiter_id,
           running: parsed.running,
           concurrent_clients: parsed.concurrent_clients,
           queued: parsed.queued
         } satisfies BottleneckLimiterSnapshot;
-      } catch {
+      } catch (err) {
+        console.error(`Bottleneck metrics: EVAL failed for limiter_id=${limiter_id}`, err);
         return null;
       }
     })
   );
 
-  return snapshots.filter((s): s is BottleneckLimiterSnapshot => s != null);
+  const ok = snapshots.filter((s): s is BottleneckLimiterSnapshot => s != null);
+  if (limiterIds.length > 0 && ok.length === 0) {
+    throw new Error(`Bottleneck Redis metrics: all ${limiterIds.length} limiter EVALs failed or returned no data`);
+  }
+  return ok;
 }
