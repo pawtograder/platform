@@ -1314,7 +1314,6 @@ function PerStudentGradingTotalsDisplay({
   });
 
   const resolvedSharedBase = sharedBase != null && Number.isFinite(Number(sharedBase)) ? Number(sharedBase) : null;
-  const sharedIsApproximate = resolvedSharedBase === null;
 
   return (
     <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
