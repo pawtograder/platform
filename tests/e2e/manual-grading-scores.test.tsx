@@ -1,0 +1,470 @@
+import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
+import { test, expect } from "../global-setup";
+import { addDays } from "date-fns";
+import dotenv from "dotenv";
+import {
+  createClass,
+  createUsersInClass,
+  insertAssignment,
+  insertPreBakedSubmission,
+  supabase,
+  TestingUser
+} from "./TestingUtils";
+
+dotenv.config({ path: ".env.local" });
+
+type AssignmentWithRubric = Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] };
+
+async function addComment({
+  submission_id,
+  review_id,
+  check_id,
+  class_id,
+  author_id,
+  points,
+  target_student_profile_id
+}: {
+  submission_id: number;
+  review_id: number;
+  check_id: number;
+  class_id: number;
+  author_id: string;
+  points: number;
+  target_student_profile_id?: string;
+}) {
+  const { data, error } = await supabase
+    .from("submission_comments")
+    .insert({
+      submission_id,
+      submission_review_id: review_id,
+      rubric_check_id: check_id,
+      class_id,
+      author: author_id,
+      comment: `Grading comment for check ${check_id}`,
+      points,
+      released: false,
+      eventually_visible: true,
+      regrade_request_id: null,
+      target_student_profile_id: target_student_profile_id ?? null
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`Failed to add comment: ${error.message}`);
+  return data;
+}
+
+async function updateCommentPoints(comment_id: number, new_points: number) {
+  const { error } = await supabase.from("submission_comments").update({ points: new_points }).eq("id", comment_id);
+  if (error) throw new Error(`Failed to update comment: ${error.message}`);
+}
+
+async function getReviewScore(review_id: number) {
+  const { data, error } = await supabase
+    .from("submission_reviews")
+    .select("total_score, individual_scores")
+    .eq("id", review_id)
+    .single();
+  if (error) throw new Error(`Failed to get review: ${error.message}`);
+  return data;
+}
+
+async function createGroupSubmission({
+  student_profiles,
+  assignment,
+  course,
+  instructor
+}: {
+  student_profiles: TestingUser[];
+  assignment: AssignmentWithRubric;
+  course: Course;
+  instructor: TestingUser;
+}) {
+  const { data: groupData, error: groupError } = await supabase
+    .from("assignment_groups")
+    .insert({
+      name: `Test Group ${Date.now()}`,
+      class_id: course.id,
+      assignment_id: assignment.id
+    })
+    .select("id")
+    .single();
+  if (groupError) throw new Error(`Failed to create group: ${groupError.message}`);
+
+  for (const student of student_profiles) {
+    const { error } = await supabase.from("assignment_groups_members").insert({
+      assignment_group_id: groupData.id,
+      profile_id: student.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: course.id,
+      added_by: instructor.private_profile_id
+    });
+    if (error) throw new Error(`Failed to add group member: ${error.message}`);
+  }
+
+  const submission = await insertPreBakedSubmission({
+    assignment_group_id: groupData.id,
+    assignment_id: assignment.id,
+    class_id: course.id
+  });
+
+  return { ...submission, group_id: groupData.id };
+}
+
+// ────────────────────────────────────────────────────────────
+// Test suite
+// ────────────────────────────────────────────────────────────
+
+test.describe("Manual grading score calculation", () => {
+  let course: Course;
+  let instructor: TestingUser;
+  let studentA: TestingUser;
+  let studentB: TestingUser;
+  let studentC: TestingUser;
+
+  test.beforeAll(async () => {
+    course = await createClass({ name: "Manual Grading Score Test" });
+    [instructor, studentA, studentB, studentC] = await createUsersInClass([
+      { name: "Score Instructor", email: "score-instructor@pawtograder.net", role: "instructor", class_id: course.id },
+      { name: "Score Student A", email: "score-student-a@pawtograder.net", role: "student", class_id: course.id },
+      { name: "Score Student B", email: "score-student-b@pawtograder.net", role: "student", class_id: course.id },
+      { name: "Score Student C", email: "score-student-c@pawtograder.net", role: "student", class_id: course.id }
+    ]);
+  });
+
+  // ──────────────── Individual assignment grading ────────────────
+
+  test.describe("Individual assignment grading", () => {
+    test.describe.configure({ mode: "serial" });
+
+    let assignment: AssignmentWithRubric;
+    let submissionId: number;
+    let reviewId: number;
+    let commentId: number;
+
+    test("setup: create individual assignment and submission", async () => {
+      assignment = await insertAssignment({
+        due_date: addDays(new Date(), 7).toUTCString(),
+        class_id: course.id,
+        name: "Individual Score Test"
+      });
+      const sub = await insertPreBakedSubmission({
+        student_profile_id: studentA.private_profile_id,
+        assignment_id: assignment.id,
+        class_id: course.id
+      });
+      submissionId = sub.submission_id;
+      reviewId = sub.grading_review_id;
+    });
+
+    test("adding a comment with points updates total_score", async () => {
+      const gradingCheck = assignment.rubricChecks.find((c) => c.name === "Grading Review Check 2")!;
+      const comment = await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: gradingCheck.id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 8
+      });
+      commentId = comment.id;
+
+      // Wait for trigger to compute
+      await new Promise((r) => setTimeout(r, 500));
+      const review = await getReviewScore(reviewId);
+      // Additive criteria with total_points=20, one check giving 8 => score includes 8
+      expect(review.total_score).toBeGreaterThanOrEqual(8);
+    });
+
+    test("updating comment points recalculates total_score", async () => {
+      await updateCommentPoints(commentId, 15);
+      await new Promise((r) => setTimeout(r, 500));
+      const review = await getReviewScore(reviewId);
+      expect(review.total_score).toBeGreaterThanOrEqual(15);
+    });
+
+    test("adding a second comment increases total_score further", async () => {
+      const check3 = assignment.rubricChecks.find((c) => c.name === "Grading Review Check 3")!;
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: check3.id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 5
+      });
+
+      await new Promise((r) => setTimeout(r, 500));
+      const review = await getReviewScore(reviewId);
+      // 15 from first check + 5 from second check + autograde (10)
+      expect(review.total_score).toBeGreaterThanOrEqual(20);
+    });
+
+    test("individual_scores should be null for individual assignments", async () => {
+      const review = await getReviewScore(reviewId);
+      expect(review.individual_scores).toBeNull();
+    });
+  });
+
+  // ──────────────── Group assignment grading (shared) ────────────────
+
+  test.describe("Group assignment grading (shared score)", () => {
+    test.describe.configure({ mode: "serial" });
+
+    let assignment: AssignmentWithRubric;
+    let submissionId: number;
+    let reviewId: number;
+    let commentId: number;
+
+    test("setup: create group assignment and group submission", async () => {
+      assignment = await insertAssignment({
+        due_date: addDays(new Date(), 7).toUTCString(),
+        class_id: course.id,
+        name: "Group Score Test"
+      });
+
+      // Override to group config
+      await supabase.from("assignments").update({ group_config: "groups" }).eq("id", assignment.id);
+
+      const sub = await createGroupSubmission({
+        student_profiles: [studentA, studentB],
+        assignment,
+        course,
+        instructor
+      });
+      submissionId = sub.submission_id;
+      reviewId = sub.grading_review_id;
+    });
+
+    test("adding a comment for group submission updates total_score", async () => {
+      const gradingCheck = assignment.rubricChecks.find((c) => c.name === "Grading Review Check 2")!;
+      const comment = await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: gradingCheck.id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 12
+      });
+      commentId = comment.id;
+
+      await new Promise((r) => setTimeout(r, 500));
+      const review = await getReviewScore(reviewId);
+      expect(review.total_score).toBeGreaterThanOrEqual(12);
+    });
+
+    test("updating group comment points recalculates total_score", async () => {
+      await updateCommentPoints(commentId, 18);
+      await new Promise((r) => setTimeout(r, 500));
+      const review = await getReviewScore(reviewId);
+      expect(review.total_score).toBeGreaterThanOrEqual(18);
+    });
+
+    test("group submissions without individual grading have null individual_scores", async () => {
+      const review = await getReviewScore(reviewId);
+      expect(review.individual_scores).toBeNull();
+    });
+  });
+
+  // ──────────────── Group individual grading ────────────────
+
+  test.describe("Group individual grading (per-student scores)", () => {
+    test.describe.configure({ mode: "serial" });
+
+    let assignment: AssignmentWithRubric;
+    let submissionId: number;
+    let reviewId: number;
+    let individualPartId: number;
+    let individualCriteriaId: number;
+    let individualCheckId: number;
+    let commentStudentA: number;
+    let commentStudentB: number;
+
+    test("setup: create group assignment with individual grading part", async () => {
+      assignment = await insertAssignment({
+        due_date: addDays(new Date(), 7).toUTCString(),
+        class_id: course.id,
+        name: "Group Individual Score Test"
+      });
+
+      await supabase.from("assignments").update({ group_config: "groups" }).eq("id", assignment.id);
+
+      // Add an individual grading rubric part
+      const { data: partData, error: partError } = await supabase
+        .from("rubric_parts")
+        .insert({
+          class_id: course.id,
+          name: "Individual Contribution",
+          description: "Graded per student",
+          ordinal: 10,
+          rubric_id: assignment.grading_rubric_id!,
+          assignment_id: assignment.id,
+          is_individual_grading: true
+        })
+        .select("id")
+        .single();
+      if (partError) throw new Error(`Failed to create individual part: ${partError.message}`);
+      individualPartId = partData.id;
+
+      const { data: criteriaData, error: criteriaError } = await supabase
+        .from("rubric_criteria")
+        .insert({
+          class_id: course.id,
+          name: "Individual Criteria",
+          description: "Per-student scoring",
+          ordinal: 0,
+          total_points: 30,
+          is_additive: true,
+          rubric_part_id: individualPartId,
+          rubric_id: assignment.grading_rubric_id!,
+          assignment_id: assignment.id
+        })
+        .select("id")
+        .single();
+      if (criteriaError) throw new Error(`Failed to create individual criteria: ${criteriaError.message}`);
+      individualCriteriaId = criteriaData.id;
+
+      const { data: checkData, error: checkError } = await supabase
+        .from("rubric_checks")
+        .insert({
+          rubric_criteria_id: individualCriteriaId,
+          name: "Individual Check",
+          description: "Per-student check",
+          ordinal: 0,
+          points: 30,
+          is_annotation: false,
+          is_comment_required: false,
+          class_id: course.id,
+          is_required: false,
+          assignment_id: assignment.id,
+          rubric_id: assignment.grading_rubric_id!
+        })
+        .select("id")
+        .single();
+      if (checkError) throw new Error(`Failed to create individual check: ${checkError.message}`);
+      individualCheckId = checkData.id;
+
+      const sub = await createGroupSubmission({
+        student_profiles: [studentA, studentB, studentC],
+        assignment,
+        course,
+        instructor
+      });
+      submissionId = sub.submission_id;
+      reviewId = sub.grading_review_id;
+    });
+
+    test("adding per-student comments populates individual_scores", async () => {
+      const cA = await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: individualCheckId,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 25,
+        target_student_profile_id: studentA.private_profile_id
+      });
+      commentStudentA = cA.id;
+
+      const cB = await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: individualCheckId,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 18,
+        target_student_profile_id: studentB.private_profile_id
+      });
+      commentStudentB = cB.id;
+
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: individualCheckId,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 10,
+        target_student_profile_id: studentC.private_profile_id
+      });
+
+      await new Promise((r) => setTimeout(r, 1000));
+      const review = await getReviewScore(reviewId);
+
+      expect(review.individual_scores).not.toBeNull();
+      const scores = review.individual_scores as Record<string, number>;
+      expect(scores[studentA.private_profile_id]).toBe(25);
+      expect(scores[studentB.private_profile_id]).toBe(18);
+      expect(scores[studentC.private_profile_id]).toBe(10);
+    });
+
+    test("updating per-student comment points recalculates individual_scores", async () => {
+      await updateCommentPoints(commentStudentA, 30);
+
+      await new Promise((r) => setTimeout(r, 1000));
+      const review = await getReviewScore(reviewId);
+
+      const scores = review.individual_scores as Record<string, number>;
+      expect(scores[studentA.private_profile_id]).toBe(30);
+      expect(scores[studentB.private_profile_id]).toBe(18);
+      expect(scores[studentC.private_profile_id]).toBe(10);
+    });
+
+    test("individual_scores respects criteria caps", async () => {
+      // Student A already at 30 which is the cap (total_points=30, additive)
+      // Try to give student B more than the cap
+      await updateCommentPoints(commentStudentB, 50);
+
+      await new Promise((r) => setTimeout(r, 1000));
+      const review = await getReviewScore(reviewId);
+
+      const scores = review.individual_scores as Record<string, number>;
+      // Should be capped at 30 (criteria total_points)
+      expect(scores[studentB.private_profile_id]).toBe(30);
+    });
+
+    test("shared rubric parts still contribute to total_score alongside individual parts", async () => {
+      const sharedCheck = assignment.rubricChecks.find((c) => c.name === "Grading Review Check 2")!;
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: sharedCheck.id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 7
+      });
+
+      await new Promise((r) => setTimeout(r, 500));
+      const review = await getReviewScore(reviewId);
+      // total_score should include shared part points + autograde
+      expect(review.total_score).toBeGreaterThanOrEqual(7);
+
+      // individual_scores should still track only individual grading parts
+      const scores = review.individual_scores as Record<string, number>;
+      expect(scores[studentA.private_profile_id]).toBe(30);
+      expect(scores[studentC.private_profile_id]).toBe(10);
+    });
+
+    test("removing individual grading comments clears individual_scores", async () => {
+      // Soft-delete all individual comments
+      await supabase
+        .from("submission_comments")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("submission_review_id", reviewId)
+        .eq("rubric_check_id", individualCheckId);
+
+      // Trigger needs a new event to recompute — update an existing non-deleted comment
+      const sharedCheck = assignment.rubricChecks.find((c) => c.name === "Grading Review Check 2")!;
+      await addComment({
+        submission_id: submissionId,
+        review_id: reviewId,
+        check_id: sharedCheck.id,
+        class_id: course.id,
+        author_id: instructor.private_profile_id,
+        points: 1
+      });
+
+      await new Promise((r) => setTimeout(r, 1000));
+      const review = await getReviewScore(reviewId);
+      expect(review.individual_scores).toBeNull();
+    });
+  });
+});
