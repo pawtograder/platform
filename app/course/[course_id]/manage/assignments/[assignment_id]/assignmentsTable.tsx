@@ -119,27 +119,40 @@ function TotalScoreCell({
   course_id: string;
   assignment_id: string;
 }) {
-  const individualScores = (row.original as { individual_scores?: IndividualScores | null }).individual_scores;
+  const studentId = row.original.student_private_profile_id!;
+  const perStudentTotals = row.original.per_student_grading_totals as IndividualScores | null | undefined;
+  const combinedForStudent =
+    perStudentTotals && typeof perStudentTotals[studentId] === "number"
+      ? (perStudentTotals[studentId] as number)
+      : null;
+
+  const individualScores = row.original.individual_scores as IndividualScores | null | undefined;
   const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
   const isObfuscated = useObfuscatedGradesMode();
-  const canShowGradeFor = useCanShowGradeFor(row.original.student_private_profile_id!);
-  const showTooltip = hasIndividual && (!isObfuscated || canShowGradeFor);
+  const canShowGradeFor = useCanShowGradeFor(studentId);
+  const showTooltip = (combinedForStudent != null || hasIndividual) && (!isObfuscated || canShowGradeFor);
+
+  const displayScore = combinedForStudent ?? (getValue() as number);
 
   return (
     <HStack gap={1}>
       <ScoreLink
-        score={getValue() as number}
-        private_profile_id={row.original.student_private_profile_id!}
+        score={displayScore}
+        private_profile_id={studentId}
         submission_id={row.original.activesubmissionid!}
         course_id={course_id}
         assignment_id={assignment_id}
       />
       {showTooltip && (
         <Tooltip
-          content={Object.entries(individualScores!)
-            .filter(([, s]) => s !== undefined)
-            .map(([, score]) => `${score}`)
-            .join(" | ")}
+          content={
+            combinedForStudent != null
+              ? `Full total (group + autograder + tweak + individual portions): ${combinedForStudent}`
+              : Object.entries(individualScores!)
+                  .filter(([, s]) => s !== undefined)
+                  .map(([, score]) => `${score}`)
+                  .join(" | ")
+          }
         >
           <Text fontSize="xs" color="fg.info" cursor="help">
             ⓘ

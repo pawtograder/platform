@@ -8847,6 +8847,7 @@ export type Database = {
           individual_scores: Json | null;
           meta_grader: string | null;
           name: string;
+          per_student_grading_totals: Json | null;
           released: boolean;
           rubric_id: number;
           rubric_part_student_assignments: Json | null;
@@ -8868,6 +8869,7 @@ export type Database = {
           individual_scores?: Json | null;
           meta_grader?: string | null;
           name: string;
+          per_student_grading_totals?: Json | null;
           released?: boolean;
           rubric_id: number;
           rubric_part_student_assignments?: Json | null;
@@ -8889,6 +8891,7 @@ export type Database = {
           individual_scores?: Json | null;
           meta_grader?: string | null;
           name?: string;
+          per_student_grading_totals?: Json | null;
           released?: boolean;
           rubric_id?: number;
           rubric_part_student_assignments?: Json | null;
@@ -11190,12 +11193,14 @@ export type Database = {
           groupname: string | null;
           hours: number | null;
           id: number | null;
+          individual_scores: Json | null;
           lab_section_id: number | null;
           lab_section_name: string | null;
           late_due_date: string | null;
           meta_grader: string | null;
           name: string | null;
           ordinal: number | null;
+          per_student_grading_totals: Json | null;
           released: string | null;
           repository: string | null;
           sha: string | null;

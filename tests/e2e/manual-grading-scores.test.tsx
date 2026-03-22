@@ -63,7 +63,7 @@ async function updateCommentPoints(comment_id: number, new_points: number) {
 async function getReviewScore(review_id: number) {
   const { data, error } = await supabase
     .from("submission_reviews")
-    .select("total_score, individual_scores")
+    .select("total_score, individual_scores, per_student_grading_totals")
     .eq("id", review_id)
     .single();
   if (error) throw new Error(`Failed to get review: ${error.message}`);
@@ -530,10 +530,8 @@ test.describe("Manual grading score calculation", () => {
         `/course/${course.id}/assignments/${assignment.id}/submissions/${submissionId}/files`
       );
 
-      const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
-      await expect(scoreHeading).toBeVisible({ timeout: 15000 });
-
-      await expect(page.getByText("Individual Scores")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("Scores by student")).toBeVisible({ timeout: 15000 });
+      await expect(page.getByRole("heading", { name: /Overall Score/ })).not.toBeVisible();
       await expect(page.getByText("(You)")).toBeVisible();
       await argosScreenshot(page, "Group individual grading - student view with individual score");
     });
@@ -546,10 +544,8 @@ test.describe("Manual grading score calculation", () => {
         `/course/${course.id}/assignments/${assignment.id}/submissions/${submissionId}/files`
       );
 
-      const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
-      await expect(scoreHeading).toBeVisible({ timeout: 15000 });
-
-      await expect(page.getByText("Individual Scores")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("Scores by student")).toBeVisible({ timeout: 15000 });
+      await expect(page.getByRole("heading", { name: /Overall Score/ })).not.toBeVisible();
       await expect(page.getByText("Score Student A")).toBeVisible();
       await expect(page.getByText("Score Student B")).toBeVisible();
       await expect(page.getByText("Score Student C")).toBeVisible();
@@ -578,6 +574,8 @@ test.describe("Manual grading score calculation", () => {
       await new Promise((r) => setTimeout(r, 1000));
       const review = await getReviewScore(reviewId);
       expect(review.individual_scores).toBeNull();
+      // Split rubric still produces per-student totals (shared hand + autograde + tweak; individual slice zero).
+      expect(review.per_student_grading_totals).not.toBeNull();
     });
   });
 

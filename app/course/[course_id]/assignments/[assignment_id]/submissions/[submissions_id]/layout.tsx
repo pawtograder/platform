@@ -1286,6 +1286,55 @@ function isIndividualScores(value: unknown): value is IndividualScores {
   );
 }
 
+function isNonEmptyPerStudentGradingTotals(value: unknown): value is IndividualScores {
+  return isIndividualScores(value) && Object.keys(value as Record<string, unknown>).length > 0;
+}
+
+/** Full per-student totals (shared hand rubric + autograder + tweak + individual/assign-to-student slice). */
+function PerStudentGradingTotalsDisplay({ totals, maxPoints }: { totals: IndividualScores; maxPoints: number | null }) {
+  const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const entries = Object.entries(totals).filter((entry): entry is [string, number] => typeof entry[1] === "number");
+  if (entries.length === 0) return null;
+
+  const myEntry = entries.find(([profileId]) => profileId === private_profile_id);
+  const sortedEntries = isGraderOrInstructor ? entries : myEntry ? [myEntry] : [];
+
+  if (sortedEntries.length === 0) return null;
+
+  return (
+    <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
+      <Text fontWeight="semibold" fontSize="sm" mb={1}>
+        Scores by student
+      </Text>
+      <Text fontSize="xs" color="text.muted" mb={2}>
+        Each total includes whole-group rubric, autograder, score tweak, and that student&apos;s individual rubric
+        portions.
+      </Text>
+      <VStack align="start" gap={1}>
+        {sortedEntries.map(([profileId, score]) => {
+          const isMe = profileId === private_profile_id;
+          return (
+            <HStack key={profileId} w="100%" justifyContent="space-between">
+              <HStack>
+                <PersonName uid={profileId} />
+                {isMe && !isGraderOrInstructor && (
+                  <Text fontSize="xs" color="fg.info" fontWeight="bold">
+                    (You)
+                  </Text>
+                )}
+              </HStack>
+              <Text fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                {maxPoints != null ? `${score}/${maxPoints}` : score}
+              </Text>
+            </HStack>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
 function IndividualScoresDisplay({ individualScores }: { individualScores: IndividualScores }) {
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -1348,6 +1397,10 @@ function RubricView() {
   const gradingReview = useSubmissionReviewOrGradingReview(reviewId);
   const { assignment } = useAssignmentController();
 
+  const showPerStudentGradingTotals =
+    gradingReview?.per_student_grading_totals &&
+    isNonEmptyPerStudentGradingTotals(gradingReview.per_student_grading_totals);
+
   return (
     <Box
       position="sticky"
@@ -1395,7 +1448,8 @@ function RubricView() {
             )}
           </Box>
         )}
-        {assignment.total_points !== null &&
+        {!showPerStudentGradingTotals &&
+          assignment.total_points !== null &&
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
@@ -1403,9 +1457,17 @@ function RubricView() {
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
-        {gradingReview?.individual_scores && isIndividualScores(gradingReview.individual_scores) && (
-          <IndividualScoresDisplay individualScores={gradingReview.individual_scores} />
+        {showPerStudentGradingTotals && (
+          <PerStudentGradingTotalsDisplay
+            totals={gradingReview.per_student_grading_totals as IndividualScores}
+            maxPoints={assignment.total_points}
+          />
         )}
+        {!showPerStudentGradingTotals &&
+          gradingReview?.individual_scores &&
+          isIndividualScores(gradingReview.individual_scores) && (
+            <IndividualScoresDisplay individualScores={gradingReview.individual_scores} />
+          )}
         <SubmissionReviewScoreTweak />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
