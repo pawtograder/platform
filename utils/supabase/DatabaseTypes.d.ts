@@ -3,7 +3,7 @@ import { Database, Json } from "./SupabaseTypes";
 export type { Json };
 
 export type IndividualScores = Partial<Record<string, number>>;
-export type RubricPartStudentAssignments = Record<string, string | null>;
+export type RubricPartStudentAssignments = Partial<Record<string, string | null>>;
 
 export type GradebookColumnExternalData = {
   source: "csv";

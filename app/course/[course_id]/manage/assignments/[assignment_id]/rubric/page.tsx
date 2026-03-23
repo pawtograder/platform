@@ -325,6 +325,13 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
       "Duplicate check ids in YAML. If you intend to copy a check, simply remove the ID on the copy, and a new ID will be generated for the new check upon saving."
     );
   }
+  for (const part of parts) {
+    if (part.is_individual_grading && part.is_assign_to_student) {
+      throw new Error(
+        `Part "${part.name}" cannot have both is_individual_grading and is_assign_to_student enabled. Choose one mode.`
+      );
+    }
+  }
   return parts.map((part, index) => ({
     id: part.id || -1,
     name: part.name,

@@ -1691,11 +1691,7 @@ function GroupMemberSelectOption({ profileId }: { profileId: string }) {
   const displayName = userProfile?.name?.trim() || "";
   const realNameSuffix = isStaff && userProfile?.real_name ? ` (${userProfile.real_name})` : "";
   const label = (displayName || profileId) + realNameSuffix;
-  return (
-    <option value={profileId}>
-      {label}
-    </option>
-  );
+  return <option value={profileId}>{label}</option>;
 }
 
 function AssignToStudentPart({
@@ -1928,6 +1924,10 @@ function IndividualGradingRunBlock({
   classId?: number;
   currentRubricId?: number;
 }) {
+  const isGrader = useIsGraderOrInstructor();
+  const { private_profile_id } = useClassProfiles();
+  const visibleMembers = isGrader ? groupMembers : groupMembers.filter((m) => m.profile_id === private_profile_id);
+
   return (
     <Box w="100%">
       <HStack mb={2} gap={2} align="center" flexWrap="wrap">
@@ -1937,7 +1937,7 @@ function IndividualGradingRunBlock({
         </Text>
       </HStack>
       <VStack align="stretch" w="100%" gap={5}>
-        {groupMembers.map((member) => (
+        {visibleMembers.map((member) => (
           <IndividualGradingStudentBlock
             key={member.profile_id}
             memberProfileId={member.profile_id}

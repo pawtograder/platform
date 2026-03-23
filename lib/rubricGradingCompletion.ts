@@ -24,8 +24,11 @@ export function gradeTargetsForSubmission(input: {
   profileId: string | null | undefined;
   groupMemberProfileIds: string[];
 }): string[] {
-  if (input.assignmentGroupId != null && input.groupMemberProfileIds.length > 0) {
-    return [...new Set(input.groupMemberProfileIds)];
+  if (input.assignmentGroupId != null) {
+    if (input.groupMemberProfileIds.length > 0) {
+      return [...new Set(input.groupMemberProfileIds)];
+    }
+    return [];
   }
   if (input.profileId) {
     return [input.profileId];

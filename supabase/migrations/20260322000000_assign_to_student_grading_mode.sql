@@ -1,6 +1,11 @@
 -- Assign-to-student grading mode: grader picks which student a rubric part applies to.
 ALTER TABLE "public"."rubric_parts" ADD COLUMN IF NOT EXISTS "is_assign_to_student" boolean NOT NULL DEFAULT false;
 
+-- Mutually exclusive: a part cannot be both individual and assign-to-student
+ALTER TABLE "public"."rubric_parts" DROP CONSTRAINT IF EXISTS "rubric_parts_exclusive_student_grading_mode";
+ALTER TABLE "public"."rubric_parts" ADD CONSTRAINT "rubric_parts_exclusive_student_grading_mode"
+  CHECK (NOT (is_individual_grading AND is_assign_to_student));
+
 -- Maps rubric_part_id → assigned student profile_id (or null if skipped)
 ALTER TABLE "public"."submission_reviews" ADD COLUMN IF NOT EXISTS "rubric_part_student_assignments" jsonb;
 -- Extend submissionreviewrecompute to also compute individual_scores.

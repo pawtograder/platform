@@ -91,6 +91,16 @@ BEGIN
         'Rubric comments for individual grading parts require target_student_profile_id (rubric_check_id=%)',
         NEW.rubric_check_id;
     END IF;
+    -- Validate the target is an actual group member for the submission
+    IF NOT EXISTS (
+      SELECT 1 FROM public.submissions s
+      JOIN public.assignment_groups_members agm ON agm.assignment_group_id = s.assignment_group_id
+      WHERE s.id = NEW.submission_id AND agm.profile_id = NEW.target_student_profile_id
+    ) THEN
+      RAISE EXCEPTION
+        'target_student_profile_id (%) is not a member of the submission group (submission_id=%)',
+        NEW.target_student_profile_id, NEW.submission_id;
+    END IF;
   ELSIF NOT v_assign THEN
     IF NEW.target_student_profile_id IS NOT NULL THEN
       RAISE EXCEPTION
@@ -103,23 +113,29 @@ BEGIN
 END;
 $$;
 
+-- Create triggers as initially DISABLED until all comment writers pass target_student_profile_id.
+-- Enable with: ALTER TABLE ... ENABLE TRIGGER tr_enforce_rubric_comment_target_...;
+
 DROP TRIGGER IF EXISTS tr_enforce_rubric_comment_target_submission_comments ON public.submission_comments;
 CREATE TRIGGER tr_enforce_rubric_comment_target_submission_comments
   BEFORE INSERT OR UPDATE OF rubric_check_id, target_student_profile_id, deleted_at ON public.submission_comments
   FOR EACH ROW
   EXECUTE FUNCTION public.enforce_rubric_comment_target_student();
+ALTER TABLE public.submission_comments DISABLE TRIGGER tr_enforce_rubric_comment_target_submission_comments;
 
 DROP TRIGGER IF EXISTS tr_enforce_rubric_comment_target_submission_file_comments ON public.submission_file_comments;
 CREATE TRIGGER tr_enforce_rubric_comment_target_submission_file_comments
   BEFORE INSERT OR UPDATE OF rubric_check_id, target_student_profile_id, deleted_at ON public.submission_file_comments
   FOR EACH ROW
   EXECUTE FUNCTION public.enforce_rubric_comment_target_student();
+ALTER TABLE public.submission_file_comments DISABLE TRIGGER tr_enforce_rubric_comment_target_submission_file_comments;
 
 DROP TRIGGER IF EXISTS tr_enforce_rubric_comment_target_submission_artifact_comments ON public.submission_artifact_comments;
 CREATE TRIGGER tr_enforce_rubric_comment_target_submission_artifact_comments
   BEFORE INSERT OR UPDATE OF rubric_check_id, target_student_profile_id, deleted_at ON public.submission_artifact_comments
   FOR EACH ROW
   EXECUTE FUNCTION public.enforce_rubric_comment_target_student();
+ALTER TABLE public.submission_artifact_comments DISABLE TRIGGER tr_enforce_rubric_comment_target_submission_artifact_comments;
 
 COMMENT ON FUNCTION public.enforce_rubric_comment_target_student() IS
   'Requires target_student_profile_id for is_individual_grading parts; forbids it for standard parts; allows either for is_assign_to_student.';

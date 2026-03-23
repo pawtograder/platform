@@ -1,7 +1,8 @@
 import { useRubricParts } from "@/hooks/useAssignment";
-import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import { useAllProfilesForClass, useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import { useSubmission } from "@/hooks/useSubmission";
 import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
+import { useMemo } from "react";
 import type {
   RubricCriteria,
   RubricPart,
@@ -11,7 +12,7 @@ import type {
 
 export type RubricAnnotationTargetMeta =
   | { mode: "whole_group" }
-  | { mode: "individual"; members: { profile_id: string }[] }
+  | { mode: "individual"; members: { profile_id: string; name?: string }[] }
   | { mode: "assign_fixed"; targetId: string }
   | { mode: "assign_blocked"; reason: string };
 
@@ -23,10 +24,15 @@ export function computeRubricAnnotationTargetMeta(input: {
   review: Pick<SubmissionReview, "rubric_part_student_assignments"> | null | undefined;
 }): RubricAnnotationTargetMeta {
   const { criteria, part, members, review } = input;
-  if (!criteria || !review) {
+  if (!criteria || !part) {
     return { mode: "whole_group" };
   }
-  if (!part || members.length === 0) {
+  if (part.is_individual_grading || part.is_assign_to_student) {
+    if (!review || members.length === 0) {
+      return { mode: "assign_blocked", reason: "Loading group data…" };
+    }
+  }
+  if (!review || members.length === 0) {
     return { mode: "whole_group" };
   }
   if (part.is_individual_grading) {
@@ -58,7 +64,16 @@ export function useRubricAnnotationTargetMeta(criteria: RubricCriteria | null | 
   const groupRow = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
-  const members = groupRow?.assignment_groups_members ?? [];
+  const rawMembers = groupRow?.assignment_groups_members ?? [];
+  const allProfiles = useAllProfilesForClass();
+  const members = useMemo(
+    () =>
+      rawMembers.map((m) => ({
+        profile_id: m.profile_id,
+        name: allProfiles?.find((p) => p.id === m.profile_id)?.name ?? undefined
+      })),
+    [rawMembers, allProfiles]
+  );
   const part = parts?.find((p) => p.id === criteria?.rubric_part_id);
   return computeRubricAnnotationTargetMeta({ criteria, part, members, review });
 }

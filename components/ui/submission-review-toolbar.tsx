@@ -137,6 +137,16 @@ function useMissingRubricChecksForReviewAssignment(reviewAssignmentId?: number) 
       };
     }
 
+    const hasPerStudentParts = rubricPartsList?.some((p) => p.is_individual_grading || p.is_assign_to_student);
+    if (hasPerStudentParts && gradeTargets.length === 0) {
+      return {
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: []
+      };
+    }
+
     return computeRubricGradingCompletion({
       rubricChecks: allChecksForRubric,
       allCriteria: allCriteriaForRubric,

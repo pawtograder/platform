@@ -1085,7 +1085,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                   <option value="">Select group member…</option>
                   {annotationTargetMeta.members.map((m) => (
                     <option key={m.profile_id} value={m.profile_id}>
-                      {m.profile_id}
+                      {m.name ?? m.profile_id}
                     </option>
                   ))}
                 </NativeSelectField>
