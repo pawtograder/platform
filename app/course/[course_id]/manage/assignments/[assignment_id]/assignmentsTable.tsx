@@ -94,7 +94,7 @@ function ScoreLink({
   course_id,
   assignment_id
 }: {
-  score: number;
+  score: number | null | undefined;
   private_profile_id: string;
   submission_id: number;
   course_id: string;
@@ -105,7 +105,8 @@ function ScoreLink({
   if (isObfuscated && !canShowGradeFor) {
     return <Skeleton w="50px" h="1em" />;
   }
-  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
+  const label = score !== null && score !== undefined ? score : "—";
+  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
 }
 
 /** Per-student combined total from `per_student_grading_totals`, if present. */
@@ -142,26 +143,29 @@ function TotalScoreCell({
 
   const displayScore = getDisplayedTotalScore(row.original);
 
+  const tooltipContent =
+    individualScores && individualScores[studentId] !== undefined
+      ? `Individual portion: ${individualScores[studentId]}`
+      : perStudentCombined != null
+        ? `Full total (group + autograder + tweak + individual portions): ${perStudentCombined}`
+        : individualScores
+          ? Object.entries(individualScores)
+              .filter(([, s]) => s !== undefined)
+              .map(([, score]) => `${score}`)
+              .join(" | ")
+          : "";
+
   return (
     <HStack gap={1}>
       <ScoreLink
-        score={displayScore ?? 0}
+        score={displayScore}
         private_profile_id={studentId}
         submission_id={row.original.activesubmissionid!}
         course_id={course_id}
         assignment_id={assignment_id}
       />
       {showTooltip && (
-        <Tooltip
-          content={
-            perStudentCombined != null
-              ? `Full total (group + autograder + tweak + individual portions): ${perStudentCombined}`
-              : Object.entries(individualScores!)
-                  .filter(([, s]) => s !== undefined)
-                  .map(([, score]) => `${score}`)
-                  .join(" | ")
-          }
-        >
+        <Tooltip content={tooltipContent}>
           <Text fontSize="xs" color="fg.info" cursor="help">
             ⓘ
           </Text>
@@ -339,7 +343,7 @@ export default function AssignmentsTable({
         cell: (props) => {
           return (
             <ScoreLink
-              score={props.getValue() as number}
+              score={props.getValue() as number | null | undefined}
               private_profile_id={props.row.original.student_private_profile_id!}
               submission_id={props.row.original.activesubmissionid!}
               course_id={course_id as string}

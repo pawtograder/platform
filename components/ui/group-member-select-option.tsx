@@ -7,7 +7,10 @@ export function useGroupMemberSelectLabel(profileId: string): string {
   const isStaff = useIsGraderOrInstructor();
   const displayName = userProfile?.name?.trim() ?? "";
   const realNameSuffix = isStaff && userProfile?.real_name ? ` (${userProfile.real_name})` : "";
-  return (displayName || profileId) + realNameSuffix;
+  if (displayName) {
+    return displayName + realNameSuffix;
+  }
+  return "Unknown user" + realNameSuffix;
 }
 
 /** Native `<option>` for picking a group member by private profile id (obfuscation-aware label). */

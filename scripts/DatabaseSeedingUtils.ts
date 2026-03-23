@@ -23,8 +23,8 @@ import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
 
 import {
-  fetchDefaultGradeTargetStudentProfileId,
-  fetchRubricCheckIdsRequiringTargetStudentProfileId
+  fetchDefaultGradeTargetStudentProfileIdsBatch,
+  fetchRubricCheckIdsRequiringTargetStudentProfileIdsBatch
 } from "@/lib/rubricCommentTargetStudentProfileId";
 import {
   createClass,
@@ -3122,28 +3122,27 @@ export class DatabaseSeeder {
       }
     });
 
-    const individualChecksByRubric = new Map<number, Set<number>>();
-    for (const [rubricId, checks] of rubricChecksMap.entries()) {
-      individualChecksByRubric.set(
-        rubricId,
-        await fetchRubricCheckIdsRequiringTargetStudentProfileId(
-          supabase,
-          checks.map((c) => c.id)
-        )
-      );
-    }
+    const rubricIdToCheckIds = new Map<number, number[]>(
+      [...rubricChecksMap.entries()].map(([rubricId, checks]) => [rubricId, checks.map((c) => c.id)])
+    );
 
-    const submissionIdsForDefaultTarget = [...new Set(reviewInfo?.map((r) => r.submission_id) ?? [])];
-    const defaultTargetBySubmission = new Map<number, string | null>();
-    for (const sid of submissionIdsForDefaultTarget) {
-      defaultTargetBySubmission.set(sid, await fetchDefaultGradeTargetStudentProfileId(supabase, sid));
-    }
+    const [individualChecksByRubric, { data: submissionFiles }] = await Promise.all([
+      fetchRubricCheckIdsRequiringTargetStudentProfileIdsBatch(supabase, rubricIdToCheckIds),
+      supabase.from("submission_files").select("id, name, submission_id").in("submission_id", submissionIds)
+    ]);
 
-    // Get all submission files for annotations
-    const { data: submissionFiles } = await supabase
-      .from("submission_files")
-      .select("id, name, submission_id")
-      .in("submission_id", submissionIds);
+    const submissionIdsForDefaultTarget = [
+      ...new Set(
+        (reviewInfo ?? [])
+          .filter((r) => (individualChecksByRubric.get(r.rubric_id)?.size ?? 0) > 0)
+          .map((r) => r.submission_id)
+      )
+    ];
+
+    const defaultTargetBySubmission = await fetchDefaultGradeTargetStudentProfileIdsBatch(
+      supabase,
+      submissionIdsForDefaultTarget
+    );
 
     const submissionFilesMap = new Map<number, Array<{ id: number; name: string; submission_id: number }>>();
     submissionFiles?.forEach((file) => {
@@ -3237,9 +3236,17 @@ export class DatabaseSeeder {
         for (const check of applicableChecks) {
           const pointsAwarded = checkPointAllocations.get(check.id) || 0;
           const individualSet = individualChecksByRubric.get(review.rubric_id);
-          const targetProfile =
-            individualSet?.has(check.id) === true ? defaultTargetBySubmission.get(review.submission_id) : null;
-          const targetField = targetProfile ? { target_student_profile_id: targetProfile } : {};
+          const needsIndividualTarget = individualSet?.has(check.id) === true;
+          const targetProfile = needsIndividualTarget ? defaultTargetBySubmission.get(review.submission_id) : undefined;
+          let targetField: { target_student_profile_id: string } | Record<string, never> = {};
+          if (needsIndividualTarget) {
+            if (targetProfile == null) {
+              throw new Error(
+                `gradeSubmissions: rubric check ${check.id} requires target_student_profile_id but no default target for submission ${review.submission_id} (review ${review.id})`
+              );
+            }
+            targetField = { target_student_profile_id: targetProfile };
+          }
 
           if (check.is_annotation && files.length > 0) {
             // Create submission file comment (annotation)
