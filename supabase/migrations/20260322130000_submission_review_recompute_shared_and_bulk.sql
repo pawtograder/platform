@@ -2,6 +2,8 @@
 -- submissionreviewrecompute_bulk_grader_tests previously only updated total_score and
 -- total_autograde_score, so split-rubric per-student lines missed tweak/autograde until a
 -- hand-grading comment fired the full trigger.
+-- Also: AFTER UPDATE OF rubric_part_student_assignments,tweak on submission_reviews so
+-- assign-to-student / tweak edits recompute without a comment touch.
 
 ALTER TABLE public.submission_reviews
   ADD COLUMN IF NOT EXISTS per_student_grading_shared_base numeric;
@@ -295,7 +297,11 @@ BEGIN
     END IF;
   END IF;
 
-  IF 'submission_review_id' = any(SELECT jsonb_object_keys(to_jsonb(new))) THEN
+  -- submission_reviews updates (assign-to-student mapping, tweak) must recompute this row;
+  -- submissions.grading_review_id alone would always target the grading review, not e.g. round-1 reviews.
+  IF TG_TABLE_NAME = 'submission_reviews' THEN
+    existing_submission_review_id := NEW.id;
+  ELSIF 'submission_review_id' = any(SELECT jsonb_object_keys(to_jsonb(new))) THEN
     IF NEW.submission_review_id IS NULL THEN
       RETURN NEW;
     END IF;
@@ -315,6 +321,18 @@ BEGIN
   RETURN NEW;
 END;
 $function$;
+
+-- Assign-to-student edits update submission_reviews only (no comment row). UPDATE OF avoids firing
+-- when recompute writes total_score / individual_scores / per_student_grading_*.
+DROP TRIGGER IF EXISTS submission_reviews_recompute_split_metadata ON public.submission_reviews;
+
+CREATE TRIGGER submission_reviews_recompute_split_metadata
+AFTER UPDATE OF rubric_part_student_assignments, tweak ON public.submission_reviews
+FOR EACH ROW
+EXECUTE FUNCTION public.submissionreviewrecompute();
+
+COMMENT ON TRIGGER submission_reviews_recompute_split_metadata ON public.submission_reviews IS
+  'Recompute scores when assign-to-student mapping or tweak changes; skipped for score-only updates from _submission_review_recompute_scores.';
 
 CREATE OR REPLACE FUNCTION public.submissionreviewrecompute_bulk_grader_tests()
 RETURNS trigger

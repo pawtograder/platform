@@ -1685,6 +1685,19 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   );
 }
 
+function GroupMemberSelectOption({ profileId }: { profileId: string }) {
+  const userProfile = useUserProfile(profileId);
+  const isStaff = useIsGraderOrInstructor();
+  const displayName = userProfile?.name?.trim() || "";
+  const realNameSuffix = isStaff && userProfile?.real_name ? ` (${userProfile.real_name})` : "";
+  const label = (displayName || profileId) + realNameSuffix;
+  return (
+    <option value={profileId}>
+      {label}
+    </option>
+  );
+}
+
 function AssignToStudentPart({
   part,
   groupMembers,
@@ -1755,9 +1768,7 @@ function AssignToStudentPart({
           >
             <option value="__skip__">Skip (hide this part)</option>
             {groupMembers.map((member) => (
-              <option key={member.profile_id} value={member.profile_id}>
-                {member.profile_id}
-              </option>
+              <GroupMemberSelectOption key={member.profile_id} profileId={member.profile_id} />
             ))}
           </NativeSelectField>
         </NativeSelectRoot>
