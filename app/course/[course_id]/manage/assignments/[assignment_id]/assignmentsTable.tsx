@@ -109,9 +109,7 @@ function ScoreLink({
 }
 
 /** Per-student combined total from `per_student_grading_totals`, if present. */
-function getPerStudentCombinedGradingTotal(
-  submission: ActiveSubmissionsWithGradesForAssignment
-): number | null {
+function getPerStudentCombinedGradingTotal(submission: ActiveSubmissionsWithGradesForAssignment): number | null {
   const studentId = submission.student_private_profile_id;
   if (!studentId) return null;
   const perStudentTotals = submission.per_student_grading_totals as IndividualScores | null | undefined;
@@ -363,11 +361,7 @@ export default function AssignmentsTable({
         header: "Total Score",
         enableColumnFilter: true,
         cell: (props) => (
-          <TotalScoreCell
-            row={props.row}
-            course_id={course_id as string}
-            assignment_id={assignment_id as string}
-          />
+          <TotalScoreCell row={props.row} course_id={course_id as string} assignment_id={assignment_id as string} />
         ),
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
