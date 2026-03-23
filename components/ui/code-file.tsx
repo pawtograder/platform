@@ -71,6 +71,7 @@ import {
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { GroupMemberLabelText, GroupMemberSelectOption } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
@@ -523,6 +524,11 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                     <Text fontSize="sm" color="fg.muted">
                       {rubricCriteria?.name} &gt; {rubricCheck?.name}
                     </Text>
+                    {comment.target_student_profile_id && (
+                      <Badge variant="outline" fontSize="xs" flexShrink={0}>
+                        <GroupMemberLabelText profileId={comment.target_student_profile_id} />
+                      </Badge>
+                    )}
                   </HStack>
                   <HStack gap={0} flexWrap="wrap">
                     <Text fontSize="sm" fontStyle="italic" color="fg.muted">
@@ -1084,9 +1090,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                 >
                   <option value="">Select group member…</option>
                   {annotationTargetMeta.members.map((m) => (
-                    <option key={m.profile_id} value={m.profile_id}>
-                      {m.name ?? m.profile_id}
-                    </option>
+                    <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
                   ))}
                 </NativeSelectField>
               </NativeSelectRoot>

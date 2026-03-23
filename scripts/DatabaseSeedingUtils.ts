@@ -23,6 +23,10 @@ import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
 
 import {
+  fetchDefaultGradeTargetStudentProfileId,
+  fetchRubricCheckIdsRequiringTargetStudentProfileId
+} from "@/lib/rubricCommentTargetStudentProfileId";
+import {
   createClass,
   createUserInClass,
   supabase,
@@ -3118,6 +3122,23 @@ export class DatabaseSeeder {
       }
     });
 
+    const individualChecksByRubric = new Map<number, Set<number>>();
+    for (const [rubricId, checks] of rubricChecksMap.entries()) {
+      individualChecksByRubric.set(
+        rubricId,
+        await fetchRubricCheckIdsRequiringTargetStudentProfileId(
+          supabase,
+          checks.map((c) => c.id)
+        )
+      );
+    }
+
+    const submissionIdsForDefaultTarget = [...new Set(reviewInfo?.map((r) => r.submission_id) ?? [])];
+    const defaultTargetBySubmission = new Map<number, string | null>();
+    for (const sid of submissionIdsForDefaultTarget) {
+      defaultTargetBySubmission.set(sid, await fetchDefaultGradeTargetStudentProfileId(supabase, sid));
+    }
+
     // Get all submission files for annotations
     const { data: submissionFiles } = await supabase
       .from("submission_files")
@@ -3215,6 +3236,10 @@ export class DatabaseSeeder {
         // Create comments for applicable checks with allocated points
         for (const check of applicableChecks) {
           const pointsAwarded = checkPointAllocations.get(check.id) || 0;
+          const individualSet = individualChecksByRubric.get(review.rubric_id);
+          const targetProfile =
+            individualSet?.has(check.id) === true ? defaultTargetBySubmission.get(review.submission_id) : null;
+          const targetField = targetProfile ? { target_student_profile_id: targetProfile } : {};
 
           if (check.is_annotation && files.length > 0) {
             // Create submission file comment (annotation)
@@ -3231,7 +3256,8 @@ export class DatabaseSeeder {
               class_id: review.class_id,
               released: true,
               rubric_check_id: check.id,
-              submission_review_id: review.id
+              submission_review_id: review.id,
+              ...targetField
             });
           } else {
             // Create submission comment (general comment)
@@ -3243,7 +3269,8 @@ export class DatabaseSeeder {
               class_id: review.class_id,
               released: true,
               rubric_check_id: check.id,
-              submission_review_id: review.id
+              submission_review_id: review.id,
+              ...targetField
             });
           }
         }

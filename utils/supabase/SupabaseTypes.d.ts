@@ -11809,6 +11809,14 @@ export type Database = {
         };
         Returns: number;
       };
+      patch_submission_review_rubric_part_assignment: {
+        Args: {
+          p_rubric_part_id: number;
+          p_student_profile_id: string | null;
+          p_submission_review_id: number;
+        };
+        Returns: Database["public"]["Tables"]["submission_reviews"]["Row"];
+      };
       preview_error_pin_matches: {
         Args: {
           p_assignment_id: number;

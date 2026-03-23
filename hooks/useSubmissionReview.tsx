@@ -346,7 +346,7 @@ export function useMissingRubricChecksForActiveReview() {
     (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
 
   return useMemo(() => {
-    if (!activeSubmissionReview || !rubricChecks.length) {
+    if (!activeSubmissionReview || !rubricChecks?.length) {
       return {
         missing_required_checks: [],
         missing_optional_checks: [],
@@ -357,9 +357,9 @@ export function useMissingRubricChecksForActiveReview() {
 
     const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
       computeRubricGradingCompletion({
-        rubricChecks,
-        allCriteria,
-        rubricParts,
+        rubricChecks: rubricChecks ?? [],
+        allCriteria: allCriteria ?? [],
+        rubricParts: rubricParts ?? [],
         comments,
         rubricPartStudentAssignments,
         gradeTargets,

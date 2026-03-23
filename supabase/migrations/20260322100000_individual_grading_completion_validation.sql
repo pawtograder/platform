@@ -91,14 +91,22 @@ BEGIN
         'Rubric comments for individual grading parts require target_student_profile_id (rubric_check_id=%)',
         NEW.rubric_check_id;
     END IF;
-    -- Validate the target is an actual group member for the submission
+    -- Validate the target is a grade target: group member, or sole submitter when there is no group
     IF NOT EXISTS (
       SELECT 1 FROM public.submissions s
-      JOIN public.assignment_groups_members agm ON agm.assignment_group_id = s.assignment_group_id
-      WHERE s.id = NEW.submission_id AND agm.profile_id = NEW.target_student_profile_id
+      WHERE s.id = NEW.submission_id
+        AND (
+          (s.assignment_group_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM public.assignment_groups_members agm
+            WHERE agm.assignment_group_id = s.assignment_group_id
+              AND agm.assignment_id = s.assignment_id
+              AND agm.profile_id = NEW.target_student_profile_id
+          ))
+          OR (s.assignment_group_id IS NULL AND s.profile_id = NEW.target_student_profile_id)
+        )
     ) THEN
       RAISE EXCEPTION
-        'target_student_profile_id (%) is not a member of the submission group (submission_id=%)',
+        'target_student_profile_id (%) is not a grade target for this submission (submission_id=%)',
         NEW.target_student_profile_id, NEW.submission_id;
     END IF;
   ELSIF NOT v_assign THEN
@@ -657,6 +665,8 @@ BEGIN
   RETURN true;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public._submission_review_is_completable(bigint) FROM PUBLIC;
 
 -- Helpers for uncovered-part checks (must exist before check_and_complete_submission_review).
 CREATE OR REPLACE FUNCTION public.check_required_check_satisfied_for_uncovered(

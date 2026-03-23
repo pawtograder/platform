@@ -8,6 +8,7 @@ import CodeFile, {
   RubricCriteriaSelectGroupOption
 } from "@/components/ui/code-file";
 import DownloadLink from "@/components/ui/download-link";
+import { GroupMemberSelectOption } from "@/components/ui/group-member-select-option";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
@@ -725,9 +726,7 @@ function ArtifactCheckPopover({
                     >
                       <option value="">Select group member…</option>
                       {artifactAnnotationTargetMeta.members.map((m) => (
-                        <option key={m.profile_id} value={m.profile_id}>
-                          {m.profile_id}
-                        </option>
+                        <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
                       ))}
                     </NativeSelectField>
                   </NativeSelectRoot>

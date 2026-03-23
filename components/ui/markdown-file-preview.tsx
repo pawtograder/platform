@@ -55,6 +55,7 @@ import CodeFile, {
   RubricCheckSubOptions,
   RubricCriteriaSelectGroupOption
 } from "./code-file";
+import { GroupMemberSelectOption } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import MessageInput from "./message-input";
 import { StudentVisibilityIndicator } from "./rubric-sidebar";
@@ -578,9 +579,7 @@ function MarkdownLineActionPopup({
                 >
                   <option value="">Select group member…</option>
                   {annotationTargetMeta.members.map((m) => (
-                    <option key={m.profile_id} value={m.profile_id}>
-                      {m.name ?? m.profile_id}
-                    </option>
+                    <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
                   ))}
                 </NativeSelectField>
               </NativeSelectRoot>

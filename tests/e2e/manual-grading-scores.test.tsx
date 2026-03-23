@@ -3,6 +3,7 @@ import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import { argosScreenshot } from "@argos-ci/playwright";
+import { resolveTargetStudentProfileIdForRubricComment } from "@/lib/rubricCommentTargetStudentProfileId";
 import {
   createClass,
   createUsersInClass,
@@ -34,6 +35,10 @@ async function addComment({
   points: number;
   target_student_profile_id?: string;
 }) {
+  const resolvedTarget =
+    target_student_profile_id !== undefined
+      ? target_student_profile_id
+      : await resolveTargetStudentProfileIdForRubricComment(supabase, submission_id, check_id);
   const { data, error } = await supabase
     .from("submission_comments")
     .insert({
@@ -47,7 +52,7 @@ async function addComment({
       released: false,
       eventually_visible: true,
       regrade_request_id: null,
-      target_student_profile_id: target_student_profile_id ?? null
+      target_student_profile_id: resolvedTarget
     })
     .select("id")
     .single();

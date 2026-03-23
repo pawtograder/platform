@@ -279,6 +279,8 @@ $function$;
 COMMENT ON FUNCTION public._submission_review_recompute_scores(bigint) IS
   'Internal: recompute total_score, autograde, individual_scores, per_student_grading_totals, and per_student_grading_shared_base.';
 
+REVOKE ALL ON FUNCTION public._submission_review_recompute_scores(bigint) FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION public.submissionreviewrecompute()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -322,6 +324,8 @@ BEGIN
 END;
 $function$;
 
+REVOKE ALL ON FUNCTION public.submissionreviewrecompute() FROM PUBLIC;
+
 -- Assign-to-student edits update submission_reviews only (no comment row). UPDATE OF avoids firing
 -- when recompute writes total_score / individual_scores / per_student_grading_*.
 DROP TRIGGER IF EXISTS submission_reviews_recompute_split_metadata ON public.submission_reviews;
@@ -348,6 +352,7 @@ BEGIN
     SELECT DISTINCT submission_id
     FROM new_table
     WHERE submission_id IS NOT NULL
+    ORDER BY submission_id
   LOOP
     SELECT grading_review_id
     INTO existing_submission_review_id
@@ -367,6 +372,8 @@ $$;
 
 COMMENT ON FUNCTION public.submissionreviewrecompute_bulk_grader_tests() IS
   'Statement-level trigger: full score recompute (including individual_scores and per_student_grading_totals) for affected grading reviews after grader_result_tests changes.';
+
+REVOKE ALL ON FUNCTION public.submissionreviewrecompute_bulk_grader_tests() FROM PUBLIC;
 
 -- Expose shared base on instructor grade table view
 DROP VIEW IF EXISTS public.submissions_with_grades_for_assignment_nice;
