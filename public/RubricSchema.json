@@ -72,6 +72,24 @@
         "is_required": {
           "type": "boolean"
         },
+        "kpi_category": {
+          "anyOf": [
+            {
+              "enum": [
+                "commits",
+                "issue_comments",
+                "issues_closed",
+                "issues_opened",
+                "pr_review_comments",
+                "prs_opened"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "max_annotations": {
           "type": "number"
         },
@@ -86,7 +104,7 @@
           "type": "string"
         }
       },
-      "required": ["is_annotation", "is_comment_required", "is_required", "name", "points"],
+      "required": ["is_annotation", "is_comment_required", "is_required", "kpi_category", "name", "points"],
       "type": "object"
     },
     "YmlRubricCriteriaType": {
@@ -217,6 +235,6 @@
       "type": "array"
     }
   },
-  "required": ["name", "parts"],
+  "required": ["cap_score_to_assignment_points", "name", "parts"],
   "type": "object"
 }
