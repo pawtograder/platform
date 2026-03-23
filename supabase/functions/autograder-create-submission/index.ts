@@ -95,8 +95,13 @@ function dedupeStorageRelativePaths(paths: string[]): string[] {
     const seen = counts.get(p) ?? 0;
     counts.set(p, seen + 1);
     if (seen === 0) return p;
-    const lastDot = p.lastIndexOf(".");
-    if (lastDot > 0 && lastDot < p.length - 1) {
+    // Find the last slash to isolate the filename
+    const lastSlash = p.lastIndexOf("/");
+    const filename = lastSlash >= 0 ? p.slice(lastSlash + 1) : p;
+    // Find extension dot in filename only (must not be at position 0 for hidden files)
+    const dotInFilename = filename.lastIndexOf(".");
+    if (dotInFilename > 0 && dotInFilename < filename.length - 1) {
+      const lastDot = lastSlash >= 0 ? lastSlash + 1 + dotInFilename : dotInFilename;
       return `${p.slice(0, lastDot)}__${seen}${p.slice(lastDot)}`;
     }
     return `${p}__${seen}`;
