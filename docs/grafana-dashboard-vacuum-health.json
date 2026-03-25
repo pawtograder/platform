@@ -1,0 +1,340 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "panels": [],
+      "title": "Vacuum Health Overview",
+      "type": "row"
+    },
+    {
+      "title": "Active Vacuum Alerts",
+      "description": "Total number of active vacuum health alerts by severity",
+      "type": "stat",
+      "id": 2,
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "expr": "count(pawtograder_vacuum_alert{severity!=\"ok\"} == 1) OR vector(0)",
+          "legendFormat": "Alerts",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Critical Alerts",
+      "description": "Critical vacuum alerts (XID wraparound > 90%)",
+      "type": "stat",
+      "id": 3,
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 1 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "expr": "count(pawtograder_vacuum_alert{severity=\"critical\"} == 1) OR vector(0)",
+          "legendFormat": "Critical",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Gradebook Recalc Queue Depth",
+      "description": "Messages pending in the gradebook row recalculation queue",
+      "type": "timeseries",
+      "id": 4,
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 1 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 500 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "hidden" }
+      },
+      "targets": [
+        {
+          "expr": "pawtograder_gradebook_row_recalculate_queue_size",
+          "legendFormat": "Queue Depth",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "id": 5,
+      "panels": [],
+      "title": "Alert Details",
+      "type": "row"
+    },
+    {
+      "title": "Alerts by Check Type (over time)",
+      "description": "Tracks which vacuum health checks are firing and when",
+      "type": "timeseries",
+      "id": 6,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": { "mode": "none" }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "pawtograder_vacuum_alert{severity!=\"ok\"} == 1",
+          "legendFormat": "{{check}} / {{table_name}} ({{severity}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Current Alert Table",
+      "description": "All currently active vacuum health alerts with details",
+      "type": "table",
+      "id": 7,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "severity" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null }
+                  ]
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "warning": { "color": "yellow", "index": 0, "text": "WARNING" }, "critical": { "color": "red", "index": 1, "text": "CRITICAL" } } }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "severity", "desc": true }]
+      },
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "Value": true, "__name__": true },
+            "renameByName": {
+              "check": "Check",
+              "severity": "Severity",
+              "table_name": "Table"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "expr": "pawtograder_vacuum_alert{severity!=\"ok\"} == 1",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "id": 8,
+      "panels": [],
+      "title": "Queue Health",
+      "type": "row"
+    },
+    {
+      "title": "All Queue Depths",
+      "description": "All PGMQ queue depths over time",
+      "type": "timeseries",
+      "id": 9,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 25 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "pawtograder_async_queue_size",
+          "legendFormat": "Async (GitHub)",
+          "refId": "A"
+        },
+        {
+          "expr": "pawtograder_async_dlq_size",
+          "legendFormat": "Async DLQ",
+          "refId": "B"
+        },
+        {
+          "expr": "pawtograder_gradebook_row_recalculate_queue_size",
+          "legendFormat": "Gradebook Recalc",
+          "refId": "C"
+        },
+        {
+          "expr": "pawtograder_discord_queue_size",
+          "legendFormat": "Discord",
+          "refId": "D"
+        },
+        {
+          "expr": "pawtograder_discord_dlq_size",
+          "legendFormat": "Discord DLQ",
+          "refId": "E"
+        }
+      ]
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 30,
+  "style": "dark",
+  "tags": ["pawtograder", "vacuum", "database"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Pawtograder - Vacuum & Database Health",
+  "uid": "pawtograder-vacuum-health",
+  "version": 1
+}

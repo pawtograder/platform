@@ -121,3 +121,105 @@ BEGIN
   END IF;
 END
 $$;
+
+-- =============================================================================
+-- MONITORING: vacuum health check RPC + proactive cron alert
+-- =============================================================================
+
+-- RPC callable via PostgREST: SELECT * FROM vacuum_health_check();
+CREATE OR REPLACE FUNCTION public.vacuum_health_check()
+RETURNS TABLE (
+  check_name text,
+  severity text,
+  relname text,
+  detail text
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  -- Tables that need vacuum but haven't been vacuumed in over 1 hour
+  SELECT
+    'vacuum_overdue'::text,
+    'warning'::text,
+    s.relname::text,
+    format('dead_tuples=%s threshold=%s last_autovacuum=%s',
+      s.n_dead_tup,
+      (50 + 0.20 * s.n_live_tup)::int,
+      COALESCE(s.last_autovacuum::text, 'never'))
+  FROM pg_stat_user_tables s
+  WHERE s.n_dead_tup > (50 + 0.20 * s.n_live_tup)
+    AND (s.last_autovacuum IS NULL OR s.last_autovacuum < now() - interval '1 hour')
+
+  UNION ALL
+
+  -- XID age approaching freeze limit (>75%)
+  SELECT
+    'xid_wraparound_risk'::text,
+    CASE
+      WHEN age(c.relfrozenxid) > 0.90 * current_setting('autovacuum_freeze_max_age')::bigint THEN 'critical'
+      ELSE 'warning'
+    END,
+    c.relname::text,
+    format('xid_age=%s freeze_max=%s pct=%s%% size=%s',
+      age(c.relfrozenxid),
+      current_setting('autovacuum_freeze_max_age'),
+      round(100.0 * age(c.relfrozenxid) / current_setting('autovacuum_freeze_max_age')::bigint, 1),
+      pg_size_pretty(pg_total_relation_size(c.oid)))
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relkind = 'r'
+    AND age(c.relfrozenxid) > 0.75 * current_setting('autovacuum_freeze_max_age')::bigint
+
+  UNION ALL
+
+  -- Dead tuple ratio > 20% (bloat building up)
+  SELECT
+    'high_dead_tuple_ratio'::text,
+    'warning'::text,
+    s.relname::text,
+    format('live=%s dead=%s ratio=%s%% size=%s',
+      s.n_live_tup, s.n_dead_tup,
+      round(100.0 * s.n_dead_tup / NULLIF(s.n_live_tup, 0), 1),
+      pg_size_pretty(pg_total_relation_size(s.relid)))
+  FROM pg_stat_user_tables s
+  WHERE s.n_live_tup > 100
+    AND s.n_dead_tup > 0.20 * s.n_live_tup
+
+  UNION ALL
+
+  -- Tables > 1 GB that have never been vacuumed (since stats reset)
+  SELECT
+    'never_vacuumed_large_table'::text,
+    'warning'::text,
+    s.relname::text,
+    format('size=%s live=%s dead=%s',
+      pg_size_pretty(pg_total_relation_size(s.relid)),
+      s.n_live_tup, s.n_dead_tup)
+  FROM pg_stat_user_tables s
+  WHERE pg_total_relation_size(s.relid) > 1073741824  -- 1 GB
+    AND s.last_autovacuum IS NULL
+    AND s.vacuum_count = 0
+    AND s.autovacuum_count = 0
+
+  ORDER BY severity, check_name, relname;
+$$;
+
+ALTER FUNCTION public.vacuum_health_check() OWNER TO postgres;
+COMMENT ON FUNCTION public.vacuum_health_check() IS
+  'Returns vacuum health warnings: overdue vacuums, XID wraparound risk, dead tuple bloat, and large unvacuumed tables.';
+
+-- Cron: run health check every 15 minutes, notify on any findings
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM cron.job WHERE jobname = 'vacuum-health-monitor'
+  ) THEN
+    PERFORM cron.schedule(
+      'vacuum-health-monitor',
+      '*/15 * * * *',
+      'SELECT pg_notify(''vacuum_health_alert'', row_to_json(r)::text) FROM public.vacuum_health_check() r WHERE severity = ''critical'''
+    );
+  END IF;
+END
+$$;

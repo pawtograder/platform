@@ -37,6 +37,13 @@ async function generatePrometheusMetrics(): Promise<Response> {
       Sentry.captureException(redisMetricsError);
     }
 
+    const { data: vacuumHealth, error: vacuumError } = await supabase.rpc("vacuum_health_check");
+
+    if (vacuumError) {
+      console.error("Error fetching vacuum health:", vacuumError);
+      Sentry.captureException(vacuumError);
+    }
+
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
     const dlqQueueCount = queueSizes?.[0]?.dlq_queue_size || 0;
     const gradebookRowRecalculateQueueCount = queueSizes?.[0]?.gradebook_row_recalculate_queue_size || 0;
@@ -110,6 +117,24 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
         output += `pawtograder_bottleneck_concurrent_clients{${labels}} ${snap.concurrent_clients} ${timestamp}\n`;
         output += `pawtograder_bottleneck_queued{${labels}} ${snap.queued} ${timestamp}\n`;
       }
+    }
+
+    // Vacuum health metrics
+    if (vacuumHealth && vacuumHealth.length > 0) {
+      output += `
+# HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name
+# TYPE pawtograder_vacuum_alert gauge
+`;
+      for (const row of vacuumHealth) {
+        const labels = `check="${escapeLabel(row.check_name)}",severity="${escapeLabel(row.severity)}",table_name="${escapeLabel(row.relname)}"`;
+        output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
+      }
+    } else {
+      output += `
+# HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name
+# TYPE pawtograder_vacuum_alert gauge
+pawtograder_vacuum_alert{check="none",severity="ok",table_name="none"} 0 ${timestamp}
+`;
     }
 
     output += "\n";
