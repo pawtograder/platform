@@ -108,11 +108,16 @@ WHERE created_at < now() - interval '90 days';
 
 VACUUM (ANALYZE) auth.audit_log_entries;
 
-SELECT cron.schedule(
-  'purge-auth-audit-log-entries',
-  '15 4 * * *',  -- daily at 04:15 UTC
-  $$
-  DELETE FROM auth.audit_log_entries
-  WHERE created_at < now() - interval '90 days'
-  $$
-);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM cron.job WHERE jobname = 'purge-auth-audit-log-entries'
+  ) THEN
+    PERFORM cron.schedule(
+      'purge-auth-audit-log-entries',
+      '15 4 * * *',  -- daily at 04:15 UTC
+      'DELETE FROM auth.audit_log_entries WHERE created_at < now() - interval ''90 days'''
+    );
+  END IF;
+END
+$$;
