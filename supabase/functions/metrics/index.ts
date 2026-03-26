@@ -167,8 +167,7 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
         const help = metricDefs[metricName] || metricName;
         output += `\n# HELP ${promName} ${help}\n# TYPE ${promName} gauge\n`;
         for (const row of rows) {
-          const ml =
-            row.metric_labels && typeof row.metric_labels === "object" ? row.metric_labels : {};
+          const ml = row.metric_labels && typeof row.metric_labels === "object" ? row.metric_labels : {};
           const labels = Object.entries(ml as Record<string, string>)
             .map(([k, v]) => `${k}="${escapeLabel(String(v))}"`)
             .join(",");
