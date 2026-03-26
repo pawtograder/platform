@@ -1164,8 +1164,7 @@ export default function FilesView() {
           ? defaultArtifactId
           : null;
 
-  const curFileIndex =
-    submissionFiles.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1));
+  const curFileIndex = submissionFiles.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1));
   const selectedFile =
     curFileIndex !== -1
       ? submissionFiles[curFileIndex]
