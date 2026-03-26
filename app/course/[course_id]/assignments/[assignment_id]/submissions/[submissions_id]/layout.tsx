@@ -51,6 +51,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { activateSubmission } from "@/lib/edgeFunctions";
+import { submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
@@ -81,7 +82,7 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { linkToSubPage } from "./utils";
+import { getSubmissionFilesOrResultsTab, linkToSubPage } from "./utils";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -1388,10 +1389,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const { course_id } = useParams();
   const submission = useSubmission();
-  const hasGraderTests = (submission.grader_results?.grader_result_tests?.length ?? 0) > 0;
-  const isResultsPath = pathname.includes("/results");
-  const isFilesPath = pathname.includes("/files");
-  const activeSubPage = isResultsPath ? "results" : isFilesPath ? "files" : hasGraderTests ? "results" : "files";
+  const hasGraderOutput = submissionHasGraderOutput(submission.grader_results);
+  const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
+  const activeSubPage = explicitSubPage ?? (hasGraderOutput ? "results" : "files");
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
@@ -1511,14 +1511,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </HStack>
       </Flex>
 
-      <Box
-        p={0}
-        m={0}
-        borderBottomColor="border.emphasized"
-        borderBottomWidth="2px"
-        bg="bg.muted"
-        defaultValue={activeSubPage}
-      >
+      <Box p={0} m={0} borderBottomColor="border.emphasized" borderBottomWidth="2px" bg="bg.muted">
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
@@ -1533,7 +1526,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </NextLink>
       </Box>
       <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4}>
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>
           {children}
         </Box>
         <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>

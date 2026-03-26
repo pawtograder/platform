@@ -161,6 +161,35 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
     return _comments.filter((comment) => expanded.includes(comment.line));
   }, [_comments, expanded]);
 
+  // `file` (not just id) must be a dependency: contents can update for the same file id after refetch.
+  const reactNode = useMemo(() => {
+    if (!file || file.contents === null || file.contents === undefined) {
+      return null;
+    }
+    const tree = starryNight ? starryNight.highlight(file.contents, language) : createPlainTextTree(file.contents);
+    starryNightGutter(tree, setLineActionPopupProps);
+    return toJsxRuntime(tree, {
+      Fragment,
+      jsx,
+      jsxs,
+      components: {
+        CodeLineComments: CodeLineComments,
+        LineNumber: LineNumber
+      } as Record<string, ComponentType<{ lineNumber: number }>>
+    });
+  }, [starryNight, file, language, setLineActionPopupProps]);
+
+  useEffect(() => {
+    if (!showCommentsFeature || _comments.length === 0) {
+      return;
+    }
+    setExpanded((prev) => {
+      const commentLines = [...new Set(_comments.map((comment) => comment.line))];
+      const missing = commentLines.filter((line) => !prev.includes(line));
+      return missing.length > 0 ? [...prev, ...missing] : prev;
+    });
+  }, [_comments, showCommentsFeature]);
+
   useEffect(() => {
     async function highlight() {
       // Dynamic import to reduce build memory usage
@@ -175,7 +204,7 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
     }
     highlight();
   }, []);
-  if (!starryNight || !file) {
+  if (!file) {
     return <Skeleton />;
   }
   if (file.contents === null || file.contents === undefined) {
@@ -185,17 +214,9 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
       </Box>
     );
   }
-  const tree = starryNight.highlight(file.contents, language);
-  starryNightGutter(tree, setLineActionPopupProps);
-  const reactNode = toJsxRuntime(tree, {
-    Fragment,
-    jsx,
-    jsxs,
-    components: {
-      CodeLineComments: CodeLineComments,
-      LineNumber: LineNumber
-    } as Record<string, ComponentType<{ lineNumber: number }>>
-  });
+  if (reactNode === null) {
+    return <Skeleton />;
+  }
   const commentsCSS = showCommentsFeature
     ? {
         "& .source-code-line": {
@@ -343,6 +364,14 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
       {content}
     </Box>
   );
+}
+
+/** HAST root with a single text node so `starryNightGutter` can split lines before syntax highlighting loads. */
+function createPlainTextTree(contents: string): Root {
+  return {
+    type: "root",
+    children: [{ type: "text", value: contents }]
+  };
 }
 
 /**

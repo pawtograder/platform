@@ -1133,35 +1133,54 @@ export default function FilesView() {
     [updateUrl, selectedArtifactId, selectedFileId]
   );
 
-  const defaultFileId = submissionData?.submission_files?.[0]?.id ?? null;
-  const defaultArtifactId = submissionData?.submission_artifacts?.[0]?.id ?? null;
+  const submissionFiles = submissionData?.submission_files ?? [];
+  const submissionArtifacts = submissionData?.submission_artifacts ?? [];
+  const normalizedSelectedFileId =
+    selectedFileId !== null && submissionFiles.some((file: SubmissionFile) => file.id === selectedFileId)
+      ? selectedFileId
+      : null;
+  const normalizedSelectedArtifactId =
+    selectedArtifactId !== null &&
+    submissionArtifacts.some((artifact: Tables<"submission_artifacts">) => artifact.id === selectedArtifactId)
+      ? selectedArtifactId
+      : null;
+
+  const defaultFileId = submissionFiles[0]?.id ?? null;
+  const defaultArtifactId = submissionArtifacts[0]?.id ?? null;
   const effectiveFileId =
-    selectedArtifactId !== null ? null : (selectedFileId ?? (defaultFileId !== null ? defaultFileId : null));
-  const effectiveArtifactId =
-    selectedFileId !== null
+    normalizedSelectedArtifactId !== null
       ? null
-      : (selectedArtifactId ?? (defaultFileId === null && defaultArtifactId !== null ? defaultArtifactId : null));
+      : normalizedSelectedFileId !== null
+        ? normalizedSelectedFileId
+        : defaultFileId !== null
+          ? defaultFileId
+          : null;
+  const effectiveArtifactId =
+    normalizedSelectedFileId !== null
+      ? null
+      : normalizedSelectedArtifactId !== null
+        ? normalizedSelectedArtifactId
+        : defaultFileId === null && defaultArtifactId !== null
+          ? defaultArtifactId
+          : null;
 
   const curFileIndex =
-    submissionData?.submission_files.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1)) ?? -1;
+    submissionFiles.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1));
   const selectedFile =
     curFileIndex !== -1
-      ? submissionData?.submission_files[curFileIndex]
-      : effectiveFileId !== null && submissionData?.submission_files && submissionData.submission_files.length > 0
-        ? submissionData.submission_files[0]
+      ? submissionFiles[curFileIndex]
+      : effectiveFileId !== null && submissionFiles.length > 0
+        ? submissionFiles[0]
         : undefined;
 
-  const curArtifactIndex =
-    submissionData?.submission_artifacts?.findIndex(
-      (artifact: Tables<"submission_artifacts">) => artifact.id === (effectiveArtifactId ?? -1)
-    ) ?? -1;
+  const curArtifactIndex = submissionArtifacts.findIndex(
+    (artifact: Tables<"submission_artifacts">) => artifact.id === (effectiveArtifactId ?? -1)
+  );
   const selectedArtifact =
     curArtifactIndex !== -1
-      ? submissionData?.submission_artifacts?.[curArtifactIndex]
-      : effectiveArtifactId !== null &&
-          submissionData?.submission_artifacts &&
-          submissionData.submission_artifacts.length > 0
-        ? submissionData.submission_artifacts[0]
+      ? submissionArtifacts[curArtifactIndex]
+      : effectiveArtifactId !== null && submissionArtifacts.length > 0
+        ? submissionArtifacts[0]
         : undefined;
 
   const isLoading = isLoadingSubmission || (!!reviewAssignment && currentSubmissionReview === undefined);
