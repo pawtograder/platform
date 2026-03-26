@@ -200,15 +200,19 @@
                 "id": "thresholds",
                 "value": {
                   "mode": "absolute",
-                  "steps": [
-                    { "color": "green", "value": null }
-                  ]
+                  "steps": [{ "color": "green", "value": null }]
                 }
               },
               {
                 "id": "mappings",
                 "value": [
-                  { "type": "value", "options": { "warning": { "color": "yellow", "index": 0, "text": "WARNING" }, "critical": { "color": "red", "index": 1, "text": "CRITICAL" } } }
+                  {
+                    "type": "value",
+                    "options": {
+                      "warning": { "color": "yellow", "index": 0, "text": "WARNING" },
+                      "critical": { "color": "red", "index": 1, "text": "CRITICAL" }
+                    }
+                  }
                 ]
               }
             ]
@@ -249,6 +253,178 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "id": 20,
+      "panels": [],
+      "title": "RAM / Buffer Cache",
+      "type": "row"
+    },
+    {
+      "title": "Total Buffer Cache Used",
+      "description": "Total shared_buffers in use by this database",
+      "type": "stat",
+      "id": 21,
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 25 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 536870912 },
+              { "color": "red", "value": 1073741824 }
+            ]
+          },
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "expr": "pawtograder_db_buffer_cache_total_used_bytes",
+          "legendFormat": "Buffer Cache Used",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Connections by State",
+      "description": "Database connections grouped by state (active, idle, idle in transaction)",
+      "type": "timeseries",
+      "id": 22,
+      "gridPos": { "h": 6, "w": 9, "x": 6, "y": 25 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "stacking": { "mode": "normal" },
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "expr": "pawtograder_db_connections",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Dead Tuples by Table",
+      "description": "Tables with the most dead tuples waiting for vacuum",
+      "type": "timeseries",
+      "id": 23,
+      "gridPos": { "h": 6, "w": 9, "x": 15, "y": 25 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, pawtograder_db_dead_tuples)",
+          "legendFormat": "{{relname}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Buffer Cache by Table (Top 15)",
+      "description": "Which tables/indexes are consuming the most shared buffer cache (RAM)",
+      "type": "timeseries",
+      "id": 24,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 31 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "stacking": { "mode": "none" },
+            "showPoints": "never"
+          },
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "topk(15, pawtograder_db_buffer_cache_bytes)",
+          "legendFormat": "{{relname}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Table Sizes (> 100 MB)",
+      "description": "Total table sizes including indexes and TOAST, tracking growth over time",
+      "type": "timeseries",
+      "id": 25,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 39 },
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] }
+      },
+      "targets": [
+        {
+          "expr": "pawtograder_db_table_total_bytes",
+          "legendFormat": "{{relname}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 47 },
       "id": 8,
       "panels": [],
       "title": "Queue Health",
@@ -259,7 +435,7 @@
       "description": "All PGMQ queue depths over time",
       "type": "timeseries",
       "id": 9,
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 25 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
       "datasource": "$datasource",
       "fieldConfig": {
         "defaults": {

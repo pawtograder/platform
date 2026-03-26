@@ -38,10 +38,16 @@ async function generatePrometheusMetrics(): Promise<Response> {
     }
 
     const { data: vacuumHealth, error: vacuumError } = await supabase.rpc("vacuum_health_check");
+    const { data: ramMetrics, error: ramError } = await supabase.rpc("database_ram_metrics");
 
     if (vacuumError) {
       console.error("Error fetching vacuum health:", vacuumError);
       Sentry.captureException(vacuumError);
+    }
+
+    if (ramError) {
+      console.error("Error fetching RAM metrics:", ramError);
+      Sentry.captureException(ramError);
     }
 
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
@@ -135,6 +141,38 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
 # TYPE pawtograder_vacuum_alert gauge
 pawtograder_vacuum_alert{check="none",severity="ok",table_name="none"} 0 ${timestamp}
 `;
+    }
+
+    // Database RAM metrics
+    if (ramMetrics && ramMetrics.length > 0) {
+      const metricDefs: Record<string, string> = {
+        buffer_cache_bytes: "Bytes of shared buffer cache used by a table/index",
+        buffer_cache_total_used_bytes: "Total bytes of shared buffer cache in use",
+        connections: "Number of database connections by state",
+        table_total_bytes: "Total size of a table including indexes and TOAST",
+        dead_tuples: "Number of dead tuples in a table"
+      };
+
+      // Group by metric name and emit HELP/TYPE once per metric
+      const grouped = new Map<string, typeof ramMetrics>();
+      for (const row of ramMetrics) {
+        const existing = grouped.get(row.metric_name) || [];
+        existing.push(row);
+        grouped.set(row.metric_name, existing);
+      }
+
+      for (const [metricName, rows] of grouped) {
+        const promName = `pawtograder_db_${metricName}`;
+        const help = metricDefs[metricName] || metricName;
+        output += `\n# HELP ${promName} ${help}\n# TYPE ${promName} gauge\n`;
+        for (const row of rows) {
+          const labels = Object.entries(row.metric_labels as Record<string, string>)
+            .map(([k, v]) => `${k}="${escapeLabel(String(v))}"`)
+            .join(",");
+          const labelStr = labels ? `{${labels}}` : "";
+          output += `${promName}${labelStr} ${row.metric_value} ${timestamp}\n`;
+        }
+      }
     }
 
     output += "\n";
