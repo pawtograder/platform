@@ -1147,11 +1147,13 @@ export default function FilesView() {
 
   const defaultFileId = submissionFiles[0]?.id ?? null;
   const defaultArtifactId = submissionArtifacts[0]?.id ?? null;
+  // Prefer file when both file_id and artifact_id are valid in the URL — checking
+  // artifact first would null out the file and then artifact suppression would null both.
   const effectiveFileId =
-    normalizedSelectedArtifactId !== null
-      ? null
-      : normalizedSelectedFileId !== null
-        ? normalizedSelectedFileId
+    normalizedSelectedFileId !== null
+      ? normalizedSelectedFileId
+      : normalizedSelectedArtifactId !== null
+        ? null
         : defaultFileId !== null
           ? defaultFileId
           : null;
