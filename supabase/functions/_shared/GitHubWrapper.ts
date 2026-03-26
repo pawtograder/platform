@@ -163,15 +163,35 @@ function withSettingsKeyRecovery(
   cacheKey: string
 ): void {
   limiter.on("error", (err: Error) => {
-    if (String(err).includes("SETTINGS_KEY_NOT_FOUND")) {
-      console.warn(`[rate-limiter] Settings keys missing for ${id}, reinitializing`);
-      limiter.disconnect();
-      const fresh = buildRedisBottleneck(id, opts, true);
-      fresh.on("error", (e: Error) => console.error(`[rate-limiter] ${id}:`, e));
-      cache.set(cacheKey, fresh);
-    } else {
+    if (!String(err).includes("SETTINGS_KEY_NOT_FOUND")) {
       console.error(`[rate-limiter] ${id}:`, err);
+      return;
     }
+    if (cache.get(cacheKey) !== limiter) {
+      return;
+    }
+    console.warn(`[rate-limiter] Settings keys missing for ${id}, reinitializing`);
+    const rotateMessage = `[${id}] SETTINGS_KEY_ROTATED after SETTINGS_KEY_NOT_FOUND; retry via getCreateContentLimiter`;
+    const fresh = buildRedisBottleneck(id, opts, true);
+    withSettingsKeyRecovery(fresh, id, opts, cache, cacheKey);
+    cache.set(cacheKey, fresh);
+    void limiter
+      .stop({
+        dropWaitingJobs: true,
+        dropErrorMessage: rotateMessage,
+        enqueueErrorMessage: rotateMessage
+      })
+      .then(() => {
+        limiter.disconnect();
+      })
+      .catch((e: unknown) => {
+        console.error(`[rate-limiter] stop/disconnect after SETTINGS_KEY rotation failed for ${id}:`, e);
+        try {
+          limiter.disconnect();
+        } catch {
+          /* ignore */
+        }
+      });
   });
 }
 
