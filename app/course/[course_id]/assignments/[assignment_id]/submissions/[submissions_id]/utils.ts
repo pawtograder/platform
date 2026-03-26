@@ -10,9 +10,10 @@ export function getSubmissionFilesOrResultsTab(pathname: string): "files" | "res
 }
 
 export function linkToSubPage(pathname: string, page: string, searchParams?: URLSearchParams) {
+  const base = pathname.replace(/\/$/, "");
   const newPath =
-    getSubmissionFilesOrResultsTab(pathname) !== null
-      ? `${pathname.substring(0, pathname.lastIndexOf("/"))}/${page}`
-      : `${pathname.replace(/\/$/, "")}/${page}`;
+    getSubmissionFilesOrResultsTab(base) !== null
+      ? `${base.slice(0, base.lastIndexOf("/"))}/${page}`
+      : `${base}/${page}`;
   return `${newPath}${searchParams ? `?${searchParams.toString()}` : ""}`;
 }

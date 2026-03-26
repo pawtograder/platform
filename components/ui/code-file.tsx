@@ -214,9 +214,6 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
       </Box>
     );
   }
-  if (reactNode === null) {
-    return <Skeleton />;
-  }
   const commentsCSS = showCommentsFeature
     ? {
         "& .source-code-line": {

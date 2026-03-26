@@ -82,7 +82,10 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { getSubmissionFilesOrResultsTab, linkToSubPage } from "./utils";
+import {
+  getSubmissionFilesOrResultsTab,
+  linkToSubPage
+} from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
