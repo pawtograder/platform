@@ -26,6 +26,10 @@ ALTER TABLE public.gradebook_column_students SET (
   fillfactor = 70
 );
 
+-- submissions: 73 MB heap / 266 MB indexes, low HOT update ratio.
+-- Already has autovacuum tuning but default fillfactor.
+ALTER TABLE public.submissions SET (fillfactor = 70);
+
 -- gradebook_row_recalc_state: constant upserts from recalc queue
 ALTER TABLE public.gradebook_row_recalc_state SET (
   autovacuum_vacuum_scale_factor = 0.02,
@@ -106,7 +110,6 @@ ALTER TABLE public.grader_result_tests SET (
 DELETE FROM auth.audit_log_entries
 WHERE created_at < now() - interval '90 days';
 
-VACUUM (ANALYZE) auth.audit_log_entries;
 
 DO $$
 BEGIN
@@ -202,12 +205,94 @@ AS $$
     AND s.vacuum_count = 0
     AND s.autovacuum_count = 0
 
-  ORDER BY severity, check_name, relname;
+  ORDER BY 2, 1, 3;
 $$;
 
 ALTER FUNCTION public.vacuum_health_check() OWNER TO postgres;
 COMMENT ON FUNCTION public.vacuum_health_check() IS
   'Returns vacuum health warnings: overdue vacuums, XID wraparound risk, dead tuple bloat, and large unvacuumed tables.';
+
+-- RPC: database RAM metrics for Prometheus scraping
+CREATE EXTENSION IF NOT EXISTS pg_buffercache;
+
+CREATE OR REPLACE FUNCTION public.database_ram_metrics()
+RETURNS TABLE (
+  metric_name text,
+  metric_labels jsonb,
+  metric_value numeric
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  -- Top tables by buffer cache usage
+  SELECT * FROM (
+    SELECT
+      'buffer_cache_bytes'::text AS metric_name,
+      jsonb_build_object('relname', c.relname) AS metric_labels,
+      (count(*) * 8192)::numeric AS metric_value
+    FROM pg_buffercache b
+    JOIN pg_class c ON c.relfilenode = b.relfilenode
+    WHERE b.reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+    GROUP BY c.relname
+    HAVING count(*) * 8192 > 1048576
+    ORDER BY count(*) DESC
+    LIMIT 20
+  ) bc
+
+  UNION ALL
+
+  -- Total buffer cache used vs available
+  SELECT
+    'buffer_cache_total_used_bytes'::text,
+    '{}'::jsonb,
+    (count(*) * 8192)::numeric
+  FROM pg_buffercache
+  WHERE reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+
+  UNION ALL
+
+  -- Connection count by state
+  SELECT
+    'connections'::text,
+    jsonb_build_object('state', COALESCE(state, 'unknown')),
+    count(*)::numeric
+  FROM pg_stat_activity
+  WHERE datname = current_database()
+  GROUP BY state
+
+  UNION ALL
+
+  -- Table sizes for the biggest tables (track growth)
+  SELECT * FROM (
+    SELECT
+      'table_total_bytes'::text AS metric_name,
+      jsonb_build_object('relname', relname) AS metric_labels,
+      pg_total_relation_size(relid)::numeric AS metric_value
+    FROM pg_stat_user_tables
+    WHERE pg_total_relation_size(relid) > 104857600
+    ORDER BY pg_total_relation_size(relid) DESC
+    LIMIT 20
+  ) ts
+
+  UNION ALL
+
+  -- Dead tuple counts for hot tables
+  SELECT * FROM (
+    SELECT
+      'dead_tuples'::text AS metric_name,
+      jsonb_build_object('relname', relname) AS metric_labels,
+      n_dead_tup::numeric AS metric_value
+    FROM pg_stat_user_tables
+    WHERE n_dead_tup > 100
+    ORDER BY n_dead_tup DESC
+    LIMIT 20
+  ) dt;
+$$;
+
+ALTER FUNCTION public.database_ram_metrics() OWNER TO postgres;
+COMMENT ON FUNCTION public.database_ram_metrics() IS
+  'Returns database RAM metrics: buffer cache usage by table, connection counts, table sizes, and dead tuple counts.';
 
 -- Cron: run health check every 15 minutes, notify on any findings
 DO $$
