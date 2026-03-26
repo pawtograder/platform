@@ -222,73 +222,75 @@ RETURNS TABLE (
   metric_labels jsonb,
   metric_value numeric
 )
-LANGUAGE sql
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
-  -- Top tables by buffer cache usage
-  SELECT * FROM (
+BEGIN
+  -- Buffer cache metrics require pg_buffercache extension
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_buffercache') THEN
+    RETURN QUERY
+    SELECT * FROM (
+      SELECT
+        'buffer_cache_bytes'::text AS mn,
+        jsonb_build_object('relname', c.relname) AS ml,
+        (count(*) * 8192)::numeric AS mv
+      FROM pg_buffercache b
+      JOIN pg_class c ON c.relfilenode = b.relfilenode
+      WHERE b.reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+      GROUP BY c.relname
+      HAVING count(*) * 8192 > 1048576
+      ORDER BY count(*) DESC
+      LIMIT 20
+    ) bc;
+
+    RETURN QUERY
     SELECT
-      'buffer_cache_bytes'::text AS metric_name,
-      jsonb_build_object('relname', c.relname) AS metric_labels,
-      (count(*) * 8192)::numeric AS metric_value
-    FROM pg_buffercache b
-    JOIN pg_class c ON c.relfilenode = b.relfilenode
-    WHERE b.reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
-    GROUP BY c.relname
-    HAVING count(*) * 8192 > 1048576
-    ORDER BY count(*) DESC
-    LIMIT 20
-  ) bc
+      'buffer_cache_total_used_bytes'::text,
+      '{}'::jsonb,
+      (count(*) * 8192)::numeric
+    FROM pg_buffercache
+    WHERE reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database());
+  ELSE
+    RAISE WARNING 'pg_buffercache extension not installed — buffer cache metrics unavailable. Enable it in the Supabase dashboard under Database > Extensions.';
+  END IF;
 
-  UNION ALL
-
-  -- Total buffer cache used vs available
-  SELECT
-    'buffer_cache_total_used_bytes'::text,
-    '{}'::jsonb,
-    (count(*) * 8192)::numeric
-  FROM pg_buffercache
-  WHERE reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
-
-  UNION ALL
-
-  -- Connection count by state
+  -- Connection count by state (no extension needed)
+  RETURN QUERY
   SELECT
     'connections'::text,
     jsonb_build_object('state', COALESCE(state, 'unknown')),
     count(*)::numeric
   FROM pg_stat_activity
   WHERE datname = current_database()
-  GROUP BY state
+  GROUP BY state;
 
-  UNION ALL
-
-  -- Table sizes for the biggest tables (track growth)
+  -- Table sizes for the biggest tables
+  RETURN QUERY
   SELECT * FROM (
     SELECT
-      'table_total_bytes'::text AS metric_name,
-      jsonb_build_object('relname', relname) AS metric_labels,
-      pg_total_relation_size(relid)::numeric AS metric_value
+      'table_total_bytes'::text AS mn,
+      jsonb_build_object('relname', relname) AS ml,
+      pg_total_relation_size(relid)::numeric AS mv
     FROM pg_stat_user_tables
     WHERE pg_total_relation_size(relid) > 104857600
     ORDER BY pg_total_relation_size(relid) DESC
     LIMIT 20
-  ) ts
-
-  UNION ALL
+  ) ts;
 
   -- Dead tuple counts for hot tables
+  RETURN QUERY
   SELECT * FROM (
     SELECT
-      'dead_tuples'::text AS metric_name,
-      jsonb_build_object('relname', relname) AS metric_labels,
-      n_dead_tup::numeric AS metric_value
+      'dead_tuples'::text AS mn,
+      jsonb_build_object('relname', relname) AS ml,
+      n_dead_tup::numeric AS mv
     FROM pg_stat_user_tables
     WHERE n_dead_tup > 100
     ORDER BY n_dead_tup DESC
     LIMIT 20
   ) dt;
+END;
 $$;
 
 ALTER FUNCTION public.database_ram_metrics() OWNER TO postgres;
