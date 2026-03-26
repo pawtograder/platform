@@ -126,21 +126,22 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
     }
 
     // Vacuum health metrics
-    if (vacuumHealth && vacuumHealth.length > 0) {
-      output += `
+    output += `
 # HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name
 # TYPE pawtograder_vacuum_alert gauge
 `;
+    if (vacuumError) {
+      const errMsg = vacuumError.message ?? String(vacuumError);
+      const errLabel = escapeLabel(errMsg.length > 800 ? `${errMsg.slice(0, 800)}...` : errMsg);
+      const labels = `check="${escapeLabel("rpc_failed")}",severity="${escapeLabel("error")}",table_name="${escapeLabel("none")}",error="${errLabel}"`;
+      output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
+    } else if (vacuumHealth && vacuumHealth.length > 0) {
       for (const row of vacuumHealth) {
         const labels = `check="${escapeLabel(row.check_name)}",severity="${escapeLabel(row.severity)}",table_name="${escapeLabel(row.relname)}"`;
         output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
       }
     } else {
-      output += `
-# HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name
-# TYPE pawtograder_vacuum_alert gauge
-pawtograder_vacuum_alert{check="none",severity="ok",table_name="none"} 0 ${timestamp}
-`;
+      output += `pawtograder_vacuum_alert{check="none",severity="ok",table_name="none"} 0 ${timestamp}\n`;
     }
 
     // Database RAM metrics
