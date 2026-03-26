@@ -51,6 +51,63 @@ function computeCombinedFileHash(files: { name: string; contents: Buffer }[]): {
   };
 }
 
+/**
+ * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
+ * no leading/trailing slashes. Preserves safe subpaths for display names.
+ */
+function getSafeRelativePath(name: string): string {
+  const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const segments = normalized.split("/").filter((s) => s.length > 0);
+  const resolved: string[] = [];
+  for (const seg of segments) {
+    if (seg === ".") continue;
+    if (seg === "..") {
+      if (resolved.length > 0) resolved.pop();
+      continue;
+    }
+    resolved.push(seg);
+  }
+  const result = resolved.join("/");
+  if (result === "") return "unnamed";
+  return result;
+}
+
+/**
+ * Supabase Storage rejects some Unicode in object keys (e.g. U+202F before AM/PM in macOS screenshot names).
+ * Sanitize each path segment to [a-zA-Z0-9._-] while preserving directory structure.
+ */
+function sanitizeStoragePathSegments(relativePath: string): string {
+  return relativePath
+    .split("/")
+    .map((seg) => {
+      const n = seg.normalize("NFKC");
+      const cleaned = n.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/_+/g, "_");
+      const trimmed = cleaned.replace(/^_|_$/g, "");
+      return trimmed || "file";
+    })
+    .join("/");
+}
+
+/** When two different paths map to the same storage key, disambiguate (before extension when possible). */
+function dedupeStorageRelativePaths(paths: string[]): string[] {
+  const counts = new Map<string, number>();
+  return paths.map((p) => {
+    const seen = counts.get(p) ?? 0;
+    counts.set(p, seen + 1);
+    if (seen === 0) return p;
+    // Find the last slash to isolate the filename
+    const lastSlash = p.lastIndexOf("/");
+    const filename = lastSlash >= 0 ? p.slice(lastSlash + 1) : p;
+    // Find extension dot in filename only (must not be at position 0 for hidden files)
+    const dotInFilename = filename.lastIndexOf(".");
+    if (dotInFilename > 0 && dotInFilename < filename.length - 1) {
+      const lastDot = lastSlash >= 0 ? lastSlash + 1 + dotInFilename : dotInFilename;
+      return `${p.slice(0, lastDot)}__${seen}${p.slice(lastDot)}`;
+    }
+    return `${p}__${seen}`;
+  });
+}
+
 async function safeCleanupRejectedSubmission(params: {
   adminSupabase: SupabaseClient<Database>;
   submissionId: number;
@@ -1256,27 +1313,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
           const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB per file
 
-          /**
-           * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
-           * no leading/trailing slashes. Preserves safe subpaths for storage keys and DB name.
-           */
-          function getSafePath(name: string): string {
-            const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-            const segments = normalized.split("/").filter((s) => s.length > 0);
-            const resolved: string[] = [];
-            for (const seg of segments) {
-              if (seg === ".") continue;
-              if (seg === "..") {
-                if (resolved.length > 0) resolved.pop();
-                continue;
-              }
-              resolved.push(seg);
-            }
-            const result = resolved.join("/");
-            if (result === "") return "unnamed";
-            return result;
-          }
-
           function getFileExtension(name: string): string {
             const lastDot = name.lastIndexOf(".");
             return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
@@ -1286,7 +1322,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             return BINARY_EXTENSIONS.has(getFileExtension(name));
           }
 
-          const submittedFilesWithContents = await Promise.all(
+          type SubmittedFileWithContents = { name: string; contents: Buffer; binary: boolean };
+          const submittedFilesWithContents: SubmittedFileWithContents[] = await Promise.all(
             submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
               const contents = await file.buffer();
               const name = stripTopDir(file.path);
@@ -1306,15 +1343,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
           }
 
+          if (submission_id === undefined) {
+            throw new Error("submission_id is undefined when inserting submission files");
+          }
+          const submissionIdForFiles = submission_id;
+
           // Separate text and binary files
-          const textFiles = submittedFilesWithContents.filter((f) => !f.binary);
-          const binaryFiles = submittedFilesWithContents.filter((f) => f.binary);
+          const textFiles = submittedFilesWithContents.filter((f: SubmittedFileWithContents) => !f.binary);
+          const binaryFiles = submittedFilesWithContents.filter((f: SubmittedFileWithContents) => f.binary);
 
           // Insert text files as before (inline contents)
           if (textFiles.length > 0) {
             const { error: textFileError } = await adminSupabase.from("submission_files").insert(
-              textFiles.map((file) => ({
-                submission_id: submission_id,
+              textFiles.map((file: SubmittedFileWithContents) => ({
+                submission_id: submissionIdForFiles,
                 name: file.name,
                 profile_id: repoData.profile_id,
                 assignment_group_id: repoData.assignment_group_id,
@@ -1335,12 +1377,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           // Insert binary files: store content in Supabase Storage, metadata in DB (parallelized)
           if (binaryFiles.length > 0) {
             const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
+            const displayPaths = binaryFiles.map((f: SubmittedFileWithContents) =>
+              getSafeRelativePath(f.name).normalize("NFKC")
+            );
+            const storageRelativePaths = dedupeStorageRelativePaths(
+              displayPaths.map((p: string) => sanitizeStoragePathSegments(p))
+            );
             await Promise.all(
-              binaryFiles.map(async (file) => {
-                const safePath = getSafePath(file.name);
-                const ext = getFileExtension(safePath);
+              binaryFiles.map(async (file: SubmittedFileWithContents, idx: number) => {
+                const displayPath = displayPaths[idx];
+                const storageRelative = storageRelativePaths[idx];
+                const ext = getFileExtension(displayPath);
                 const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${safePath}`;
+                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submissionIdForFiles}/files/${storageRelative}`;
 
                 // Upload to Supabase Storage
                 const { error: storageError } = await adminSupabase.storage
@@ -1352,14 +1401,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 if (storageError) {
                   Sentry.captureException(storageError, scope);
                   throw new UserVisibleError(
-                    `Internal error: Failed to upload binary file "${safePath}" to storage: ${storageError.message}`
+                    `Internal error: Failed to upload binary file "${displayPath}" to storage: ${storageError.message}`
                   );
                 }
 
                 // Insert DB record (no inline contents for binary)
                 const { error: dbError } = await adminSupabase.from("submission_files").insert({
-                  submission_id: submission_id,
-                  name: safePath,
+                  submission_id: submissionIdForFiles,
+                  name: displayPath,
                   profile_id: repoData.profile_id,
                   assignment_group_id: repoData.assignment_group_id,
                   contents: null,
@@ -1376,7 +1425,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                   }
                   Sentry.captureException(dbError, scope);
                   throw new UserVisibleError(
-                    `Internal error: Failed to insert binary file record for "${safePath}": ${dbError.message}`
+                    `Internal error: Failed to insert binary file record for "${displayPath}": ${dbError.message}`
                   );
                 }
               })
