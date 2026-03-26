@@ -65,6 +65,30 @@ async function safeCleanupRejectedSubmission(params: {
     throw new Error(`Cleanup failed (delete submission_reviews): submission_id=${submissionId}: ${reviewsErr.message}`);
   }
 
+  // Delete binary blobs from storage before removing submission_files rows (same order as duplicate-submission cleanup).
+  const { data: binaryFileRows, error: binarySelectErr } = await adminSupabase
+    .from("submission_files")
+    .select("storage_key")
+    .eq("submission_id", submissionId)
+    .eq("is_binary", true);
+  if (binarySelectErr) {
+    throw new Error(
+      `Cleanup failed (select binary submission_files): submission_id=${submissionId}: ${binarySelectErr.message}`
+    );
+  }
+  const storageKeysToRemove = (binaryFileRows ?? [])
+    .map((row) => row.storage_key)
+    .filter((k): k is string => k != null && k.length > 0);
+  if (storageKeysToRemove.length > 0) {
+    const { error: storageRemoveErr } = await adminSupabase.storage.from("submission-files").remove(storageKeysToRemove);
+    if (storageRemoveErr) {
+      Sentry.captureException(storageRemoveErr);
+      throw new Error(
+        `Cleanup failed (remove submission-files storage): submission_id=${submissionId}: ${storageRemoveErr.message}`
+      );
+    }
+  }
+
   // Remove files (these are the only child rows we definitely created in this path).
   const { error: filesErr } = await adminSupabase.from("submission_files").delete().eq("submission_id", submissionId);
   if (filesErr) {

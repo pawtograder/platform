@@ -3,7 +3,6 @@ import { createClient } from "@/utils/supabase/server";
 import {
   Badge,
   Box,
-  Button,
   CardBody,
   CardHeader,
   CardRoot,
@@ -32,6 +31,41 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
+
+function SurveyDashboardCta({
+  href,
+  label,
+  ariaLabel,
+  colorPalette
+}: {
+  href: string;
+  label: string;
+  ariaLabel: string;
+  colorPalette: "blue" | "red" | "yellow" | "green" | "gray";
+}) {
+  return (
+    <Link href={href} aria-label={ariaLabel} style={{ textDecoration: "none" }}>
+      <Box
+        as="span"
+        display="inline-flex"
+        alignItems="center"
+        justifyContent="center"
+        h="8"
+        px="3"
+        fontSize="sm"
+        fontWeight="medium"
+        borderRadius="l2"
+        colorPalette={colorPalette}
+        bg="colorPalette.solid"
+        color="colorPalette.contrast"
+        _hover={{ opacity: 0.92 }}
+        _active={{ opacity: 0.88 }}
+      >
+        {label}
+      </Box>
+    </Link>
+  );
+}
 
 function sortIncompleteSurveysForBanner(surveys: Survey[]): Survey[] {
   const now = Date.now();
@@ -76,7 +110,7 @@ export default async function StudentDashboard({
       .eq("submissions.is_active", true)
       .eq("student_profile_id", private_profile_id)
       .gte("due_date", new Date().toISOString())
-      .order("due_date", { ascending: false })
+      .order("due_date", { ascending: true })
       .limit(5),
     supabase
       .from("surveys")
@@ -115,7 +149,10 @@ export default async function StudentDashboard({
   const courseTz = course?.time_zone ?? "America/New_York";
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
 
-  const surveys = (surveysRaw ?? []) as unknown as Survey[];
+  const nowMs = Date.now();
+  const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(
+    (s) => s.status === "published" && (s.available_at == null || new Date(s.available_at).getTime() <= nowMs)
+  );
 
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
 
@@ -232,11 +269,12 @@ export default async function StudentDashboard({
                         )}
                       </VStack>
                     </HStack>
-                    <Link href={href}>
-                      <Button size="sm" colorPalette={isOverdue ? "red" : "blue"}>
-                        {inProgress ? "Continue" : "Take survey"}
-                      </Button>
-                    </Link>
+                    <SurveyDashboardCta
+                      href={href}
+                      label={inProgress ? "Continue" : "Take survey"}
+                      ariaLabel={`${inProgress ? "Continue" : "Take survey"}: ${survey.title ?? "Untitled survey"}`}
+                      colorPalette={isOverdue ? "red" : "blue"}
+                    />
                   </HStack>
                 </Box>
               );
@@ -431,11 +469,12 @@ export default async function StudentDashboard({
                           {statusLabel}
                         </Text>
                       </Box>
-                      <Link href={href}>
-                        <Button size="sm" colorScheme={colorScheme}>
-                          {buttonLabel}
-                        </Button>
-                      </Link>
+                      <SurveyDashboardCta
+                        href={href}
+                        label={buttonLabel}
+                        ariaLabel={`${buttonLabel} survey: ${survey.title ?? "Untitled survey"}`}
+                        colorPalette={colorScheme}
+                      />
                     </Stack>
                   </CardHeader>
                   <CardBody>

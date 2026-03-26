@@ -22,7 +22,7 @@ type GroupViewContentProps = {
   classId: number;
   groupAnalytics: GroupAnalytics[];
   selectedGroupId: number | null;
-  onSelectGroup: (groupId: number) => void;
+  onSelectGroup: (groupId: number | null) => void;
   responses: SurveyResponseWithContext[];
   questionsToShow: { name: string; title: string; type: string }[];
   allQuestions: { name: string; title: string; type: string }[];
@@ -101,6 +101,32 @@ export function GroupViewContent({
     }
   }, [sectionBuckets, studentSectionKey, storageKey]);
 
+  const showSectionedAllView = studentSectionKey === GROUP_ANALYTICS_ALL_SECTIONS && sectionBuckets.length > 1;
+  const activeBucket =
+    studentSectionKey === GROUP_ANALYTICS_ALL_SECTIONS ? null : sectionBuckets.find((b) => b.key === studentSectionKey);
+  const groupCardsForFlatView =
+    activeBucket?.groups ?? (sectionBuckets.length === 1 ? sectionBuckets[0]!.groups : groupAnalytics);
+
+  useEffect(() => {
+    if (selectedGroupId == null) return;
+
+    const showAllSectionsGrid = studentSectionKey === GROUP_ANALYTICS_ALL_SECTIONS && sectionBuckets.length > 1;
+    const bucketForFlat =
+      studentSectionKey === GROUP_ANALYTICS_ALL_SECTIONS
+        ? null
+        : sectionBuckets.find((b) => b.key === studentSectionKey);
+    const cardsForFlat =
+      bucketForFlat?.groups ?? (sectionBuckets.length === 1 ? sectionBuckets[0]!.groups : groupAnalytics);
+
+    const visible = showAllSectionsGrid
+      ? sectionBuckets.some((b) => b.groups.some((g) => g.groupId === selectedGroupId))
+      : cardsForFlat.some((g) => g.groupId === selectedGroupId);
+
+    if (!visible) {
+      onSelectGroup(null);
+    }
+  }, [selectedGroupId, studentSectionKey, sectionBuckets, groupAnalytics, onSelectGroup]);
+
   const persistStudentSection = (key: string) => {
     setStudentSectionKey(key);
     try {
@@ -109,13 +135,6 @@ export function GroupViewContent({
       /* ignore */
     }
   };
-
-  const showSectionedAllView = studentSectionKey === GROUP_ANALYTICS_ALL_SECTIONS && sectionBuckets.length > 1;
-  const activeBucket =
-    studentSectionKey === GROUP_ANALYTICS_ALL_SECTIONS ? null : sectionBuckets.find((b) => b.key === studentSectionKey);
-
-  const groupCardsForFlatView =
-    activeBucket?.groups ?? (sectionBuckets.length === 1 ? sectionBuckets[0]!.groups : groupAnalytics);
 
   return (
     <VStack align="stretch" gap={4} pt={4}>
