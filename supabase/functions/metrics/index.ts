@@ -4,6 +4,43 @@ import { BottleneckLimiterSnapshot, collectBottleneckRedisSnapshots } from "../_
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
+/** Best-effort cap for vacuum/RAM RPCs so a slow DB cannot stall the scrape. */
+const VACUUM_RAM_RPC_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+/** Shape returned by `vacuum_health_check` (not yet on generated `Database` types). */
+type VacuumHealthRow = { check_name: string; severity: string; relname: string };
+
+/** Shape returned by `database_ram_metrics` rows. */
+type RamMetricRow = {
+  metric_name: string;
+  metric_value: number;
+  metric_labels?: Record<string, unknown> | null;
+};
+
+type RpcRowResult<T> = { data: T | null; error: { message: string } | null };
+
+/** Call RPCs not yet present on generated `Database` / unwrap thenable builders for `withTimeout`. */
+function rpcUntyped<T>(client: ReturnType<typeof createClient<Database>>, fnName: string): Promise<RpcRowResult<T>> {
+  const sb = client as unknown as { rpc: (name: string) => Promise<RpcRowResult<T>> };
+  return sb.rpc(fnName);
+}
+
 async function generatePrometheusMetrics(): Promise<Response> {
   const scope = Sentry.getCurrentScope();
   scope?.setTag("function", "metrics");
@@ -35,6 +72,45 @@ async function generatePrometheusMetrics(): Promise<Response> {
     } catch (redisMetricsError) {
       console.error("Error collecting Bottleneck/Upstash metrics:", redisMetricsError);
       Sentry.captureException(redisMetricsError);
+    }
+
+    let vacuumHealth: VacuumHealthRow[] | null = null;
+    let vacuumError: { message: string } | null = null;
+    try {
+      const v = await withTimeout(
+        rpcUntyped<VacuumHealthRow[]>(supabase, "vacuum_health_check"),
+        VACUUM_RAM_RPC_TIMEOUT_MS,
+        "vacuum_health_check"
+      );
+      vacuumHealth = v.data;
+      vacuumError = v.error;
+    } catch (e) {
+      vacuumError = e instanceof Error ? e : new Error(String(e));
+    }
+
+    let ramMetrics: RamMetricRow[] | null = null;
+    let ramError: { message: string } | null = null;
+    try {
+      const r = await withTimeout(
+        rpcUntyped<RamMetricRow[]>(supabase, "database_ram_metrics"),
+        VACUUM_RAM_RPC_TIMEOUT_MS,
+        "database_ram_metrics"
+      );
+      ramMetrics = r.data;
+      ramError = r.error;
+    } catch (e) {
+      ramError = e instanceof Error ? e : new Error(String(e));
+    }
+
+    if (vacuumError) {
+      const errMsg = vacuumError.message ?? String(vacuumError);
+      console.error("Error fetching vacuum health:", errMsg, vacuumError);
+      Sentry.captureException(vacuumError);
+    }
+
+    if (ramError) {
+      console.error("Error fetching RAM metrics:", ramError);
+      Sentry.captureException(ramError);
     }
 
     const asyncQueueCount = queueSizes?.[0]?.async_queue_size || 0;
@@ -109,6 +185,56 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
         output += `pawtograder_bottleneck_running{${labels}} ${snap.running} ${timestamp}\n`;
         output += `pawtograder_bottleneck_concurrent_clients{${labels}} ${snap.concurrent_clients} ${timestamp}\n`;
         output += `pawtograder_bottleneck_queued{${labels}} ${snap.queued} ${timestamp}\n`;
+      }
+    }
+
+    // Vacuum health metrics
+    output += `
+# HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name; on RPC failure also error_type (bounded code only, no raw message)
+# TYPE pawtograder_vacuum_alert gauge
+`;
+    if (vacuumError) {
+      const labels = `check="${escapeLabel("rpc_failed")}",severity="${escapeLabel("error")}",table_name="${escapeLabel("none")}",error_type="${escapeLabel("rpc_error")}"`;
+      output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
+    } else if (vacuumHealth && vacuumHealth.length > 0) {
+      for (const row of vacuumHealth) {
+        const labels = `check="${escapeLabel(row.check_name)}",severity="${escapeLabel(row.severity)}",table_name="${escapeLabel(row.relname)}"`;
+        output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
+      }
+    } else {
+      output += `pawtograder_vacuum_alert{check="none",severity="ok",table_name="none"} 0 ${timestamp}\n`;
+    }
+
+    // Database RAM metrics
+    if (ramMetrics && ramMetrics.length > 0) {
+      const metricDefs: Record<string, string> = {
+        buffer_cache_bytes: "Bytes of shared buffer cache used by a table/index",
+        buffer_cache_total_used_bytes: "Total bytes of shared buffer cache in use",
+        connections: "Number of database connections by state",
+        table_total_bytes: "Total size of a table including indexes and TOAST",
+        dead_tuples: "Number of dead tuples in a table"
+      };
+
+      // Group by metric name and emit HELP/TYPE once per metric
+      const grouped = new Map<string, typeof ramMetrics>();
+      for (const row of ramMetrics) {
+        const existing = grouped.get(row.metric_name) || [];
+        existing.push(row);
+        grouped.set(row.metric_name, existing);
+      }
+
+      for (const [metricName, rows] of grouped) {
+        const promName = `pawtograder_db_${metricName}`;
+        const help = metricDefs[metricName] || metricName;
+        output += `\n# HELP ${promName} ${help}\n# TYPE ${promName} gauge\n`;
+        for (const row of rows) {
+          const ml = row.metric_labels && typeof row.metric_labels === "object" ? row.metric_labels : {};
+          const labels = Object.entries(ml as Record<string, string>)
+            .map(([k, v]) => `${k}="${escapeLabel(String(v))}"`)
+            .join(",");
+          const labelStr = labels ? `{${labels}}` : "";
+          output += `${promName}${labelStr} ${row.metric_value} ${timestamp}\n`;
+        }
       }
     }
 
