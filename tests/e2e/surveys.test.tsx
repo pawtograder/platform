@@ -375,15 +375,15 @@ test.describe("Surveys Page", () => {
     const surveysSection = activeSurveysHeading.locator("..");
 
     const startCard = surveysSection.locator("div").filter({ hasText: "Dashboard Start Survey" }).first();
-    await expect(startCard.getByRole("button", { name: "Start" })).toBeVisible();
+    await expect(startCard.getByRole("link", { name: "Start survey: Dashboard Start Survey" })).toBeVisible();
     await expect(startCard.getByText("Not started")).toBeVisible();
 
     const lockedCard = surveysSection.locator("div").filter({ hasText: "Dashboard Submitted Locked" }).first();
-    await expect(lockedCard.getByRole("button", { name: "View" })).toBeVisible();
+    await expect(lockedCard.getByRole("link", { name: "View survey: Dashboard Submitted Locked" })).toBeVisible();
     await expect(lockedCard.getByText("Submitted (locked)")).toBeVisible();
 
     const editableCard = surveysSection.locator("div").filter({ hasText: "Dashboard Submitted Editable" }).first();
-    await expect(editableCard.getByRole("button", { name: "Edit" })).toBeVisible();
+    await expect(editableCard.getByRole("link", { name: "Edit survey: Dashboard Submitted Editable" })).toBeVisible();
     await expect(editableCard.getByText("Submitted (editable)")).toBeVisible();
   });
 
