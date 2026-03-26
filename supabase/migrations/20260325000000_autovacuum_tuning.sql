@@ -213,7 +213,8 @@ COMMENT ON FUNCTION public.vacuum_health_check() IS
   'Returns vacuum health warnings: overdue vacuums, XID wraparound risk, dead tuple bloat, and large unvacuumed tables.';
 
 -- RPC: database RAM metrics for Prometheus scraping
-CREATE EXTENSION IF NOT EXISTS pg_buffercache;
+-- Must enable in the Supabase console for this to work.
+-- CREATE EXTENSION IF NOT EXISTS pg_buffercache;
 
 CREATE OR REPLACE FUNCTION public.database_ram_metrics()
 RETURNS TABLE (
