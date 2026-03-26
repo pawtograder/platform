@@ -33,22 +33,13 @@ function sha256Hex(buf: Uint8Array): string {
   return hash.digest("hex");
 }
 
-function computeCombinedFileHash(files: { name: string; contents: Buffer }[]): {
-  file_hashes: Record<string, string>;
-  combined_hash: string;
-} {
-  const file_hashes: Record<string, string> = {};
-  for (const f of files) {
-    file_hashes[f.name] = sha256Hex(f.contents);
-  }
+/** Combined empty-submission hash from per-file SHA-256 hex strings (sorted by path). */
+function combinedHashFromPerFileHexHashes(file_hashes: Record<string, string>): string {
   const combinedInput = Object.keys(file_hashes)
     .sort()
     .map((name) => `${name}\0${file_hashes[name]}\n`)
     .join("");
-  return {
-    file_hashes,
-    combined_hash: sha256Hex(Buffer.from(combinedInput, "utf-8"))
-  };
+  return sha256Hex(Buffer.from(combinedInput, "utf-8"));
 }
 
 async function safeCleanupRejectedSubmission(params: {
@@ -1254,7 +1245,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             ".otf": "font/otf"
           };
 
-          const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB per file
+          const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
 
           /**
            * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
@@ -1286,102 +1277,89 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             return BINARY_EXTENSIONS.has(getFileExtension(name));
           }
 
-          const submittedFilesWithContents = await Promise.all(
-            submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
-              const contents = await file.buffer();
-              const name = stripTopDir(file.path);
-              return { name, contents, binary: isBinaryFile(name) };
-            })
-          );
-          // Compute combined hash for empty submission detection (before any file insert)
-          const { combined_hash: submissionCombinedHash } = computeCombinedFileHash(submittedFilesWithContents);
+          // One in-flight file buffer at a time (zipball is already fully buffered by GitHub).
+          // Parallel Promise.all here used to multiply peak RAM by the number / size of files.
+          if (submission_id === undefined) {
+            throw new UserVisibleError("Internal error: submission id missing while saving files", 500);
+          }
+          const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
+          const file_hashes: Record<string, string> = {};
 
-          // Enforce 15 MB per-file size limit
-          for (const file of submittedFilesWithContents) {
-            if (file.contents.length > MAX_FILE_SIZE) {
+          for (const zipEntry of submittedFiles) {
+            const name = stripTopDir(zipEntry.path);
+            const contents = await zipEntry.buffer();
+
+            if (contents.length > MAX_FILE_SIZE) {
               throw new UserVisibleError(
-                `File "${file.name}" exceeds the 15 MB size limit (${(file.contents.length / (1024 * 1024)).toFixed(1)} MB).`,
+                `File "${name}" exceeds the 50 MB size limit (${(contents.length / (1024 * 1024)).toFixed(1)} MB).`,
                 400
               );
             }
-          }
 
-          // Separate text and binary files
-          const textFiles = submittedFilesWithContents.filter((f) => !f.binary);
-          const binaryFiles = submittedFilesWithContents.filter((f) => f.binary);
+            file_hashes[name] = sha256Hex(contents);
 
-          // Insert text files as before (inline contents)
-          if (textFiles.length > 0) {
-            const { error: textFileError } = await adminSupabase.from("submission_files").insert(
-              textFiles.map((file) => ({
+            if (isBinaryFile(name)) {
+              const safePath = getSafePath(name);
+              const ext = getFileExtension(safePath);
+              const mimeType = MIME_TYPES[ext] || "application/octet-stream";
+              const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${safePath}`;
+
+              const { error: storageError } = await adminSupabase.storage
+                .from("submission-files")
+                .upload(storageKey, contents, {
+                  contentType: mimeType,
+                  upsert: true
+                });
+              if (storageError) {
+                Sentry.captureException(storageError, scope);
+                throw new UserVisibleError(
+                  `Internal error: Failed to upload binary file "${safePath}" to storage: ${storageError.message}`
+                );
+              }
+
+              const { error: dbError } = await adminSupabase.from("submission_files").insert({
                 submission_id: submission_id,
-                name: file.name,
+                name: safePath,
                 profile_id: repoData.profile_id,
                 assignment_group_id: repoData.assignment_group_id,
-                contents: file.contents.toString("utf-8"),
+                contents: null,
+                class_id: repoData.assignments.class_id!,
+                is_binary: true,
+                file_size: contents.length,
+                mime_type: mimeType,
+                storage_key: storageKey
+              });
+              if (dbError) {
+                const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
+                if (removeErr.error) {
+                  Sentry.captureException(removeErr.error, scope);
+                }
+                Sentry.captureException(dbError, scope);
+                throw new UserVisibleError(
+                  `Internal error: Failed to insert binary file record for "${safePath}": ${dbError.message}`
+                );
+              }
+            } else {
+              const { error: textFileError } = await adminSupabase.from("submission_files").insert({
+                submission_id: submission_id,
+                name: name,
+                profile_id: repoData.profile_id,
+                assignment_group_id: repoData.assignment_group_id,
+                contents: contents.toString("utf-8"),
                 class_id: repoData.assignments.class_id!,
                 is_binary: false,
-                file_size: file.contents.length
-              }))
-            );
-            if (textFileError) {
-              Sentry.captureException(textFileError, scope);
-              throw new UserVisibleError(
-                `Internal error: Failed to insert text submission files: ${textFileError.message}`
-              );
+                file_size: contents.length
+              });
+              if (textFileError) {
+                Sentry.captureException(textFileError, scope);
+                throw new UserVisibleError(
+                  `Internal error: Failed to insert text submission file "${name}": ${textFileError.message}`
+                );
+              }
             }
           }
 
-          // Insert binary files: store content in Supabase Storage, metadata in DB (parallelized)
-          if (binaryFiles.length > 0) {
-            const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
-            await Promise.all(
-              binaryFiles.map(async (file) => {
-                const safePath = getSafePath(file.name);
-                const ext = getFileExtension(safePath);
-                const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${safePath}`;
-
-                // Upload to Supabase Storage
-                const { error: storageError } = await adminSupabase.storage
-                  .from("submission-files")
-                  .upload(storageKey, file.contents, {
-                    contentType: mimeType,
-                    upsert: true
-                  });
-                if (storageError) {
-                  Sentry.captureException(storageError, scope);
-                  throw new UserVisibleError(
-                    `Internal error: Failed to upload binary file "${safePath}" to storage: ${storageError.message}`
-                  );
-                }
-
-                // Insert DB record (no inline contents for binary)
-                const { error: dbError } = await adminSupabase.from("submission_files").insert({
-                  submission_id: submission_id,
-                  name: safePath,
-                  profile_id: repoData.profile_id,
-                  assignment_group_id: repoData.assignment_group_id,
-                  contents: null,
-                  class_id: repoData.assignments.class_id!,
-                  is_binary: true,
-                  file_size: file.contents.length,
-                  mime_type: mimeType,
-                  storage_key: storageKey
-                });
-                if (dbError) {
-                  const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
-                  if (removeErr.error) {
-                    Sentry.captureException(removeErr.error, scope);
-                  }
-                  Sentry.captureException(dbError, scope);
-                  throw new UserVisibleError(
-                    `Internal error: Failed to insert binary file record for "${safePath}": ${dbError.message}`
-                  );
-                }
-              })
-            );
-          }
+          const submissionCombinedHash = combinedHashFromPerFileHexHashes(file_hashes);
 
           // Empty submission detection:
           // If the submitted expected files match ANY recorded handout version for the assignment,

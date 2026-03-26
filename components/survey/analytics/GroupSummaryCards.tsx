@@ -1,7 +1,7 @@
 "use client";
 
 import type { Alert, GroupAnalytics } from "@/types/survey-analytics";
-import { Badge, Box, HStack, Text, VStack } from "@chakra-ui/react";
+import { Badge, Box, HStack, SimpleGrid, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
 
 type GroupSummaryCardsProps = {
@@ -50,7 +50,7 @@ export function GroupSummaryCards({
   );
 
   return (
-    <HStack gap={3} flexWrap="wrap" align="stretch">
+    <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4 }} gap={3} w="100%">
       {sortedGroups.map((group) => {
         const stats = Object.values(group.questionStats)[0];
         const isSelected = selectedGroupId === group.groupId;
@@ -71,6 +71,9 @@ export function GroupSummaryCards({
             _dark={{ bg: isSelected ? "blue.900" : undefined }}
             _hover={{ borderColor: "blue.400", bg: isSelected ? "blue.50" : "bg.muted" }}
             cursor="pointer"
+            w="100%"
+            h="full"
+            alignSelf="stretch"
             onClick={() => onSelectGroup(group.groupId)}
           >
             <VStack align="stretch" gap={1}>
@@ -95,6 +98,6 @@ export function GroupSummaryCards({
           </Box>
         );
       })}
-    </HStack>
+    </SimpleGrid>
   );
 }

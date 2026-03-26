@@ -1,5 +1,6 @@
 export type SurveyResponseWithContext = {
-  response_id: string;
+  /** Null when the row is a roster placeholder with no survey_responses row yet */
+  response_id: string | null;
   profile_id: string;
   profile_name: string | null;
   is_submitted: boolean;
@@ -11,6 +12,8 @@ export type SurveyResponseWithContext = {
   group_member_count?: number | null;
   mentor_profile_id: string | null;
   mentor_name: string | null;
+  profile_email?: string | null;
+  mentor_email?: string | null;
   lab_section_id: number | null;
   lab_section_name: string | null;
   class_section_id: number | null;
