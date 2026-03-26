@@ -765,9 +765,8 @@ function ArtifactWithComments({
   );
 }
 function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtifact; artifactKey: string }) {
-  const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [textContent, setTextContent] = useState<string | null>(null);
 
   useEffect(() => {
@@ -786,24 +785,29 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
             artifactId: artifact.id
           })
         });
-        setSiteUrl(data.data.url);
+        if (isMounted) setSiteUrl(data.data.url);
       }
-      const data = await client.storage.from("submission-artifacts").download(artifactKey);
 
-      if (!isMounted) return; // Component unmounted, exit early
-
-      if (data.data) {
-        setArtifactData(data.data);
-        if (artifact.data.format === "plaintext" || artifact.data.format === "markdown") {
+      if (artifact.data.format === "png") {
+        const { data: urlData, error: urlError } = await client.storage
+          .from("submission-artifacts")
+          .createSignedUrl(artifactKey, 60 * 60 * 24);
+        if (!isMounted) return;
+        if (urlError) {
+          toaster.error({ title: "Error loading artifact image", description: urlError.message });
+          return;
+        }
+        if (urlData) setSignedUrl(urlData.signedUrl);
+      } else if (artifact.data.format === "plaintext" || artifact.data.format === "markdown") {
+        const data = await client.storage.from("submission-artifacts").download(artifactKey);
+        if (!isMounted) return;
+        if (data.data) {
           const text = await data.data.text();
           if (isMounted) setTextContent(text);
         }
-      }
-      if (data.error && isMounted) {
-        toaster.error({
-          title: "Error processing ZIP file: " + data.error,
-          description: "Please try again."
-        });
+        if (data.error) {
+          toaster.error({ title: "Error loading artifact: " + data.error, description: "Please try again." });
+        }
       }
     }
 
@@ -821,29 +825,14 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     artifact.id
   ]);
 
-  // Create object URL when artifactData changes and cleanup previous URL
-  useEffect(() => {
-    let newObjectUrl: string | null = null;
-    if (artifactData && artifact.data.format === "png") {
-      newObjectUrl = URL.createObjectURL(artifactData);
-      setObjectUrl(newObjectUrl);
-    }
-
-    return () => {
-      // Cleanup on unmount or when artifactData changes
-      if (newObjectUrl) {
-        URL.revokeObjectURL(newObjectUrl);
-      }
-    };
-  }, [artifactData, artifact.data?.format]);
-
   if (artifact.data.format === "png") {
-    if (objectUrl) {
+    if (signedUrl) {
       return (
         //eslint-disable-next-line @next/next/no-img-element
         <img
-          src={objectUrl}
+          src={signedUrl}
           alt={artifact.name}
+          loading="lazy"
           style={{
             maxWidth: "100%",
             height: "auto",
