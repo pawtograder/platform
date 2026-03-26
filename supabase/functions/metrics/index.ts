@@ -4,6 +4,43 @@ import { BottleneckLimiterSnapshot, collectBottleneckRedisSnapshots } from "../_
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
+/** Best-effort cap for vacuum/RAM RPCs so a slow DB cannot stall the scrape. */
+const VACUUM_RAM_RPC_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+/** Shape returned by `vacuum_health_check` (not yet on generated `Database` types). */
+type VacuumHealthRow = { check_name: string; severity: string; relname: string };
+
+/** Shape returned by `database_ram_metrics` rows. */
+type RamMetricRow = {
+  metric_name: string;
+  metric_value: number;
+  metric_labels?: Record<string, unknown> | null;
+};
+
+type RpcRowResult<T> = { data: T | null; error: { message: string } | null };
+
+/** Call RPCs not yet present on generated `Database` / unwrap thenable builders for `withTimeout`. */
+function rpcUntyped<T>(client: ReturnType<typeof createClient<Database>>, fnName: string): Promise<RpcRowResult<T>> {
+  const sb = client as unknown as { rpc: (name: string) => Promise<RpcRowResult<T>> };
+  return sb.rpc(fnName);
+}
+
 async function generatePrometheusMetrics(): Promise<Response> {
   const scope = Sentry.getCurrentScope();
   scope?.setTag("function", "metrics");
@@ -37,11 +74,37 @@ async function generatePrometheusMetrics(): Promise<Response> {
       Sentry.captureException(redisMetricsError);
     }
 
-    const { data: vacuumHealth, error: vacuumError } = await supabase.rpc("vacuum_health_check");
-    const { data: ramMetrics, error: ramError } = await supabase.rpc("database_ram_metrics");
+    let vacuumHealth: VacuumHealthRow[] | null = null;
+    let vacuumError: { message: string } | null = null;
+    try {
+      const v = await withTimeout(
+        rpcUntyped<VacuumHealthRow[]>(supabase, "vacuum_health_check"),
+        VACUUM_RAM_RPC_TIMEOUT_MS,
+        "vacuum_health_check"
+      );
+      vacuumHealth = v.data;
+      vacuumError = v.error;
+    } catch (e) {
+      vacuumError = e instanceof Error ? e : new Error(String(e));
+    }
+
+    let ramMetrics: RamMetricRow[] | null = null;
+    let ramError: { message: string } | null = null;
+    try {
+      const r = await withTimeout(
+        rpcUntyped<RamMetricRow[]>(supabase, "database_ram_metrics"),
+        VACUUM_RAM_RPC_TIMEOUT_MS,
+        "database_ram_metrics"
+      );
+      ramMetrics = r.data;
+      ramError = r.error;
+    } catch (e) {
+      ramError = e instanceof Error ? e : new Error(String(e));
+    }
 
     if (vacuumError) {
-      console.error("Error fetching vacuum health:", vacuumError);
+      const errMsg = vacuumError.message ?? String(vacuumError);
+      console.error("Error fetching vacuum health:", errMsg, vacuumError);
       Sentry.captureException(vacuumError);
     }
 
@@ -127,13 +190,11 @@ pawtograder_discord_dlq_size ${discordDlqQueueCount} ${timestamp}
 
     // Vacuum health metrics
     output += `
-# HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name
+# HELP pawtograder_vacuum_alert Vacuum health alert (1 = active alert). Labels: check, severity, table_name; on RPC failure also error_type (bounded code only, no raw message)
 # TYPE pawtograder_vacuum_alert gauge
 `;
     if (vacuumError) {
-      const errMsg = vacuumError.message ?? String(vacuumError);
-      const errLabel = escapeLabel(errMsg.length > 800 ? `${errMsg.slice(0, 800)}...` : errMsg);
-      const labels = `check="${escapeLabel("rpc_failed")}",severity="${escapeLabel("error")}",table_name="${escapeLabel("none")}",error="${errLabel}"`;
+      const labels = `check="${escapeLabel("rpc_failed")}",severity="${escapeLabel("error")}",table_name="${escapeLabel("none")}",error_type="${escapeLabel("rpc_error")}"`;
       output += `pawtograder_vacuum_alert{${labels}} 1 ${timestamp}\n`;
     } else if (vacuumHealth && vacuumHealth.length > 0) {
       for (const row of vacuumHealth) {
