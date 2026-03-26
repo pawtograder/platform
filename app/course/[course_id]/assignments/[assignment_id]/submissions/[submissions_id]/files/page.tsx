@@ -1133,23 +1133,34 @@ export default function FilesView() {
     [updateUrl, selectedArtifactId, selectedFileId]
   );
 
+  const defaultFileId = submissionData?.submission_files?.[0]?.id ?? null;
+  const defaultArtifactId = submissionData?.submission_artifacts?.[0]?.id ?? null;
+  const effectiveFileId =
+    selectedArtifactId !== null ? null : (selectedFileId ?? (defaultFileId !== null ? defaultFileId : null));
+  const effectiveArtifactId =
+    selectedFileId !== null
+      ? null
+      : (selectedArtifactId ?? (defaultFileId === null && defaultArtifactId !== null ? defaultArtifactId : null));
+
   const curFileIndex =
-    submissionData?.submission_files.findIndex((file: SubmissionFile) => file.id === (selectedFileId ?? -1)) ?? -1;
+    submissionData?.submission_files.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1)) ?? -1;
   const selectedFile =
     curFileIndex !== -1
       ? submissionData?.submission_files[curFileIndex]
-      : submissionData?.submission_files && submissionData.submission_files.length > 0
+      : effectiveFileId !== null && submissionData?.submission_files && submissionData.submission_files.length > 0
         ? submissionData.submission_files[0]
         : undefined;
 
   const curArtifactIndex =
     submissionData?.submission_artifacts?.findIndex(
-      (artifact: Tables<"submission_artifacts">) => artifact.id === (selectedArtifactId ?? -1)
+      (artifact: Tables<"submission_artifacts">) => artifact.id === (effectiveArtifactId ?? -1)
     ) ?? -1;
   const selectedArtifact =
     curArtifactIndex !== -1
       ? submissionData?.submission_artifacts?.[curArtifactIndex]
-      : submissionData?.submission_artifacts && submissionData.submission_artifacts.length > 0
+      : effectiveArtifactId !== null &&
+          submissionData?.submission_artifacts &&
+          submissionData.submission_artifacts.length > 0
         ? submissionData.submission_artifacts[0]
         : undefined;
 
@@ -1164,7 +1175,7 @@ export default function FilesView() {
   // Scroll to line anchors when hash is present and relevant content is rendered
   useEffect(() => {
     scrollToHash();
-  }, [selectedFileId, selectedArtifactId, scrollToHash]);
+  }, [effectiveFileId, effectiveArtifactId, scrollToHash]);
 
   // Scroll to top of file/artifact when navigating via URL params (file_id or artifact_id)
   useEffect(() => {
@@ -1177,10 +1188,10 @@ export default function FilesView() {
 
     // Determine which selector to use based on which ID is set (using !== null to handle 0 correctly)
     const selector =
-      selectedFileId !== null
-        ? `[data-file-id="${selectedFileId}"]`
-        : selectedArtifactId !== null
-          ? `[data-artifact-id="${selectedArtifactId}"]`
+      effectiveFileId !== null
+        ? `[data-file-id="${effectiveFileId}"]`
+        : effectiveArtifactId !== null
+          ? `[data-artifact-id="${effectiveArtifactId}"]`
           : null;
 
     if (!selector) return; // No valid ID to scroll to
@@ -1241,17 +1252,17 @@ export default function FilesView() {
         clearTimeout(scrollTimeoutId);
       }
     };
-  }, [isSwitching, selectedFileId, selectedArtifactId, getScrollableAncestor]);
+  }, [isSwitching, effectiveFileId, effectiveArtifactId, getScrollableAncestor]);
 
   // After switching to a new file, wait for content to render and then scroll to the hash exactly once per file+hash
   useEffect(() => {
     if (isSwitching) return; // Still switching, wait until content area is shown
-    if (!selectedFileId) return; // Only applies to file views
+    if (!effectiveFileId) return; // Only applies to file views
     if (typeof window === "undefined") return;
     const hash = window.location.hash;
     if (!hash) return;
     const targetId = hash.startsWith("#") ? hash.slice(1) : hash;
-    const key = `${selectedFileId}:${targetId}`;
+    const key = `${effectiveFileId}:${targetId}`;
     if (scrolledTargetsRef.current.has(key)) return; // Already scrolled for this target on this file
 
     let attempts = 0;
@@ -1268,7 +1279,7 @@ export default function FilesView() {
       }
     };
     tryScroll();
-  }, [isSwitching, selectedFileId, preciseScrollTo]);
+  }, [isSwitching, effectiveFileId, preciseScrollTo]);
 
   // Briefly show a loading skeleton when switching files/artifacts
   useEffect(() => {
@@ -1300,7 +1311,7 @@ export default function FilesView() {
         <Box w={"100%"}>
           {isSwitching ? (
             <Skeleton height="70vh" width="100%" />
-          ) : selectedArtifact && selectedArtifactId !== null ? (
+          ) : selectedArtifact ? (
             <Box data-artifact-id={selectedArtifact.id} scrollMarginTop="80px">
               {selectedArtifact.data !== null ? (
                 <ArtifactWithComments

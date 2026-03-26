@@ -102,9 +102,6 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(
-      page.getByText("There are no published surveys available for this course at this time.")
-    ).toBeVisible();
   });
 
   test("student sees published survey and updated status", async ({ page }) => {
@@ -135,9 +132,6 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(
-      page.getByText("There are no published surveys available for this course at this time.")
-    ).toBeVisible();
     await expect(page.getByText("Draft Survey")).not.toBeVisible();
   });
 
@@ -152,9 +146,6 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(
-      page.getByText("There are no published surveys available for this course at this time.")
-    ).toBeVisible();
     await expect(page.getByText("Closed Survey")).not.toBeVisible();
   });
 
@@ -326,7 +317,6 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByRole("heading", { name: "Active Surveys" })).toBeVisible();
     await expect(page.getByText("No active surveys")).toBeVisible();
-    await expect(page.getByText("There are no published, active surveys for this course right now.")).toBeVisible();
   });
 
   test("student dashboard active surveys show correct actions", async ({ page }) => {

@@ -1388,6 +1388,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const { course_id } = useParams();
   const submission = useSubmission();
+  const hasGraderTests = (submission.grader_results?.grader_result_tests?.length ?? 0) > 0;
+  const isResultsPath = pathname.includes("/results");
+  const isFilesPath = pathname.includes("/files");
+  const activeSubPage = isResultsPath ? "results" : isFilesPath ? "files" : hasGraderTests ? "results" : "files";
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
@@ -1513,16 +1517,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         borderBottomColor="border.emphasized"
         borderBottomWidth="2px"
         bg="bg.muted"
-        defaultValue="results"
+        defaultValue={activeSubPage}
       >
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
-          <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
+          <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
-          <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
+          <Button variant={activeSubPage === "files" ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files
           </Button>
