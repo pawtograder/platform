@@ -42,6 +42,64 @@ function combinedHashFromPerFileHexHashes(file_hashes: Record<string, string>): 
   return sha256Hex(Buffer.from(combinedInput, "utf-8"));
 }
 
+/**
+ * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
+ * no leading/trailing slashes. Preserves safe subpaths for display names.
+ */
+function getSafeRelativePath(name: string): string {
+  const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const segments = normalized.split("/").filter((s) => s.length > 0);
+  const resolved: string[] = [];
+  for (const seg of segments) {
+    if (seg === ".") continue;
+    if (seg === "..") {
+      if (resolved.length > 0) resolved.pop();
+      continue;
+    }
+    resolved.push(seg);
+  }
+  const result = resolved.join("/");
+  if (result === "") return "unnamed";
+  return result;
+}
+
+/** Map Unicode whitespace (e.g. U+202F in macOS screenshot names) to ASCII space per segment. */
+function normalizeFilenameWhitespace(resolvedRelativePath: string): string {
+  return resolvedRelativePath
+    .split("/")
+    .map((seg) => {
+      let out = "";
+      for (const ch of seg.normalize("NFC")) {
+        out += /\p{White_Space}/u.test(ch) ? " " : ch;
+      }
+      return out.replace(/ +/g, " ").trim();
+    })
+    .join("/");
+}
+
+/**
+ * Per-segment sanitization for Supabase Storage object keys (file name restrictions in docs).
+ * Replaces any character outside the allowed set with underscore.
+ */
+function sanitizeSegmentForSupabaseStorage(seg: string): string {
+  const normalized = seg.normalize("NFC");
+  const allowed = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-',!*$&@=;:+?() ");
+  let out = "";
+  for (const ch of normalized) {
+    if (allowed.has(ch)) out += ch;
+    else if (/\p{White_Space}/u.test(ch)) out += " ";
+    else out += "_";
+  }
+  const trimmed = out.replace(/ +/g, " ").trim();
+  const collapsed = trimmed.replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return collapsed.length > 0 ? collapsed : "unnamed";
+}
+
+function sanitizePathForSupabaseStorageObjectKey(resolvedRelativePath: string): string {
+  if (resolvedRelativePath === "") return "unnamed";
+  return resolvedRelativePath.split("/").map(sanitizeSegmentForSupabaseStorage).join("/");
+}
+
 async function safeCleanupRejectedSubmission(params: {
   adminSupabase: SupabaseClient<Database>;
   submissionId: number;
@@ -1273,64 +1331,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
           const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
 
-          /**
-           * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
-           * no leading/trailing slashes. Preserves safe subpaths for storage keys and DB name.
-           */
-          function getSafePath(name: string): string {
-            const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-            const segments = normalized.split("/").filter((s) => s.length > 0);
-            const resolved: string[] = [];
-            for (const seg of segments) {
-              if (seg === ".") continue;
-              if (seg === "..") {
-                if (resolved.length > 0) resolved.pop();
-                continue;
-              }
-              resolved.push(seg);
-            }
-            const result = resolved.join("/");
-            if (result === "") return "unnamed";
-            return result;
-          }
-
-          /** Map Unicode whitespace (e.g. U+202F in macOS screenshot names) to ASCII space. */
-          function normalizeFilenameWhitespace(resolvedRelativePath: string): string {
-            return resolvedRelativePath
-              .split("/")
-              .map((seg) => {
-                let out = "";
-                for (const ch of seg.normalize("NFC")) {
-                  out += /\p{White_Space}/u.test(ch) ? " " : ch;
-                }
-                return out.replace(/ +/g, " ").trim();
-              })
-              .join("/");
-          }
-
-          /**
-           * Per-segment sanitization for Supabase Storage object keys (file name restrictions in docs).
-           * Replaces any character outside the allowed set with underscore.
-           */
-          function sanitizeSegmentForSupabaseStorage(seg: string): string {
-            const normalized = seg.normalize("NFC");
-            const allowed = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-',!*$&@=;:+?() ");
-            let out = "";
-            for (const ch of normalized) {
-              if (allowed.has(ch)) out += ch;
-              else if (/\p{White_Space}/u.test(ch)) out += " ";
-              else out += "_";
-            }
-            const trimmed = out.replace(/ +/g, " ").trim();
-            const collapsed = trimmed.replace(/_+/g, "_").replace(/^_|_$/g, "");
-            return collapsed.length > 0 ? collapsed : "unnamed";
-          }
-
-          function sanitizePathForSupabaseStorageObjectKey(resolvedRelativePath: string): string {
-            if (resolvedRelativePath === "") return "unnamed";
-            return resolvedRelativePath.split("/").map(sanitizeSegmentForSupabaseStorage).join("/");
-          }
-
           function getFileExtension(name: string): string {
             const lastDot = name.lastIndexOf(".");
             return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
@@ -1363,7 +1363,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             file_hashes[name] = sha256Hex(contents);
 
             if (isBinaryFile(name)) {
-              const logicalPath = normalizeFilenameWhitespace(getSafePath(name));
+              const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
               let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
               if (usedBinaryStorageRelPaths.has(storageRelPath)) {
                 const extDup = getFileExtension(storageRelPath);
