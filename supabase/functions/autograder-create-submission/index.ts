@@ -80,7 +80,9 @@ async function safeCleanupRejectedSubmission(params: {
     .map((row) => row.storage_key)
     .filter((k): k is string => k != null && k.length > 0);
   if (storageKeysToRemove.length > 0) {
-    const { error: storageRemoveErr } = await adminSupabase.storage.from("submission-files").remove(storageKeysToRemove);
+    const { error: storageRemoveErr } = await adminSupabase.storage
+      .from("submission-files")
+      .remove(storageKeysToRemove);
     if (storageRemoveErr) {
       Sentry.captureException(storageRemoveErr);
       throw new Error(
@@ -1292,6 +1294,43 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             return result;
           }
 
+          /** Map Unicode whitespace (e.g. U+202F in macOS screenshot names) to ASCII space. */
+          function normalizeFilenameWhitespace(resolvedRelativePath: string): string {
+            return resolvedRelativePath
+              .split("/")
+              .map((seg) => {
+                let out = "";
+                for (const ch of seg.normalize("NFC")) {
+                  out += /\p{White_Space}/u.test(ch) ? " " : ch;
+                }
+                return out.replace(/ +/g, " ").trim();
+              })
+              .join("/");
+          }
+
+          /**
+           * Per-segment sanitization for Supabase Storage object keys (file name restrictions in docs).
+           * Replaces any character outside the allowed set with underscore.
+           */
+          function sanitizeSegmentForSupabaseStorage(seg: string): string {
+            const normalized = seg.normalize("NFC");
+            const allowed = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-',!*$&@=;:+?() ");
+            let out = "";
+            for (const ch of normalized) {
+              if (allowed.has(ch)) out += ch;
+              else if (/\p{White_Space}/u.test(ch)) out += " ";
+              else out += "_";
+            }
+            const trimmed = out.replace(/ +/g, " ").trim();
+            const collapsed = trimmed.replace(/_+/g, "_").replace(/^_|_$/g, "");
+            return collapsed.length > 0 ? collapsed : "unnamed";
+          }
+
+          function sanitizePathForSupabaseStorageObjectKey(resolvedRelativePath: string): string {
+            if (resolvedRelativePath === "") return "unnamed";
+            return resolvedRelativePath.split("/").map(sanitizeSegmentForSupabaseStorage).join("/");
+          }
+
           function getFileExtension(name: string): string {
             const lastDot = name.lastIndexOf(".");
             return lastDot >= 0 ? name.substring(lastDot).toLowerCase() : "";
@@ -1308,6 +1347,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           }
           const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
           const file_hashes: Record<string, string> = {};
+          const usedBinaryStorageRelPaths = new Set<string>();
 
           for (const zipEntry of submittedFiles) {
             const name = stripTopDir(zipEntry.path);
@@ -1323,10 +1363,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             file_hashes[name] = sha256Hex(contents);
 
             if (isBinaryFile(name)) {
-              const safePath = getSafePath(name);
-              const ext = getFileExtension(safePath);
+              const logicalPath = normalizeFilenameWhitespace(getSafePath(name));
+              let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
+              if (usedBinaryStorageRelPaths.has(storageRelPath)) {
+                const extDup = getFileExtension(storageRelPath);
+                const base = extDup.length > 0 ? storageRelPath.slice(0, -extDup.length) : storageRelPath;
+                let n = 2;
+                while (usedBinaryStorageRelPaths.has(`${base}__${n}${extDup}`)) n++;
+                storageRelPath = `${base}__${n}${extDup}`;
+              }
+              usedBinaryStorageRelPaths.add(storageRelPath);
+
+              const ext = getFileExtension(logicalPath);
               const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-              const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${safePath}`;
+              const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${storageRelPath}`;
 
               const { error: storageError } = await adminSupabase.storage
                 .from("submission-files")
@@ -1337,13 +1387,13 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               if (storageError) {
                 Sentry.captureException(storageError, scope);
                 throw new UserVisibleError(
-                  `Internal error: Failed to upload binary file "${safePath}" to storage: ${storageError.message}`
+                  `Internal error: Failed to upload binary file "${logicalPath}" to storage: ${storageError.message}`
                 );
               }
 
               const { error: dbError } = await adminSupabase.from("submission_files").insert({
                 submission_id: submission_id,
-                name: safePath,
+                name: logicalPath,
                 profile_id: repoData.profile_id,
                 assignment_group_id: repoData.assignment_group_id,
                 contents: null,
@@ -1360,7 +1410,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 }
                 Sentry.captureException(dbError, scope);
                 throw new UserVisibleError(
-                  `Internal error: Failed to insert binary file record for "${safePath}": ${dbError.message}`
+                  `Internal error: Failed to insert binary file record for "${logicalPath}": ${dbError.message}`
                 );
               }
             } else {
