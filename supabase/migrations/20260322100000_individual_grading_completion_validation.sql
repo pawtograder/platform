@@ -811,8 +811,85 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.criteria_max_satisfied_for_uncovered(
+  p_submission_review_id bigint,
+  p_rubric_criteria_id bigint,
+  p_max int,
+  p_is_individual boolean,
+  p_targets uuid[],
+  p_num_targets int
+)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  i int;
+  v_target uuid;
+  v_count int;
+BEGIN
+  IF NOT p_is_individual OR p_num_targets IS NULL OR p_num_targets = 0 THEN
+    SELECT COUNT(DISTINCT rc.id)
+    INTO v_count
+    FROM rubric_checks rc
+    WHERE rc.rubric_criteria_id = p_rubric_criteria_id
+      AND EXISTS (
+        SELECT 1 FROM submission_comments sc
+        WHERE sc.submission_review_id = p_submission_review_id
+          AND sc.rubric_check_id = rc.id
+          AND sc.deleted_at IS NULL
+        UNION ALL
+        SELECT 1 FROM submission_file_comments sfc
+        WHERE sfc.submission_review_id = p_submission_review_id
+          AND sfc.rubric_check_id = rc.id
+          AND sfc.deleted_at IS NULL
+        UNION ALL
+        SELECT 1 FROM submission_artifact_comments sac
+        WHERE sac.submission_review_id = p_submission_review_id
+          AND sac.rubric_check_id = rc.id
+          AND sac.deleted_at IS NULL
+      );
+    RETURN v_count <= p_max;
+  END IF;
+
+  FOR i IN 1..p_num_targets LOOP
+    v_target := p_targets[i];
+    SELECT COUNT(DISTINCT rc.id)
+    INTO v_count
+    FROM rubric_checks rc
+    WHERE rc.rubric_criteria_id = p_rubric_criteria_id
+      AND EXISTS (
+        SELECT 1 FROM submission_comments sc
+        WHERE sc.submission_review_id = p_submission_review_id
+          AND sc.rubric_check_id = rc.id
+          AND sc.deleted_at IS NULL
+          AND sc.target_student_profile_id = v_target
+        UNION ALL
+        SELECT 1 FROM submission_file_comments sfc
+        WHERE sfc.submission_review_id = p_submission_review_id
+          AND sfc.rubric_check_id = rc.id
+          AND sfc.deleted_at IS NULL
+          AND sfc.target_student_profile_id = v_target
+        UNION ALL
+        SELECT 1 FROM submission_artifact_comments sac
+        WHERE sac.submission_review_id = p_submission_review_id
+          AND sac.rubric_check_id = rc.id
+          AND sac.deleted_at IS NULL
+          AND sac.target_student_profile_id = v_target
+      );
+    IF v_count > p_max THEN
+      RETURN false;
+    END IF;
+  END LOOP;
+  RETURN true;
+END;
+$$;
+
 REVOKE ALL ON FUNCTION public.check_required_check_satisfied_for_uncovered(bigint, bigint, boolean, uuid[], int) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.criteria_min_satisfied_for_uncovered(bigint, bigint, int, boolean, uuid[], int) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.criteria_max_satisfied_for_uncovered(bigint, bigint, int, boolean, uuid[], int) FROM PUBLIC;
 
 -- Uncovered rubric parts: same rules when deciding if submission_review can auto-complete.
 CREATE OR REPLACE FUNCTION public.check_and_complete_submission_review()
@@ -951,7 +1028,6 @@ BEGIN
           FROM rubric_criteria rcrit
           JOIN rubric_parts rp ON rcrit.rubric_part_id = rp.id
           WHERE rcrit.rubric_id = target_rubric_id
-            AND rcrit.min_checks_per_submission IS NOT NULL
             AND rcrit.rubric_part_id IS NOT NULL
             AND NOT (rcrit.rubric_part_id = ANY (covered_part_ids))
             AND NOT (
@@ -961,13 +1037,29 @@ BEGIN
                 OR (v_assignments ->> rcrit.rubric_part_id::text) = ''
               )
             )
-            AND NOT criteria_min_satisfied_for_uncovered(
-              target_submission_review_id,
-              rcrit.id,
-              rcrit.min_checks_per_submission,
-              rp.is_individual_grading,
-              v_targets,
-              v_num_targets
+            AND (
+              (
+                rcrit.min_checks_per_submission IS NOT NULL
+                AND NOT criteria_min_satisfied_for_uncovered(
+                  target_submission_review_id,
+                  rcrit.id,
+                  rcrit.min_checks_per_submission,
+                  rp.is_individual_grading,
+                  v_targets,
+                  v_num_targets
+                )
+              )
+              OR (
+                rcrit.max_checks_per_submission IS NOT NULL
+                AND NOT criteria_max_satisfied_for_uncovered(
+                  target_submission_review_id,
+                  rcrit.id,
+                  rcrit.max_checks_per_submission,
+                  rp.is_individual_grading,
+                  v_targets,
+                  v_num_targets
+                )
+              )
             )
         ) INTO has_blocking_uncovered_parts;
       END IF;

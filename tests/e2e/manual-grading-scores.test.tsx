@@ -566,17 +566,6 @@ test.describe("Manual grading score calculation", () => {
         .eq("submission_review_id", reviewId)
         .eq("rubric_check_id", individualCheckId);
 
-      // Trigger needs a new event to recompute — update an existing non-deleted comment
-      const sharedCheck = assignment.rubricChecks.find((c) => c.name === "Grading Review Check 2")!;
-      await addComment({
-        submission_id: submissionId,
-        review_id: reviewId,
-        check_id: sharedCheck.id,
-        class_id: course.id,
-        author_id: instructor.private_profile_id,
-        points: 1
-      });
-
       await new Promise((r) => setTimeout(r, 1000));
       const review = await getReviewScore(reviewId);
       expect(review.individual_scores).toBeNull();

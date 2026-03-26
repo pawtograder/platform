@@ -87,7 +87,7 @@ function StudentNameCell({
   );
 }
 
-function ScoreLink({
+function ScoreLinkWithProfile({
   score,
   private_profile_id,
   submission_id,
@@ -96,7 +96,7 @@ function ScoreLink({
 }: {
   score: number | null | undefined;
   private_profile_id: string;
-  submission_id: number;
+  submission_id: number | null | undefined;
   course_id: string;
   assignment_id: string;
 }) {
@@ -106,7 +106,45 @@ function ScoreLink({
     return <Skeleton w="50px" h="1em" />;
   }
   const label = score !== null && score !== undefined ? score : "—";
+  if (submission_id == null) {
+    return <Text fontSize="inherit">{label}</Text>;
+  }
   return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
+}
+
+function ScoreLink({
+  score,
+  private_profile_id,
+  submission_id,
+  course_id,
+  assignment_id
+}: {
+  score: number | null | undefined;
+  private_profile_id: string | null | undefined;
+  submission_id: number | null | undefined;
+  course_id: string;
+  assignment_id: string;
+}) {
+  const isObfuscated = useObfuscatedGradesMode();
+  const label = score !== null && score !== undefined ? score : "—";
+  if (!private_profile_id) {
+    if (isObfuscated) {
+      return <Skeleton w="50px" h="1em" />;
+    }
+    if (submission_id == null) {
+      return <Text fontSize="inherit">{label}</Text>;
+    }
+    return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
+  }
+  return (
+    <ScoreLinkWithProfile
+      score={score}
+      private_profile_id={private_profile_id}
+      submission_id={submission_id}
+      course_id={course_id}
+      assignment_id={assignment_id}
+    />
+  );
 }
 
 /** Per-student combined total from `per_student_grading_totals`, if present. */
@@ -124,7 +162,8 @@ function getDisplayedTotalScore(submission: ActiveSubmissionsWithGradesForAssign
   return getPerStudentCombinedGradingTotal(submission) ?? submission.total_score ?? null;
 }
 
-function TotalScoreCell({
+/** Total score when `student_private_profile_id` is missing (no per-student obfuscation target). */
+function TotalScoreCellUnknownStudent({
   row,
   course_id,
   assignment_id
@@ -133,7 +172,50 @@ function TotalScoreCell({
   course_id: string;
   assignment_id: string;
 }) {
-  const studentId = row.original.student_private_profile_id!;
+  const isObfuscated = useObfuscatedGradesMode();
+  const individualScores = row.original.individual_scores as IndividualScores | null | undefined;
+  const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
+  const displayScore = getDisplayedTotalScore(row.original);
+  if (isObfuscated) {
+    return <Skeleton w="50px" h="1em" />;
+  }
+  const tooltipContent = hasIndividual
+    ? Object.entries(individualScores!)
+        .filter(([, s]) => s !== undefined)
+        .map(([, s]) => `${s}`)
+        .join(" | ")
+    : "";
+  return (
+    <HStack gap={1}>
+      <ScoreLink
+        score={displayScore}
+        private_profile_id={undefined}
+        submission_id={row.original.activesubmissionid}
+        course_id={course_id}
+        assignment_id={assignment_id}
+      />
+      {hasIndividual && tooltipContent !== "" && (
+        <Tooltip content={`Individual portion(s): ${tooltipContent}`}>
+          <Text fontSize="xs" color="fg.info" cursor="help">
+            ⓘ
+          </Text>
+        </Tooltip>
+      )}
+    </HStack>
+  );
+}
+
+function TotalScoreCellWithStudent({
+  row,
+  course_id,
+  assignment_id,
+  studentId
+}: {
+  row: { original: ActiveSubmissionsWithGradesForAssignment };
+  course_id: string;
+  assignment_id: string;
+  studentId: string;
+}) {
   const perStudentCombined = getPerStudentCombinedGradingTotal(row.original);
   const individualScores = row.original.individual_scores as IndividualScores | null | undefined;
   const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
@@ -160,7 +242,7 @@ function TotalScoreCell({
       <ScoreLink
         score={displayScore}
         private_profile_id={studentId}
-        submission_id={row.original.activesubmissionid!}
+        submission_id={row.original.activesubmissionid}
         course_id={course_id}
         assignment_id={assignment_id}
       />
@@ -172,6 +254,24 @@ function TotalScoreCell({
         </Tooltip>
       )}
     </HStack>
+  );
+}
+
+function TotalScoreCell({
+  row,
+  course_id,
+  assignment_id
+}: {
+  row: { original: ActiveSubmissionsWithGradesForAssignment };
+  course_id: string;
+  assignment_id: string;
+}) {
+  const studentId = row.original.student_private_profile_id;
+  if (!studentId) {
+    return <TotalScoreCellUnknownStudent row={row} course_id={course_id} assignment_id={assignment_id} />;
+  }
+  return (
+    <TotalScoreCellWithStudent row={row} course_id={course_id} assignment_id={assignment_id} studentId={studentId} />
   );
 }
 export default function AssignmentsTable({
@@ -246,14 +346,32 @@ export default function AssignmentsTable({
           if (!row.original.name) return false;
           return values.some((val) => row.original.name!.toLowerCase().includes(val.toLowerCase()));
         },
-        cell: ({ row }) => (
-          <StudentNameCell
-            course_id={course_id as string}
-            assignment_id={assignment_id as string}
-            uid={row.original.student_private_profile_id!}
-            activeSubmissionId={row.original.activesubmissionid}
-          />
-        )
+        cell: ({ row }) => {
+          const uid = row.original.student_private_profile_id;
+          if (!uid) {
+            const sid = row.original.activesubmissionid;
+            const label = row.original.name ?? "—";
+            return (
+              <HStack w="100%">
+                {sid != null ? (
+                  <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${sid}`}>
+                    <Text>{label}</Text>
+                  </Link>
+                ) : (
+                  <Text>{label}</Text>
+                )}
+              </HStack>
+            );
+          }
+          return (
+            <StudentNameCell
+              course_id={course_id as string}
+              assignment_id={assignment_id as string}
+              uid={uid}
+              activeSubmissionId={row.original.activesubmissionid}
+            />
+          );
+        }
       },
       {
         id: "groupname",
@@ -344,8 +462,8 @@ export default function AssignmentsTable({
           return (
             <ScoreLink
               score={props.getValue() as number | null | undefined}
-              private_profile_id={props.row.original.student_private_profile_id!}
-              submission_id={props.row.original.activesubmissionid!}
+              private_profile_id={props.row.original.student_private_profile_id}
+              submission_id={props.row.original.activesubmissionid}
               course_id={course_id as string}
               assignment_id={assignment_id as string}
             />
