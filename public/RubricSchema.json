@@ -104,7 +104,7 @@
           "type": "string"
         }
       },
-      "required": ["is_annotation", "is_comment_required", "is_required", "kpi_category", "name", "points"],
+      "required": ["is_annotation", "is_comment_required", "is_required", "name", "points"],
       "type": "object"
     },
     "YmlRubricCriteriaType": {
@@ -235,6 +235,6 @@
       "type": "array"
     }
   },
-  "required": ["cap_score_to_assignment_points", "name", "parts"],
+  "required": ["name", "parts"],
   "type": "object"
 }

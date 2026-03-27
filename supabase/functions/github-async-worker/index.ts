@@ -1259,6 +1259,40 @@ export async function processEnvelope(
           repos = reposData ?? [];
           if (repos.length === 0) {
             Sentry.addBreadcrumb({ message: "No repositories found for assignment", level: "info" });
+            // Single-repo UI refresh sets repository_analytics_fetch_status to "fetching" in
+            // enqueue_repo_analytics_fetch; reconcile if the repo is missing from the worker query
+            // (e.g. not GitHub-ready), so the row does not stay stuck in "fetching".
+            if (singleRepoId != null) {
+              const errMessage =
+                "No GitHub-ready repository matched this request (repository may not be GitHub-ready yet).";
+              const { error: reconcileErr } = await adminSupabase.from("repository_analytics_fetch_status").upsert(
+                {
+                  assignment_id,
+                  class_id: classId,
+                  repository_id: singleRepoId,
+                  last_fetched_at: null,
+                  status: "error",
+                  error_message: errMessage
+                },
+                { onConflict: "assignment_id,repository_id" }
+              );
+              if (reconcileErr) {
+                console.error("[repo-analytics] Failed to reconcile fetch status (empty repo list):", reconcileErr);
+                Sentry.captureException(reconcileErr, scope);
+              } else {
+                Sentry.addBreadcrumb({
+                  message: "Reconciled repository_analytics_fetch_status after empty repo query (single-repo)",
+                  level: "warning",
+                  data: {
+                    assignment_id,
+                    class_id: classId,
+                    repository_id: singleRepoId,
+                    debug_id: envelope.debug_id,
+                    enqueued_at: meta.enqueued_at
+                  }
+                });
+              }
+            }
             recordMetric(
               adminSupabase,
               {
@@ -1279,17 +1313,21 @@ export async function processEnvelope(
 
           console.log(`[repo-analytics] Starting: assignment ${assignment_id}, org ${org}, ${repos.length} repo(s)`);
 
-          // Fix 7: Rate limit budget — if too low, requeue whole job (bulk or single-repo) to avoid partial runs
-          const RATE_LIMIT_BUDGET_THRESHOLD = 10_000;
+          // Fix 7: Rate limit budget — if remaining core requests fall below a fraction of the installation's limit, requeue
           const RATE_LIMIT_REQUEUE_DELAY_SECONDS = 1800; // 30 minutes
           try {
             const { data: rateLimit } = await octokit.request("GET /rate_limit");
-            const remaining = rateLimit.resources.core.remaining;
-            console.log(`[repo-analytics] Rate limit: ${remaining}/${rateLimit.resources.core.limit} remaining`);
-            if (remaining < RATE_LIMIT_BUDGET_THRESHOLD) {
-              const resetAt = new Date(rateLimit.resources.core.reset * 1000);
+            const core = rateLimit.resources.core;
+            const remaining = core.remaining;
+            const limit = core.limit;
+            const rateLimitBudget = Math.max(Math.floor(limit * 0.2), 1000);
+            console.log(
+              `[repo-analytics] Rate limit: ${remaining}/${limit} remaining (budget ${rateLimitBudget} = max(20% of limit, 1000))`
+            );
+            if (remaining < rateLimitBudget) {
+              const resetAt = new Date(core.reset * 1000);
               console.log(
-                `[repo-analytics] Rate limit below ${RATE_LIMIT_BUDGET_THRESHOLD} (${remaining} remaining). Requeuing in ${RATE_LIMIT_REQUEUE_DELAY_SECONDS}s. Core reset at ${resetAt.toISOString()}`
+                `[repo-analytics] Rate limit below budget: remaining=${remaining}, limit=${limit}, budget=${rateLimitBudget}. Requeuing in ${RATE_LIMIT_REQUEUE_DELAY_SECONDS}s. Core reset at ${resetAt.toISOString()}`
               );
               await requeueWithDelay(adminSupabase, envelope, RATE_LIMIT_REQUEUE_DELAY_SECONDS, scope, queueName);
               const archived = await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
@@ -1518,13 +1556,26 @@ export async function processEnvelope(
                 });
               }
 
-              // Fix 4: Query existing PR items to skip file fetch for known PRs
+              // Fix 4: Query existing PR items to skip file fetch for known PRs (keep stored data for upsert)
+              type PrCommitFileData = {
+                files: Array<{ filename: string; status?: string; additions: number; deletions: number }>;
+              };
+              const parseStoredFileData = (raw: unknown): PrCommitFileData | null => {
+                if (raw && typeof raw === "object" && Array.isArray((raw as { files?: unknown }).files)) {
+                  return raw as PrCommitFileData;
+                }
+                return null;
+              };
+
               const { data: existingPrItems } = await adminSupabase
                 .from("repository_analytics_items")
-                .select("github_id")
+                .select("github_id, data")
                 .eq("repository_id", repo.id)
                 .eq("item_type", "pr");
-              const existingPrIds = new Set((existingPrItems ?? []).map((r) => r.github_id));
+              const existingPrDataByGithubId = new Map<string, unknown>(
+                (existingPrItems ?? []).map((r) => [r.github_id, r.data])
+              );
+              const existingPrIds = new Set(existingPrDataByGithubId.keys());
 
               // Fetch PRs (paginated iterator with early exit when PRs are older than sinceIso)
               try {
@@ -1547,10 +1598,8 @@ export async function processEnvelope(
                     if (sinceIso && new Date(pr.updated_at) <= new Date(sinceIso)) break outer;
                     const createdDay = ensureDay(pr.created_at);
                     dailyMap.get(createdDay)!.prs_opened++;
-                    let prData: {
-                      files: Array<{ filename: string; status?: string; additions: number; deletions: number }>;
-                    } | null = null;
-                    // Fix 4: Only fetch PR files for new PRs (not already in DB)
+                    let prData: PrCommitFileData | null = null;
+                    // Fix 4: Only fetch PR files for new PRs (not already in DB); reuse DB data for existing rows
                     const isNewPr = !existingPrIds.has(String(pr.number));
                     if (isNewPr) {
                       try {
@@ -1571,6 +1620,8 @@ export async function processEnvelope(
                       } catch {
                         // Continue without file data
                       }
+                    } else {
+                      prData = parseStoredFileData(existingPrDataByGithubId.get(String(pr.number)));
                     }
                     itemUpserts.push({
                       repository_id: repo.id,
@@ -1664,25 +1715,21 @@ export async function processEnvelope(
                   commitsIter = await commitsIterator.next();
                 }
 
-                // Fix 3: Only fetch commit details for new commits (not already in DB)
+                // Fix 3: Only fetch commit details for new commits (not already in DB); keep stored data otherwise
                 const { data: existingCommitItems } = await adminSupabase
                   .from("repository_analytics_items")
-                  .select("github_id")
+                  .select("github_id, data")
                   .eq("repository_id", repo.id)
                   .eq("item_type", "commit");
-                const existingCommitShas = new Set((existingCommitItems ?? []).map((r) => r.github_id));
+                const existingCommitDataBySha = new Map<string, unknown>(
+                  (existingCommitItems ?? []).map((r) => [r.github_id, r.data])
+                );
+                const existingCommitShas = new Set(existingCommitDataBySha.keys());
 
                 for (let i = 0; i < commitsToProcess.length; i++) {
                   const { commit, day } = commitsToProcess[i];
 
-                  let commitData: {
-                    files: Array<{
-                      filename: string;
-                      status?: string;
-                      additions: number;
-                      deletions: number;
-                    }>;
-                  } | null = null;
+                  let commitData: PrCommitFileData | null = null;
                   const isNewCommit = !existingCommitShas.has(commit.sha);
                   if (isNewCommit) {
                     try {
@@ -1707,6 +1754,8 @@ export async function processEnvelope(
                     } catch {
                       // Continue without file data
                     }
+                  } else {
+                    commitData = parseStoredFileData(existingCommitDataBySha.get(commit.sha));
                   }
 
                   itemUpserts.push({

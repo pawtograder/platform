@@ -27,6 +27,7 @@ CREATE OR REPLACE FUNCTION public.enqueue_repo_analytics_fetch(
 ) RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
     message_id bigint;
@@ -163,7 +164,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgmq
+SET search_path = public, pg_catalog, pgmq
 AS $$
 BEGIN
     RETURN QUERY
@@ -183,10 +184,10 @@ GRANT EXECUTE ON FUNCTION public.get_async_queue_sizes() TO service_role;
 -- Update check_assignment_deadlines_passed to only enqueue for assignments with the flag
 CREATE OR REPLACE FUNCTION "public"."check_assignment_deadlines_passed"() RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
+    SET search_path = public, pg_catalog
     AS $$
 DECLARE
     r RECORD;
-    v_minute int;
     v_total int;
 BEGIN
     -- First, create any missing submission reviews for students whose lab-based due dates have passed
@@ -268,7 +269,6 @@ BEGIN
 
     -- Daily repo analytics refresh: only for assignments with enable_repo_analytics = true
     IF extract(hour from now() at time zone 'UTC') = 2 THEN
-        v_minute := extract(minute from now() at time zone 'UTC')::int;
         SELECT count(*)::int INTO v_total
         FROM public.assignments a
         JOIN public.classes c ON c.id = a.class_id
@@ -288,7 +288,7 @@ BEGIN
                   AND a.enable_repo_analytics = true
                   AND nullif(trim(c.github_org), '') IS NOT NULL
                 ORDER BY a.id
-                LIMIT 1 OFFSET (v_minute % v_total)
+                LIMIT 1 OFFSET (extract(epoch from now())::bigint % v_total::bigint)
             LOOP
                 BEGIN
                     PERFORM public.enqueue_repo_analytics_fetch(r.class_id, r.assignment_id, r.github_org, null);
