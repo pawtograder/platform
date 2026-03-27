@@ -126,7 +126,7 @@ function WhatIfScoreCell({
   }
   if (isShowingWhatIf) {
     if (whatIfVal?.what_if !== null && whatIfVal?.what_if !== undefined) {
-      scoreToShow = Math.round(whatIfVal?.what_if ?? 0);
+      scoreToShow = whatIfVal.what_if;
     } else {
       scoreToShow = "0";
     }
