@@ -288,7 +288,11 @@ test.describe("Manual grading score calculation", () => {
       });
 
       // Override to group config
-      await supabase.from("assignments").update({ group_config: "groups" }).eq("id", assignment.id);
+      const { error: groupConfigError } = await supabase
+        .from("assignments")
+        .update({ group_config: "groups" })
+        .eq("id", assignment.id);
+      if (groupConfigError) throw new Error(`Failed to set group_config: ${groupConfigError.message}`);
 
       const sub = await createGroupSubmission({
         student_profiles: [studentA, studentB],
@@ -367,7 +371,11 @@ test.describe("Manual grading score calculation", () => {
         name: "Group Individual Score Test"
       });
 
-      await supabase.from("assignments").update({ group_config: "groups" }).eq("id", assignment.id);
+      const { error: groupConfigError } = await supabase
+        .from("assignments")
+        .update({ group_config: "groups" })
+        .eq("id", assignment.id);
+      if (groupConfigError) throw new Error(`Failed to set group_config: ${groupConfigError.message}`);
 
       // Add an individual grading rubric part
       const { data: partData, error: partError } = await supabase
@@ -560,11 +568,12 @@ test.describe("Manual grading score calculation", () => {
 
     test("removing individual grading comments clears individual_scores", async () => {
       // Soft-delete all individual comments
-      await supabase
+      const { error: deleteError } = await supabase
         .from("submission_comments")
         .update({ deleted_at: new Date().toISOString() })
         .eq("submission_review_id", reviewId)
         .eq("rubric_check_id", individualCheckId);
+      if (deleteError) throw new Error(`Failed to soft-delete individual comments: ${deleteError.message}`);
 
       await new Promise((r) => setTimeout(r, 1000));
       const review = await getReviewScore(reviewId);
@@ -594,11 +603,15 @@ test.describe("Manual grading score calculation", () => {
         name: "Assign-to-Student Test"
       });
 
-      await supabase.from("assignments").update({ group_config: "groups" }).eq("id", assignment.id);
+      const { error: groupConfigError } = await supabase
+        .from("assignments")
+        .update({ group_config: "groups" })
+        .eq("id", assignment.id);
+      if (groupConfigError) throw new Error(`Failed to set group_config: ${groupConfigError.message}`);
 
       const rubricId = assignment.grading_rubric_id!;
 
-      const { data: parts } = await supabase
+      const { data: parts, error: partsError } = await supabase
         .from("rubric_parts")
         .insert([
           {
@@ -621,6 +634,7 @@ test.describe("Manual grading score calculation", () => {
           }
         ])
         .select("id, name");
+      if (partsError) throw new Error(`Failed to create assign-to-student parts: ${partsError.message}`);
 
       assignPart1Id = parts!.find((p) => p.name === "Task A")!.id;
       assignPart2Id = parts!.find((p) => p.name === "Task B")!.id;
@@ -629,7 +643,7 @@ test.describe("Manual grading score calculation", () => {
         [assignPart1Id, 1],
         [assignPart2Id, 2]
       ] as const) {
-        const { data: criteria } = await supabase
+        const { data: criteria, error: criteriaError } = await supabase
           .from("rubric_criteria")
           .insert({
             class_id: course.id,
@@ -643,8 +657,9 @@ test.describe("Manual grading score calculation", () => {
           })
           .select("id")
           .single();
+        if (criteriaError) throw new Error(`Failed to create criteria for Task ${idx}: ${criteriaError.message}`);
 
-        const { data: check } = await supabase
+        const { data: check, error: checkError } = await supabase
           .from("rubric_checks")
           .insert({
             rubric_criteria_id: criteria!.id,
@@ -660,6 +675,7 @@ test.describe("Manual grading score calculation", () => {
           })
           .select("id")
           .single();
+        if (checkError) throw new Error(`Failed to create check for Task ${idx}: ${checkError.message}`);
 
         if (idx === 1) assignCheck1Id = check!.id;
         else assignCheck2Id = check!.id;
@@ -677,7 +693,7 @@ test.describe("Manual grading score calculation", () => {
 
     test("assigning parts to students and grading produces individual_scores", async () => {
       // Assign Task A to Student A, Task B to Student B
-      await supabase
+      const { error: assignError } = await supabase
         .from("submission_reviews")
         .update({
           rubric_part_student_assignments: {
@@ -686,6 +702,7 @@ test.describe("Manual grading score calculation", () => {
           }
         })
         .eq("id", reviewId);
+      if (assignError) throw new Error(`Failed to set rubric_part_student_assignments: ${assignError.message}`);
 
       // Grade Task A check (assigned to Student A)
       await addComment({
@@ -718,7 +735,7 @@ test.describe("Manual grading score calculation", () => {
 
     test("skipping a part (null assignment) excludes it from individual_scores", async () => {
       // Skip Task B (set to null)
-      await supabase
+      const { error: skipError } = await supabase
         .from("submission_reviews")
         .update({
           rubric_part_student_assignments: {
@@ -727,6 +744,7 @@ test.describe("Manual grading score calculation", () => {
           }
         })
         .eq("id", reviewId);
+      if (skipError) throw new Error(`Failed to update rubric_part_student_assignments: ${skipError.message}`);
 
       // Trigger recompute by touching a comment
       await addComment({
@@ -750,7 +768,7 @@ test.describe("Manual grading score calculation", () => {
 
     test("reassigning a part to a different student moves the score", async () => {
       // Reassign Task A from Student A to Student B
-      await supabase
+      const { error: reassignError } = await supabase
         .from("submission_reviews")
         .update({
           rubric_part_student_assignments: {
@@ -759,6 +777,8 @@ test.describe("Manual grading score calculation", () => {
           }
         })
         .eq("id", reviewId);
+      if (reassignError)
+        throw new Error(`Failed to reassign rubric_part_student_assignments: ${reassignError.message}`);
 
       // Trigger recompute
       await addComment({

@@ -9,13 +9,14 @@ DECLARE
   existing_submission_review_id int8;
   v_comment_deleted_at_changed boolean;
 BEGIN
-  v_comment_deleted_at_changed := TG_OP = 'UPDATE'
-    AND TG_TABLE_NAME IN (
-      'submission_comments',
-      'submission_file_comments',
-      'submission_artifact_comments'
-    )
-    AND OLD.deleted_at IS DISTINCT FROM NEW.deleted_at;
+  v_comment_deleted_at_changed := false;
+  IF TG_OP = 'UPDATE' AND TG_TABLE_NAME IN (
+    'submission_comments',
+    'submission_file_comments',
+    'submission_artifact_comments'
+  ) THEN
+    v_comment_deleted_at_changed := OLD.deleted_at IS DISTINCT FROM NEW.deleted_at;
+  END IF;
 
   IF NOT v_comment_deleted_at_changed AND pg_trigger_depth() > 1 THEN
     RETURN NEW;
