@@ -769,20 +769,40 @@ export async function createRepo(
     );
     console.log(JSON.stringify(resp.headers, null, 2));
     scope?.setTag("github_operation", "create_repo_request_done");
-    //Disable squash merging, make template
+    // Enable squash merging; set template flag when applicable
     scope?.setTag("github_operation", "patch_repo_settings");
     await retryWithBackoff(
       () =>
         octokit.request("PATCH /repos/{owner}/{repo}", {
           owner: org,
           repo: repoName,
-          allow_squash_merge: false,
+          allow_squash_merge: true,
           is_template: is_template_repo ? true : false
         }),
       3, // maxRetries
       1000, // baseDelayMs
       scope
     );
+    // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+    scope?.setTag("github_operation", "enable_actions");
+    try {
+      await retryWithBackoff(
+        () =>
+          octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+            owner: org,
+            repo: repoName,
+            enabled: true,
+            allowed_actions: "all"
+          }),
+        3,
+        1000,
+        scope
+      );
+    } catch (actionsErr) {
+      console.error("Error enabling GitHub Actions", actionsErr);
+      scope?.setTag("enable_actions_failed", "true");
+      Sentry.captureException(actionsErr, scope);
+    }
     //Get the head SHA
     scope?.setTag("github_operation", "get_head_sha");
     scope?.setTag("ref", "heads/main");
@@ -828,6 +848,45 @@ export async function createRepo(
           scope
         );
         scope?.setTag("head_sha", heads.data.object.sha);
+        // Match settings we apply on fresh creates (e.g. squash merge).
+        try {
+          await retryWithBackoff(
+            () =>
+              octokit.request("PATCH /repos/{owner}/{repo}", {
+                owner: org,
+                repo: repoName,
+                allow_squash_merge: true,
+                is_template: is_template_repo ? true : false
+              }),
+            3,
+            1000,
+            scope
+          );
+        } catch (patchErr) {
+          console.error("Error patching repo settings for pre-existing repo", patchErr);
+          scope?.setTag("patch_existing_repo_settings_failed", "true");
+          Sentry.captureException(patchErr, scope);
+        }
+        // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+        scope?.setTag("github_operation", "enable_actions");
+        try {
+          await retryWithBackoff(
+            () =>
+              octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+                owner: org,
+                repo: repoName,
+                enabled: true,
+                allowed_actions: "all"
+              }),
+            3,
+            1000,
+            scope
+          );
+        } catch (actionsErr) {
+          console.error("Error enabling GitHub Actions for pre-existing repo", actionsErr);
+          scope?.setTag("enable_actions_failed", "true");
+          Sentry.captureException(actionsErr, scope);
+        }
         return heads.data.object.sha as string;
       } else {
         throw e;
