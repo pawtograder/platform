@@ -4,6 +4,7 @@ import { Box, Heading, Text, VStack, Button } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
 import { toaster } from "@/components/ui/toaster";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import dynamic from "next/dynamic";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { SurveyResponse, ResponseData } from "@/types/survey";
@@ -54,6 +55,11 @@ export default function SurveyTakingPage() {
         if (error && error.code !== "PGRST116") {
           // PGRST116 = no rows found, which is fine
           console.error("Error loading response:", error);
+          toaster.create({
+            title: "Could not load your saved answers",
+            description: getStudentFacingErrorMessage(error),
+            type: "error"
+          });
         }
 
         setExistingResponse(data || null);
@@ -143,10 +149,10 @@ export default function SurveyTakingPage() {
       } catch (error) {
         console.error("Error submitting survey:", error);
 
-        const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
+        const errorMessage = getStudentFacingErrorMessage(error);
         toaster.create({
           title: "Submission Failed",
-          description: `Error: ${errorMessage}. Please try again.`,
+          description: `${errorMessage} Please try again.`,
           type: "error"
         });
       } finally {

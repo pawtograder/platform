@@ -42,6 +42,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { AIHelpSubmissionErrorButton } from "@/components/ai-help/AIHelpSubmissionErrorButton";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
@@ -821,9 +822,10 @@ export default function GraderResults() {
   }
   if (query.error) {
     return (
-      <Box>
-        Error loading grader results
-        {query.error.message}
+      <Box p={4}>
+        <Alert status="error" title="Could not load results">
+          {getStudentFacingErrorMessage(query.error)}
+        </Alert>
       </Box>
     );
   }
@@ -893,18 +895,19 @@ export default function GraderResults() {
             </Alert>
           ) : (
             <Alert title="Submission Processing Error" status="warning" p={4} mb={4}>
-              An error occurred while processing your submission, but no user-visible error details are available. Your
-              code has been submitted to{" "}
+              The autograder reported a problem, but the detailed message is only visible to course staff. Your code was
+              still pushed to{" "}
               <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>.
               <Box mt={4}>
                 <Text fontSize="sm">
-                  Please check{" "}
+                  Open{" "}
                   <Link
                     href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
                   >
-                    the GitHub Actions run for this submission
+                    the GitHub Actions run log
                   </Link>{" "}
-                  or contact your instructor for assistance.
+                  to see the full error output, or ask your instructor or TA—they can see the same details in
+                  Pawtograder and in GitHub.
                 </Text>
               </Box>
             </Alert>

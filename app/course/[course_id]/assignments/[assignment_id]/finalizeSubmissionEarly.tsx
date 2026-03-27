@@ -1,6 +1,8 @@
 "use client";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
@@ -48,20 +50,53 @@ export default function FinalizeSubmissionEarly({
 
       if (error) {
         console.error("Error finalizing submission:", error);
-        // You might want to show a toast notification here
+        toaster.error({
+          title: "Could not finalize submission",
+          description: getStudentFacingErrorMessage(error)
+        });
+        return;
+      }
+
+      if (data === null || data === undefined) {
+        toaster.error({
+          title: "Could not finalize submission",
+          description: "No response from the server. Please try again."
+        });
         return;
       }
 
       const result = data as { success: boolean; error?: string; message?: string };
 
-      if (result && !result.success) {
+      if (!result.success) {
+        const reason = result.error || result.message;
         console.error("Failed to finalize submission:", result.error);
-        // You might want to show a toast notification here
+        const friendly: Record<string, string> = {
+          "Not authorized":
+            "You are not allowed to finalize this submission. Make sure you are enrolled as a student in this course.",
+          "Self reviews not enabled for this assignment":
+            "Early finalization is only available when self-review is enabled for this assignment. Contact your instructor if you expected this option.",
+          "Submission already finalized": "Your submission is already finalized for this assignment.",
+          "Assignment not found": "This assignment could not be found. Refresh the page or contact your instructor."
+        };
+        const mapped = reason && friendly[reason];
+        toaster.error({
+          title: "Could not finalize submission",
+          description:
+            mapped || (reason ? getStudentFacingErrorMessage(reason) : "This action is not allowed right now.")
+        });
         return;
       }
       reviewAssignments.refetchAll();
+      toaster.success({
+        title: "Submission finalized",
+        description: "Your submission time is set. You can continue with self-review if your course uses it."
+      });
     } catch (err) {
       console.error("Unexpected error finalizing submission:", err);
+      toaster.error({
+        title: "Could not finalize submission",
+        description: getStudentFacingErrorMessage(err)
+      });
     } finally {
       setLoading(false);
     }
