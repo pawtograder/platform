@@ -1,4 +1,5 @@
 "use client";
+import remarkEscapeHtml from "@/lib/remark-escape-html";
 import Markdown from "@/components/ui/markdown";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -709,6 +710,7 @@ export default function MessageInput(props: MessageInputProps) {
             }
           }, 0);
         }}
+        previewOptions={{ remarkPlugins: [remarkEscapeHtml] }}
         {...editorProps}
       />
       <MentionDropdown
