@@ -1,4 +1,9 @@
 import { createAdminClient } from "@/utils/supabase/client";
+import {
+  fetchDefaultGradeTargetStudentProfileId,
+  fetchRubricCheckIdsRequiringTargetStudentProfileId,
+  resolveTargetStudentProfileIdForRubricComment
+} from "@/lib/rubricCommentTargetStudentProfileId";
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
@@ -1811,6 +1816,11 @@ export async function createRegradeRequest(
     closedPoints?: number;
   }
 ) {
+  const target_student_profile_id = await resolveTargetStudentProfileIdForRubricComment(
+    supabase,
+    submission_id,
+    rubric_check_id
+  );
   // First create a submission comment to reference
   const { data: commentData, error: commentError } = await supabase
     .from("submission_comments")
@@ -1821,7 +1831,8 @@ export async function createRegradeRequest(
       points: options?.commentPoints ?? Math.floor(Math.random() * 10),
       class_id: class_id,
       rubric_check_id,
-      released: true
+      released: true,
+      target_student_profile_id
     })
     .select("*")
     .single();
@@ -1912,6 +1923,15 @@ export async function gradeSubmission(
       throw new Error(`Failed to get rubric checks: ${checksError.message}`);
     }
 
+    const individualCheckIds = await fetchRubricCheckIdsRequiringTargetStudentProfileId(
+      supabase,
+      (rubricChecks ?? []).map((c) => c.id)
+    );
+    const defaultIndividualTarget =
+      individualCheckIds.size > 0
+        ? await fetchDefaultGradeTargetStudentProfileId(supabase, reviewInfo.submission_id)
+        : null;
+
     // Get submission files for annotation comments
     const { data: submissionFiles } = await supabase
       .from("submission_files")
@@ -1944,6 +1964,11 @@ export async function gradeSubmission(
             const lineRandomValue = options?.lineNumberRandomizer?.() ?? Math.random();
             const lineNumber = Math.floor(lineRandomValue * 5) + 1; // Random line number 1-5
 
+            const targetField =
+              individualCheckIds.has(check.id) && defaultIndividualTarget
+                ? { target_student_profile_id: defaultIndividualTarget }
+                : {};
+
             await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
               "submission_file_comments",
               () =>
@@ -1959,12 +1984,17 @@ export async function gradeSubmission(
                     class_id: reviewInfo.class_id,
                     released: true,
                     rubric_check_id: check.id,
-                    submission_review_id: grading_review_id
+                    submission_review_id: grading_review_id,
+                    ...targetField
                   })
                   .select("id")
             );
           }
         } else {
+          const targetField =
+            individualCheckIds.has(check.id) && defaultIndividualTarget
+              ? { target_student_profile_id: defaultIndividualTarget }
+              : {};
           // Create submission comment (general comment)
           await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("submission_comments", () =>
             supabase
@@ -1977,7 +2007,8 @@ export async function gradeSubmission(
                 class_id: reviewInfo.class_id,
                 released: true,
                 rubric_check_id: check.id,
-                submission_review_id: grading_review_id
+                submission_review_id: grading_review_id,
+                ...targetField
               })
               .select("id")
           );

@@ -6,6 +6,7 @@ import {
   RubricCheck as RubricCheckType,
   RubricCriteria as RubricCriteriaType,
   RubricPart as RubricPartType,
+  RubricPartStudentAssignments,
   SubmissionArtifactComment,
   SubmissionComments,
   SubmissionFileComment,
@@ -31,6 +32,7 @@ import {
 } from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { createClient } from "@/utils/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
@@ -53,6 +55,7 @@ import {
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -66,15 +69,17 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaChartLine, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
@@ -768,16 +773,22 @@ export function RubricCheckAnnotation({
   criteria,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
-  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, reviewForThisRubric?.id);
+  const rubricCheckComments = useRubricCheckInstances(
+    check as RubricChecks,
+    reviewForThisRubric?.id,
+    targetStudentProfileId
+  );
   const isGrader = useIsGraderOrInstructor();
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
@@ -891,7 +902,8 @@ export function RubricCheckGlobal({
   isSelected,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
@@ -899,12 +911,18 @@ export function RubricCheckGlobal({
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
-  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, reviewForThisRubric?.id);
+  const rubricCheckComments = useRubricCheckInstances(
+    check as RubricChecks,
+    reviewForThisRubric?.id,
+    targetStudentProfileId
+  );
   const criteriaCheckComments = useRubricCriteriaInstances({
     criteria: criteria,
-    review_id: reviewForThisRubric?.id
+    review_id: reviewForThisRubric?.id,
+    target_student_profile_id: targetStudentProfileId
   });
 
   // Move all useState calls before any early returns
@@ -1194,6 +1212,7 @@ export function RubricCheckGlobal({
           submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
+          targetStudentProfileId={targetStudentProfileId}
           onSuccess={onCommentSuccess}
         />
       )}
@@ -1236,12 +1255,14 @@ function SubmissionCommentForm({
   submissionReview,
   selectedOptionIndex,
   linkedArtifactId,
+  targetStudentProfileId,
   onSuccess
 }: {
   check: HydratedRubricCheck;
   submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
+  targetStudentProfileId?: string | null;
   onSuccess: () => void;
 }) {
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -1306,6 +1327,7 @@ function SubmissionCommentForm({
             submission_review_id: submissionReview?.id ?? null,
             eventually_visible: true,
             regrade_request_id: null,
+            ...(targetStudentProfileId != null ? { target_student_profile_id: targetStudentProfileId } : {}),
             ...artifactInfo
           };
           onSuccess();
@@ -1328,7 +1350,8 @@ function RubricCheck({
   isSelected,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   criteria: RubricCriteriaType;
   check: RubricCheckType;
@@ -1336,6 +1359,7 @@ function RubricCheck({
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   return (
     <Box p={0} w="100%">
@@ -1346,6 +1370,7 @@ function RubricCheck({
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
+          targetStudentProfileId={targetStudentProfileId}
         />
       ) : (
         <RubricCheckGlobal
@@ -1355,6 +1380,7 @@ function RubricCheck({
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
+          targetStudentProfileId={targetStudentProfileId}
         />
       )}
     </Box>
@@ -1365,17 +1391,20 @@ export function RubricCriteria({
   criteria,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   criteria: RubricCriteriaType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
   const comments = useRubricCriteriaInstances({
     criteria: criteria,
-    review_id: reviewForThisRubric?.id
+    review_id: reviewForThisRubric?.id,
+    target_student_profile_id: targetStudentProfileId
   });
   const totalPoints = comments.reduce((acc, comment) => acc + (comment.points || 0), 0);
   const isAdditive = criteria.is_additive;
@@ -1461,6 +1490,7 @@ export function RubricCriteria({
                   assignmentId={assignmentId}
                   classId={classId}
                   currentRubricId={currentRubricId}
+                  targetStudentProfileId={targetStudentProfileId}
                 />
               ))}
             </RadioGroup.Root>
@@ -1475,12 +1505,14 @@ export function RubricPart({
   part,
   assignmentId,
   classId,
-  currentRubricId
+  currentRubricId,
+  targetStudentProfileId
 }: {
   part: RubricPartType;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
+  targetStudentProfileId?: string | null;
 }) {
   const unsortedCriteria = useRubricCriteriaByPart(part?.id);
   const criteria = [...unsortedCriteria].sort((a, b) => a.ordinal - b.ordinal);
@@ -1496,6 +1528,7 @@ export function RubricPart({
             assignmentId={assignmentId}
             classId={classId}
             currentRubricId={currentRubricId}
+            targetStudentProfileId={targetStudentProfileId}
           />
         ))}
       </VStack>
@@ -1684,6 +1717,326 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   );
 }
 
+function AssignToStudentPart({
+  part,
+  groupMembers,
+  assignmentId,
+  classId,
+  currentRubricId
+}: {
+  part: RubricPartType;
+  groupMembers: { profile_id: string }[];
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+}) {
+  const review = useSubmissionReviewForRubric(currentRubricId);
+  const isGrader = useIsGraderOrInstructor();
+  const assignments: RubricPartStudentAssignments =
+    (review?.rubric_part_student_assignments as RubricPartStudentAssignments) ?? {};
+  const assignedStudentId = assignments[String(part.id)] ?? null;
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(assignedStudentId);
+  const selectedStudentRef = useRef(selectedStudent);
+  selectedStudentRef.current = selectedStudent;
+
+  useEffect(() => {
+    setSelectedStudent(assignedStudentId);
+  }, [assignedStudentId]);
+
+  const handleAssign = useCallback(
+    async (studentId: string | null) => {
+      if (!review) return;
+      const previous = selectedStudentRef.current;
+      setSelectedStudent(studentId);
+      selectedStudentRef.current = studentId;
+
+      const supabase = createClient();
+      const { error } = await supabase.rpc("patch_submission_review_rubric_part_assignment", {
+        p_submission_review_id: review.id,
+        p_rubric_part_id: part.id,
+        p_student_profile_id: studentId
+      });
+
+      if (error) {
+        setSelectedStudent(previous);
+        selectedStudentRef.current = previous;
+        toaster.error({
+          title: "Could not update rubric assignment",
+          description: error.message
+        });
+      }
+    },
+    [review?.id, part.id]
+  );
+
+  if (!isGrader) {
+    if (!selectedStudent) return null;
+    return (
+      <Box w="100%" borderLeft="3px solid" borderColor="border.warning" pl={3}>
+        <Box mb={1}>
+          <Badge variant="outline">
+            <PersonName uid={selectedStudent} />
+          </Badge>
+        </Box>
+        <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+      </Box>
+    );
+  }
+
+  return (
+    <Box w="100%">
+      <HStack mb={2} gap={2} align="center">
+        <Heading size="md">{part.name}</Heading>
+        <Badge variant="secondary">Assign</Badge>
+      </HStack>
+      {part.description && <Markdown>{part.description}</Markdown>}
+      <Box my={2}>
+        <NativeSelectRoot>
+          <NativeSelectField
+            aria-label={`Assign ${part.name} to student`}
+            value={selectedStudent ?? "__skip__"}
+            onChange={(e) => {
+              const val = e.target.value;
+              handleAssign(val === "__skip__" ? null : val);
+            }}
+          >
+            <option value="__skip__">Skip (hide this part)</option>
+            {groupMembers.map((member) => (
+              <GroupMemberSelectOption key={member.profile_id} profileId={member.profile_id} />
+            ))}
+          </NativeSelectField>
+        </NativeSelectRoot>
+      </Box>
+      {selectedStudent && (
+        <Box borderLeft="3px solid" borderColor="border.warning" pl={3}>
+          <RubricPart part={part} assignmentId={assignmentId} classId={classId} currentRubricId={currentRubricId} />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+type RubricSidebarSegment =
+  | { type: "individual_run"; parts: RubricPartType[] }
+  | { type: "entire_group_run"; parts: RubricPartType[] }
+  | { type: "single"; part: RubricPartType };
+
+/**
+ * When grading a group, consecutive `is_individual_grading` parts form one run (per-student columns).
+ * `is_assign_to_student` parts and non-individual parts break the run so rubric order matches authoring:
+ * e.g. individual A,B — assign X — individual C stays A,B then X then C, not one merged A,B,C block.
+ */
+function segmentRubricSidebarParts(parts: RubricPartType[], hasGroupMembers: boolean): RubricSidebarSegment[] {
+  const qualifies = (p: RubricPartType) => Boolean(p.is_individual_grading && hasGroupMembers);
+  const segments: RubricSidebarSegment[] = [];
+  let currentIndividualRun: RubricPartType[] = [];
+
+  const flushIndividualRun = () => {
+    if (currentIndividualRun.length === 0) return;
+    segments.push({ type: "individual_run", parts: currentIndividualRun });
+    currentIndividualRun = [];
+  };
+
+  for (const part of parts) {
+    if (part.is_assign_to_student) {
+      flushIndividualRun();
+      segments.push({ type: "single", part });
+      continue;
+    }
+    if (qualifies(part)) {
+      currentIndividualRun.push(part);
+      continue;
+    }
+    flushIndividualRun();
+    segments.push({ type: "single", part });
+  }
+  flushIndividualRun();
+  return segments;
+}
+
+/**
+ * When the rubric mixes individual-graded parts with shared parts, merge consecutive plain (full-group)
+ * segments so we show one "Entire Group" banner for each contiguous block of shared criteria.
+ */
+function withEntireGroupRuns(segments: RubricSidebarSegment[], enabled: boolean): RubricSidebarSegment[] {
+  if (!enabled) return segments;
+  const out: RubricSidebarSegment[] = [];
+  let buffer: RubricPartType[] = [];
+  const flushBuffer = () => {
+    if (buffer.length === 0) return;
+    out.push({ type: "entire_group_run", parts: buffer });
+    buffer = [];
+  };
+  for (const seg of segments) {
+    if (seg.type === "individual_run") {
+      flushBuffer();
+      out.push(seg);
+      continue;
+    }
+    if (seg.type === "entire_group_run") {
+      flushBuffer();
+      out.push(seg);
+      continue;
+    }
+    if (seg.part.is_assign_to_student) {
+      flushBuffer();
+      out.push(seg);
+    } else {
+      buffer.push(seg.part);
+    }
+  }
+  flushBuffer();
+  return out;
+}
+
+function RubricGradingScopeBanner({ kicker, title }: { kicker: string; title: ReactNode }) {
+  return (
+    <Box
+      position="sticky"
+      top="3rem"
+      zIndex={2}
+      py={2}
+      mb={2}
+      ml={-3}
+      pl={3}
+      pr={2}
+      bg="bg.muted"
+      borderBottomWidth="1px"
+      borderColor="border.emphasized"
+      shadow="sm"
+    >
+      <Text
+        fontSize="xs"
+        fontWeight="semibold"
+        color="text.muted"
+        textTransform="uppercase"
+        letterSpacing="wider"
+        mb={1}
+      >
+        {kicker}
+      </Text>
+      <Heading size="md">{title}</Heading>
+    </Box>
+  );
+}
+
+function EntireGroupRubricBlock({
+  parts,
+  assignmentId,
+  classId,
+  currentRubricId
+}: {
+  parts: RubricPartType[];
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+}) {
+  return (
+    <Box
+      w="100%"
+      borderLeft="3px solid"
+      borderColor="border.emphasized"
+      pl={3}
+      role="region"
+      aria-label="Rubric criteria for the entire group"
+    >
+      <RubricGradingScopeBanner kicker="Applies to" title="Entire Group" />
+      <VStack align="stretch" w="100%" gap={4}>
+        {parts.map((part) => (
+          <RubricPart
+            key={part.id}
+            part={part}
+            assignmentId={assignmentId}
+            classId={classId}
+            currentRubricId={currentRubricId}
+          />
+        ))}
+      </VStack>
+    </Box>
+  );
+}
+
+function IndividualGradingRunBlock({
+  parts,
+  groupMembers,
+  assignmentId,
+  classId,
+  currentRubricId
+}: {
+  parts: RubricPartType[];
+  groupMembers: { profile_id: string }[];
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+}) {
+  const isGrader = useIsGraderOrInstructor();
+  const { private_profile_id } = useClassProfiles();
+  const visibleMembers = isGrader ? groupMembers : groupMembers.filter((m) => m.profile_id === private_profile_id);
+
+  return (
+    <Box w="100%">
+      <HStack mb={2} gap={2} align="center" flexWrap="wrap">
+        <Badge variant="secondary">Individual</Badge>
+        <Text fontSize="sm" color="text.muted">
+          Graded separately for each group member
+        </Text>
+      </HStack>
+      <VStack align="stretch" w="100%" gap={5}>
+        {visibleMembers.map((member) => (
+          <IndividualGradingStudentBlock
+            key={member.profile_id}
+            memberProfileId={member.profile_id}
+            parts={parts}
+            assignmentId={assignmentId}
+            classId={classId}
+            currentRubricId={currentRubricId}
+          />
+        ))}
+      </VStack>
+    </Box>
+  );
+}
+
+function IndividualGradingStudentBlock({
+  memberProfileId,
+  parts,
+  assignmentId,
+  classId,
+  currentRubricId
+}: {
+  memberProfileId: string;
+  parts: RubricPartType[];
+  assignmentId?: number;
+  classId?: number;
+  currentRubricId?: number;
+}) {
+  const profile = useUserProfile(memberProfileId);
+  return (
+    <Box
+      w="100%"
+      borderLeft="3px solid"
+      borderColor="border.info"
+      pl={3}
+      role="region"
+      aria-label={`Individual grading for ${profile?.name ?? memberProfileId}`}
+    >
+      <RubricGradingScopeBanner kicker="Grading for" title={<PersonName uid={memberProfileId} />} />
+      <VStack align="stretch" w="100%" gap={4}>
+        {parts.map((part) => (
+          <RubricPart
+            key={part.id}
+            part={part}
+            assignmentId={assignmentId}
+            classId={classId}
+            currentRubricId={currentRubricId}
+            targetStudentProfileId={memberProfileId}
+          />
+        ))}
+      </VStack>
+    </Box>
+  );
+}
+
 export function RubricSidebar({ rubricId }: { rubricId: number }) {
   /*
   What this sidebar should show:
@@ -1701,6 +2054,17 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
   const reviewForThisRubric = useSubmissionReviewForRubric(rubricId);
   const viewOnly = !isGrader && !reviewForThisRubric;
   const rubricParts = useRubricParts(rubricId);
+  const submission = useSubmissionMaybe();
+  const isGroupSubmission = Boolean(submission?.assignment_group_id);
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const assignmentGroupsTableReady = useIsTableControllerReady(assignmentGroupsWithMembers);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission?.assignment_group_id
+  });
+  /** False only while we might still be loading the group row; avoid treating [] as "no group" during fetch. */
+  const groupMembersContextReady = !isGroupSubmission || assignmentGroupsTableReady;
+  const resolvedGroupMembers = assignmentGroupWithMembers?.assignment_groups_members ?? [];
+  const hasGroupMembers = isGroupSubmission && resolvedGroupMembers.length > 0;
 
   if (!rubric) {
     return (
@@ -1764,15 +2128,60 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
             )}
           </Box>
         )}
-        {partsToDisplay.map((part) => (
-          <RubricPart
-            key={part.name + "-" + part.id}
-            part={part}
-            assignmentId={assignmentController.assignment.id}
-            classId={assignmentController.assignment.class_id}
-            currentRubricId={rubric?.id}
-          />
-        ))}
+        {!groupMembersContextReady ? (
+          <Skeleton height="220px" width="100%" mt={2} aria-label="Loading group roster for rubric" />
+        ) : (
+          withEntireGroupRuns(
+            segmentRubricSidebarParts(partsToDisplay, hasGroupMembers),
+            hasGroupMembers && partsToDisplay.some((p) => p.is_individual_grading)
+          ).map((segment) => {
+            if (segment.type === "individual_run") {
+              return (
+                <IndividualGradingRunBlock
+                  key={segment.parts.map((p) => p.id).join("-")}
+                  parts={segment.parts}
+                  groupMembers={resolvedGroupMembers}
+                  assignmentId={assignmentController.assignment.id}
+                  classId={assignmentController.assignment.class_id}
+                  currentRubricId={rubric?.id}
+                />
+              );
+            }
+            if (segment.type === "entire_group_run") {
+              return (
+                <EntireGroupRubricBlock
+                  key={segment.parts.map((p) => p.id).join("-")}
+                  parts={segment.parts}
+                  assignmentId={assignmentController.assignment.id}
+                  classId={assignmentController.assignment.class_id}
+                  currentRubricId={rubric?.id}
+                />
+              );
+            }
+            const part = segment.part;
+            if (part.is_assign_to_student && hasGroupMembers) {
+              return (
+                <AssignToStudentPart
+                  key={part.name + "-" + part.id}
+                  part={part}
+                  groupMembers={resolvedGroupMembers}
+                  assignmentId={assignmentController.assignment.id}
+                  classId={assignmentController.assignment.class_id}
+                  currentRubricId={rubric?.id}
+                />
+              );
+            }
+            return (
+              <RubricPart
+                key={part.name + "-" + part.id}
+                part={part}
+                assignmentId={assignmentController.assignment.id}
+                classId={assignmentController.assignment.class_id}
+                currentRubricId={rubric?.id}
+              />
+            );
+          })
+        )}
       </VStack>
     </Box>
   );

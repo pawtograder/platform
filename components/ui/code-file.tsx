@@ -6,9 +6,17 @@ import {
   useRubricChecksByRubric,
   useRubricCriteria,
   useRubricCriteriaByRubric,
+  useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import {
+  computeRubricAnnotationTargetMeta,
+  countFileCommentsForCheckScopedToTarget,
+  effectiveAnnotationTargetStudentProfileId,
+  useRubricAnnotationTargetMeta
+} from "@/hooks/useRubricAnnotationTargetMeta";
 import {
   useSubmission,
   useSubmissionController,
@@ -25,7 +33,20 @@ import {
   SubmissionFileComment,
   SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
-import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
+import {
+  Badge,
+  Box,
+  Button,
+  Flex,
+  HStack,
+  Icon,
+  NativeSelectField,
+  NativeSelectRoot,
+  Separator,
+  Tag,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 // Dynamic import of starry-night to reduce build memory usage
 // Note: The actual loading happens in useEffect, but we need to avoid static import
@@ -50,6 +71,7 @@ import {
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { GroupMemberLabelText, GroupMemberSelectOption } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
@@ -528,6 +550,11 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                     <Text fontSize="sm" color="fg.muted">
                       {rubricCriteria?.name} &gt; {rubricCheck?.name}
                     </Text>
+                    {comment.target_student_profile_id && (
+                      <Badge variant="outline" fontSize="xs" flexShrink={0}>
+                        <GroupMemberLabelText profileId={comment.target_student_profile_id} />
+                      </Badge>
+                    )}
                   </HStack>
                   <HStack gap={0} flexWrap="wrap">
                     <Text fontSize="sm" fontStyle="italic" color="fg.muted">
@@ -744,6 +771,16 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
   const existingComments = useSubmissionFileComments({ file_id: file.id });
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
+  const rubricParts = useRubricParts(rubric?.id ?? null);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id ?? undefined
+  });
+  const groupMembers = useMemo(
+    () => assignmentGroupWithMembers?.assignment_groups_members ?? [],
+    [assignmentGroupWithMembers]
+  );
+  const [pickedAnnotationStudentId, setPickedAnnotationStudentId] = useState<string | null>(null);
+  const annotationTargetMeta = useRubricAnnotationTargetMeta(selectedCheckOption?.criteria ?? null);
 
   const criteria: RubricCriteriaSelectGroupOption[] = useMemo(() => {
     // Only show criteria that have annotation checks
@@ -786,10 +823,19 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
             )
             .sort((a, b) => a.ordinal - b.ordinal)
             .map((check) => {
-              // Count existing annotations for this specific check
-              const existingAnnotationsForCheck = existingComments.filter(
-                (comment) => comment.rubric_check_id === check.id
-              ).length;
+              const rubricPart = rubricParts?.find((p) => p.id === criteria.rubric_part_id);
+              const targetMeta = computeRubricAnnotationTargetMeta({
+                criteria: criteria as RubricCriteria,
+                part: rubricPart,
+                members: groupMembers,
+                review
+              });
+              const existingAnnotationsForCheck = countFileCommentsForCheckScopedToTarget(
+                existingComments,
+                check.id,
+                targetMeta,
+                pickedAnnotationStudentId
+              );
 
               // Check if this option should be disabled due to max_annotations
               const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
@@ -830,7 +876,20 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
     });
 
     return criteriaOptions;
-  }, [assignedPartIds, existingComments, rubricCriteria, rubricChecks]);
+  }, [
+    assignedPartIds,
+    existingComments,
+    rubricCriteria,
+    rubricChecks,
+    rubricParts,
+    groupMembers,
+    review,
+    pickedAnnotationStudentId
+  ]);
+
+  useEffect(() => {
+    setPickedAnnotationStudentId(null);
+  }, [selectedCheckOption?.criteria?.id, selectedCheckOption?.check?.id]);
 
   useEffect(() => {
     if (!visible) {
@@ -1048,6 +1107,25 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
             ) : (
               <></>
             )}
+            {selectedCheckOption.check && annotationTargetMeta.mode === "individual" && (
+              <NativeSelectRoot size="sm">
+                <NativeSelectField
+                  aria-label="Group member this annotation is for"
+                  value={pickedAnnotationStudentId ?? ""}
+                  onChange={(e) => setPickedAnnotationStudentId(e.target.value || null)}
+                >
+                  <option value="">Select group member…</option>
+                  {annotationTargetMeta.members.map((m) => (
+                    <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
+                  ))}
+                </NativeSelectField>
+              </NativeSelectRoot>
+            )}
+            {selectedCheckOption.check && annotationTargetMeta.mode === "assign_blocked" && (
+              <Text fontSize="sm" color="fg.error">
+                {annotationTargetMeta.reason}
+              </Text>
+            )}
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
@@ -1078,6 +1156,14 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                   });
                   return;
                 }
+                const targetEff = effectiveAnnotationTargetStudentProfileId(
+                  annotationTargetMeta,
+                  pickedAnnotationStudentId
+                );
+                if (targetEff.error) {
+                  toaster.error({ title: "Cannot save annotation", description: targetEff.error });
+                  return;
+                }
                 const values = {
                   comment,
                   line: lineNumber,
@@ -1093,7 +1179,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                   eventually_visible: selectedCheckOption.check
                     ? selectedCheckOption.check.student_visibility !== "never"
                     : true,
-                  regrade_request_id: null
+                  regrade_request_id: null,
+                  target_student_profile_id: targetEff.targetId
                 };
                 try {
                   await submissionController.submission_file_comments.create(values);

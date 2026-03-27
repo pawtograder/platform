@@ -479,7 +479,18 @@ export function useTableControllerValueById<
 
   return value;
 }
-export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller?: TableController<T>): boolean {
+export function useIsTableControllerReady<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T> | undefined | null,
+  ResultOne = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(controller?: TableController<T, Query, IDType, ResultOne>): boolean {
   const [ready, setReady] = useState(controller?.ready ?? false);
   useEffect(() => {
     if (!controller) {

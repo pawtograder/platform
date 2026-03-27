@@ -1,3 +1,4 @@
+import { resolveTargetStudentProfileIdForRubricComment } from "@/lib/rubricCommentTargetStudentProfileId";
 import dotenv from "dotenv";
 import {
   createAssignmentsAndGradebookColumns,
@@ -223,6 +224,11 @@ async function test() {
     throw new Error(`Failed to create code walk review: ${submissionCodeWalkReview.error.message}`);
   }
   //Throw in a quick review for the code walk on submission 1
+  const codeWalkTarget = await resolveTargetStudentProfileIdForRubricComment(
+    supabase,
+    submission1.submission_id,
+    codeWalkCheck.data!.id
+  );
   const submissionCodeWalkComment = await supabase.from("submission_comments").insert({
     submission_id: submission1.submission_id,
     class_id: course.id,
@@ -230,7 +236,8 @@ async function test() {
     comment: "Good work on this aspect!",
     rubric_check_id: codeWalkCheck.data!.id,
     points: 90,
-    submission_review_id: submissionCodeWalkReview.data!.id
+    submission_review_id: submissionCodeWalkReview.data!.id,
+    target_student_profile_id: codeWalkTarget
   });
   if (submissionCodeWalkComment.error) {
     throw new Error(`Failed to create code walk comment: ${submissionCodeWalkComment.error.message}`);
