@@ -19,14 +19,12 @@ function formatFileSize(bytes: number | null): string {
 }
 
 export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
-    let currentObjectUrl: string | null = null;
 
     async function loadFile() {
       if (!file.storage_key) {
@@ -39,52 +37,31 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
 
       const client = createClient();
 
-      // Create signed URL for download
       const { data: signedUrlData, error: signedUrlError } = await client.storage
         .from("submission-files")
-        .createSignedUrl(file.storage_key, 60 * 60 * 24); // 24 hour expiry
+        .createSignedUrl(file.storage_key, 60 * 60 * 24);
 
-      if (isMounted && signedUrlData) {
-        setDownloadUrl(signedUrlData.signedUrl);
-      }
-      if (signedUrlError && isMounted) {
+      if (!isMounted) return;
+
+      if (signedUrlError) {
         setError(`Failed to create download link: ${signedUrlError.message}`);
         setLoading(false);
         return;
       }
 
-      // For images, also create an object URL for inline display
-      if (isImageMime(file.mime_type)) {
-        const { data: blob, error: downloadError } = await client.storage
-          .from("submission-files")
-          .download(file.storage_key);
-
-        if (downloadError && isMounted) {
-          setError(`Failed to load image: ${downloadError.message}`);
-          setLoading(false);
-          return;
-        }
-
-        if (blob && isMounted) {
-          currentObjectUrl = URL.createObjectURL(blob);
-          setObjectUrl(currentObjectUrl);
-        }
+      if (signedUrlData) {
+        setSignedUrl(signedUrlData.signedUrl);
       }
 
-      if (isMounted) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
 
     loadFile();
 
     return () => {
       isMounted = false;
-      if (currentObjectUrl) {
-        URL.revokeObjectURL(currentObjectUrl);
-      }
     };
-  }, [file.storage_key, file.mime_type]);
+  }, [file.storage_key]);
 
   return (
     <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" m={2} w="100%">
@@ -115,8 +92,8 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
             </Box>
           )}
         </HStack>
-        {downloadUrl && (
-          <DownloadLink href={downloadUrl} filename={file.name}>
+        {signedUrl && (
+          <DownloadLink href={signedUrl} filename={file.name}>
             <HStack gap={1}>
               <Icon as={FaDownload} />
               <Text fontSize="xs">Download</Text>
@@ -137,12 +114,13 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
           <Box p={4} bg="bg.error" borderRadius="md">
             <Text color="fg.error">{error}</Text>
           </Box>
-        ) : isImageMime(file.mime_type) && objectUrl ? (
+        ) : isImageMime(file.mime_type) && signedUrl ? (
           <Flex justify="center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={objectUrl}
+              src={signedUrl}
               alt={file.name}
+              loading="lazy"
               style={{
                 maxWidth: "100%",
                 height: "auto",
@@ -151,10 +129,10 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
               }}
             />
           </Flex>
-        ) : file.mime_type === "application/pdf" && downloadUrl ? (
+        ) : file.mime_type === "application/pdf" && signedUrl ? (
           <Box w="100%" h="600px">
             <iframe
-              src={downloadUrl}
+              src={signedUrl}
               style={{ width: "100%", height: "100%", border: "none", borderRadius: "0.375rem" }}
               title={file.name}
             />
@@ -163,8 +141,8 @@ export default function BinaryFilePreview({ file }: { file: SubmissionFile }) {
           <Flex direction="column" align="center" py={8} gap={3}>
             <Icon as={FaFile} boxSize={12} color="fg.muted" />
             <Text color="fg.muted">No preview available for this file type</Text>
-            {downloadUrl && (
-              <DownloadLink href={downloadUrl} filename={file.name}>
+            {signedUrl && (
+              <DownloadLink href={signedUrl} filename={file.name}>
                 <HStack gap={1}>
                   <Icon as={FaDownload} />
                   <Text>Download {file.name}</Text>
