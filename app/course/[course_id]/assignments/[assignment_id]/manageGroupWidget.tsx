@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
+import { useAllStudentRoles, useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -157,7 +157,8 @@ function CreateGroupButton({
 }
 
 export function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
-  const profiles = useProfiles();
+  const studentRoles = useAllStudentRoles();
+  const profiles = useMemo(() => studentRoles.map((r) => r.profiles), [studentRoles]);
   const ungroupedProfiles = useMemo(() => {
     if (!groups) {
       return [];

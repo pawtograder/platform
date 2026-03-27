@@ -11009,6 +11009,14 @@ export type Database = {
         Args: { p_assignment_id: number };
         Returns: number;
       };
+      copy_groups_from_assignment: {
+        Args: {
+          p_class_id: number;
+          p_source_assignment_id: number;
+          p_target_assignment_id: number;
+        };
+        Returns: Json;
+      };
       create_all_repos_for_assignment:
         | {
             Args: {
@@ -11298,6 +11306,15 @@ export type Database = {
         Args: { p_rows: Json[] };
         Returns: undefined;
       };
+      enqueue_repo_analytics_fetch: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_org: string;
+          p_repository_id?: number;
+        };
+        Returns: number;
+      };
       evaluate_error_pin_rule: {
         Args: {
           p_grader_result_id: number;
@@ -11499,21 +11516,23 @@ export type Database = {
       get_survey_responses_with_full_context: {
         Args: { p_class_id: number; p_survey_id: string };
         Returns: {
-          class_section_id: number;
-          class_section_name: string;
-          group_id: number;
-          group_member_count: number;
-          group_name: string;
+          class_section_id: number | null;
+          class_section_name: string | null;
+          group_id: number | null;
+          group_member_count: number | null;
+          group_name: string | null;
           is_submitted: boolean;
-          lab_section_id: number;
-          lab_section_name: string;
-          mentor_name: string;
-          mentor_profile_id: string;
+          lab_section_id: number | null;
+          lab_section_name: string | null;
+          mentor_email: string | null;
+          mentor_name: string | null;
+          mentor_profile_id: string | null;
+          profile_email: string | null;
           profile_id: string;
           profile_name: string;
           response: Json;
-          response_id: string;
-          submitted_at: string;
+          response_id: string | null;
+          submitted_at: string | null;
         }[];
       };
       get_survey_responses_with_group_context: {

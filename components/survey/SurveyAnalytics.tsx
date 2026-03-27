@@ -288,7 +288,12 @@ export default function SurveyAnalytics({
                             {submittedResponses.map((r, i) => {
                               const val = (r.response as Record<string, unknown>)[q.name];
                               return (
-                                <HStack key={r.response_id} justify="space-between" align="start" gap={2}>
+                                <HStack
+                                  key={r.response_id ?? r.profile_id}
+                                  justify="space-between"
+                                  align="start"
+                                  gap={2}
+                                >
                                   <Text fontSize="sm" color="fg.muted" minW="80px">
                                     {obfuscateStats ? `Respondent ${i + 1}` : (r.profile_name ?? "Unknown")}
                                   </Text>
@@ -315,6 +320,7 @@ export default function SurveyAnalytics({
 
           <Tabs.Content value="group">
             <GroupViewContent
+              classId={classId}
               groupAnalytics={showMentorViewOnly && currentUserProfileId ? filteredGroupAnalytics : groupAnalytics}
               selectedGroupId={selectedGroupId}
               onSelectGroup={setSelectedGroupId}
@@ -340,6 +346,7 @@ export default function SurveyAnalytics({
 
           <Tabs.Content value="mentor">
             <GroupViewContent
+              classId={classId}
               groupAnalytics={filteredGroupAnalytics}
               selectedGroupId={selectedGroupId}
               onSelectGroup={setSelectedGroupId}

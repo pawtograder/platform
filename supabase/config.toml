@@ -542,7 +542,7 @@ entrypoint = "./functions/assignment-group-instructor-move-student/index.ts"
 # static_files = [ "./functions/assignment-group-instructor-move-student/*.html" ]
 
 [functions.assignment-group-copy-groups-from-assignment]
-enabled = true
+enabled = false
 verify_jwt = false
 import_map = "./functions/assignment-group-copy-groups-from-assignment/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
