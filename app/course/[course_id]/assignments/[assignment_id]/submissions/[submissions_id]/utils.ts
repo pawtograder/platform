@@ -1,8 +1,7 @@
 "use client";
 
 /** Files, results, or repo-analytics after /submissions/:id/ — avoids false positives from .includes("/files") elsewhere. */
-const SUBMISSION_SUB_PAGE_RE =
-  /\/submissions\/[^/]+\/(?:files|results|repo-analytics)(?:\/|$|\?|#)/;
+const SUBMISSION_SUB_PAGE_RE = /\/submissions\/[^/]+\/(?:files|results|repo-analytics)(?:\/|$|\?|#)/;
 
 /** Last path segment after /submissions/:id/ for files vs results — used for default active tab. */
 export function getSubmissionFilesOrResultsTab(pathname: string): "files" | "results" | null {
