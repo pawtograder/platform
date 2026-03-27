@@ -71,6 +71,7 @@ import {
   FaCheckCircle,
   FaFile,
   FaFileExport,
+  FaGithub,
   FaHistory,
   FaInfo,
   FaQuestionCircle,
@@ -1688,6 +1689,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             Files
           </Button>
         </NextLink>
+        {isGraderOrInstructor && assignment.enable_repo_analytics && (
+          <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
+            <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
+              <Icon as={FaGithub} />
+              Repo Analytics
+            </Button>
+          </NextLink>
+        )}
       </Box>
       <Flex flexDirection={"row"} wrap="wrap">
         <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>

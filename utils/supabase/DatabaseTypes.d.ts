@@ -721,7 +721,15 @@ export type RubricPartsDataType = Json;
 
 export type YmlRubricType = Omit<
   HydratedRubric,
-  "id" | "description" | "rubric_parts" | "class_id" | "created_at" | "assignment_id" | "review_round" | "is_private"
+  | "id"
+  | "description"
+  | "rubric_parts"
+  | "class_id"
+  | "created_at"
+  | "assignment_id"
+  | "review_round"
+  | "is_private"
+  | "cap_score_to_assignment_points"
 > & {
   parts: YmlRubricPartType[];
   description?: string;
@@ -787,6 +795,7 @@ export type YmlRubricChecksType = Omit<
   | "artifact"
   | "annotation_target"
   | "data"
+  | "kpi_category"
 > & {
   id?: number;
   description?: string;
@@ -795,6 +804,7 @@ export type YmlRubricChecksType = Omit<
   max_annotations?: number;
   annotation_target?: "file" | "artifact";
   data?: RubricChecksDataType;
+  kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
 };
 
 export type AssignmentDueDateException = GetResult<

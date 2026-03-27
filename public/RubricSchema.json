@@ -72,6 +72,24 @@
         "is_required": {
           "type": "boolean"
         },
+        "kpi_category": {
+          "anyOf": [
+            {
+              "enum": [
+                "commits",
+                "issue_comments",
+                "issues_closed",
+                "issues_opened",
+                "pr_review_comments",
+                "prs_opened"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "max_annotations": {
           "type": "number"
         },

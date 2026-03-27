@@ -188,6 +188,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
       const yamlCheck: Omit<YmlRubricChecksType, "data"> & { data?: Json | null } = {
         id: check.id,
         name: check.name,
+        kpi_category: valOrUndefined(check.kpi_category) || null,
         description: valOrUndefined(check.description),
         file: valOrUndefined(check.file),
         is_annotation: check.is_annotation,
@@ -259,6 +260,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
   return checks.map((check, index) => ({
     id: check.id || -1,
     name: check.name,
+    kpi_category: valOrNull(check.kpi_category),
     description: valOrNull(check.description),
     ordinal: index,
     rubric_id: 0,
@@ -1454,7 +1456,8 @@ function InnerRubricPage() {
           rubric_criteria_id: checkData.rubric_criteria_id,
           student_visibility: checkData.student_visibility || "always",
           assignment_id: assignmentDetails.id,
-          rubric_id: currentEffectiveRubricId
+          rubric_id: currentEffectiveRubricId,
+          kpi_category: checkData.kpi_category
         };
         const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
         if (!createdCheck.data.id) throw new Error("Failed to create check");

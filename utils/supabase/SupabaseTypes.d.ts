@@ -1043,6 +1043,7 @@ export type Database = {
           release_date: string | null;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
+          enable_repo_analytics: boolean;
           show_leaderboard: boolean;
           slug: string | null;
           student_repo_prefix: string | null;
@@ -1080,6 +1081,7 @@ export type Database = {
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
+          enable_repo_analytics?: boolean;
           show_leaderboard?: boolean;
           slug?: string | null;
           student_repo_prefix?: string | null;
@@ -1117,6 +1119,7 @@ export type Database = {
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
+          enable_repo_analytics?: boolean;
           show_leaderboard?: boolean;
           slug?: string | null;
           student_repo_prefix?: string | null;
@@ -5908,6 +5911,308 @@ export type Database = {
           }
         ];
       };
+      repository_analytics_daily: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          commits: number;
+          date: string;
+          id: number;
+          issue_comments: number;
+          issues_closed: number;
+          issues_opened: number;
+          pr_review_comments: number;
+          prs_opened: number;
+          repository_id: number;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          commits?: number;
+          date: string;
+          id?: number;
+          issue_comments?: number;
+          issues_closed?: number;
+          issues_opened?: number;
+          pr_review_comments?: number;
+          prs_opened?: number;
+          repository_id: number;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          commits?: number;
+          date?: string;
+          id?: number;
+          issue_comments?: number;
+          issues_closed?: number;
+          issues_opened?: number;
+          pr_review_comments?: number;
+          prs_opened?: number;
+          repository_id?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      repository_analytics_fetch_status: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          error_message: string | null;
+          id: number;
+          last_fetched_at: string | null;
+          last_requested_at: string | null;
+          repository_id: number;
+          status: Database["public"]["Enums"]["repo_analytics_fetch_status"];
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          error_message?: string | null;
+          id?: number;
+          last_fetched_at?: string | null;
+          last_requested_at?: string | null;
+          repository_id: number;
+          status?: Database["public"]["Enums"]["repo_analytics_fetch_status"];
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          error_message?: string | null;
+          id?: number;
+          last_fetched_at?: string | null;
+          last_requested_at?: string | null;
+          repository_id?: number;
+          status?: Database["public"]["Enums"]["repo_analytics_fetch_status"];
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      repository_analytics_items: {
+        Row: {
+          assignment_id: number;
+          author: string | null;
+          class_id: number;
+          created_date: string;
+          data: Json | null;
+          github_id: string;
+          id: number;
+          item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
+          repository_id: number;
+          state: string | null;
+          title: string | null;
+          updated_at: string;
+          url: string;
+        };
+        Insert: {
+          assignment_id: number;
+          author?: string | null;
+          class_id: number;
+          created_date: string;
+          data?: Json | null;
+          github_id: string;
+          id?: number;
+          item_type: Database["public"]["Enums"]["repo_analytics_item_type"];
+          repository_id: number;
+          state?: string | null;
+          title?: string | null;
+          updated_at?: string;
+          url: string;
+        };
+        Update: {
+          assignment_id?: number;
+          author?: string | null;
+          class_id?: number;
+          created_date?: string;
+          data?: Json | null;
+          github_id?: string;
+          id?: number;
+          item_type?: Database["public"]["Enums"]["repo_analytics_item_type"];
+          repository_id?: number;
+          state?: string | null;
+          title?: string | null;
+          updated_at?: string;
+          url?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      repository_analytics_repo_status: {
+        Row: {
+          last_commit_sha: string | null;
+          last_fetched_at: string | null;
+          repository_id: number;
+        };
+        Insert: {
+          last_commit_sha?: string | null;
+          last_fetched_at?: string | null;
+          repository_id: number;
+        };
+        Update: {
+          last_commit_sha?: string | null;
+          last_fetched_at?: string | null;
+          repository_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repository_analytics_repo_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: true;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       repository_check_runs: {
         Row: {
           assignment_group_id: number | null;
@@ -6415,6 +6720,7 @@ export type Database = {
           is_annotation: boolean;
           is_comment_required: boolean;
           is_required: boolean;
+          kpi_category: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
           max_annotations: number | null;
           name: string;
           ordinal: number;
@@ -6437,6 +6743,7 @@ export type Database = {
           is_annotation: boolean;
           is_comment_required?: boolean;
           is_required?: boolean;
+          kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
           max_annotations?: number | null;
           name: string;
           ordinal: number;
@@ -6459,6 +6766,7 @@ export type Database = {
           is_annotation?: boolean;
           is_comment_required?: boolean;
           is_required?: boolean;
+          kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
           max_annotations?: number | null;
           name?: string;
           ordinal?: number;
@@ -11353,6 +11661,7 @@ export type Database = {
       get_async_queue_sizes: {
         Args: never;
         Returns: {
+          async_low_priority_queue_size: number;
           async_queue_size: number;
           discord_dlq_queue_size: number;
           discord_queue_size: number;
@@ -12143,7 +12452,8 @@ export type Database = {
         | "sync_repo_permissions"
         | "archive_repo_and_lock"
         | "rerun_autograder"
-        | "sync_repo_to_handout";
+        | "sync_repo_to_handout"
+        | "fetch_repo_analytics";
       help_queue_type: "text" | "video" | "in_person";
       help_request_creation_notification: "all" | "only_active_queue" | "none";
       help_request_resolution_status: "self_solved" | "staff_helped" | "peer_helped" | "no_time" | "other";
@@ -12151,6 +12461,15 @@ export type Database = {
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
+      repo_analytics_fetch_status: "idle" | "fetching" | "completed" | "error";
+      repo_analytics_item_type: "issue" | "pr" | "commit" | "issue_comment" | "pr_review_comment";
+      repo_analytics_kpi_category:
+        | "issues_opened"
+        | "issues_closed"
+        | "issue_comments"
+        | "prs_opened"
+        | "pr_review_comments"
+        | "commits";
       review_round: "self-review" | "grading-review" | "meta-grading-review" | "code-walk";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
       student_help_activity_type:
@@ -12333,7 +12652,8 @@ export const Constants = {
         "sync_repo_permissions",
         "archive_repo_and_lock",
         "rerun_autograder",
-        "sync_repo_to_handout"
+        "sync_repo_to_handout",
+        "fetch_repo_analytics"
       ],
       help_queue_type: ["text", "video", "in_person"],
       help_request_creation_notification: ["all", "only_active_queue", "none"],
@@ -12342,6 +12662,16 @@ export const Constants = {
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
+      repo_analytics_fetch_status: ["idle", "fetching", "completed", "error"],
+      repo_analytics_item_type: ["issue", "pr", "commit", "issue_comment", "pr_review_comment"],
+      repo_analytics_kpi_category: [
+        "issues_opened",
+        "issues_closed",
+        "issue_comments",
+        "prs_opened",
+        "pr_review_comments",
+        "commits"
+      ],
       review_round: ["self-review", "grading-review", "meta-grading-review", "code-walk"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
       student_help_activity_type: [
