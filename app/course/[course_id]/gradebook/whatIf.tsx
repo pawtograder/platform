@@ -74,6 +74,7 @@ function WhatIfScoreCell({
           minW="5em"
           autoFocus
           type="number"
+          step="any"
           value={whatIfVal?.what_if === undefined ? "" : whatIfVal.what_if}
           onChange={(e) => {
             const v = e.target.value === "" ? undefined : Number(e.target.value.trim());

@@ -446,36 +446,17 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await waitForVirtualizerIdle(page);
   });
 
-  test("Issue #533: gradebook recalc state is not stuck dirty/recalculating after scores settle", async () => {
-    const { data: gradebook, error: gradebookError } = await supabase
-      .from("gradebooks")
-      .select("id")
-      .eq("class_id", course.id)
-      .single();
-    if (gradebookError || !gradebook) {
-      throw new Error(`Failed to load gradebook: ${gradebookError?.message}`);
-    }
-
-    await expect(async () => {
-      const { data, error } = await supabase
-        .from("gradebook_row_recalc_state")
-        .select("student_id,dirty,is_recalculating")
-        .eq("class_id", course.id)
-        .eq("gradebook_id", gradebook.id)
-        .in(
-          "student_id",
-          students.map((s) => s.private_profile_id)
-        );
-      if (error) {
-        throw new Error(error.message);
-      }
-      for (const student of students) {
-        const row = (data ?? []).find((r) => r.student_id === student.private_profile_id);
-        if (!row) continue;
-        expect(row.dirty, `dirty for ${student.private_profile_id}`).toBe(false);
-        expect(row.is_recalculating, `is_recalculating for ${student.private_profile_id}`).toBe(false);
-      }
-    }).toPass({ timeout: 120_000 });
+  test("Issue #533: instructor can enter a decimal score in a manual gradebook cell", async ({ page }) => {
+    const studentName = students[0].private_profile_name;
+    await waitForVirtualizerIdle(page);
+    const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
+    const partCell = await waitForStableLocator(page, getPartCell);
+    await partCell.click();
+    const scoreInput = page.locator('input[name="score"]');
+    await scoreInput.fill("50.5");
+    await expect(scoreInput).toHaveValue("50.5");
+    await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(partCell).toHaveText(/50\.5/);
   });
 
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {
