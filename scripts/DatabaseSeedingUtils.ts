@@ -23,6 +23,10 @@ import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
 
 import {
+  fetchDefaultGradeTargetStudentProfileIdsBatch,
+  fetchRubricCheckIdsRequiringTargetStudentProfileIdsBatch
+} from "@/lib/rubricCommentTargetStudentProfileId";
+import {
   createClass,
   createUserInClass,
   supabase,
@@ -3118,11 +3122,27 @@ export class DatabaseSeeder {
       }
     });
 
-    // Get all submission files for annotations
-    const { data: submissionFiles } = await supabase
-      .from("submission_files")
-      .select("id, name, submission_id")
-      .in("submission_id", submissionIds);
+    const rubricIdToCheckIds = new Map<number, number[]>(
+      [...rubricChecksMap.entries()].map(([rubricId, checks]) => [rubricId, checks.map((c) => c.id)])
+    );
+
+    const [individualChecksByRubric, { data: submissionFiles }] = await Promise.all([
+      fetchRubricCheckIdsRequiringTargetStudentProfileIdsBatch(supabase, rubricIdToCheckIds),
+      supabase.from("submission_files").select("id, name, submission_id").in("submission_id", submissionIds)
+    ]);
+
+    const submissionIdsForDefaultTarget = [
+      ...new Set(
+        (reviewInfo ?? [])
+          .filter((r) => (individualChecksByRubric.get(r.rubric_id)?.size ?? 0) > 0)
+          .map((r) => r.submission_id)
+      )
+    ];
+
+    const defaultTargetBySubmission = await fetchDefaultGradeTargetStudentProfileIdsBatch(
+      supabase,
+      submissionIdsForDefaultTarget
+    );
 
     const submissionFilesMap = new Map<number, Array<{ id: number; name: string; submission_id: number }>>();
     submissionFiles?.forEach((file) => {
@@ -3215,6 +3235,18 @@ export class DatabaseSeeder {
         // Create comments for applicable checks with allocated points
         for (const check of applicableChecks) {
           const pointsAwarded = checkPointAllocations.get(check.id) || 0;
+          const individualSet = individualChecksByRubric.get(review.rubric_id);
+          const needsIndividualTarget = individualSet?.has(check.id) === true;
+          const targetProfile = needsIndividualTarget ? defaultTargetBySubmission.get(review.submission_id) : undefined;
+          let targetField: { target_student_profile_id: string } | Record<string, never> = {};
+          if (needsIndividualTarget) {
+            if (targetProfile == null) {
+              throw new Error(
+                `gradeSubmissions: rubric check ${check.id} requires target_student_profile_id but no default target for submission ${review.submission_id} (review ${review.id})`
+              );
+            }
+            targetField = { target_student_profile_id: targetProfile };
+          }
 
           if (check.is_annotation && files.length > 0) {
             // Create submission file comment (annotation)
@@ -3231,7 +3263,8 @@ export class DatabaseSeeder {
               class_id: review.class_id,
               released: true,
               rubric_check_id: check.id,
-              submission_review_id: review.id
+              submission_review_id: review.id,
+              ...targetField
             });
           } else {
             // Create submission comment (general comment)
@@ -3243,7 +3276,8 @@ export class DatabaseSeeder {
               class_id: review.class_id,
               released: true,
               rubric_check_id: check.id,
-              submission_review_id: review.id
+              submission_review_id: review.id,
+              ...targetField
             });
           }
         }

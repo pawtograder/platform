@@ -173,6 +173,14 @@
         "id": {
           "type": "number"
         },
+        "is_individual_grading": {
+          "type": "boolean",
+          "description": "When true, this rubric part is graded per-student in a group submission"
+        },
+        "is_assign_to_student": {
+          "type": "boolean",
+          "description": "When true, the grader selects which student this part applies to (or skips it)"
+        },
         "name": {
           "type": "string"
         }
