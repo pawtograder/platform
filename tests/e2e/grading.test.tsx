@@ -333,11 +333,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByText("public static void main(")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .click();
-    await argosScreenshot(page, "Instructors can view the regrade request");
+    await argosScreenshot(page, "Instructors can view the student's regrade request");
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
@@ -362,6 +364,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByText("public static void main(")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
@@ -384,6 +388,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByText("public static void main(")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")

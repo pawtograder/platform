@@ -11413,21 +11413,23 @@ export type Database = {
       get_survey_responses_with_full_context: {
         Args: { p_class_id: number; p_survey_id: string };
         Returns: {
-          class_section_id: number;
-          class_section_name: string;
-          group_id: number;
-          group_member_count: number;
-          group_name: string;
+          class_section_id: number | null;
+          class_section_name: string | null;
+          group_id: number | null;
+          group_member_count: number | null;
+          group_name: string | null;
           is_submitted: boolean;
-          lab_section_id: number;
-          lab_section_name: string;
-          mentor_name: string;
-          mentor_profile_id: string;
+          lab_section_id: number | null;
+          lab_section_name: string | null;
+          mentor_email: string | null;
+          mentor_name: string | null;
+          mentor_profile_id: string | null;
+          profile_email: string | null;
           profile_id: string;
           profile_name: string;
           response: Json;
-          response_id: string;
-          submitted_at: string;
+          response_id: string | null;
+          submitted_at: string | null;
         }[];
       };
       get_survey_responses_with_group_context: {

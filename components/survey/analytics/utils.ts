@@ -20,21 +20,42 @@ export function getAllQuestionsFromSurveyJson(surveyJson: Json): SurveyQuestionI
   return questions;
 }
 
+/** Map a stored choice value to its display label when valueLabels is present and the value is numeric. */
+function resolveChoiceLabel(raw: unknown, valueLabels?: Record<number, string>): string | null {
+  if (!valueLabels || Object.keys(valueLabels).length === 0) return null;
+  const n = Number(raw);
+  if (isNaN(n)) return null;
+  const label = valueLabels[n];
+  return label !== undefined ? label : null;
+}
+
 /** Format a response value for display, optionally with value labels for radiogroup/checkbox */
 export function formatResponseValue(value: unknown, valueLabels?: Record<number, string>): string {
   if (value === null || value === undefined) return "—";
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    const resolved = resolveChoiceLabel(value, valueLabels);
+    if (resolved !== null) return resolved;
+    return value;
+  }
   if (typeof value === "number" || typeof value === "boolean") {
-    return valueLabels?.[Number(value)] ?? String(value);
+    const resolved = resolveChoiceLabel(value, valueLabels);
+    if (resolved !== null) return resolved;
+    return String(value);
   }
   if (Array.isArray(value)) {
-    const labels = valueLabels ? value.map((v) => valueLabels[Number(v)] ?? String(v)).join(", ") : value.join(", ");
-    return labels;
+    if (!valueLabels || Object.keys(valueLabels).length === 0) {
+      return value.join(", ");
+    }
+    return value.map((v) => resolveChoiceLabel(v, valueLabels) ?? String(v)).join(", ");
   }
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
     if (obj.text && typeof obj.text === "string") return obj.text;
-    if (obj.value) return String(obj.value);
+    if (obj.value !== undefined && obj.value !== null) {
+      const resolved = resolveChoiceLabel(obj.value, valueLabels);
+      if (resolved !== null) return resolved;
+      return String(obj.value);
+    }
     const stringValues = Object.values(obj).filter((v) => typeof v === "string");
     if (stringValues.length > 0) return stringValues.join(", ");
     const jsonStr = JSON.stringify(value);
@@ -47,31 +68,33 @@ export function formatResponseValue(value: unknown, valueLabels?: Record<number,
 export function getValueLabelsFromSurveyJson(surveyJson: Json, questionName: string): Record<number, string> {
   const labels: Record<number, string> = {};
   try {
-    const pages = (
-      surveyJson as {
-        pages?: Array<{
-          elements?: Array<{
-            name?: string;
-            type?: string;
-            choices?: Array<{ value: number | string; text: string }>;
-          }>;
-        }>;
-      }
-    )?.pages;
-    if (!pages) return labels;
-    for (const page of pages) {
-      for (const el of page.elements || []) {
-        if (
-          el.name === questionName &&
-          (el.type === "radiogroup" || el.type === "rating" || el.type === "dropdown" || el.type === "checkbox")
-        ) {
-          for (const c of el.choices || []) {
-            const v = typeof c.value === "number" ? c.value : Number(c.value);
-            if (!isNaN(v) && c.text) labels[v] = c.text;
-          }
-          return labels;
-        }
-      }
+    const survey = new Model(surveyJson);
+    const q = survey.getQuestionByName(questionName);
+    if (!q) return labels;
+
+    const t = q.getType();
+    if (t !== "radiogroup" && t !== "rating" && t !== "dropdown" && t !== "checkbox") {
+      return labels;
+    }
+
+    const qRef = q as unknown as {
+      choices?: Array<{ value: unknown; text: unknown }>;
+      rateValues?: Array<{ value: unknown; text: unknown }>;
+    };
+
+    const items =
+      qRef.choices && qRef.choices.length > 0
+        ? qRef.choices
+        : t === "rating" && qRef.rateValues && qRef.rateValues.length > 0
+          ? qRef.rateValues
+          : undefined;
+
+    if (!items) return labels;
+
+    for (const c of items) {
+      const v = typeof c.value === "number" ? c.value : Number(c.value);
+      const text = typeof c.text === "string" ? c.text : c.text != null ? String(c.text) : "";
+      if (!isNaN(v) && text) labels[v] = text;
     }
   } catch {
     /* ignore */

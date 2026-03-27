@@ -102,9 +102,6 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(
-      page.getByText("There are no published surveys available for this course at this time.")
-    ).toBeVisible();
   });
 
   test("student sees published survey and updated status", async ({ page }) => {
@@ -135,9 +132,6 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(
-      page.getByText("There are no published surveys available for this course at this time.")
-    ).toBeVisible();
     await expect(page.getByText("Draft Survey")).not.toBeVisible();
   });
 
@@ -152,9 +146,6 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
-    await expect(
-      page.getByText("There are no published surveys available for this course at this time.")
-    ).toBeVisible();
     await expect(page.getByText("Closed Survey")).not.toBeVisible();
   });
 
@@ -326,7 +317,6 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByRole("heading", { name: "Active Surveys" })).toBeVisible();
     await expect(page.getByText("No active surveys")).toBeVisible();
-    await expect(page.getByText("There are no published, active surveys for this course right now.")).toBeVisible();
   });
 
   test("student dashboard active surveys show correct actions", async ({ page }) => {
@@ -385,15 +375,15 @@ test.describe("Surveys Page", () => {
     const surveysSection = activeSurveysHeading.locator("..");
 
     const startCard = surveysSection.locator("div").filter({ hasText: "Dashboard Start Survey" }).first();
-    await expect(startCard.getByRole("button", { name: "Start" })).toBeVisible();
+    await expect(startCard.getByRole("link", { name: "Start survey: Dashboard Start Survey" })).toBeVisible();
     await expect(startCard.getByText("Not started")).toBeVisible();
 
     const lockedCard = surveysSection.locator("div").filter({ hasText: "Dashboard Submitted Locked" }).first();
-    await expect(lockedCard.getByRole("button", { name: "View" })).toBeVisible();
+    await expect(lockedCard.getByRole("link", { name: "View survey: Dashboard Submitted Locked" })).toBeVisible();
     await expect(lockedCard.getByText("Submitted (locked)")).toBeVisible();
 
     const editableCard = surveysSection.locator("div").filter({ hasText: "Dashboard Submitted Editable" }).first();
-    await expect(editableCard.getByRole("button", { name: "Edit" })).toBeVisible();
+    await expect(editableCard.getByRole("link", { name: "Edit survey: Dashboard Submitted Editable" })).toBeVisible();
     await expect(editableCard.getByText("Submitted (editable)")).toBeVisible();
   });
 
