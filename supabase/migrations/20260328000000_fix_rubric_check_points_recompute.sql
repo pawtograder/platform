@@ -39,6 +39,7 @@ BEGIN
         WHERE rubric_check_id = NEW.id AND deleted_at IS NULL
       ) AS subq
       WHERE subq.submission_review_id IS NOT NULL
+      ORDER BY subq.submission_review_id
     LOOP
       PERFORM public._submission_review_recompute_scores(v_review_id);
     END LOOP;
