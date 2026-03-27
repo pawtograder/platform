@@ -1584,7 +1584,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
           Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
-          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={assignment} />
+          <AdjustDueDateDialog
+            student_id={submission.profile_id || ""}
+            group={assignmentGroupWithMembers || undefined}
+            assignment={assignment}
+          />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
             <Alert status="warning">
