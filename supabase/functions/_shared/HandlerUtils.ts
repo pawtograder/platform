@@ -239,8 +239,8 @@ export async function wrapRequestHandler(
         JSON.stringify({
           error: {
             recoverable: false,
-            message: "Security Error",
-            details: "This request has been reported to the staff"
+            message: e.details,
+            details: e.details
           }
         }),
         {
@@ -249,11 +249,13 @@ export async function wrapRequestHandler(
       );
     }
     if (e instanceof UserVisibleError) {
+      // Surface the actual message to clients; the previous "Internal Server Error" title
+      // was shown in UIs that only display `error.message`, hiding `details`.
       return new Response(
         JSON.stringify({
           error: {
             recoverable: e.status >= 500,
-            message: "Internal Server Error",
+            message: e.details,
             details: e.details
           }
         }),
@@ -281,7 +283,7 @@ export async function wrapRequestHandler(
         JSON.stringify({
           error: {
             recoverable: true,
-            message: "Illegal Argument",
+            message: e.details,
             details: e.details
           }
         }),

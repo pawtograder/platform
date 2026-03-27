@@ -14,6 +14,7 @@ import {
   assignmentGroupLeave,
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -46,6 +47,23 @@ import { MultiValue, Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
+
+function showEdgeFunctionErrorToast(e: unknown, fallbackTitle = "Something went wrong") {
+  if (e instanceof EdgeFunctionError) {
+    const description = e.details && e.details !== e.message ? e.details : undefined;
+    toaster.create({
+      title: e.message,
+      ...(description ? { description } : {}),
+      type: "error"
+    });
+    return;
+  }
+  toaster.create({
+    title: fallbackTitle,
+    description: e instanceof Error ? e.message : "Please try again.",
+    type: "error"
+  });
+}
 
 function CreateGroupButton({
   assignment,
@@ -140,9 +158,7 @@ function CreateGroupButton({
                     })
                     .catch((e) => {
                       setIsLoading(false);
-                      if (e instanceof EdgeFunctionError) {
-                        toaster.create({ title: "Error: " + e.message, description: e.details, type: "error" });
-                      }
+                      showEdgeFunctionErrorToast(e, "Could not create group");
                     });
                 }}
               >
@@ -247,8 +263,8 @@ function InviteButton({
                     .then((res) => {
                       if (res.error) {
                         toaster.create({
-                          title: "Error: " + res.error.message,
-                          description: res.error.details,
+                          title: "Could not send invitations",
+                          description: getStudentFacingErrorMessage(res.error),
                           type: "error"
                         });
                       } else {
@@ -381,12 +397,7 @@ function JoinGroupButton({
                                   });
                                   invalidateInvites();
                                 } catch (e) {
-                                  toaster.create({
-                                    title: "Error",
-                                    description:
-                                      e instanceof EdgeFunctionError ? e.message : "An unknown error occurred",
-                                    type: "error"
-                                  });
+                                  showEdgeFunctionErrorToast(e, "Could not accept invitation");
                                 }
                               }}
                             >
@@ -472,9 +483,7 @@ function JoinGroupButton({
                         toaster.create({ title: "Request sent", description: res.message, type: "info" });
                       }
                     } catch (err) {
-                      if (err instanceof EdgeFunctionError) {
-                        toaster.create({ title: "Error: " + err.message, description: err.details, type: "error" });
-                      }
+                      showEdgeFunctionErrorToast(err, "Could not join group");
                     }
                   }}
                 >
@@ -578,9 +587,13 @@ function LeaveGroupButton({ assignment }: { assignment: Assignment }) {
       confirmHeader="Leave Group"
       confirmText="Are you sure you want to leave this group? You will be removed from the group and will no longer be able to submit assignments as part of this group. If you have already submitted an assignment, your prior group submission will no longer be associated with your account. Your groupmates and the instructor will be notified of your departure."
       onConfirm={async () => {
-        const res = await assignmentGroupLeave({ assignment_id: assignment.id }, supabase);
-        invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
-        toaster.create({ title: "Group left", description: res.message, type: "success" });
+        try {
+          const res = await assignmentGroupLeave({ assignment_id: assignment.id }, supabase);
+          invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+          toaster.create({ title: "Group left", description: res.message, type: "success" });
+        } catch (e) {
+          showEdgeFunctionErrorToast(e, "Could not leave group");
+        }
       }}
     />
   );
@@ -694,15 +707,7 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
             toaster.create({ title: "Join request approved", description: res.message, type: "success" });
             invalidateInvites();
           } catch (e) {
-            if (e instanceof EdgeFunctionError) {
-              toaster.create({ title: e.message, description: e.details, type: "error" });
-            } else {
-              toaster.create({
-                title: "Error",
-                description: e instanceof Error ? e.message : "An unknown error occurred",
-                type: "error"
-              });
-            }
+            showEdgeFunctionErrorToast(e, "Could not approve request");
           }
         }}
         trigger={
