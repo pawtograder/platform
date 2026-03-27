@@ -1,17 +1,8 @@
--- Issue #533: Gradebook recalculation flakiness / stuck "recalculating" state.
+-- Gradebook batch RPC: skip no-op cell updates (reduces trigger churn) and keep
+-- full clearing/archive/re-enqueue behavior from 20251124233922_extend-more-rpc-timeouts.sql.
 --
--- Root cause: update_gradebook_rows_batch() updates gradebook_column_students,
--- which fires triggers that call enqueue_gradebook_row_recalculation() and can
--- bump gradebook_row_recalc_state.version before the batch clears state. The
--- clear step used expected_version, so it failed to clear; rows stayed dirty.
---
--- Fix 1: Skip no-op updates (IS DISTINCT FROM) so identical writes do not fire
---        triggers unnecessarily.
--- Fix 2: Clear recalc state by (class_id, gradebook_id, student_id, is_private)
---        without requiring version = expected_version after updates (worker
---        output for the batch is authoritative for that pass).
--- Fix 3: Report version_matched/cleared from cleared_rows (actual clears), not
---        from a post-hoc version equality check that can be false after triggers.
+-- enqueue_gradebook_row_recalculation: when a row is already recalculating, send a follow-up
+-- queue message but do not bump version (worker stability).
 
 CREATE OR REPLACE FUNCTION public.enqueue_gradebook_row_recalculation(
   p_class_id bigint,
@@ -242,7 +233,7 @@ BEGIN
     )
   ),
   cleared_rows AS (
-    UPDATE public.gradebook_row_recalc_state grs
+    UPDATE public.gradebook_row_recalc_state
     SET
       dirty = false,
       is_recalculating = false,
@@ -252,22 +243,24 @@ BEGIN
         astc.class_id,
         astc.gradebook_id,
         astc.student_id,
-        astc.is_private
+        astc.is_private,
+        astc.expected_version
       FROM all_students_to_clear astc
       ORDER BY astc.class_id, astc.gradebook_id, astc.student_id, astc.is_private
     ) ordered_astc
-    WHERE grs.class_id = ordered_astc.class_id
-      AND grs.gradebook_id = ordered_astc.gradebook_id
-      AND grs.student_id = ordered_astc.student_id
-      AND grs.is_private = ordered_astc.is_private
+    WHERE gradebook_row_recalc_state.class_id = ordered_astc.class_id
+      AND gradebook_row_recalc_state.gradebook_id = ordered_astc.gradebook_id
+      AND gradebook_row_recalc_state.student_id = ordered_astc.student_id
+      AND gradebook_row_recalc_state.is_private = ordered_astc.is_private
+      AND gradebook_row_recalc_state.version = ordered_astc.expected_version
     RETURNING
-      grs.class_id,
-      grs.gradebook_id,
-      grs.student_id,
-      grs.is_private,
-      grs.dirty,
-      grs.is_recalculating,
-      grs.version
+      gradebook_row_recalc_state.class_id,
+      gradebook_row_recalc_state.gradebook_id,
+      gradebook_row_recalc_state.student_id,
+      gradebook_row_recalc_state.is_private,
+      gradebook_row_recalc_state.dirty,
+      gradebook_row_recalc_state.is_recalculating,
+      gradebook_row_recalc_state.version
   ),
   student_results AS (
     SELECT DISTINCT
@@ -282,20 +275,28 @@ BEGIN
         '[]'::jsonb
       ) AS message_ids,
       COALESCE(uc.updated_count, 0) AS updated_count,
-      EXISTS (
-        SELECT 1 FROM cleared_rows cr
-        WHERE cr.class_id = (su->>'class_id')::bigint
-          AND cr.gradebook_id = (su->>'gradebook_id')::bigint
-          AND cr.student_id = (su->>'student_id')::uuid
-          AND cr.is_private = (su->>'is_private')::boolean
-      ) AS version_matched,
-      EXISTS (
-        SELECT 1 FROM cleared_rows cr
-        WHERE cr.class_id = (su->>'class_id')::bigint
-          AND cr.gradebook_id = (su->>'gradebook_id')::bigint
-          AND cr.student_id = (su->>'student_id')::uuid
-          AND cr.is_private = (su->>'is_private')::boolean
-      ) AS cleared
+      CASE
+        WHEN EXISTS (
+          SELECT 1 FROM public.gradebook_row_recalc_state rs
+          WHERE rs.class_id = (su->>'class_id')::bigint
+            AND rs.gradebook_id = (su->>'gradebook_id')::bigint
+            AND rs.student_id = (su->>'student_id')::uuid
+            AND rs.is_private = (su->>'is_private')::boolean
+            AND rs.version = (su->>'expected_version')::bigint
+        ) THEN true
+        ELSE false
+      END AS version_matched,
+      CASE
+        WHEN EXISTS (
+          SELECT 1 FROM public.gradebook_row_recalc_state rs
+          WHERE rs.class_id = (su->>'class_id')::bigint
+            AND rs.gradebook_id = (su->>'gradebook_id')::bigint
+            AND rs.student_id = (su->>'student_id')::uuid
+            AND rs.is_private = (su->>'is_private')::boolean
+            AND rs.version = (su->>'expected_version')::bigint
+        ) THEN true
+        ELSE false
+      END AS cleared
     FROM unnest(p_batch_updates) AS su
     LEFT JOIN update_counts uc ON
       uc.class_id = (su->>'class_id')::bigint
@@ -428,5 +429,4 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.update_gradebook_rows_batch(jsonb[]) IS
-  'Batch updates gradebook rows and clears recalculation state. Issue #533: skip no-op column updates; clear state by student row without stale version match; result flags reflect actual clears.';
+COMMENT ON FUNCTION public.update_gradebook_rows_batch(jsonb[]) IS 'Batch updates gradebook rows and clears recalculation state. Skips no-op cell updates (IS DISTINCT FROM).';
