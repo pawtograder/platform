@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
 import type { MDEditorProps } from "@uiw/react-md-editor";
+import remarkEscapeHtml from "@/lib/remark-escape-html";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import { isTextFile, getLanguageFromFile } from "@/lib/utils";
@@ -175,7 +176,7 @@ const MdEditor = (props: ExtendedMdEditorProps) => {
         e.preventDefault();
         e.stopPropagation();
       }}
-      previewOptions={{ rehypePlugins: [rehypeKatex], remarkPlugins: [remarkMath] }}
+      previewOptions={{ rehypePlugins: [rehypeKatex], remarkPlugins: [remarkEscapeHtml, remarkMath] }}
     />
   );
 };

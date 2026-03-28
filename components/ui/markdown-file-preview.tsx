@@ -43,6 +43,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import rehypeSanitize from "rehype-sanitize";
+import remarkEscapeHtml from "@/lib/remark-escape-html";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkGemoji from "remark-gemoji";
@@ -1246,8 +1248,8 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
             }}
           >
             <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath, remarkGemoji]}
-              rehypePlugins={[rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
+              remarkPlugins={[remarkEscapeHtml, remarkGfm, remarkMath, remarkGemoji]}
+              rehypePlugins={[rehypeSanitize, rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
               components={components}
             >
               {content}
