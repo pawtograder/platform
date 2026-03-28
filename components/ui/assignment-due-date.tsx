@@ -37,7 +37,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + (b.tokens_consumed > 0 ? b.tokens_consumed : 0), 0);
+  const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + b.tokens_consumed, 0);
   const lateTokensAppliedToAssignment = lateTokens
     .filter((e) => e.assignment_id === assignment.id)
     .map((e) => e.tokens_consumed)
