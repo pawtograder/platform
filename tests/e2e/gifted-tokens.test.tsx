@@ -1,9 +1,16 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { test, expect } from "../global-setup";
+import { test, expect } from "@/global-setup";
 import { addDays, addHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser, supabase } from "./TestingUtils";
+import {
+  createClass,
+  createUsersInClass,
+  insertAssignment,
+  loginAsUser,
+  TestingUser,
+  supabase
+} from "@/tests/e2e/TestingUtils";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -21,7 +28,17 @@ function getDueDateString(date: Date) {
 test.beforeEach(async () => {
   course = await createClass({ name: "Gifted Token Test Class" });
 
-  await supabase.from("classes").update({ late_tokens_per_student: NUM_INITIAL_TOKENS }).eq("id", course.id);
+  const { data: updatedClasses, error: lateTokensUpdateError } = await supabase
+    .from("classes")
+    .update({ late_tokens_per_student: NUM_INITIAL_TOKENS })
+    .eq("id", course.id)
+    .select("id");
+  if (lateTokensUpdateError) {
+    throw new Error(`Failed to set late_tokens_per_student: ${lateTokensUpdateError.message}`);
+  }
+  if (!updatedClasses?.length) {
+    throw new Error("Failed to set late_tokens_per_student: no rows updated");
+  }
   course.late_tokens_per_student = NUM_INITIAL_TOKENS;
 
   [student, instructor] = await createUsersInClass([
