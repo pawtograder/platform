@@ -1,9 +1,24 @@
 "use client";
 
+import SurveyAnalytics from "@/components/survey/SurveyAnalytics";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSurveyResponses } from "@/hooks/useCourseController";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Survey, SurveyResponseWithProfile } from "@/types/survey";
-import { Badge, Box, Button, Container, Heading, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
+import {
+  Badge,
+  Box,
+  Button,
+  Container,
+  Heading,
+  HStack,
+  Icon,
+  Input,
+  Table,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { differenceInDays, differenceInHours, isPast, isWithinInterval, parseISO } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
@@ -14,16 +29,18 @@ import { Model } from "survey-core";
 
 type SurveyResponsesViewProps = {
   courseId: string;
-  surveyId: string; // The UUID (survey_id column)
-  surveyDbId: string; // The database ID (id column) - used for querying responses
+  surveyId: string;
+  surveyDbId: string;
   surveyTitle: Survey["title"];
   surveyVersion: number;
   surveyStatus: Survey["status"];
-  surveyJson: Survey["json"]; // The JSON configuration of the survey
-  surveyDueDate: Survey["due_date"]; // The deadline for the survey
-  initialResponses: SurveyResponseWithProfile[]; // SSR initial data
+  surveyJson: Survey["json"];
+  surveyDueDate: Survey["due_date"];
+  initialResponses: SurveyResponseWithProfile[];
   totalStudents: number;
-  timezone: string; // Course timezone for date formatting
+  timezone: string;
+  analyticsConfig?: SurveyAnalyticsConfig | null;
+  seriesId?: string | null;
 };
 
 /**
@@ -121,9 +138,12 @@ export default function SurveyResponsesView({
   surveyDueDate,
   initialResponses,
   totalStudents,
-  timezone
+  timezone,
+  analyticsConfig = null,
+  seriesId
 }: SurveyResponsesViewProps) {
   const router = useRouter();
+  const { private_profile_id } = useClassProfiles();
 
   // Use the hook for realtime response updates
   const { responses: liveResponses, isLoading: responsesLoading } = useSurveyResponses(surveyDbId);
@@ -186,14 +206,6 @@ export default function SurveyResponsesView({
 
     return filtered;
   }, [responses, dateRangeStart, dateRangeEnd]);
-
-  // Determine which questions to show in table
-  const visibleQuestions = useMemo(() => {
-    if (selectedQuestions.length > 0) {
-      return selectedQuestions;
-    }
-    return allQuestionNames;
-  }, [selectedQuestions, allQuestionNames]);
 
   // Count active filters
   const activeFilterCount = useMemo(() => {
@@ -504,6 +516,17 @@ export default function SurveyResponsesView({
           </Text>
         </Box>
       </HStack>
+
+      {/* Analytics - compare quantitative values across groups */}
+      <SurveyAnalytics
+        surveyId={surveyDbId}
+        surveyJson={surveyJson}
+        analyticsConfig={analyticsConfig}
+        classId={Number(courseId)}
+        currentUserProfileId={private_profile_id}
+        seriesId={seriesId ?? undefined}
+        totalStudents={totalStudents}
+      />
 
       {/* Responses Table */}
       <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">

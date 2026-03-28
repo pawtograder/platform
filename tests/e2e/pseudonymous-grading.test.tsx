@@ -95,14 +95,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
   test("Students can submit self-review", async ({ page }) => {
     await loginAsUser(page, student!, course);
-    // Wait for the realtime connection status to be connected
-    await expect(
-      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
-    ).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();

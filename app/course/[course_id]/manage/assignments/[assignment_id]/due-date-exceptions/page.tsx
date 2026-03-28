@@ -198,8 +198,9 @@ function AdjustDueDateDialogContent({
   const newDueDate = addMinutes(addHours(finalDueDate, watchedHours), watchedMinutes);
   const sumIsInvalid = (watchedHours || 0) + (watchedMinutes || 0) <= 0;
 
-  // Memoize finalDueDate to prevent infinite loops
-  const finalDueDateMemo = useMemo(() => finalDueDate, [finalDueDate.getTime()]);
+  // Memoize finalDueDate to prevent infinite loops (use timestamp for stable dependency)
+  const finalDueDateTimestamp = finalDueDate.getTime();
+  const finalDueDateMemo = useMemo(() => finalDueDate, [finalDueDateTimestamp]);
 
   // Format finalDueDate for datetime-local input (min attribute) in course timezone
   const minDateTimeLocal = useMemo(

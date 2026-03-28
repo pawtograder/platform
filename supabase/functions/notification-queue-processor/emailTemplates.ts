@@ -60,11 +60,11 @@ export const emailTemplates = {
   discussion_thread: {
     new_post: {
       subject: "{course_name} - New post in {thread_name} from {reply_author_name}",
-      body: "{reply_author_name} posted a new message in {thread_name}. Read more details in Pawtograder at {thread_url}\n\n{notification_footer}"
+      body: "{reply_author_name} posted a new message in {thread_name}:\n\n{message_body}\n\nRead more details in Pawtograder at {thread_url}\n\n{notification_footer}"
     },
     reply: {
       subject: "{course_name} - {thread_name} has a new reply from {reply_author_name}",
-      body: "{reply_author_name} has replied to your post in {thread_name}. Read more details in Pawtograder at {thread_url}\n\n{notification_footer}"
+      body: "{reply_author_name} has replied to your post in {thread_name}:\n\n{message_body}\n\nRead more details in Pawtograder at {thread_url}\n\n{notification_footer}"
     }
   },
   email: {

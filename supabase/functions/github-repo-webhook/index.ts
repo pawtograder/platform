@@ -1504,11 +1504,17 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
     scope.setTag("repository_id", repo.id.toString());
 
-    // Extract the SHA from the branch name (sync-to-abc1234 -> abc1234)
-    const syncedSha = branchName.replace("sync-to-", "");
+    // Extract the short SHA from branch name (sync-to-abc1234 -> abc1234)
+    const shortSha = branchName.replace("sync-to-", "");
+
+    // Use the full SHA from desired_handout_sha if it matches the short SHA prefix,
+    // otherwise fall back to the short SHA (handles edge cases)
+    const syncedSha = repo.desired_handout_sha?.startsWith(shortSha) ? repo.desired_handout_sha : shortSha;
+
     // For "Rebase and merge" PRs, merge_commit_sha is null, so fall back to head SHA
     const effectiveMergeSha = payload.pull_request.merge_commit_sha || payload.pull_request.head.sha;
 
+    scope.setTag("short_sha", shortSha);
     scope.setTag("synced_sha", syncedSha);
     scope.setTag("merge_sha", effectiveMergeSha);
 

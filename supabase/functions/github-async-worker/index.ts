@@ -5,6 +5,7 @@ import * as Sentry from "npm:@sentry/deno";
 import type {
   ArchiveRepoAndLockArgs,
   CreateRepoArgs,
+  FetchRepoAnalyticsArgs,
   GitHubAsyncEnvelope,
   GitHubAsyncMethod,
   RerunAutograderArgs,
@@ -42,19 +43,67 @@ function toMsLatency(enqueuedAt: string): number {
   }
 }
 
-async function archiveMessage(adminSupabase: SupabaseClient<Database>, msgId: number, scope: Sentry.Scope) {
-  try {
-    await adminSupabase.schema("pgmq_public").rpc("archive", {
-      queue_name: "async_calls",
-      message_id: msgId
-    });
-  } catch (error) {
-    scope.setContext("archive_error", {
-      msg_id: msgId,
-      error_message: error instanceof Error ? error.message : String(error)
-    });
-    Sentry.captureException(error, scope);
+const PGMQ_ARCHIVE_MAX_ATTEMPTS = 3;
+
+/**
+ * Moves a processed message from the active queue to PGMQ archive.
+ * Retries on transient failures. Returns false if the message could still be in the queue (will redeliver after VT).
+ */
+async function archiveMessage(
+  adminSupabase: SupabaseClient<Database>,
+  msgId: number,
+  scope: Sentry.Scope,
+  queueName: string = "async_calls"
+): Promise<boolean> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= PGMQ_ARCHIVE_MAX_ATTEMPTS; attempt++) {
+    try {
+      const { error } = await adminSupabase.schema("pgmq_public").rpc("archive", {
+        queue_name: queueName,
+        message_id: msgId
+      });
+
+      if (error) {
+        lastError = error;
+        console.warn(
+          `[pgmq] archive attempt ${attempt}/${PGMQ_ARCHIVE_MAX_ATTEMPTS} failed msg_id=${msgId} queue=${queueName}: ${error.message}`
+        );
+      } else {
+        if (attempt > 1) {
+          console.log(`[pgmq] archived msg_id=${msgId} queue=${queueName} (after ${attempt} attempts)`);
+        } else {
+          console.log(`[pgmq] archived msg_id=${msgId} queue=${queueName}`);
+        }
+        return true;
+      }
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[pgmq] archive attempt ${attempt}/${PGMQ_ARCHIVE_MAX_ATTEMPTS} threw msg_id=${msgId} queue=${queueName}:`,
+        error
+      );
+    }
+
+    if (attempt < PGMQ_ARCHIVE_MAX_ATTEMPTS) {
+      const backoffMs = 150 * Math.pow(3, attempt - 1);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
   }
+
+  const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
+  console.error(
+    `[pgmq] archive FAILED after ${PGMQ_ARCHIVE_MAX_ATTEMPTS} attempts msg_id=${msgId} queue=${queueName}: ${errMsg}`
+  );
+  scope.setContext("archive_error", {
+    msg_id: msgId,
+    queue_name: queueName,
+    attempts: PGMQ_ARCHIVE_MAX_ATTEMPTS,
+    error_message: errMsg
+  });
+  scope.setTag("pgmq_archive_failed", "true");
+  Sentry.captureException(lastError instanceof Error ? lastError : new Error(String(lastError)), scope);
+  return false;
 }
 
 function recordMetric(
@@ -194,14 +243,15 @@ async function requeueWithDelay(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
   delaySeconds: number,
-  scope: Sentry.Scope
+  scope: Sentry.Scope,
+  queueName: string = "async_calls"
 ) {
   const newEnvelope: GitHubAsyncEnvelope = {
     ...envelope,
     retry_count: (envelope.retry_count ?? 0) + 1
   };
   const result = await adminSupabase.schema("pgmq_public").rpc("send", {
-    queue_name: "async_calls",
+    queue_name: queueName,
     message: newEnvelope as unknown as Json,
     sleep_seconds: delaySeconds
   });
@@ -508,9 +558,10 @@ async function checkAndTripErrorCircuitBreaker(
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
-  meta: { msg_id: number; enqueued_at: string },
+  meta: { msg_id: number; enqueued_at: string; queue_name?: string },
   _scope: Sentry.Scope
 ): Promise<boolean> {
+  const queueName = meta.queue_name ?? "async_calls";
   const scope = _scope?.clone();
   scope.setTag("msg_id", String(meta.msg_id));
   scope.setTag("async_api_log_id", envelope.log_id);
@@ -533,6 +584,7 @@ export async function processEnvelope(
         const repo = (envelope.args as SyncRepoToHandoutArgs).repository_full_name;
         return repo.split("/")[0];
       }
+      if (envelope.method === "fetch_repo_analytics") return (envelope.args as FetchRepoAnalyticsArgs).org;
       throw new Error(`Unknown method, ignoring circuit breaker, seems dangerous. ${envelope.method}`);
     })();
     if (org) {
@@ -550,7 +602,7 @@ export async function processEnvelope(
             const error = new Error(`Circuit breaker open for org ${org} after ${currentRetryCount} retries`);
             const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
             if (dlqSuccess) {
-              await archiveMessage(adminSupabase, meta.msg_id, scope);
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
             } else {
               console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
               scope.setContext("dlq_archive_skipped", {
@@ -566,8 +618,8 @@ export async function processEnvelope(
           const delaySeconds = 180; // minimum enforced delay while circuit open
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org");
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
       }
@@ -587,7 +639,7 @@ export async function processEnvelope(
             const error = new Error(`Circuit breaker open for ${envelope.method} after ${currentRetryCount} retries`);
             const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
             if (dlqSuccess) {
-              await archiveMessage(adminSupabase, meta.msg_id, scope);
+              await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
             } else {
               console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
               scope.setContext("dlq_archive_skipped", {
@@ -604,8 +656,8 @@ export async function processEnvelope(
           scope.setTag("circuit_state", "open");
           scope.setTag("circuit_scope", "org_method");
           scope.setTag("circuit_method", envelope.method);
-          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope);
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, delaySeconds, scope, queueName);
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
       }
@@ -825,6 +877,7 @@ export async function processEnvelope(
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateContentLimiter(org);
+        // createRepo patches repo settings after generate (squash merge on, template flag, branch ruleset, …).
         const headSha = await limiter.schedule(() =>
           github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
         );
@@ -1156,6 +1209,733 @@ export async function processEnvelope(
           throw error;
         }
       }
+      case "fetch_repo_analytics": {
+        const {
+          assignment_id,
+          org,
+          repository_id: singleRepoId,
+          repository_ids: repositoryIdBatch
+        } = envelope.args as FetchRepoAnalyticsArgs;
+
+        if (envelope.class_id == null) {
+          throw new Error("fetch_repo_analytics requires class_id in envelope");
+        }
+        const classId = envelope.class_id;
+
+        scope.setTag("assignment_id", String(assignment_id));
+        scope.setTag("org", org);
+        if (singleRepoId != null) scope.setTag("repository_id", String(singleRepoId));
+        if (repositoryIdBatch != null && repositoryIdBatch.length > 0) {
+          scope.setTag("repository_batch_size", String(repositoryIdBatch.length));
+        }
+
+        Sentry.addBreadcrumb({
+          message: `Fetching repo analytics for assignment ${assignment_id} in org ${org}${
+            singleRepoId != null
+              ? ` (repo ${singleRepoId} only)`
+              : repositoryIdBatch != null && repositoryIdBatch.length > 0
+                ? ` (batch of ${repositoryIdBatch.length} repos)`
+                : ""
+          }`,
+          level: "info"
+        });
+
+        let repos: { id: number; repository: string; assignment_id: number; class_id: number }[] = [];
+        try {
+          // Repos: single (UI), explicit batch (bulk enqueue), or all ready for assignment (legacy)
+          const query = adminSupabase
+            .from("repositories")
+            .select("id, repository, assignment_id, class_id")
+            .eq("assignment_id", assignment_id)
+            .eq("is_github_ready", true);
+          if (singleRepoId != null) {
+            query.eq("id", singleRepoId);
+          } else if (repositoryIdBatch != null && repositoryIdBatch.length > 0) {
+            query.in("id", repositoryIdBatch);
+          }
+          const { data: reposData, error: reposError } = await query;
+
+          if (reposError) throw reposError;
+          repos = reposData ?? [];
+          if (repos.length === 0) {
+            Sentry.addBreadcrumb({ message: "No repositories found for assignment", level: "info" });
+            // Single-repo UI refresh sets repository_analytics_fetch_status to "fetching" in
+            // enqueue_repo_analytics_fetch; reconcile if the repo is missing from the worker query
+            // (e.g. not GitHub-ready), so the row does not stay stuck in "fetching".
+            if (singleRepoId != null) {
+              const errMessage =
+                "No GitHub-ready repository matched this request (repository may not be GitHub-ready yet).";
+              const { error: reconcileErr } = await adminSupabase.from("repository_analytics_fetch_status").upsert(
+                {
+                  assignment_id,
+                  class_id: classId,
+                  repository_id: singleRepoId,
+                  last_fetched_at: null,
+                  status: "error",
+                  error_message: errMessage
+                },
+                { onConflict: "assignment_id,repository_id" }
+              );
+              if (reconcileErr) {
+                console.error("[repo-analytics] Failed to reconcile fetch status (empty repo list):", reconcileErr);
+                Sentry.captureException(reconcileErr, scope);
+              } else {
+                Sentry.addBreadcrumb({
+                  message: "Reconciled repository_analytics_fetch_status after empty repo query (single-repo)",
+                  level: "warning",
+                  data: {
+                    assignment_id,
+                    class_id: classId,
+                    repository_id: singleRepoId,
+                    debug_id: envelope.debug_id,
+                    enqueued_at: meta.enqueued_at
+                  }
+                });
+              }
+            }
+            recordMetric(
+              adminSupabase,
+              {
+                method: envelope.method,
+                status_code: 200,
+                class_id: classId,
+                debug_id: envelope.debug_id,
+                enqueued_at: meta.enqueued_at,
+                log_id: envelope.log_id
+              },
+              scope
+            );
+            return true;
+          }
+
+          const octokit = await github.getOctoKit(org, scope);
+          if (!octokit) throw new Error(`No octokit found for org ${org}`);
+
+          console.log(`[repo-analytics] Starting: assignment ${assignment_id}, org ${org}, ${repos.length} repo(s)`);
+
+          // Fix 7: Rate limit budget — if remaining core requests fall below a fraction of the installation's limit, requeue
+          const RATE_LIMIT_REQUEUE_DELAY_SECONDS = 1800; // 30 minutes
+          try {
+            const { data: rateLimit } = await octokit.request("GET /rate_limit");
+            const core = rateLimit.resources.core;
+            const remaining = core.remaining;
+            const limit = core.limit;
+            const rateLimitBudget = Math.max(Math.floor(limit * 0.2), 1000);
+            console.log(
+              `[repo-analytics] Rate limit: ${remaining}/${limit} remaining (budget ${rateLimitBudget} = max(20% of limit, 1000))`
+            );
+            if (remaining < rateLimitBudget) {
+              const resetAt = new Date(core.reset * 1000);
+              console.log(
+                `[repo-analytics] Rate limit below budget: remaining=${remaining}, limit=${limit}, budget=${rateLimitBudget}. Requeuing in ${RATE_LIMIT_REQUEUE_DELAY_SECONDS}s. Core reset at ${resetAt.toISOString()}`
+              );
+              await requeueWithDelay(adminSupabase, envelope, RATE_LIMIT_REQUEUE_DELAY_SECONDS, scope, queueName);
+              const archived = await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+              if (!archived) {
+                console.error(
+                  `[repo-analytics] requeued delayed copy but failed to archive original msg_id=${meta.msg_id} queue=${queueName}`
+                );
+              }
+              return false;
+            }
+          } catch (e) {
+            Sentry.addBreadcrumb({
+              message: `Rate limit check failed, proceeding anyway: ${e}`,
+              level: "warning"
+            });
+          }
+
+          const { data: fetchStatuses } = await adminSupabase
+            .from("repository_analytics_fetch_status")
+            .select("repository_id, last_fetched_at")
+            .eq("assignment_id", assignment_id)
+            .in(
+              "repository_id",
+              repos.map((r) => r.id)
+            );
+          const sinceByRepo = new Map<number, string | null>(
+            (fetchStatuses ?? []).map((f) => [f.repository_id, f.last_fetched_at])
+          );
+
+          // Fix 0: Per-repo API call counter for audit logging
+          class ApiCallCounter {
+            private counts: Record<string, number> = {};
+            increment(category: string, n = 1) {
+              this.counts[category] = (this.counts[category] ?? 0) + n;
+            }
+            get total() {
+              return Object.values(this.counts).reduce((a, b) => a + b, 0);
+            }
+            summary() {
+              return { ...this.counts, total: this.total };
+            }
+          }
+          const assignmentCounter = new ApiCallCounter();
+
+          const logRateLimit = async (
+            oct: Awaited<ReturnType<typeof github.getOctoKit>>,
+            label: string
+          ): Promise<void> => {
+            if (!oct) return;
+            try {
+              const { data: rl } = await oct.request("GET /rate_limit");
+              const core = rl.resources.core;
+              const resetAt = new Date(core.reset * 1000).toISOString();
+              console.log(
+                `[repo-analytics] rate_limit ${label}: ${core.remaining}/${core.limit} remaining, resets ${resetAt}`
+              );
+            } catch {
+              // ignore
+            }
+          };
+
+          const processRepo = async (
+            repo: (typeof repos)[0]
+          ): Promise<{
+            repoFullName: string;
+            repoId: number;
+            error?: unknown;
+            apiCalls?: ApiCallCounter;
+          }> => {
+            const repoFullName = repo.repository;
+            const [repoOwner, repoName] = repoFullName.split("/");
+            const sinceIso = sinceByRepo.get(repo.id) ?? null;
+            const counter = new ApiCallCounter();
+            console.log(
+              `[repo-analytics] Processing ${repoFullName}${sinceIso ? ` (incremental since ${sinceIso})` : " (full fetch)"}`
+            );
+            try {
+              // Fix 5: Use paginate.iterator (GitHub throttling via Octokit plugin handles rate limits)
+              // Fix 1: Add since param for incremental fetching
+              const issuesParams: Record<string, unknown> = {
+                owner: repoOwner,
+                repo: repoName,
+                state: "all",
+                per_page: 100
+              };
+              if (sinceIso) issuesParams.since = sinceIso;
+              const issuesIterator = octokit.paginate
+                .iterator("GET /repos/{owner}/{repo}/issues", issuesParams)
+                [Symbol.asyncIterator]();
+              const issues: Awaited<ReturnType<typeof octokit.rest.issues.listForRepo>>["data"] = [];
+              console.log(`[repo-analytics] ${repoFullName}: fetching issues...`);
+              let iterResult = await issuesIterator.next();
+              while (!iterResult.done) {
+                counter.increment("issues_pages");
+                issues.push(...iterResult.value.data);
+                iterResult = await issuesIterator.next();
+              }
+              console.log(
+                `[repo-analytics] ${repoFullName}: issues done (${issues.length} items, ${counter.total} API calls so far)`
+              );
+
+              const dailyMap = new Map<
+                string,
+                {
+                  issues_opened: number;
+                  issues_closed: number;
+                  issue_comments: number;
+                  prs_opened: number;
+                  pr_review_comments: number;
+                  commits: number;
+                }
+              >();
+
+              const ensureDay = (dateStr: string) => {
+                const day = dateStr.substring(0, 10);
+                if (!dailyMap.has(day)) {
+                  dailyMap.set(day, {
+                    issues_opened: 0,
+                    issues_closed: 0,
+                    issue_comments: 0,
+                    prs_opened: 0,
+                    pr_review_comments: 0,
+                    commits: 0
+                  });
+                }
+                return day;
+              };
+
+              const itemUpserts: Array<{
+                repository_id: number;
+                class_id: number;
+                assignment_id: number;
+                item_type: string;
+                github_id: string;
+                title: string | null;
+                url: string;
+                author: string | null;
+                created_date: string;
+                state: string | null;
+                updated_at: string;
+                data?: object | null;
+              }> = [];
+              const now = new Date().toISOString();
+
+              for (const issue of issues) {
+                if (issue.pull_request) continue; // skip PRs in issues list
+                const createdDay = ensureDay(issue.created_at);
+                dailyMap.get(createdDay)!.issues_opened++;
+
+                if (issue.closed_at) {
+                  const closedDay = ensureDay(issue.closed_at);
+                  dailyMap.get(closedDay)!.issues_closed++;
+                }
+
+                const issueData: {
+                  labels?: string[];
+                  body_preview?: string | null;
+                  assignees?: string[];
+                  closed_at?: string | null;
+                  state_reason?: string | null;
+                } = {
+                  labels: (issue.labels as Array<{ name?: string }> | undefined)?.map((l) => l.name ?? String(l)) ?? [],
+                  body_preview: issue.body?.substring(0, 400) ?? null,
+                  assignees:
+                    (issue.assignees as Array<{ login?: string }> | undefined)
+                      ?.map((a) => a.login ?? "")
+                      .filter(Boolean) ?? [],
+                  closed_at: issue.closed_at ?? null,
+                  state_reason: (issue as { state_reason?: string }).state_reason ?? null
+                };
+                itemUpserts.push({
+                  repository_id: repo.id,
+                  class_id: repo.class_id,
+                  assignment_id: repo.assignment_id,
+                  item_type: "issue",
+                  github_id: String(issue.number),
+                  title: issue.title,
+                  url: issue.html_url,
+                  author: issue.user?.login || null,
+                  created_date: createdDay,
+                  state: issue.state,
+                  updated_at: now,
+                  data: issueData
+                });
+              }
+
+              // Fetch issue comments (Fix 5: iterator, Fix 1: since param)
+              try {
+                const issueCommentsParams: Record<string, unknown> = {
+                  owner: repoOwner,
+                  repo: repoName,
+                  per_page: 100
+                };
+                if (sinceIso) issueCommentsParams.since = sinceIso;
+                const issueCommentsIterator = octokit.paginate
+                  .iterator("GET /repos/{owner}/{repo}/issues/comments", issueCommentsParams)
+                  [Symbol.asyncIterator]();
+                let issueCommentsIter = await issueCommentsIterator.next();
+                while (!issueCommentsIter.done) {
+                  counter.increment("issue_comments_pages");
+                  for (const comment of issueCommentsIter.value.data) {
+                    if (!comment.created_at) continue;
+                    const day = ensureDay(comment.created_at);
+                    dailyMap.get(day)!.issue_comments++;
+
+                    itemUpserts.push({
+                      repository_id: repo.id,
+                      class_id: repo.class_id,
+                      assignment_id: repo.assignment_id,
+                      item_type: "issue_comment",
+                      github_id: String(comment.id),
+                      title: comment.body?.substring(0, 200) || null,
+                      url: comment.html_url,
+                      author: comment.user?.login || null,
+                      created_date: day,
+                      state: null,
+                      updated_at: now
+                    });
+                  }
+                  issueCommentsIter = await issueCommentsIterator.next();
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({
+                  message: `Error fetching issue comments for ${repoFullName}: ${e}`,
+                  level: "warning"
+                });
+              }
+
+              // Fix 4: Query existing PR items to skip file fetch for known PRs (keep stored data for upsert)
+              type PrCommitFileData = {
+                files: Array<{ filename: string; status?: string; additions: number; deletions: number }>;
+              };
+              const parseStoredFileData = (raw: unknown): PrCommitFileData | null => {
+                if (raw && typeof raw === "object" && Array.isArray((raw as { files?: unknown }).files)) {
+                  return raw as PrCommitFileData;
+                }
+                return null;
+              };
+
+              const { data: existingPrItems } = await adminSupabase
+                .from("repository_analytics_items")
+                .select("github_id, data")
+                .eq("repository_id", repo.id)
+                .eq("item_type", "pr");
+              const existingPrDataByGithubId = new Map<string, unknown>(
+                (existingPrItems ?? []).map((r) => [r.github_id, r.data])
+              );
+              const existingPrIds = new Set(existingPrDataByGithubId.keys());
+
+              // Fetch PRs (paginated iterator with early exit when PRs are older than sinceIso)
+              try {
+                const prsParams = {
+                  owner: repoOwner,
+                  repo: repoName,
+                  state: "all",
+                  per_page: 100,
+                  sort: "updated" as const,
+                  direction: "desc" as const
+                };
+                const iterator = octokit.paginate
+                  .iterator("GET /repos/{owner}/{repo}/pulls", prsParams)
+                  [Symbol.asyncIterator]();
+                let iterResult = await iterator.next();
+                outer: while (!iterResult.done) {
+                  counter.increment("prs_pages");
+                  const response = iterResult.value;
+                  for (const pr of response.data) {
+                    if (sinceIso && new Date(pr.updated_at) <= new Date(sinceIso)) break outer;
+                    const createdDay = ensureDay(pr.created_at);
+                    dailyMap.get(createdDay)!.prs_opened++;
+                    let prData: PrCommitFileData | null = null;
+                    // Fix 4: Only fetch PR files for new PRs (not already in DB); reuse DB data for existing rows
+                    const isNewPr = !existingPrIds.has(String(pr.number));
+                    if (isNewPr) {
+                      try {
+                        counter.increment("pr_files");
+                        const filesRes = await octokit.rest.pulls.listFiles({
+                          owner: repoOwner,
+                          repo: repoName,
+                          pull_number: pr.number
+                        });
+                        prData = {
+                          files: (filesRes.data ?? []).map((f) => ({
+                            filename: f.filename,
+                            status: f.status,
+                            additions: f.additions ?? 0,
+                            deletions: f.deletions ?? 0
+                          }))
+                        };
+                      } catch {
+                        // Continue without file data
+                      }
+                    } else {
+                      prData = parseStoredFileData(existingPrDataByGithubId.get(String(pr.number)));
+                    }
+                    itemUpserts.push({
+                      repository_id: repo.id,
+                      class_id: repo.class_id,
+                      assignment_id: repo.assignment_id,
+                      item_type: "pr",
+                      github_id: String(pr.number),
+                      title: pr.title,
+                      url: pr.html_url,
+                      author: pr.user?.login || null,
+                      created_date: createdDay,
+                      state: pr.state,
+                      updated_at: now,
+                      data: prData
+                    });
+                  }
+                  iterResult = await iterator.next();
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({ message: `Error fetching PRs for ${repoFullName}: ${e}`, level: "warning" });
+              }
+
+              // Fetch PR review comments (Fix 5: iterator, Fix 1: since param)
+              try {
+                const reviewCommentsParams: Record<string, unknown> = {
+                  owner: repoOwner,
+                  repo: repoName,
+                  per_page: 100
+                };
+                if (sinceIso) reviewCommentsParams.since = sinceIso;
+                const reviewCommentsIterator = octokit.paginate
+                  .iterator("GET /repos/{owner}/{repo}/pulls/comments", reviewCommentsParams)
+                  [Symbol.asyncIterator]();
+                let reviewCommentsIter = await reviewCommentsIterator.next();
+                while (!reviewCommentsIter.done) {
+                  counter.increment("pr_review_comments_pages");
+                  for (const comment of reviewCommentsIter.value.data) {
+                    if (!comment.created_at) continue;
+                    const day = ensureDay(comment.created_at);
+                    dailyMap.get(day)!.pr_review_comments++;
+
+                    itemUpserts.push({
+                      repository_id: repo.id,
+                      class_id: repo.class_id,
+                      assignment_id: repo.assignment_id,
+                      item_type: "pr_review_comment",
+                      github_id: String(comment.id),
+                      title: comment.body?.substring(0, 200) || null,
+                      url: comment.html_url,
+                      author: comment.user?.login || null,
+                      created_date: day,
+                      state: null,
+                      updated_at: now
+                    });
+                  }
+                  reviewCommentsIter = await reviewCommentsIterator.next();
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({
+                  message: `Error fetching PR review comments for ${repoFullName}: ${e}`,
+                  level: "warning"
+                });
+              }
+
+              // Fix 2: Single default-branch commit listing (eliminates branches API call)
+              // Fix 1: Add since param for incremental fetching
+              try {
+                const commitsParams: Record<string, unknown> = {
+                  owner: repoOwner,
+                  repo: repoName,
+                  per_page: 100
+                };
+                if (sinceIso) commitsParams.since = sinceIso;
+                const commitsIterator = octokit.paginate
+                  .iterator("GET /repos/{owner}/{repo}/commits", commitsParams)
+                  [Symbol.asyncIterator]();
+                const commitsToProcess: Array<{
+                  commit: Awaited<ReturnType<typeof octokit.rest.repos.listCommits>>["data"][number];
+                  day: string;
+                }> = [];
+                let commitsIter = await commitsIterator.next();
+                while (!commitsIter.done) {
+                  counter.increment("commits_pages");
+                  for (const commit of commitsIter.value.data) {
+                    const dateStr = commit.commit.author?.date || commit.commit.committer?.date;
+                    if (!dateStr) continue;
+                    const day = ensureDay(dateStr);
+                    dailyMap.get(day)!.commits++;
+                    commitsToProcess.push({ commit, day });
+                  }
+                  commitsIter = await commitsIterator.next();
+                }
+
+                // Fix 3: Only fetch commit details for new commits (not already in DB); keep stored data otherwise
+                const { data: existingCommitItems } = await adminSupabase
+                  .from("repository_analytics_items")
+                  .select("github_id, data")
+                  .eq("repository_id", repo.id)
+                  .eq("item_type", "commit");
+                const existingCommitDataBySha = new Map<string, unknown>(
+                  (existingCommitItems ?? []).map((r) => [r.github_id, r.data])
+                );
+                const existingCommitShas = new Set(existingCommitDataBySha.keys());
+
+                for (let i = 0; i < commitsToProcess.length; i++) {
+                  const { commit, day } = commitsToProcess[i];
+
+                  let commitData: PrCommitFileData | null = null;
+                  const isNewCommit = !existingCommitShas.has(commit.sha);
+                  if (isNewCommit) {
+                    try {
+                      counter.increment("commit_details");
+                      const fullCommit = await octokit.rest.repos.getCommit({
+                        owner: repoOwner,
+                        repo: repoName,
+                        ref: commit.sha
+                      });
+                      commitData = {
+                        files: (fullCommit.data.files ?? []).map((f) => ({
+                          filename: f.filename,
+                          status: f.status,
+                          additions: f.additions ?? 0,
+                          deletions: f.deletions ?? 0
+                        }))
+                      };
+                      // 50ms spacing between commit-detail calls to avoid secondary rate limits (was 150ms)
+                      if (i < commitsToProcess.length - 1) {
+                        await new Promise((r) => setTimeout(r, 50));
+                      }
+                    } catch {
+                      // Continue without file data
+                    }
+                  } else {
+                    commitData = parseStoredFileData(existingCommitDataBySha.get(commit.sha));
+                  }
+
+                  itemUpserts.push({
+                    repository_id: repo.id,
+                    class_id: repo.class_id,
+                    assignment_id: repo.assignment_id,
+                    item_type: "commit",
+                    github_id: commit.sha,
+                    title: commit.commit.message?.substring(0, 200) || null,
+                    url: commit.html_url,
+                    author: commit.author?.login || commit.commit.author?.name || null,
+                    created_date: day,
+                    state: null,
+                    updated_at: now,
+                    data: commitData
+                  });
+                }
+              } catch (e) {
+                Sentry.addBreadcrumb({
+                  message: `Error fetching commits for ${repoFullName}: ${e}`,
+                  level: "warning"
+                });
+              }
+
+              // When using incremental PR fetch (sinceIso), dailyMap.prs_opened only contains new PRs
+              // since last fetch. Merge existing stored prs_opened so we don't overwrite with partial counts.
+              if (sinceIso && dailyMap.size > 0) {
+                const days = Array.from(dailyMap.keys());
+                const { data: existingRows } = await adminSupabase
+                  .from("repository_analytics_daily")
+                  .select("date, prs_opened")
+                  .eq("repository_id", repo.id)
+                  .in("date", days);
+                if (existingRows) {
+                  for (const row of existingRows) {
+                    const day = String(row.date);
+                    const existing = Number(row.prs_opened) || 0;
+                    const entry = dailyMap.get(day);
+                    if (entry) entry.prs_opened += existing;
+                  }
+                }
+              }
+
+              // Upsert daily stats
+              for (const [day, stats] of dailyMap.entries()) {
+                const { error: dailyErr } = await adminSupabase.from("repository_analytics_daily").upsert(
+                  {
+                    repository_id: repo.id,
+                    class_id: repo.class_id,
+                    assignment_id: repo.assignment_id,
+                    date: day,
+                    ...stats,
+                    updated_at: now
+                  },
+                  { onConflict: "repository_id,date" }
+                );
+                if (dailyErr) throw dailyErr;
+              }
+
+              // Upsert items in batches of 100
+              for (let i = 0; i < itemUpserts.length; i += 100) {
+                const batch = itemUpserts.slice(i, i + 100);
+                const { error: itemsErr } = await adminSupabase
+                  .from("repository_analytics_items")
+                  .upsert(batch, { onConflict: "repository_id,item_type,github_id" });
+                if (itemsErr) throw itemsErr;
+              }
+            } catch (repoError) {
+              const errMsg = repoError instanceof Error ? repoError.message : String(repoError);
+              console.error(`[repo-analytics] ERROR ${repoFullName}: ${errMsg}`);
+              Sentry.addBreadcrumb({
+                message: `Error processing repo ${repoFullName}: ${repoError}`,
+                level: "error"
+              });
+              Sentry.captureException(repoError, scope);
+              return { repoFullName, repoId: repo.id, error: repoError };
+            }
+            return { repoFullName, repoId: repo.id, apiCalls: counter };
+          };
+
+          // Sequential processing: one repo at a time for predictable debug output
+          const failedByRepoId = new Map<number, string>();
+          let repoIndex = 0;
+          for (const repo of repos) {
+            try {
+              const result = await processRepo(repo);
+              repoIndex++;
+              if (result.error) {
+                failedByRepoId.set(
+                  result.repoId,
+                  result.error instanceof Error ? result.error.message : String(result.error)
+                );
+              } else if (result.apiCalls) {
+                const summary = result.apiCalls.summary();
+                console.log(`[repo-analytics] ${result.repoFullName}: ${JSON.stringify(summary)}`);
+                for (const [k, v] of Object.entries(summary)) {
+                  if (k !== "total") assignmentCounter.increment(k, v);
+                }
+                if (repoIndex % 20 === 0) {
+                  await logRateLimit(octokit, `after repo ${repoIndex}/${repos.length}`);
+                }
+              }
+            } catch (err) {
+              Sentry.captureException(err, scope);
+            }
+          }
+
+          // Fix 0: Log assignment-level aggregate and rate limit remaining
+          const totalCalls = assignmentCounter.total;
+          if (totalCalls > 0) {
+            const avgPerRepo = (totalCalls / repos.length).toFixed(1);
+            let rateLimitRemaining = "unknown";
+            try {
+              const { data: rateLimit } = await octokit.request("GET /rate_limit");
+              rateLimitRemaining = `${rateLimit.resources.core.remaining}/${rateLimit.resources.core.limit}`;
+            } catch {
+              // ignore
+            }
+            console.log(
+              `[repo-analytics] Assignment ${assignment_id} complete: ${repos.length} repos, ${totalCalls} total API calls (avg ${avgPerRepo}/repo), rate_limit remaining: ${rateLimitRemaining}`
+            );
+            Sentry.addBreadcrumb({
+              message: `Repo analytics: ${repos.length} repos, ${totalCalls} API calls, avg ${avgPerRepo}/repo`,
+              level: "info",
+              data: assignmentCounter.summary()
+            });
+          }
+
+          // Update fetch status (one row per repository; schema unique is assignment_id, repository_id)
+          const nowIso = new Date().toISOString();
+          const fetchStatusRows = repos.map((r) => {
+            const failedErr = failedByRepoId.get(r.id);
+            return {
+              assignment_id,
+              class_id: classId,
+              repository_id: r.id,
+              last_fetched_at: failedErr ? null : nowIso,
+              status: (failedErr ? "error" : "completed") as const,
+              error_message: failedErr ?? null
+            };
+          });
+          const { error: statusErr } = await adminSupabase
+            .from("repository_analytics_fetch_status")
+            .upsert(fetchStatusRows, { onConflict: "assignment_id,repository_id" });
+          if (statusErr) throw statusErr;
+        } catch (error) {
+          // Update fetch status with error (one row per repository; repos may be undefined if error was before query)
+          const errMsg = error instanceof Error ? error.message : String(error);
+          const reposForStatus = repos;
+          const fetchStatusErrorRows = reposForStatus.map((r) => ({
+            assignment_id,
+            class_id: classId,
+            repository_id: r.id,
+            last_fetched_at: new Date().toISOString(),
+            status: "error" as const,
+            error_message: errMsg
+          }));
+          if (fetchStatusErrorRows.length > 0) {
+            await adminSupabase
+              .from("repository_analytics_fetch_status")
+              .upsert(fetchStatusErrorRows, { onConflict: "assignment_id,repository_id" });
+            // Best-effort; ignore upsert errors
+          }
+          throw error;
+        }
+
+        recordMetric(
+          adminSupabase,
+          {
+            method: envelope.method,
+            status_code: 200,
+            class_id: classId,
+            debug_id: envelope.debug_id,
+            enqueued_at: meta.enqueued_at,
+            log_id: envelope.log_id
+          },
+          scope
+        );
+        return true;
+      }
       default:
         throw new Error(`Unknown async method: ${(envelope as GitHubAsyncEnvelope).method}`);
     }
@@ -1195,6 +1975,7 @@ export async function processEnvelope(
         const repo = (envelope.args as RerunAutograderArgs).repository;
         return repo.split("/")[0];
       }
+      if (envelope.method === "fetch_repo_analytics") return (envelope.args as FetchRepoAnalyticsArgs).org;
       return undefined;
     })();
 
@@ -1264,7 +2045,7 @@ export async function processEnvelope(
         if (currentRetryCount >= 5) {
           const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
           if (dlqSuccess) {
-            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           } else {
             console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
             scope.setContext("dlq_archive_skipped", {
@@ -1284,14 +2065,14 @@ export async function processEnvelope(
           : false;
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
 
         // Requeue with computed backoff delay for rate limit
-        await requeueWithDelay(adminSupabase, envelope, delay, scope);
-        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        await requeueWithDelay(adminSupabase, envelope, delay, scope, queueName);
+        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
         return false;
       }
 
@@ -1330,7 +2111,7 @@ export async function processEnvelope(
         if (currentRetryCount >= 5) {
           const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
           if (dlqSuccess) {
-            await archiveMessage(adminSupabase, meta.msg_id, scope);
+            await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           } else {
             console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
             scope.setContext("dlq_archive_skipped", {
@@ -1348,14 +2129,14 @@ export async function processEnvelope(
         const circuitTripped = await checkAndTripErrorCircuitBreaker(adminSupabase, org, envelope.method, scope);
         if (circuitTripped) {
           // If circuit was tripped, requeue with 8-hour delay
-          await requeueWithDelay(adminSupabase, envelope, 28800, scope); // 8 hours
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await requeueWithDelay(adminSupabase, envelope, 28800, scope, queueName); // 8 hours
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
           return false;
         }
 
         // For immediate circuit breaker, requeue with 30-second delay
-        await requeueWithDelay(adminSupabase, envelope, 30, scope); // 30 seconds
-        await archiveMessage(adminSupabase, meta.msg_id, scope);
+        await requeueWithDelay(adminSupabase, envelope, 30, scope, queueName); // 30 seconds
+        await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
         return false;
       }
 
@@ -1384,7 +2165,7 @@ export async function processEnvelope(
       if (currentRetryCount >= 5) {
         const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
         if (dlqSuccess) {
-          await archiveMessage(adminSupabase, meta.msg_id, scope);
+          await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
         } else {
           console.error(`Failed to send message ${meta.msg_id} to DLQ, leaving unarchived`);
           scope.setContext("dlq_archive_skipped", {
@@ -1408,8 +2189,8 @@ export async function processEnvelope(
       Sentry.captureException(error, scope);
 
       // Requeue with 2-minute delay and archive the current message
-      await requeueWithDelay(adminSupabase, envelope, 120, scope); // 2 minutes
-      await archiveMessage(adminSupabase, meta.msg_id, scope);
+      await requeueWithDelay(adminSupabase, envelope, 120, scope, queueName); // 2 minutes
+      await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
       return false;
     } catch (e) {
       console.error("error", e);
@@ -1421,7 +2202,7 @@ export async function processEnvelope(
 }
 
 export async function processBatch(adminSupabase: SupabaseClient<Database>, scope: Sentry.Scope) {
-  const result = await adminSupabase.schema("pgmq_public").rpc("read", {
+  let result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "async_calls",
     sleep_seconds: 60,
     n: 4
@@ -1431,7 +2212,24 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
     Sentry.captureException(result.error, scope);
     return false;
   }
-  const messages = (result.data || []) as QueueMessage<GitHubAsyncEnvelope>[];
+
+  let messages = (result.data || []) as QueueMessage<GitHubAsyncEnvelope>[];
+  let queueName: "async_calls" | "async_calls_low_priority" = "async_calls";
+
+  if (messages.length === 0) {
+    result = await adminSupabase.schema("pgmq_public").rpc("read", {
+      queue_name: "async_calls_low_priority",
+      sleep_seconds: 60,
+      n: 4
+    });
+    if (result.error) {
+      Sentry.captureException(result.error, scope);
+      return false;
+    }
+    messages = (result.data || []) as QueueMessage<GitHubAsyncEnvelope>[];
+    queueName = "async_calls_low_priority";
+  }
+
   if (messages.length === 0) return false;
 
   await Promise.allSettled(
@@ -1439,11 +2237,23 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
       const ok = await processEnvelope(
         adminSupabase,
         msg.message,
-        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at },
+        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, queue_name: queueName },
         scope
       );
       if (ok) {
-        await archiveMessage(adminSupabase, msg.msg_id, scope);
+        const archived = await archiveMessage(adminSupabase, msg.msg_id, scope, queueName);
+        if (!archived) {
+          console.error(
+            `[pgmq] worker: handler returned OK but archive failed msg_id=${msg.msg_id} queue=${queueName} — message will redeliver after VT`
+          );
+          Sentry.captureMessage(
+            "github-async-worker: processed message but failed to archive after retries; expect redelivery",
+            {
+              level: "error",
+              extra: { msg_id: msg.msg_id, queue_name: queueName }
+            }
+          );
+        }
       }
     })
   );
@@ -1473,46 +2283,48 @@ export async function runBatchHandler() {
   }
 }
 
-Deno.serve((req) => {
-  const secret = req.headers.get("x-edge-function-secret");
-  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
+if (import.meta.main) {
+  Deno.serve((req) => {
+    const secret = req.headers.get("x-edge-function-secret");
+    const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET");
 
-  if (!expectedSecret) {
-    return new Response(JSON.stringify({ error: "EDGE_FUNCTION_SECRET is not configured" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
-    });
-  }
-
-  if (secret !== expectedSecret) {
-    return new Response(JSON.stringify({ error: "Invalid or missing secret" }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
-        "WWW-Authenticate": 'Bearer realm="github_async_worker", error="invalid_token"'
-      }
-    });
-  }
-
-  const already_running = started;
-
-  if (!started) {
-    started = true;
-    EdgeRuntime.waitUntil(runBatchHandler());
-  }
-
-  return new Response(
-    JSON.stringify({
-      message: "GitHub async worker started",
-      already_running: already_running,
-      timestamp: new Date().toISOString()
-    }),
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store"
-      }
+    if (!expectedSecret) {
+      return new Response(JSON.stringify({ error: "EDGE_FUNCTION_SECRET is not configured" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
+      });
     }
-  );
-});
+
+    if (secret !== expectedSecret) {
+      return new Response(JSON.stringify({ error: "Invalid or missing secret" }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+          "WWW-Authenticate": 'Bearer realm="github_async_worker", error="invalid_token"'
+        }
+      });
+    }
+
+    const already_running = started;
+
+    if (!started) {
+      started = true;
+      EdgeRuntime.waitUntil(runBatchHandler());
+    }
+
+    return new Response(
+      JSON.stringify({
+        message: "GitHub async worker started",
+        already_running: already_running,
+        timestamp: new Date().toISOString()
+      }),
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store"
+        }
+      }
+    );
+  });
+}

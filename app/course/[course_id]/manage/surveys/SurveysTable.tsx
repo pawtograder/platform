@@ -7,7 +7,7 @@ import Link from "@/components/ui/link";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
 import { useIsGrader, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useAssignments, useCourseController } from "@/hooks/useCourseController";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 import { Badge, Box, Icon, Table, Text } from "@chakra-ui/react";
@@ -27,6 +27,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
   const isGrader = useIsGrader();
+  const assignments = useAssignments();
 
   // Filter options for instructor view
   const filterOptions = useMemo(
@@ -347,6 +348,9 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
               <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
                 DUE DATE
               </Table.ColumnHeader>
+              <Table.ColumnHeader color="fg.muted" fontSize="xs" fontWeight="semibold" textTransform="uppercase" py={3}>
+                LINKED ASSIGNMENT
+              </Table.ColumnHeader>
               <Table.ColumnHeader
                 color="fg.muted"
                 fontSize="xs"
@@ -401,6 +405,14 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
                 <Table.Cell py={4}>
                   <Text color={survey.due_date ? "fg" : "fg.muted"}>
                     {survey.due_date ? <TimeZoneAwareDate date={survey.due_date} format="MMM d, h:mm a" /> : "—"}
+                  </Text>
+                </Table.Cell>
+                <Table.Cell py={4}>
+                  <Text color={survey.assignment_id ? "fg" : "fg.muted"}>
+                    {survey.assignment_id
+                      ? assignments.find((a) => a.id === survey.assignment_id)?.title ||
+                        `Assignment #${survey.assignment_id}`
+                      : "—"}
                   </Text>
                 </Table.Cell>
                 <Table.Cell pr={3}>

@@ -188,6 +188,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
       const yamlCheck: Omit<YmlRubricChecksType, "data"> & { data?: Json | null } = {
         id: check.id,
         name: check.name,
+        kpi_category: valOrUndefined(check.kpi_category) || null,
         description: valOrUndefined(check.description),
         file: valOrUndefined(check.file),
         is_annotation: check.is_annotation,
@@ -233,6 +234,8 @@ function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): YmlRubricP
     data: valOrUndefined(part.data),
     description: valOrUndefined(part.description),
     name: part.name,
+    is_individual_grading: part.is_individual_grading || undefined,
+    is_assign_to_student: part.is_assign_to_student || undefined,
     criteria: hydratedRubricCriteriaToYamlRubric(part.rubric_criteria)
   }));
 }
@@ -257,6 +260,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
   return checks.map((check, index) => ({
     id: check.id || -1,
     name: check.name,
+    kpi_category: valOrNull(check.kpi_category),
     description: valOrNull(check.description),
     ordinal: index,
     rubric_id: 0,
@@ -323,6 +327,13 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
       "Duplicate check ids in YAML. If you intend to copy a check, simply remove the ID on the copy, and a new ID will be generated for the new check upon saving."
     );
   }
+  for (const part of parts) {
+    if (part.is_individual_grading && part.is_assign_to_student) {
+      throw new Error(
+        `Part "${part.name}" cannot have both is_individual_grading and is_assign_to_student enabled. Choose one mode.`
+      );
+    }
+  }
   return parts.map((part, index) => ({
     id: part.id || -1,
     name: part.name,
@@ -333,6 +344,8 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
     created_at: "",
     data: part.data,
     assignment_id: 0,
+    is_individual_grading: part.is_individual_grading ?? false,
+    is_assign_to_student: part.is_assign_to_student ?? false,
     rubric_criteria: YamlCriteriaToHydratedCriteria(part.id || -1, part.criteria)
   }));
 }
@@ -1314,7 +1327,9 @@ function InnerRubricPage() {
           data: partData.data,
           class_id: assignmentDetails.class_id,
           rubric_id: currentEffectiveRubricId,
-          assignment_id: assignmentDetails.id
+          assignment_id: assignmentDetails.id,
+          is_individual_grading: partData.is_individual_grading ?? false,
+          is_assign_to_student: partData.is_assign_to_student ?? false
         };
         const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
         if (!createdPart.data.id) throw new Error("Failed to create part");
@@ -1441,7 +1456,8 @@ function InnerRubricPage() {
           rubric_criteria_id: checkData.rubric_criteria_id,
           student_visibility: checkData.student_visibility || "always",
           assignment_id: assignmentDetails.id,
-          rubric_id: currentEffectiveRubricId
+          rubric_id: currentEffectiveRubricId,
+          kpi_category: checkData.kpi_category
         };
         const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
         if (!createdCheck.data.id) throw new Error("Failed to create check");

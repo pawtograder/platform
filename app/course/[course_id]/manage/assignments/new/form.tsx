@@ -874,6 +874,26 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
+            <Field helperText="When enabled, GitHub repository analytics (commits, PRs, issues, comments) will be collected and visible to graders/instructors on each submission.">
+              <Controller
+                name="enable_repo_analytics"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value || false}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Enable repository analytics</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
               Save
             </Button>
