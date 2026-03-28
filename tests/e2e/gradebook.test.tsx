@@ -446,6 +446,19 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await waitForVirtualizerIdle(page);
   });
 
+  test("Issue #533: instructor can enter a decimal score in a manual gradebook cell", async ({ page }) => {
+    const studentName = students[0].private_profile_name;
+    await waitForVirtualizerIdle(page);
+    const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
+    const partCell = await waitForStableLocator(page, getPartCell);
+    await partCell.click();
+    const scoreInput = page.locator('input[name="score"]');
+    await scoreInput.fill("50.5");
+    await expect(scoreInput).toHaveValue("50.5");
+    await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(partCell).toHaveText(/50\.5/);
+  });
+
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {
     // Verify the gradebook loads with all components
     await expect(page.getByText("Student Name")).toBeVisible();
