@@ -7,6 +7,7 @@ import { createClient } from "@/utils/supabase/client";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import RegradeRequestsTable from "../RegradeRequestsTable";
 import { toaster } from "@/components/ui/toaster";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import * as Sentry from "@sentry/nextjs";
 
 export default function StudentRegradeRequestsPage() {
@@ -41,7 +42,7 @@ export default function StudentRegradeRequestsPage() {
         setRegradeRequests(data || []);
         setError(null);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Failed to load regrade requests";
+        const errorMessage = getStudentFacingErrorMessage(error);
 
         // Log to Sentry with context
         Sentry.withScope((scope) => {

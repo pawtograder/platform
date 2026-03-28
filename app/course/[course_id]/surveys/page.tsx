@@ -5,6 +5,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { toaster } from "@/components/ui/toaster";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import Link from "@/components/ui/link";
 import { formatInTimeZone } from "date-fns-tz";
 import { SurveyWithResponse } from "@/types/survey";
@@ -100,7 +101,7 @@ export default function StudentSurveysPage() {
         console.error("Error loading responses:", error);
         toaster.create({
           title: "Error Loading Surveys",
-          description: "An error occurred while loading survey responses.",
+          description: getStudentFacingErrorMessage(error),
           type: "error"
         });
       } finally {
