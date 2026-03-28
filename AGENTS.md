@@ -12,7 +12,7 @@ Pawtograder is a Next.js 15 + Supabase course operations platform (autograder, h
 2. **Supabase**: `npx supabase start` — starts all Supabase services in Docker. Output includes local API URL and keys.
    - **Known issue**: Migration `20260217000000_binary_submission_files.sql` may fail with `must be owner of table objects` because it creates RLS policies on `storage.objects`. Workaround: temporarily move the migration file, run `supabase start`, apply it via `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < <migration_file>`, record it in `supabase_migrations.schema_migrations`, then restore the file.
 3. **Configure `.env.local`**: After `supabase start`, get keys with `npx supabase status -o env` and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`, `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3000`, and `ENABLE_SIGNUPS=true`.
-   - For production E2E on port 3001, override app URL to match `BASE_URL`: `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001`.
+   - **Prod E2E on port 3001**: Next.js inlines `NEXT_PUBLIC_*` at **build** time. Set `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001` for `npm run build` (and keep it in `.env.local` while iterating) so auth redirects and magic links match `BASE_URL` / `PORT`; exporting it only when running Playwright does not change an existing bundle.
 4. **Next.js dev server**: `npm run dev` — serves at `http://localhost:3000`.
 
 ### Seeding the database
@@ -27,13 +27,12 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 
 - **Lint**: `npm run lint` (ESLint + Prettier). See `package.json` scripts.
 - **Unit tests**: `npm test` (Jest). Note: `jest.setup.ts` must exist (import `@testing-library/jest-dom`). The existing test has a pre-existing issue with `Request` not being defined in jsdom.
-- **E2E tests (default policy)**: **Always run E2E against a production build/server**, not `next dev`, for stable performance and fewer timing flakes.
+- **E2E — local (recommended default for everyday dev)**: With local Supabase running and `npm run dev` (port 3000), run **`npm run test:e2e:local`** — it sets `BASE_URL=http://localhost:3000` to match the dev server (`playwright.config.ts`). Ensure **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, and **`SUPABASE_SERVICE_ROLE_KEY`** are in `.env.local` or exported: `tests/e2e/TestingUtils.ts` loads `.env.local` via dotenv and uses those values (plus the service role for the admin client) for setup and auth helpers.
+- **E2E — prod build (CI-like, fewer timing flakes)**: Prefer a production build/server over `next dev` when debugging flakes or matching CI.
   - Never run `next dev` and `next start` at the same time in this environment. Stop all dev servers before prod E2E runs.
-  - Build from a clean output directory: `rm -rf .next && npm run build`
+  - Build from a clean output directory with the public web URL matching the prod server port (see note above on **`NEXT_PUBLIC_PAWTOGRADER_WEB_URL` at build time**): `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001 rm -rf .next && npm run build`
   - Start only the prod server: `PORT=3001 npm run start`
-  - Run Playwright against prod server with matching app URL: `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001 BASE_URL=http://localhost:3001 npx playwright test ...`
-  - Ensure `SUPABASE_URL` and `SUPABASE_ANON_KEY` are exported or present in `.env.local` because `tests/e2e/TestingUtils.ts` reads them from `process.env`.
-  - Use `npm run test:e2e:local` / `next dev` only during tight local iteration **after** confirming the same test is already reliable in dev mode.
+  - Run Playwright with matching **`BASE_URL`**: `BASE_URL=http://localhost:3001 npx playwright test ...` (the **built** app URL comes from the build step above; Playwright only needs `BASE_URL` to match where `next start` listens).
   - If a test is flaky in dev mode, switch back to prod-build runs immediately.
 - **Build**: `npm run build` (requires ~8 GB memory via `NODE_OPTIONS=--max-old-space-size=8000`).
 - **Format**: `npm run format` (Prettier auto-fix).
