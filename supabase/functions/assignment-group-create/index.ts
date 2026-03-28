@@ -87,12 +87,19 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   }
 
   if (invitees.length > 0) {
-    const { data: inviteeEnrollments } = await adminSupabase
+    const { data: inviteeEnrollments, error: inviteeEnrollmentsError } = await adminSupabase
       .from("user_roles")
       .select("private_profile_id")
       .eq("class_id", course_id)
       .eq("role", "student")
       .in("private_profile_id", invitees);
+    if (inviteeEnrollmentsError) {
+      console.error(inviteeEnrollmentsError);
+      Sentry.captureException(inviteeEnrollmentsError, scope);
+      const err = inviteeEnrollmentsError as { message?: string; details?: string; hint?: string; code?: string };
+      const parts = [err.message, err.details, err.hint, err.code].filter(Boolean);
+      throw new UserVisibleError(`Could not verify invitee enrollments for this course. ${parts.join(" — ")}`);
+    }
     const enrolled = new Set((inviteeEnrollments ?? []).map((r) => r.private_profile_id));
     if (enrolled.size !== invitees.length) {
       throw new IllegalArgumentError(
@@ -100,11 +107,18 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
       );
     }
 
-    const { data: inviteesInGroups } = await adminSupabase
+    const { data: inviteesInGroups, error: inviteesInGroupsError } = await adminSupabase
       .from("assignment_groups_members")
       .select("profile_id")
       .eq("assignment_id", assignment_id)
       .in("profile_id", invitees);
+    if (inviteesInGroupsError) {
+      console.error(inviteesInGroupsError);
+      Sentry.captureException(inviteesInGroupsError, scope);
+      const err = inviteesInGroupsError as { message?: string; details?: string; hint?: string; code?: string };
+      const parts = [err.message, err.details, err.hint, err.code].filter(Boolean);
+      throw new UserVisibleError(`Could not verify whether invitees are already in groups. ${parts.join(" — ")}`);
+    }
     if (inviteesInGroups && inviteesInGroups.length > 0) {
       throw new IllegalArgumentError(
         "One or more students you invited are already in a group for this assignment. They must leave that group before they can join yours."

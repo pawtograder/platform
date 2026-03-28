@@ -76,7 +76,10 @@ export default function FinalizeSubmissionEarly({
           "Self reviews not enabled for this assignment":
             "Early finalization is only available when self-review is enabled for this assignment. Contact your instructor if you expected this option.",
           "Submission already finalized": "Your submission is already finalized for this assignment.",
-          "Assignment not found": "This assignment could not be found. Refresh the page or contact your instructor."
+          "Assignment not found": "This assignment could not be found. Refresh the page or contact your instructor.",
+          "No active submission found":
+            "You don't have an active submission to finalize. Create or resume your submission first.",
+          "Self review already assigned": "A self-review has already been assigned for this submission."
         };
         const mapped = reason && friendly[reason];
         toaster.error({

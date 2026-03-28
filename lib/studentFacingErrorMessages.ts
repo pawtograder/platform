@@ -22,13 +22,13 @@ export function getStudentFacingErrorMessage(error: unknown): string {
     }
   }
 
-  if (message && message.trim()) {
-    return message.trim();
-  }
-
   const extra = [details, hint].filter((s) => s && s.trim()).join(" ");
   if (extra.trim()) {
     return extra.trim();
+  }
+
+  if (message && message.trim()) {
+    return message.trim();
   }
 
   return "Something went wrong. Please try again.";
