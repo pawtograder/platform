@@ -77,6 +77,22 @@ async function waitForVirtualizerIdle(page: Page) {
   );
 }
 
+async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
+  const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
+  await region.evaluate((el) => {
+    el.scrollLeft = 0;
+  });
+  const dataRow = region.locator("thead tr").filter({ has: page.getByRole("columnheader", { name: "Student Name" }) });
+  await dataRow.first().waitFor({ state: "visible" });
+  const cells = dataRow.locator("th");
+  const n = await cells.count();
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push((await cells.nth(i).innerText()).split("\n")[0].trim());
+  }
+  return out;
+}
+
 async function waitForStableLocator(page: Page, getLocator: () => Promise<Locator> | Locator, timeoutMs = 3000) {
   const start = Date.now();
   while (Date.now() - start <= timeoutMs) {
@@ -444,6 +460,45 @@ test.describe("Gradebook Page - Comprehensive", () => {
       .click();
     await page.waitForLoadState("networkidle");
     await waitForVirtualizerIdle(page);
+  });
+
+  test("Issue #531: Move Left / Move Right reorder assignment columns in the instructor gradebook", async ({
+    page
+  }) => {
+    const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await waitForVirtualizerIdle(page);
+
+    // Assignment columns start in a collapsed group; expand so all assignment headers are visible.
+    await region.getByRole("button", { name: "Expand all groups" }).click();
+    await waitForVirtualizerIdle(page);
+
+    const colName = "Test Assignment 4 (Group)";
+    const titlesBefore = await getGradebookDataHeaderTitles(page);
+    const idxBefore = titlesBefore.indexOf(colName);
+    expect(idxBefore, `expected column ${colName} in header row, got: ${titlesBefore.join(" | ")}`).toBeGreaterThan(0);
+
+    const headerCell = region
+      .locator("thead tr")
+      .filter({ has: page.getByRole("columnheader", { name: "Student Name" }) })
+      .locator("th")
+      .filter({ hasText: colName });
+    await headerCell.getByRole("button", { name: "Column options" }).click();
+    await page.getByRole("menuitem", { name: "Move Left", exact: true }).click();
+    await expect(page.getByText("Column moved left")).toBeVisible();
+
+    await waitForVirtualizerIdle(page);
+    const titlesAfterLeft = await getGradebookDataHeaderTitles(page);
+    const idxAfterLeft = titlesAfterLeft.indexOf(colName);
+    expect(idxAfterLeft).toBe(idxBefore - 1);
+    expect(titlesAfterLeft[idxBefore]).toBe(titlesBefore[idxBefore - 1]);
+
+    await headerCell.getByRole("button", { name: "Column options" }).click();
+    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click();
+    await expect(page.getByText("Column moved right")).toBeVisible();
+
+    await waitForVirtualizerIdle(page);
+    const titlesRestored = await getGradebookDataHeaderTitles(page);
+    expect(titlesRestored).toEqual(titlesBefore);
   });
 
   test("Issue #533: instructor can enter a decimal score in a manual gradebook cell", async ({ page }) => {
