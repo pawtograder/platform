@@ -646,13 +646,6 @@ const NotificationPreferencesMenu = () => {
 };
 
 const TimeZonePreferencesMenu = () => {
-  const { courseTimeZone } = useTimeZone();
-  const browserTimeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
-  // Only show if timezones differ
-  if (courseTimeZone === browserTimeZone) {
-    return null;
-  }
-
   return (
     <Dialog.Root size="md" placement="center">
       <Dialog.Trigger asChild>

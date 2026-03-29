@@ -184,6 +184,14 @@ export default function SurveyResponsesView({
     return getOrderedQuestions(surveyJson);
   }, [surveyJson]);
 
+  const visibleQuestions = useMemo(() => {
+    if (selectedQuestions.length === 0) {
+      return allQuestionNames;
+    }
+    const selected = new Set(selectedQuestions);
+    return allQuestionNames.filter((name) => selected.has(name));
+  }, [allQuestionNames, selectedQuestions]);
+
   // Filter responses based on active filters
   const filteredResponses = useMemo(() => {
     let filtered = responses;

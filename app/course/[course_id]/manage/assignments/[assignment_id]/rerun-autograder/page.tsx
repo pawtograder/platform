@@ -7,6 +7,7 @@ import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { rerunGrader } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import { ActiveSubmissionsWithRegressionTestResults, Assignment, Autograder } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -29,8 +30,8 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
 import { useOne } from "@refinedev/core";
+import { formatInTimeZone } from "date-fns-tz";
 import * as Sentry from "@sentry/nextjs";
 import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select as ReactSelect } from "chakra-react-select";
@@ -52,7 +53,8 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   const { assignment_id, course_id } = useParams();
   const { role } = useClassProfiles();
   const course = role.classes;
-  const timeZone = course.time_zone || "America/New_York";
+  /** Same active zone as TimeZoneAwareDate (course vs local per user setting). */
+  const { timeZone } = useTimeZone();
   const [commitOptions, setCommitOptions] = useState<SelectOption[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<SelectOption | null>(null);
   const [manualSha, setManualSha] = useState<string>("");
@@ -226,10 +228,14 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         filterFn: (row, id, filterValue) => {
           if (!row.original.created_at) return false;
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const date = new TZDate(row.original.created_at, timeZone);
           const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const formatted = formatInTimeZone(
+            new Date(row.original.created_at),
+            timeZone,
+            "M/d/yyyy, h:mm:ss a zzz"
+          );
           return filterArray.some((filter: string) =>
-            date.toLocaleString().toLowerCase().includes(filter.toLowerCase())
+            formatted.toLowerCase().includes(filter.toLowerCase())
           );
         }
       },
@@ -595,12 +601,24 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       if (!column.enableColumnFilter) return;
 
       const uniqueValues = new Set<string>();
+
+      if (column.id === "rerun_queued_at") {
+        // Match filterFn: semantic "Pending" / "None", not raw timestamps
+        rows.forEach((row) => {
+          uniqueValues.add(row.original.rerun_queued_at != null ? "Pending" : "None");
+        });
+        uniqueValuesMap[column.id as string] = Array.from(uniqueValues)
+          .sort()
+          .map((value) => ({ label: value, value }));
+        return;
+      }
+
       rows.forEach((row) => {
         const value = row.getValue(column.id as string);
         if (value !== null && value !== undefined) {
           if (column.id === "created_at") {
-            // For dates, show the formatted date string
-            const dateValue = new TZDate(value as string, timeZone).toLocaleString();
+            // Match TimeZoneAwareDate format="compact" (M/d/yyyy, h:mm:ss a zzz)
+            const dateValue = formatInTimeZone(new Date(value as string), timeZone, "M/d/yyyy, h:mm:ss a zzz");
             uniqueValues.add(dateValue);
           } else if (column.id === "grader_sha" || column.id === "rt_grader_sha" || column.id === "whatif_grader_sha") {
             // For SHAs, show the short version
@@ -992,7 +1010,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                   <Table.Body>
                     {historyResults.map((result) => {
                       const dateValue = result.created_at
-                        ? new TZDate(result.created_at, timeZone).toLocaleString()
+                        ? formatInTimeZone(new Date(result.created_at), timeZone, "M/d/yyyy, h:mm:ss a zzz")
                         : "Unknown";
                       return (
                         <Table.Row key={result.id}>
