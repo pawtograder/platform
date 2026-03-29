@@ -5,6 +5,8 @@ import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sd
 import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
 import * as Sentry from "@sentry/nextjs";
+
+/** Invokes autograder-create-repos-for-student. Use `opts.forTestAssignment` only from the instructor Test Assignment UI. */
 export async function autograderCreateReposForStudent(
   supabase: SupabaseClient<Database>,
   assignmentId?: number,
