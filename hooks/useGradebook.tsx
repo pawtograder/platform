@@ -1037,6 +1037,7 @@ export class GradebookController {
   private studentGradebookControllers: Map<string, StudentGradebookController> = new Map();
 
   private cellRenderersByColumnId: Map<number, (cell: RendererParams) => React.ReactNode> = new Map();
+  private cellRendererSourceKeysByColumnId: Map<number, string> = new Map();
 
   // Refetch tracking
   private _isAnyTableRefetching: boolean = false;
@@ -1079,18 +1080,10 @@ export class GradebookController {
       classRealTimeController
     });
     const { unsubscribe: updateRendererUnsubscribe, data: gradebookColumns } = this.gradebook_columns.list((data) => {
-      data.forEach((col) => {
-        if (!this.cellRenderersByColumnId.has(col.id)) {
-          this.cellRenderersByColumnId.set(col.id, this.createRendererForColumn(col));
-        }
-      });
+      this.syncCellRenderersFromColumns(data);
     });
     this._unsubscribes.push(updateRendererUnsubscribe);
-    gradebookColumns.forEach((col) => {
-      if (!this.cellRenderersByColumnId.has(col.id)) {
-        this.cellRenderersByColumnId.set(col.id, this.createRendererForColumn(col));
-      }
-    });
+    this.syncCellRenderersFromColumns(gradebookColumns);
 
     this.table = new GradebookCellController(class_id, classRealTimeController, client);
 
@@ -1109,6 +1102,27 @@ export class GradebookController {
 
     // Set up refetch status tracking
     this._setupRefetchTracking();
+  }
+
+  private fullRenderExpressionForColumn(column: GradebookColumn): string {
+    return (this._expression_prefix || "") + "\n" + (column.render_expression ?? "round(score, 2)");
+  }
+
+  private syncCellRenderersFromColumns(columns: GradebookColumn[]) {
+    const idSet = new Set(columns.map((c) => c.id));
+    for (const id of this.cellRenderersByColumnId.keys()) {
+      if (!idSet.has(id)) {
+        this.cellRenderersByColumnId.delete(id);
+        this.cellRendererSourceKeysByColumnId.delete(id);
+      }
+    }
+    for (const col of columns) {
+      const sourceKey = this.fullRenderExpressionForColumn(col);
+      if (this.cellRendererSourceKeysByColumnId.get(col.id) !== sourceKey) {
+        this.cellRendererSourceKeysByColumnId.set(col.id, sourceKey);
+        this.cellRenderersByColumnId.set(col.id, this.createRendererForColumn(col));
+      }
+    }
   }
 
   private _setupRefetchTracking() {
@@ -1497,8 +1511,7 @@ export class GradebookController {
     }
     math.import(imports, { override: true });
     try {
-      const theRenderExpression =
-        (this._expression_prefix || "") + "\n" + (column.render_expression ?? "round(score, 2)");
+      const theRenderExpression = this.fullRenderExpressionForColumn(column);
       const expr = math.parse(theRenderExpression);
       const compiled = expr.compile();
       const cache = new Map<string, string>();

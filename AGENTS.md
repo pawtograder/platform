@@ -30,7 +30,7 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 - **E2E — local (recommended default for everyday dev)**: With local Supabase running and `npm run dev` (port 3000), run **`npm run test:e2e:local`** — it sets `BASE_URL=http://localhost:3000` to match the dev server (`playwright.config.ts`). Ensure **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, and **`SUPABASE_SERVICE_ROLE_KEY`** are in `.env.local` or exported: `tests/e2e/TestingUtils.ts` loads `.env.local` via dotenv and uses those values (plus the service role for the admin client) for setup and auth helpers.
 - **E2E — prod build (CI-like, fewer timing flakes)**: Prefer a production build/server over `next dev` when debugging flakes or matching CI.
   - Never run `next dev` and `next start` at the same time in this environment. Stop all dev servers before prod E2E runs.
-  - Build from a clean output directory with the public web URL matching the prod server port (see note above on **`NEXT_PUBLIC_PAWTOGRADER_WEB_URL` at build time**): `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001 rm -rf .next && npm run build`
+  - Build from a clean output directory with the public web URL matching the prod server port (see note above on **`NEXT_PUBLIC_PAWTOGRADER_WEB_URL` at build time**): `export NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001 && rm -rf .next && npm run build`
   - Start only the prod server: `PORT=3001 npm run start`
   - Run Playwright with matching **`BASE_URL`**: `BASE_URL=http://localhost:3001 npx playwright test ...` (the **built** app URL comes from the build step above; Playwright only needs `BASE_URL` to match where `next start` listens).
   - If a test is flaky in dev mode, switch back to prod-build runs immediately.
