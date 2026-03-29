@@ -1,6 +1,11 @@
 -- Fix gradebook column move left/right: swap with the visually adjacent column
 -- (ORDER BY sort_order ASC NULLS LAST, id ASC) instead of decrementing sort_order,
 -- which collides with the uniqueness trigger and fails for sort_order = 0 (issue #531).
+--
+-- Before swapping, assign concrete consecutive sort_order values to every row in the
+-- gradebook that still has NULL sort_order (ordered by id). That preserves the NULL
+-- tail relative to non-NULL columns and among NULLs, so swapping two values does not
+-- scramble other NULL-position columns (see PR review feedback).
 
 CREATE OR REPLACE FUNCTION public.gradebook_column_move_left(p_column_id bigint)
 RETURNS public.gradebook_columns
@@ -14,7 +19,6 @@ DECLARE
   v_self_order integer;
   v_neighbor_order integer;
   v_max integer;
-  v_base integer;
 BEGIN
   SELECT gradebook_id INTO v_gradebook_id
     FROM public.gradebook_columns
@@ -26,6 +30,38 @@ BEGIN
 
   PERFORM pg_advisory_xact_lock(v_gradebook_id);
 
+  IF EXISTS (
+    SELECT 1
+      FROM public.gradebook_columns
+     WHERE gradebook_id = v_gradebook_id
+       AND sort_order IS NULL
+  ) THEN
+    PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'true', true);
+    BEGIN
+      SELECT COALESCE(MAX(sort_order), -1) INTO v_max
+        FROM public.gradebook_columns
+       WHERE gradebook_id = v_gradebook_id;
+
+      WITH numbered AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (ORDER BY id) AS rn
+        FROM public.gradebook_columns
+        WHERE gradebook_id = v_gradebook_id
+          AND sort_order IS NULL
+      )
+      UPDATE public.gradebook_columns gc
+         SET sort_order = v_max + numbered.rn
+        FROM numbered
+       WHERE gc.id = numbered.id;
+    EXCEPTION
+      WHEN OTHERS THEN
+        PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'false', true);
+        RAISE;
+    END;
+    PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'false', true);
+  END IF;
+
   SELECT * INTO v_col
     FROM public.gradebook_columns
    WHERE id = p_column_id
@@ -34,7 +70,6 @@ BEGIN
   WITH ordered AS (
     SELECT
       id,
-      sort_order,
       ROW_NUMBER() OVER (ORDER BY sort_order ASC NULLS LAST, id ASC) AS rn
     FROM public.gradebook_columns
     WHERE gradebook_id = v_gradebook_id
@@ -58,24 +93,13 @@ BEGIN
 
   PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'true', true);
   BEGIN
-    IF v_self_order IS NULL AND v_neighbor_order IS NULL THEN
-      -- Swapping NULL with NULL is a no-op unless we assign distinct orders
-      SELECT COALESCE(MAX(sort_order), -1) INTO v_max
-        FROM public.gradebook_columns
-       WHERE gradebook_id = v_gradebook_id;
-      v_base := v_max + 1;
-      -- After move left: self comes before neighbor (lower sort_order)
-      UPDATE public.gradebook_columns SET sort_order = v_base WHERE id = p_column_id;
-      UPDATE public.gradebook_columns SET sort_order = v_base + 1 WHERE id = v_neighbor_id;
-    ELSE
-      UPDATE public.gradebook_columns
-         SET sort_order = v_neighbor_order
-       WHERE id = p_column_id;
+    UPDATE public.gradebook_columns
+       SET sort_order = v_neighbor_order
+     WHERE id = p_column_id;
 
-      UPDATE public.gradebook_columns
-         SET sort_order = v_self_order
-       WHERE id = v_neighbor_id;
-    END IF;
+    UPDATE public.gradebook_columns
+       SET sort_order = v_self_order
+     WHERE id = v_neighbor_id;
   EXCEPTION
     WHEN OTHERS THEN
       PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'false', true);
@@ -101,7 +125,6 @@ DECLARE
   v_self_order integer;
   v_neighbor_order integer;
   v_max integer;
-  v_base integer;
 BEGIN
   SELECT gradebook_id INTO v_gradebook_id
     FROM public.gradebook_columns
@@ -113,6 +136,38 @@ BEGIN
 
   PERFORM pg_advisory_xact_lock(v_gradebook_id);
 
+  IF EXISTS (
+    SELECT 1
+      FROM public.gradebook_columns
+     WHERE gradebook_id = v_gradebook_id
+       AND sort_order IS NULL
+  ) THEN
+    PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'true', true);
+    BEGIN
+      SELECT COALESCE(MAX(sort_order), -1) INTO v_max
+        FROM public.gradebook_columns
+       WHERE gradebook_id = v_gradebook_id;
+
+      WITH numbered AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (ORDER BY id) AS rn
+        FROM public.gradebook_columns
+        WHERE gradebook_id = v_gradebook_id
+          AND sort_order IS NULL
+      )
+      UPDATE public.gradebook_columns gc
+         SET sort_order = v_max + numbered.rn
+        FROM numbered
+       WHERE gc.id = numbered.id;
+    EXCEPTION
+      WHEN OTHERS THEN
+        PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'false', true);
+        RAISE;
+    END;
+    PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'false', true);
+  END IF;
+
   SELECT * INTO v_col
     FROM public.gradebook_columns
    WHERE id = p_column_id
@@ -121,7 +176,6 @@ BEGIN
   WITH ordered AS (
     SELECT
       id,
-      sort_order,
       ROW_NUMBER() OVER (ORDER BY sort_order ASC NULLS LAST, id ASC) AS rn
     FROM public.gradebook_columns
     WHERE gradebook_id = v_gradebook_id
@@ -145,23 +199,13 @@ BEGIN
 
   PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'true', true);
   BEGIN
-    IF v_self_order IS NULL AND v_neighbor_order IS NULL THEN
-      SELECT COALESCE(MAX(sort_order), -1) INTO v_max
-        FROM public.gradebook_columns
-       WHERE gradebook_id = v_gradebook_id;
-      v_base := v_max + 1;
-      -- After move right: neighbor comes before self
-      UPDATE public.gradebook_columns SET sort_order = v_base WHERE id = v_neighbor_id;
-      UPDATE public.gradebook_columns SET sort_order = v_base + 1 WHERE id = p_column_id;
-    ELSE
-      UPDATE public.gradebook_columns
-         SET sort_order = v_neighbor_order
-       WHERE id = p_column_id;
+    UPDATE public.gradebook_columns
+       SET sort_order = v_neighbor_order
+     WHERE id = p_column_id;
 
-      UPDATE public.gradebook_columns
-         SET sort_order = v_self_order
-       WHERE id = v_neighbor_id;
-    END IF;
+    UPDATE public.gradebook_columns
+       SET sort_order = v_self_order
+     WHERE id = v_neighbor_id;
   EXCEPTION
     WHEN OTHERS THEN
       PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || v_gradebook_id::text, 'false', true);
