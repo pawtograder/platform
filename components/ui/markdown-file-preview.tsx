@@ -43,6 +43,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import rehypeSanitize from "rehype-sanitize";
+import remarkEscapeHtml from "@/lib/remark-escape-html";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkGemoji from "remark-gemoji";
@@ -233,35 +235,18 @@ function resolveRelativePath(currentFilePath: string, relativePath: string): str
   return resolved.join("/");
 }
 
-/** Max size (10MB) for inlining images as data URIs. Larger files return "" to avoid OOM. */
-const MAX_INLINE_IMAGE_SIZE = 10 * 1024 * 1024;
-
 /**
- * Fetches binary file content from Supabase Storage and returns a data URI.
- * Uses FileReader.readAsDataURL for O(n) base64 encoding (avoids quadratic reduce on large files).
- * Returns "" if the file exceeds MAX_INLINE_IMAGE_SIZE to avoid OOM; callers should render a
- * placeholder for oversized or failed images.
+ * Returns a signed URL for a binary file in Supabase Storage.
+ * Uses signed URLs instead of downloading full blobs to avoid holding large files in JS memory.
+ * Returns "" on error; callers should render a placeholder for failed images.
  */
-async function fetchBinaryFileAsDataUri(storageKey: string, mimeType: string): Promise<string> {
+async function fetchBinaryFileSignedUrl(storageKey: string): Promise<string> {
   const client = createClient();
-  const { data, error } = await client.storage.from("submission-files").download(storageKey);
+  const { data, error } = await client.storage.from("submission-files").createSignedUrl(storageKey, 60 * 60 * 24);
   if (error || !data) {
     return "";
   }
-  const size = data.size ?? 0;
-  if (size > MAX_INLINE_IMAGE_SIZE) {
-    return "";
-  }
-  const blob = new Blob([data], { type: mimeType });
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      resolve(typeof result === "string" ? result : `data:${mimeType};base64,`);
-    };
-    reader.onerror = () => resolve("");
-    reader.readAsDataURL(blob);
-  });
+  return data.signedUrl;
 }
 
 /**
@@ -915,12 +900,9 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
 
         if (matchingFile) {
           if (matchingFile.is_binary && matchingFile.storage_key) {
-            // Binary file - fetch from Supabase Storage. Returns "" if oversized (exceeds MAX_INLINE_IMAGE_SIZE)
-            // or on error; we skip adding to resolved so the img component renders its placeholder.
-            const mime = matchingFile.mime_type || getMimeFromExtension(matchingFile.name);
-            const dataUri = await fetchBinaryFileAsDataUri(matchingFile.storage_key, mime);
-            if (dataUri) {
-              resolved[imgPath] = dataUri;
+            const signedUrl = await fetchBinaryFileSignedUrl(matchingFile.storage_key);
+            if (signedUrl) {
+              resolved[imgPath] = signedUrl;
             }
           } else if (!matchingFile.is_binary && matchingFile.contents && isImageFile(matchingFile.name)) {
             // SVG or text-based image stored inline
@@ -1266,8 +1248,8 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
             }}
           >
             <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath, remarkGemoji]}
-              rehypePlugins={[rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
+              remarkPlugins={[remarkEscapeHtml, remarkGfm, remarkMath, remarkGemoji]}
+              rehypePlugins={[rehypeSanitize, rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
               components={components}
             >
               {content}

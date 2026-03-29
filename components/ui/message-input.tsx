@@ -1,4 +1,7 @@
 "use client";
+import remarkEscapeHtml from "@/lib/remark-escape-html";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import Markdown from "@/components/ui/markdown";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -710,6 +713,7 @@ export default function MessageInput(props: MessageInputProps) {
           }, 0);
         }}
         {...editorProps}
+        previewOptions={{ remarkPlugins: [remarkEscapeHtml, remarkMath], rehypePlugins: [rehypeKatex] }}
       />
       <MentionDropdown
         threads={mentionState.filteredThreads}

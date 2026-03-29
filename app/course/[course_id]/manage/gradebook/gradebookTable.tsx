@@ -268,6 +268,7 @@ function AddColumnDialog() {
                       valueAsNumber: true,
                       min: { value: 1, message: "Max Score must be at least 1" }
                     })}
+                    step="any"
                     placeholder="Max Score"
                   />
                   {errors.maxScore && (
@@ -488,6 +489,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                       valueAsNumber: true,
                       min: { value: 1, message: "Max Score must be at least 1" }
                     })}
+                    step="any"
                     placeholder="Max Score"
                   />
                   {errors.maxScore && (

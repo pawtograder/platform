@@ -17,6 +17,7 @@ import { useState } from "react";
 import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster, Toaster } from "./toaster";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
@@ -36,7 +37,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + (b.tokens_consumed > 0 ? b.tokens_consumed : 0), 0);
+  const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + b.tokens_consumed, 0);
   const lateTokensAppliedToAssignment = lateTokens
     .filter((e) => e.assignment_id === assignment.id)
     .map((e) => e.tokens_consumed)
@@ -155,8 +156,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                   console.error(err);
                   toaster.create({
                     title: "Error consuming late token",
-                    description:
-                      "An error occurred while consuming the late token. Please try again, and reach out to your instructor if the problem persists.",
+                    description: `${getStudentFacingErrorMessage(err)} If this keeps happening, contact your instructor.`,
                     type: "error"
                   });
                 } finally {

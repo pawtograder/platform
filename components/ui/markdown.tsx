@@ -1,3 +1,4 @@
+import remarkEscapeHtml from "@/lib/remark-escape-html";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -72,7 +73,14 @@ const additionalStyles = `
 export default function Markdown(props: MarkdownProps) {
   const { style, remarkPlugins, rehypePlugins, ...rest } = props;
 
-  const combinedRemark = [remarkMath, remarkGfm, remarkBreaks, remarkGemoji, ...(remarkPlugins || [])];
+  const combinedRemark = [
+    remarkEscapeHtml,
+    remarkMath,
+    remarkGfm,
+    remarkBreaks,
+    remarkGemoji,
+    ...(remarkPlugins || [])
+  ];
   const combinedRehype = [rehypeSanitize, rehypeKatex, rehypeHighlight, ...(rehypePlugins || [])];
 
   return (

@@ -5,6 +5,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { usePublishedSurveys } from "@/hooks/useCourseController";
 import { SurveyWithResponse } from "@/types/survey";
 import { createClient } from "@/utils/supabase/client";
@@ -99,7 +100,7 @@ export default function StudentSurveysPage() {
         console.error("Error loading responses:", error);
         toaster.create({
           title: "Error Loading Surveys",
-          description: "An error occurred while loading survey responses.",
+          description: getStudentFacingErrorMessage(error),
           type: "error"
         });
       } finally {
