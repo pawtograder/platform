@@ -1,4 +1,9 @@
 import { createAdminClient } from "@/utils/supabase/client";
+import {
+  fetchDefaultGradeTargetStudentProfileId,
+  fetchRubricCheckIdsRequiringTargetStudentProfileId,
+  resolveTargetStudentProfileIdForRubricComment
+} from "@/lib/rubricCommentTargetStudentProfileId";
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
@@ -29,46 +34,96 @@ export type TestingUser = {
   password: string;
 };
 
+/**
+ * Supabase CLI 2.71.1+ uses ES256 JWT signing. If your .env.local has HS256 keys
+ * (from CLI < 2.71 or an older local project), the API rejects them with
+ * "signing method HS256 is invalid". You must use ES256 keys:
+ * 1. Upgrade CLI: npm install supabase@latest  (or use npx supabase@latest)
+ * 2. Full reset (wipes local DB): npx supabase stop --no-backup && npx supabase start
+ * 3. Export keys: npx supabase status -o env
+ * 4. Update .env.local with SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+ */
+function ensureServiceRoleKeyNotHS256(): void {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return;
+  const parts = key.split(".");
+  if (parts.length < 2) return;
+  try {
+    const b64 = parts[0].replace(/-/g, "+").replace(/_/g, "/");
+    const header = JSON.parse(Buffer.from(b64, "base64").toString("utf8")) as { alg?: string };
+    if (header.alg === "HS256") {
+      throw new Error(
+        "SUPABASE_SERVICE_ROLE_KEY is HS256; local Supabase expects ES256. " +
+          "Upgrade CLI (npm install supabase@latest), then run: " +
+          "npx supabase stop --no-backup && npx supabase start && npx supabase status -o env " +
+          "and update .env.local with the new keys."
+      );
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("SUPABASE_SERVICE_ROLE_KEY")) throw e;
+    throw new Error(`Malformed SUPABASE_SERVICE_ROLE_KEY: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+// ensureServiceRoleKeyNotHS256();
+
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 1000): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const isTransient = msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ETIMEDOUT");
+      if (!isTransient || attempt === maxRetries) throw error;
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      console.log(`Transient error (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${msg}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("withRetry: unreachable");
+}
+
 export async function createClass({
   name,
   rateLimitManager
 }: { name?: string; rateLimitManager?: RateLimitManager } = {}) {
-  const className = name ?? `E2E Test Class`;
-  const { data: classDataList, error: classError } = await (
-    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
-  ).trackAndLimit("classes", () =>
-    supabase
-      .from("classes")
-      .insert({
-        name: className,
-        slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
-        github_org: "pawtograder-playground",
-        start_date: addDays(new Date(), -30).toISOString(),
-        end_date: addDays(new Date(), 180).toISOString(),
-        late_tokens_per_student: 10,
-        time_zone: "America/New_York"
-      })
-      .select("*")
-  );
-  if (classError) {
-    throw new Error(`Failed to create class: ${classError.message}`);
-  }
-  const classData = classDataList[0];
-  if (!classData) {
-    throw new Error("Failed to create class");
-  }
-  //Update slug to include class_id
-  const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
-    supabase
-      .from("classes")
-      .update({ slug: `${classData.slug}-${classData.id}` })
-      .eq("id", classData.id)
-      .select("id")
-  );
-  if (classError2) {
-    throw new Error(`Failed to update class slug: ${classError2.message}`);
-  }
-  return classData;
+  return withRetry(async () => {
+    const className = name ?? `E2E Test Class`;
+    const { data: classDataList, error: classError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("classes", () =>
+      supabase
+        .from("classes")
+        .insert({
+          name: className,
+          slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
+          github_org: "pawtograder-playground",
+          start_date: addDays(new Date(), -30).toISOString(),
+          end_date: addDays(new Date(), 180).toISOString(),
+          late_tokens_per_student: 10,
+          time_zone: "America/New_York"
+        })
+        .select("*")
+    );
+    if (classError) {
+      throw new Error(`Failed to create class: ${classError.message}`);
+    }
+    const classData = classDataList[0];
+    if (!classData) {
+      throw new Error("Failed to create class");
+    }
+    //Update slug to include class_id
+    const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
+      supabase
+        .from("classes")
+        .update({ slug: `${classData.slug}-${classData.id}` })
+        .eq("id", classData.id)
+        .select("id")
+    );
+    if (classError2) {
+      throw new Error(`Failed to update class slug: ${classError2.message}`);
+    }
+    return classData;
+  });
 }
 let sectionIdx = 1;
 export async function createClassSection({
@@ -1768,6 +1823,11 @@ export async function createRegradeRequest(
     closedPoints?: number;
   }
 ) {
+  const target_student_profile_id = await resolveTargetStudentProfileIdForRubricComment(
+    supabase,
+    submission_id,
+    rubric_check_id
+  );
   // First create a submission comment to reference
   const { data: commentData, error: commentError } = await supabase
     .from("submission_comments")
@@ -1778,7 +1838,8 @@ export async function createRegradeRequest(
       points: options?.commentPoints ?? Math.floor(Math.random() * 10),
       class_id: class_id,
       rubric_check_id,
-      released: true
+      released: true,
+      target_student_profile_id
     })
     .select("*")
     .single();
@@ -1869,6 +1930,15 @@ export async function gradeSubmission(
       throw new Error(`Failed to get rubric checks: ${checksError.message}`);
     }
 
+    const individualCheckIds = await fetchRubricCheckIdsRequiringTargetStudentProfileId(
+      supabase,
+      (rubricChecks ?? []).map((c) => c.id)
+    );
+    const defaultIndividualTarget =
+      individualCheckIds.size > 0
+        ? await fetchDefaultGradeTargetStudentProfileId(supabase, reviewInfo.submission_id)
+        : null;
+
     // Get submission files for annotation comments
     const { data: submissionFiles } = await supabase
       .from("submission_files")
@@ -1901,6 +1971,11 @@ export async function gradeSubmission(
             const lineRandomValue = options?.lineNumberRandomizer?.() ?? Math.random();
             const lineNumber = Math.floor(lineRandomValue * 5) + 1; // Random line number 1-5
 
+            const targetField =
+              individualCheckIds.has(check.id) && defaultIndividualTarget
+                ? { target_student_profile_id: defaultIndividualTarget }
+                : {};
+
             await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
               "submission_file_comments",
               () =>
@@ -1916,12 +1991,17 @@ export async function gradeSubmission(
                     class_id: reviewInfo.class_id,
                     released: true,
                     rubric_check_id: check.id,
-                    submission_review_id: grading_review_id
+                    submission_review_id: grading_review_id,
+                    ...targetField
                   })
                   .select("id")
             );
           }
         } else {
+          const targetField =
+            individualCheckIds.has(check.id) && defaultIndividualTarget
+              ? { target_student_profile_id: defaultIndividualTarget }
+              : {};
           // Create submission comment (general comment)
           await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("submission_comments", () =>
             supabase
@@ -1934,7 +2014,8 @@ export async function gradeSubmission(
                 class_id: reviewInfo.class_id,
                 released: true,
                 rubric_check_id: check.id,
-                submission_review_id: grading_review_id
+                submission_review_id: grading_review_id,
+                ...targetField
               })
               .select("id")
           );

@@ -135,6 +135,66 @@ async function retryWithBackoff<T>(
 }
 
 const createContentLimiters = new Map<string, Bottleneck>();
+
+function buildRedisBottleneck(
+  id: string,
+  opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
+  clearDatastore: boolean
+): Bottleneck {
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL")!;
+  const host = upstashUrl.replace("https://", "");
+  const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN")!;
+  return new Bottleneck({
+    id,
+    ...opts,
+    datastore: "ioredis",
+    timeout: 600000,
+    clearDatastore,
+    clientOptions: { host, password, username: "default", tls: {}, port: 6379 },
+    Redis
+  });
+}
+
+function withSettingsKeyRecovery(
+  limiter: Bottleneck,
+  id: string,
+  opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
+  cache: Map<string, Bottleneck>,
+  cacheKey: string
+): void {
+  limiter.on("error", (err: Error) => {
+    if (!String(err).includes("SETTINGS_KEY_NOT_FOUND")) {
+      console.error(`[rate-limiter] ${id}:`, err);
+      return;
+    }
+    if (cache.get(cacheKey) !== limiter) {
+      return;
+    }
+    console.warn(`[rate-limiter] Settings keys missing for ${id}, reinitializing`);
+    const rotateMessage = `[${id}] SETTINGS_KEY_ROTATED after SETTINGS_KEY_NOT_FOUND; retry via getCreateContentLimiter`;
+    const fresh = buildRedisBottleneck(id, opts, true);
+    withSettingsKeyRecovery(fresh, id, opts, cache, cacheKey);
+    cache.set(cacheKey, fresh);
+    void limiter
+      .stop({
+        dropWaitingJobs: true,
+        dropErrorMessage: rotateMessage,
+        enqueueErrorMessage: rotateMessage
+      })
+      .then(() => {
+        limiter.disconnect();
+      })
+      .catch((e: unknown) => {
+        console.error(`[rate-limiter] stop/disconnect after SETTINGS_KEY rotation failed for ${id}:`, e);
+        try {
+          limiter.disconnect();
+        } catch {
+          /* ignore */
+        }
+      });
+  });
+}
+
 /**
  * GitHub limits the number of content-creating requests per organization per-minute and per-hour
  * This includes repository creation and organization invitations (same rate limit bucket)
@@ -145,41 +205,16 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   const key = org || "unknown";
   const existing = createContentLimiters.get(key);
   if (existing) return existing;
+  const id = `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
+  const opts = { reservoir: 50, maxConcurrent: 50, reservoirRefreshAmount: 50, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 50,
-      reservoirRefreshAmount: 50,
-      reservoirRefreshInterval: 60_000,
-      maxConcurrent: 50,
-      datastore: "ioredis",
-      timeout: 600000, // 10 minutes
-      clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default",
-        tls: {},
-        port: 6379
-      },
-      Redis
-    });
-    limiter.on("error", (err: Error) => console.error(err));
+  if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+    limiter = buildRedisBottleneck(id, opts, false);
+    withSettingsKeyRecovery(limiter, id, opts, createContentLimiters, key);
   } else {
     console.log("No Upstash URL or token found, using local limiter");
     Sentry.captureMessage("No Upstash URL or token found, using local limiter");
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 10,
-      maxConcurrent: 10,
-      reservoirRefreshAmount: 10,
-      reservoirRefreshInterval: 60_000
-    });
+    limiter = new Bottleneck({ id, ...opts });
   }
   createContentLimiters.set(key, limiter);
   return limiter;
@@ -734,20 +769,40 @@ export async function createRepo(
     );
     console.log(JSON.stringify(resp.headers, null, 2));
     scope?.setTag("github_operation", "create_repo_request_done");
-    //Disable squash merging, make template
+    // Enable squash merging; set template flag when applicable
     scope?.setTag("github_operation", "patch_repo_settings");
     await retryWithBackoff(
       () =>
         octokit.request("PATCH /repos/{owner}/{repo}", {
           owner: org,
           repo: repoName,
-          allow_squash_merge: false,
+          allow_squash_merge: true,
           is_template: is_template_repo ? true : false
         }),
       3, // maxRetries
       1000, // baseDelayMs
       scope
     );
+    // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+    scope?.setTag("github_operation", "enable_actions");
+    try {
+      await retryWithBackoff(
+        () =>
+          octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+            owner: org,
+            repo: repoName,
+            enabled: true,
+            allowed_actions: "all"
+          }),
+        3,
+        1000,
+        scope
+      );
+    } catch (actionsErr) {
+      console.error("Error enabling GitHub Actions", actionsErr);
+      scope?.setTag("enable_actions_failed", "true");
+      Sentry.captureException(actionsErr, scope);
+    }
     //Get the head SHA
     scope?.setTag("github_operation", "get_head_sha");
     scope?.setTag("ref", "heads/main");
@@ -793,6 +848,45 @@ export async function createRepo(
           scope
         );
         scope?.setTag("head_sha", heads.data.object.sha);
+        // Match settings we apply on fresh creates (e.g. squash merge).
+        try {
+          await retryWithBackoff(
+            () =>
+              octokit.request("PATCH /repos/{owner}/{repo}", {
+                owner: org,
+                repo: repoName,
+                allow_squash_merge: true,
+                is_template: is_template_repo ? true : false
+              }),
+            3,
+            1000,
+            scope
+          );
+        } catch (patchErr) {
+          console.error("Error patching repo settings for pre-existing repo", patchErr);
+          scope?.setTag("patch_existing_repo_settings_failed", "true");
+          Sentry.captureException(patchErr, scope);
+        }
+        // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+        scope?.setTag("github_operation", "enable_actions");
+        try {
+          await retryWithBackoff(
+            () =>
+              octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+                owner: org,
+                repo: repoName,
+                enabled: true,
+                allowed_actions: "all"
+              }),
+            3,
+            1000,
+            scope
+          );
+        } catch (actionsErr) {
+          console.error("Error enabling GitHub Actions for pre-existing repo", actionsErr);
+          scope?.setTag("enable_actions_failed", "true");
+          Sentry.captureException(actionsErr, scope);
+        }
         return heads.data.object.sha as string;
       } else {
         throw e;

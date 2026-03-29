@@ -2,6 +2,7 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
+  IndividualScores,
   SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
@@ -29,7 +30,7 @@ import {
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
   useAssignmentGroupWithMembers,
@@ -51,6 +52,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { activateSubmission } from "@/lib/edgeFunctions";
+import { submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
 import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
@@ -69,6 +71,7 @@ import {
   FaCheckCircle,
   FaFile,
   FaFileExport,
+  FaGithub,
   FaHistory,
   FaInfo,
   FaQuestionCircle,
@@ -81,7 +84,10 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { linkToSubPage } from "./utils";
+import {
+  getSubmissionFilesOrResultsTab,
+  linkToSubPage
+} from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -1278,6 +1284,144 @@ function UnGradedGradingSummary() {
   );
 }
 
+function isIndividualScores(value: unknown): value is IndividualScores {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(
+    (v) => typeof v === "number" || v === undefined || v === null
+  );
+}
+
+function isNonEmptyPerStudentGradingTotals(value: unknown): value is IndividualScores {
+  return isIndividualScores(value) && Object.keys(value as Record<string, unknown>).length > 0;
+}
+
+/** Full per-student totals (shared hand rubric + autograder + tweak + individual/assign-to-student slice). */
+function PerStudentGradingTotalsDisplay({
+  totals,
+  individualScores,
+  sharedBase,
+  maxPoints
+}: {
+  totals: IndividualScores;
+  individualScores: IndividualScores | null;
+  sharedBase: number | null | undefined;
+  maxPoints: number | null;
+}) {
+  const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const entries = Object.entries(totals).filter((entry): entry is [string, number] => typeof entry[1] === "number");
+  if (entries.length === 0) return null;
+
+  entries.sort(([a], [b]) => {
+    if (a === private_profile_id) return -1;
+    if (b === private_profile_id) return 1;
+    return a.localeCompare(b);
+  });
+
+  const resolvedSharedBase = sharedBase != null && Number.isFinite(Number(sharedBase)) ? Number(sharedBase) : null;
+
+  return (
+    <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
+      <Text fontWeight="semibold" fontSize="sm" mb={1}>
+        Scores by student
+      </Text>
+      <Text fontSize="xs" color="text.muted" mb={2}>
+        <strong>Shared</strong> is the same for everyone (whole-group rubric + autograder + tweak).{" "}
+        <strong>Individual</strong> is that student&apos;s personal / assigned rubric slice. <strong>Total</strong> is
+        capped to the assignment maximum when that setting is on.
+      </Text>
+      <VStack align="stretch" gap={2}>
+        {entries.map(([profileId, totalScore]) => {
+          const isMe = profileId === private_profile_id;
+          const rawInd = individualScores?.[profileId];
+          const individualNum = typeof rawInd === "number" && Number.isFinite(rawInd) ? rawInd : 0;
+          const sharedNum = resolvedSharedBase != null ? resolvedSharedBase : totalScore - individualNum;
+          const isCapped =
+            maxPoints != null && resolvedSharedBase != null && totalScore + 1e-6 < resolvedSharedBase + individualNum;
+          const totalLabel = maxPoints != null ? `${totalScore}/${maxPoints}` : String(totalScore);
+
+          return (
+            <Box
+              key={profileId}
+              w="100%"
+              pb={2}
+              borderBottomWidth="1px"
+              borderColor="border.muted"
+              _last={{ borderBottomWidth: "0", pb: 0 }}
+            >
+              <HStack mb={1}>
+                <PersonName uid={profileId} />
+                {isMe && (
+                  <Text fontSize="xs" color="fg.info" fontWeight="bold">
+                    (You)
+                  </Text>
+                )}
+              </HStack>
+              <DataListRoot orientation="horizontal" size="sm">
+                <DataListItem label="Shared" value={String(sharedNum)} />
+                <DataListItem label="Individual" value={String(individualNum)} />
+                <DataListItem
+                  label="Total"
+                  value={
+                    <Text as="span" fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                      {totalLabel}
+                    </Text>
+                  }
+                />
+              </DataListRoot>
+              {isCapped && (
+                <Text fontSize="xs" color="text.muted" mt={1}>
+                  Total capped at assignment maximum.
+                </Text>
+              )}
+            </Box>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
+function IndividualScoresDisplay({ individualScores }: { individualScores: IndividualScores }) {
+  const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const entries = Object.entries(individualScores).filter((entry): entry is [string, number] => entry[1] !== undefined);
+  if (entries.length === 0) return null;
+
+  const myEntry = entries.find(([profileId]) => profileId === private_profile_id);
+  const sortedEntries = isGraderOrInstructor ? entries : myEntry ? [myEntry] : [];
+
+  if (sortedEntries.length === 0) return null;
+
+  return (
+    <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
+      <Text fontWeight="semibold" fontSize="sm" mb={2}>
+        Individual Scores
+      </Text>
+      <VStack align="start" gap={1}>
+        {sortedEntries.map(([profileId, score]) => {
+          const isMe = profileId === private_profile_id;
+          return (
+            <HStack key={profileId} w="100%" justifyContent="space-between">
+              <HStack>
+                <PersonName uid={profileId} />
+                {isMe && !isGraderOrInstructor && (
+                  <Text fontSize="xs" color="fg.info" fontWeight="bold">
+                    (You)
+                  </Text>
+                )}
+              </HStack>
+              <Text fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                {score}
+              </Text>
+            </HStack>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -1299,6 +1443,10 @@ function RubricView() {
   }
   const gradingReview = useSubmissionReviewOrGradingReview(reviewId);
   const { assignment } = useAssignmentController();
+
+  const showPerStudentGradingTotals =
+    gradingReview?.per_student_grading_totals &&
+    isNonEmptyPerStudentGradingTotals(gradingReview.per_student_grading_totals);
 
   return (
     <Box
@@ -1347,13 +1495,31 @@ function RubricView() {
             )}
           </Box>
         )}
-        {assignment.total_points !== null &&
+        {!showPerStudentGradingTotals &&
+          assignment.total_points !== null &&
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
             <Heading size="xl">
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
+          )}
+        {showPerStudentGradingTotals && (
+          <PerStudentGradingTotalsDisplay
+            totals={gradingReview.per_student_grading_totals as IndividualScores}
+            individualScores={
+              gradingReview.individual_scores && isIndividualScores(gradingReview.individual_scores)
+                ? gradingReview.individual_scores
+                : null
+            }
+            sharedBase={gradingReview.per_student_grading_shared_base}
+            maxPoints={assignment.total_points}
+          />
+        )}
+        {!showPerStudentGradingTotals &&
+          gradingReview?.individual_scores &&
+          isIndividualScores(gradingReview.individual_scores) && (
+            <IndividualScoresDisplay individualScores={gradingReview.individual_scores} />
           )}
         <SubmissionReviewScoreTweak />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
@@ -1388,6 +1554,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const { course_id } = useParams();
   const submission = useSubmission();
+  const hasGraderOutput = submissionHasGraderOutput(submission.grader_results);
+  const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
+  const activeSubPage = explicitSubPage ?? (hasGraderOutput ? "results" : "files");
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
@@ -1415,7 +1584,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
           Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
-          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={assignment} />
+          <AdjustDueDateDialog
+            student_id={submission.profile_id || ""}
+            group={assignmentGroupWithMembers || undefined}
+            assignment={assignment}
+          />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
             <Alert status="warning">
@@ -1432,19 +1605,26 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             <HStack gap={1}>
               {submission.is_active && <ActiveSubmissionIcon />}
               {assignmentGroupWithMembers ? (
-                <HStack gap={1}>
-                  Group {assignmentGroupWithMembers.name} (
-                  {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                    <HStack key={member.profile_id} gap={1}>
-                      <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
-                      <StudentSummaryTrigger
-                        key={member.profile_id}
-                        student_id={member.profile_id}
-                        course_id={parseInt(course_id as string, 10)}
-                      />
-                    </HStack>
-                  ))}
-                  )
+                <HStack gap={1} flexWrap="wrap" alignItems="baseline">
+                  <HStack gap={1}>
+                    Group {assignmentGroupWithMembers.name} (
+                    {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
+                      <HStack key={member.profile_id} gap={1}>
+                        <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
+                        <StudentSummaryTrigger
+                          key={member.profile_id}
+                          student_id={member.profile_id}
+                          course_id={parseInt(course_id as string, 10)}
+                        />
+                      </HStack>
+                    ))}
+                    )
+                  </HStack>
+                  {assignmentGroupWithMembers.mentor_profile_id && (
+                    <Text fontSize="sm" color="fg.muted">
+                      Mentor: <PersonName uid={assignmentGroupWithMembers.mentor_profile_id} showAvatar={false} />
+                    </Text>
+                  )}
                 </HStack>
               ) : (
                 <>
@@ -1500,29 +1680,30 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </HStack>
       </Flex>
 
-      <Box
-        p={0}
-        m={0}
-        borderBottomColor="border.emphasized"
-        borderBottomWidth="2px"
-        bg="bg.muted"
-        defaultValue="results"
-      >
+      <Box p={0} m={0} borderBottomColor="border.emphasized" borderBottomWidth="2px" bg="bg.muted">
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
-          <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
+          <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
-          <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
+          <Button variant={activeSubPage === "files" ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files
           </Button>
         </NextLink>
+        {isGraderOrInstructor && assignment.enable_repo_analytics && (
+          <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
+            <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
+              <Icon as={FaGithub} />
+              Repo Analytics
+            </Button>
+          </NextLink>
+        )}
       </Box>
       <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4}>
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>
           {children}
         </Box>
         <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>

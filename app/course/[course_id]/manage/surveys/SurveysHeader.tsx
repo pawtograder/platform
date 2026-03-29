@@ -17,9 +17,14 @@ export default function SurveysHeader({ courseId }: SurveysHeaderProps) {
         Manage Surveys
       </Heading>
       {isInstructor && (
-        <Button size="sm" asChild variant="solid" bg="green.500" color="white" _hover={{ bg: "green.600" }}>
-          <NextLink href={`/course/${courseId}/manage/surveys/new`}>+ Create New Survey</NextLink>
-        </Button>
+        <HStack gap={2}>
+          <Button size="sm" asChild variant="outline">
+            <NextLink href={`/course/${courseId}/manage/surveys/series`}>Manage Series</NextLink>
+          </Button>
+          <Button size="sm" asChild variant="solid" bg="green.500" color="white" _hover={{ bg: "green.600" }}>
+            <NextLink href={`/course/${courseId}/manage/surveys/new`}>+ Create New Survey</NextLink>
+          </Button>
+        </HStack>
       )}
     </HStack>
   );

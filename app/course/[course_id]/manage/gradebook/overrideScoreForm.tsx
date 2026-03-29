@@ -99,7 +99,8 @@ export function OverrideScoreForm({
         {!isAutoCalculated && (
           <HStack gap={2} align="stretch">
             <Field label="Score" errorText={errors.score?.message?.toString()} flexGrow={1}>
-              <Input type="number" step="any" {...register("score", { valueAsNumber: true })} />
+              {/* step after register: default step=1 blocks decimals (issue #533) */}
+              <Input type="number" {...register("score", { valueAsNumber: true })} step="any" />
             </Field>
             {renderer && (
               <Field label="New Score" flexGrow={0} flexShrink={1}>
@@ -141,8 +142,8 @@ export function OverrideScoreForm({
               <Field label="Score" errorText={errors.score_override?.message?.toString()} flex={1} minW="5em">
                 <Input
                   type="number"
-                  step="any"
                   {...register("score_override", { valueAsNumber: true })}
+                  step="any"
                   placeholder={studentGradebookColumn.score?.toString()}
                 />
               </Field>

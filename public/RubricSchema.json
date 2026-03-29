@@ -72,6 +72,24 @@
         "is_required": {
           "type": "boolean"
         },
+        "kpi_category": {
+          "anyOf": [
+            {
+              "enum": [
+                "commits",
+                "issue_comments",
+                "issues_closed",
+                "issues_opened",
+                "pr_review_comments",
+                "prs_opened"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "max_annotations": {
           "type": "number"
         },
@@ -172,6 +190,14 @@
         },
         "id": {
           "type": "number"
+        },
+        "is_individual_grading": {
+          "type": "boolean",
+          "description": "When true, this rubric part is graded per-student in a group submission"
+        },
+        "is_assign_to_student": {
+          "type": "boolean",
+          "description": "When true, the grader selects which student this part applies to (or skips it)"
         },
         "name": {
           "type": "string"

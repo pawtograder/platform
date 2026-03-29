@@ -1,3 +1,4 @@
+import { resolveTargetStudentProfileIdForRubricComment } from "@/lib/rubricCommentTargetStudentProfileId";
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import type { Page, Locator } from "@playwright/test";
@@ -248,6 +249,16 @@ test.describe("Gradebook Page - Comprehensive", () => {
       class_id: course.id
     });
 
+    const check0Id = assignments[0].rubricChecks.find((check) => check.is_annotation)?.id;
+    const check1Id = assignments[1].rubricChecks.find((check) => check.is_annotation)?.id;
+    const target1 =
+      check0Id != null
+        ? await resolveTargetStudentProfileIdForRubricComment(supabase, submission1.submission_id, check0Id)
+        : null;
+    const target2 =
+      check1Id != null
+        ? await resolveTargetStudentProfileIdForRubricComment(supabase, submission2.submission_id, check1Id)
+        : null;
     const { error: submissionComment1Error } = await supabase
       .from("submission_comments")
       .insert({
@@ -256,8 +267,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
         author: instructor!.private_profile_id,
         comment: "Good work on this aspect!",
         submission_review_id: submission1.grading_review_id,
-        rubric_check_id: assignments[0].rubricChecks.find((check) => check.is_annotation)?.id,
-        points: 90
+        rubric_check_id: check0Id,
+        points: 90,
+        target_student_profile_id: target1
       })
       .select("id");
     const { error: submissionComment2Error } = await supabase
@@ -268,8 +280,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
         author: instructor!.private_profile_id,
         comment: "Good work on this aspect!",
         submission_review_id: submission2.grading_review_id,
-        rubric_check_id: assignments[1].rubricChecks.find((check) => check.is_annotation)?.id,
-        points: 80
+        rubric_check_id: check1Id,
+        points: 80,
+        target_student_profile_id: target2
       })
       .select("id");
     if (submissionComment1Error || submissionComment2Error) {
@@ -362,6 +375,11 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to create code walk review: ${submissionCodeWalkReview.error.message}`);
     }
     //Throw in a quick review for the code walk on submission 1
+    const codeWalkTarget = await resolveTargetStudentProfileIdForRubricComment(
+      supabase,
+      submission1.submission_id,
+      codeWalkCheck.data!.id
+    );
     const submissionCodeWalkComment = await supabase.from("submission_comments").insert({
       submission_id: submission1.submission_id,
       class_id: course.id,
@@ -369,7 +387,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
       comment: "Good work on this aspect!",
       rubric_check_id: codeWalkCheck.data!.id,
       points: 90,
-      submission_review_id: submissionCodeWalkReview.data!.id
+      submission_review_id: submissionCodeWalkReview.data!.id,
+      target_student_profile_id: codeWalkTarget
     });
     if (submissionCodeWalkComment.error) {
       throw new Error(`Failed to create code walk comment: ${submissionCodeWalkComment.error.message}`);
@@ -463,6 +482,19 @@ test.describe("Gradebook Page - Comprehensive", () => {
       .click();
     await page.waitForLoadState("networkidle");
     await waitForVirtualizerIdle(page);
+  });
+
+  test("Issue #533: instructor can enter a decimal score in a manual gradebook cell", async ({ page }) => {
+    const studentName = students[0].private_profile_name;
+    await waitForVirtualizerIdle(page);
+    const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
+    const partCell = await waitForStableLocator(page, getPartCell);
+    await partCell.click();
+    const scoreInput = page.locator('input[name="score"]');
+    await scoreInput.fill("50.5");
+    await expect(scoreInput).toHaveValue("50.5");
+    await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(partCell).toHaveText(/50\.5/);
   });
 
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {

@@ -166,10 +166,17 @@ export async function assignmentGroupCopyGroupsFromAssignment(
   params: FunctionTypes.AssignmentGroupCopyGroupsFromAssignmentRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-group-copy-groups-from-assignment", { body: params });
-  const { error } = data as FunctionTypes.GenericResponse;
+  const { data, error } = await (supabase.rpc as CallableFunction)("copy_groups_from_assignment", {
+    p_class_id: params.class_id,
+    p_source_assignment_id: params.source_assignment_id,
+    p_target_assignment_id: params.target_assignment_id
+  });
   if (error) {
-    throw new EdgeFunctionError(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: error.message,
+      recoverable: false
+    });
   }
   return data as unknown;
 }
