@@ -1,19 +1,19 @@
 "use client";
 
-import { Box, Container, Heading, Text, VStack, HStack, Button, Input, Badge, Icon } from "@chakra-ui/react";
-import { formatInTimeZone } from "date-fns-tz";
-import { TZDate } from "@date-fns/tz";
-import { isWithinInterval, parseISO, differenceInDays, differenceInHours, isPast } from "date-fns";
-import { useRouter } from "next/navigation";
-import { Model } from "survey-core";
-import { useMemo, useCallback, useState, useEffect } from "react";
-import { FiX, FiFilter } from "react-icons/fi";
-import type { SurveyResponseWithProfile, Survey } from "@/types/survey";
+import SurveyAnalytics from "@/components/survey/SurveyAnalytics";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSurveyResponses } from "@/hooks/useCourseController";
-import SurveyAnalytics from "@/components/survey/SurveyAnalytics";
-
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
+import type { Survey, SurveyResponseWithProfile } from "@/types/survey";
+import { Badge, Box, Button, Container, Heading, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
+import { differenceInDays, differenceInHours, isPast, isWithinInterval, parseISO } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FiFilter, FiX } from "react-icons/fi";
+import { Model } from "survey-core";
 
 type SurveyResponsesViewProps = {
   courseId: string;
@@ -171,6 +171,14 @@ export default function SurveyResponsesView({
   const { names: allQuestionNames, titles: questionTitles } = useMemo(() => {
     return getOrderedQuestions(surveyJson);
   }, [surveyJson]);
+
+  const visibleQuestions = useMemo(() => {
+    if (selectedQuestions.length === 0) {
+      return allQuestionNames;
+    }
+    const selected = new Set(selectedQuestions);
+    return allQuestionNames.filter((name) => selected.has(name));
+  }, [allQuestionNames, selectedQuestions]);
 
   // Filter responses based on active filters
   const filteredResponses = useMemo(() => {
@@ -515,6 +523,100 @@ export default function SurveyResponsesView({
         seriesId={seriesId ?? undefined}
         totalStudents={totalStudents}
       />
+
+      {/* Responses Table */}
+      <Box border="1px solid" borderColor="border" borderRadius="lg" overflow="hidden" overflowX="auto">
+        <Table.Root variant="outline" size="md">
+          <Table.Header>
+            <Table.Row bg="bg.subtle">
+              {!anonymousMode && (
+                <>
+                  <Table.ColumnHeader
+                    color="fg.muted"
+                    fontSize="xs"
+                    fontWeight="semibold"
+                    textTransform="uppercase"
+                    py={3}
+                    pl={6}
+                  >
+                    STUDENT NAME
+                  </Table.ColumnHeader>
+                  <Table.ColumnHeader
+                    color="fg.muted"
+                    fontSize="xs"
+                    fontWeight="semibold"
+                    textTransform="uppercase"
+                    py={3}
+                  >
+                    SUBMITTED AT
+                  </Table.ColumnHeader>
+                </>
+              )}
+              {visibleQuestions.map((questionName, index) => (
+                <Table.ColumnHeader
+                  key={questionName}
+                  color="fg.muted"
+                  fontSize="xs"
+                  fontWeight="semibold"
+                  textTransform="uppercase"
+                  py={3}
+                  pl={anonymousMode && index === 0 ? 6 : undefined}
+                  pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
+                >
+                  {questionTitles[questionName] || questionName}
+                </Table.ColumnHeader>
+              ))}
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {filteredResponses.length === 0 ? (
+              <Table.Row bg="bg.muted" borderColor="border">
+                <Table.Cell colSpan={(anonymousMode ? 0 : 2) + visibleQuestions.length} py={4} textAlign="center">
+                  <Text color="fg.muted">
+                    {totalResponses === 0
+                      ? "Students haven't submitted any responses to this survey."
+                      : "No responses match the current filters."}
+                  </Text>
+                </Table.Cell>
+              </Table.Row>
+            ) : (
+              filteredResponses.map((response) => {
+                const answers = (response.response ?? {}) as Record<string, unknown>;
+                return (
+                  <Table.Row key={response.id} bg="bg.muted" borderColor="border">
+                    {!anonymousMode && (
+                      <>
+                        <Table.Cell py={4} pl={6}>
+                          <Text color="fg">{response.profiles?.name || "N/A"}</Text>
+                        </Table.Cell>
+                        <Table.Cell py={4}>
+                          <Text color="fg">
+                            {response.submitted_at ? (
+                              <TimeZoneAwareDate date={response.submitted_at} format="full" />
+                            ) : (
+                              "—"
+                            )}
+                          </Text>
+                        </Table.Cell>
+                      </>
+                    )}
+                    {visibleQuestions.map((questionName, index) => (
+                      <Table.Cell
+                        key={questionName}
+                        py={4}
+                        pl={anonymousMode && index === 0 ? 6 : undefined}
+                        pr={questionName === visibleQuestions[visibleQuestions.length - 1] ? 6 : undefined}
+                      >
+                        <Text color="fg">{formatResponseValue(answers[questionName])}</Text>
+                      </Table.Cell>
+                    ))}
+                  </Table.Row>
+                );
+              })
+            )}
+          </Table.Body>
+        </Table.Root>
+      </Box>
     </Container>
   );
 }

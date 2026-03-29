@@ -18,7 +18,6 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { format, formatDistanceToNow, isPast } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import { FaClipboardList, FaExclamationCircle } from "react-icons/fa";
 
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
@@ -26,7 +25,7 @@ import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
-import { TZDate } from "@date-fns/tz";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -146,7 +145,6 @@ export default async function StudentDashboard({
       : Promise.resolve({ data: null })
   ]);
 
-  const courseTz = course?.time_zone ?? "America/New_York";
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
 
   const nowMs = Date.now();
@@ -379,9 +377,11 @@ export default async function StudentDashboard({
                     <DataListItem>
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
-                        {assignment.due_date
-                          ? formatInTimeZone(new TZDate(assignment.due_date), courseTz, "Pp")
-                          : "No due date"}
+                        {assignment.due_date ? (
+                          <TimeZoneAwareDate date={assignment.due_date} format="Pp" />
+                        ) : (
+                          "No due date"
+                        )}
                       </DataListItemValue>
                     </DataListItem>
                     <DataListItem>
@@ -482,9 +482,7 @@ export default async function StudentDashboard({
                       <DataListItem>
                         <DataListItemLabel>Due</DataListItemLabel>
                         <DataListItemValue>
-                          {survey.due_date
-                            ? formatInTimeZone(new TZDate(survey.due_date), courseTz, "Pp")
-                            : "No due date"}
+                          {survey.due_date ? <TimeZoneAwareDate date={survey.due_date} format="Pp" /> : "No due date"}
                         </DataListItemValue>
                       </DataListItem>
 
@@ -492,7 +490,7 @@ export default async function StudentDashboard({
                         <DataListItem>
                           <DataListItemLabel>Submitted</DataListItemLabel>
                           <DataListItemValue>
-                            {formatInTimeZone(new TZDate(response.submitted_at), courseTz, "Pp")}
+                            <TimeZoneAwareDate date={response.submitted_at} format="Pp" />
                           </DataListItemValue>
                         </DataListItem>
                       )}

@@ -1,15 +1,15 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useCourse, useCourseController } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Icon, Table, Text, VStack } from "@chakra-ui/react";
-import { formatInTimeZone } from "date-fns-tz";
 import { useMemo } from "react";
 import { FaPlus, FaTrash } from "react-icons/fa";
 import AddExceptionModal, { AddExtensionDefaults } from "../modals/addExceptionModal";
@@ -37,7 +37,6 @@ export default function AssignmentExceptionsTable({
   studentFilter,
   tokenFilter
 }: AssignmentExceptionsTableProps) {
-  const course = useCourse();
   const { assignmentDueDateExceptions } = useCourseController();
   // // Load assignment groups with their members for this assignment
   const assignmentGroups = useAssignmentGroupsWithMembers(assignment.id);
@@ -110,7 +109,7 @@ export default function AssignmentExceptionsTable({
           <Heading size="sm">{assignment.title || `Assignment #${assignment.id}`}</Heading>
           <Text fontSize="sm" color="fg.muted">
             {exceptions?.length || 0} exceptions, normal due date:{" "}
-            {formatInTimeZone(assignment.due_date, course.time_zone || "America/New_York", "MMM d h:mm aaa")}
+            <TimeZoneAwareDate date={assignment.due_date} format="MMM d, h:mm a" />
             {assignment.minutes_due_after_lab !== null &&
               ` (auto-calculated for students as ${assignment.minutes_due_after_lab} minutes after lab)`}
           </Text>
@@ -190,9 +189,7 @@ export default function AssignmentExceptionsTable({
                 <Table.Cell>{r.creator_id ? <PersonName uid={r.creator_id} /> : ""}</Table.Cell>
                 <Table.Cell>{r.note}</Table.Cell>
                 <Table.Cell>
-                  {new Date(r.created_at).toLocaleString("en-US", {
-                    timeZone: course.time_zone || "America/New_York"
-                  })}
+                  <TimeZoneAwareDate date={r.created_at} format="compact" />
                 </Table.Cell>
                 <Table.Cell>
                   <HStack gap={2}>
