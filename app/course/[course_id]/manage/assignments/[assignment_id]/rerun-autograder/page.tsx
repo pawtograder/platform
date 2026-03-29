@@ -229,14 +229,8 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
           if (!row.original.created_at) return false;
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const filterArray = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const formatted = formatInTimeZone(
-            new Date(row.original.created_at),
-            timeZone,
-            "M/d/yyyy, h:mm:ss a zzz"
-          );
-          return filterArray.some((filter: string) =>
-            formatted.toLowerCase().includes(filter.toLowerCase())
-          );
+          const formatted = formatInTimeZone(new Date(row.original.created_at), timeZone, "M/d/yyyy, h:mm:ss a zzz");
+          return filterArray.some((filter: string) => formatted.toLowerCase().includes(filter.toLowerCase()));
         }
       },
       {

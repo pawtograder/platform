@@ -6,19 +6,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSurveyResponses } from "@/hooks/useCourseController";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Survey, SurveyResponseWithProfile } from "@/types/survey";
-import {
-  Badge,
-  Box,
-  Button,
-  Container,
-  Heading,
-  HStack,
-  Icon,
-  Input,
-  Table,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { Badge, Box, Button, Container, Heading, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { differenceInDays, differenceInHours, isPast, isWithinInterval, parseISO } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
