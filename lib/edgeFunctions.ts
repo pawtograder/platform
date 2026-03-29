@@ -8,7 +8,8 @@ import * as Sentry from "@sentry/nextjs";
 export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>, assignmentId?: number) {
   const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
     body: {
-      assignment_id: assignmentId
+      assignment_id: assignmentId,
+      ...(assignmentId !== undefined ? { for_test_assignment: true } : {})
     }
   });
   const { error } = data as FunctionTypes.GenericResponse;

@@ -284,6 +284,8 @@ export type AutograderCreateReposForStudentRequest = {
   class_id?: number; // Optional: if provided, only create repos for this specific class
   assignment_id?: number; // Optional: if provided, only create repos for this specific assignment
   sync_all_permissions?: boolean; // Optional: if true, sync permissions for all existing repos
+  /** When true with assignment_id, allow an individual test repo even for groups-only assignments (instructor Test Assignment). */
+  for_test_assignment?: boolean;
 };
 
 export type AssignmentDeleteRequest = {

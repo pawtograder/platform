@@ -20,6 +20,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   let githubUsername: string | null;
   let classId: number | undefined;
   let assignmentId: number | undefined;
+  let forTestAssignment = false;
   const syncAllPermissions = true;
 
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
@@ -31,6 +32,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     console.log("user_id", user_id);
     const assignment_id_param = url.searchParams.get("assignment_id");
     assignmentId = assignment_id_param ? Number.parseInt(assignment_id_param) : undefined;
+    forTestAssignment = url.searchParams.get("for_test_assignment") === "true";
     console.log("assignment_id", assignmentId);
     // syncAllPermissions = url.searchParams.get("sync_all_permissions") === "true";
     console.log("sync_all_permissions", syncAllPermissions);
@@ -72,6 +74,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // syncAllPermissions = requestBody.sync_all_permissions || false;
     classId = requestBody.class_id;
     assignmentId = requestBody.assignment_id;
+    forTestAssignment = requestBody.for_test_assignment === true;
     console.log("sync_all_permissions", syncAllPermissions);
     console.log("assignment_id", assignmentId);
 
@@ -365,12 +368,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     )
   );
 
+  // Instructor "Test Assignment" sends for_test_assignment so we allow an individual repo
+  // even for groups-only assignments. Otherwise instructors not in a student group—common
+  // after the group-formation deadline—get no repo: group creation only runs for
+  // assignment_groups_members rows, and individual repos were skipped for group_config "groups".
+  const allowIndividualRepoDespiteGroupOnly = forTestAssignment;
+
   const requests = assignments!
     .filter(
       (assignment) =>
         !existingRepos.find((repo) => repo.assignment_id === assignment.id) &&
         !createdAsGroupRepos.find((_assignment) => _assignment?.id === assignment.id) &&
-        assignment.group_config !== "groups"
+        (allowIndividualRepoDespiteGroupOnly || assignment.group_config !== "groups")
     )
     .map(async (assignment) => {
       const userProfileID = classes.find((c) => c && c.class_id === assignment.class_id)?.profiles.id;
