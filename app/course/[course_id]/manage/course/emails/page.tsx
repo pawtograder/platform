@@ -20,6 +20,7 @@ import TagDisplay from "@/components/ui/tag";
 import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { TZDate } from "@date-fns/tz";
 import { addHours, addMinutes } from "date-fns";
 import HistoryPage from "./historyList";
@@ -77,6 +78,7 @@ function EmailsInnerPage() {
   const [body, setBody] = useState<string>("");
   const tags = useTags();
   const { role: enrollment } = useClassProfiles();
+  const timeZoneContext = useTimeZone();
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
   const [labSectionIds, setLabSectionIds] = useState<number[]>([]);
   const [ccList, setCcList] = useState<{ email: string; user_id: string }[]>([]);
@@ -349,13 +351,11 @@ function EmailsInnerPage() {
       inserted_text = inserted_text.replace(/{assignment_group_name}/g, assignment_group_name);
     }
     if (due_date) {
+      // Use the user's preferred timezone from context, or fall back to course timezone
+      const displayTimeZone = timeZoneContext?.timeZone || course?.data.time_zone || "America/New_York";
       inserted_text = inserted_text.replace(
         /{due_date}/g,
-        `${formatInTimeZone(
-          new TZDate(due_date, course?.data.time_zone ?? "America/New_York"),
-          course?.data.time_zone || "America/New_York",
-          "MMM d h:mm aaa"
-        )} (${course?.data.time_zone})`
+        `${formatInTimeZone(due_date, displayTimeZone, "MMM d, h:mm a zzz")}`
       );
     }
     if (assignment_url) {

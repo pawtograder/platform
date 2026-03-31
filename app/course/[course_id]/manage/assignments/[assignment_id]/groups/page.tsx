@@ -3,6 +3,7 @@ import { toaster } from "@/components/ui/toaster";
 
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import { useGradersAndInstructors } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
@@ -35,11 +36,42 @@ import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
 
+const UTF8_BOM = "\uFEFF";
+
 /**
- * Helper function to download CSV data
+ * RFC-style CSV cell escaping; blocks formula injection in Excel/Sheets.
+ */
+function escapeCSVCell(value: string): string {
+  const stringValue = value;
+  const trimmed = stringValue.trimStart();
+  if (["=", "+", "-", "@"].includes(trimmed[0] ?? "")) {
+    return `"'${stringValue.replace(/"/g, '""')}"`;
+  }
+  if (
+    stringValue.includes(",") ||
+    stringValue.includes('"') ||
+    stringValue.includes("\n") ||
+    stringValue.includes("\r")
+  ) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  return stringValue;
+}
+
+function formatNameEmailLabel(name: string | null | undefined, email: string | null | undefined): string {
+  const displayName = (name ?? "").trim() || "Unknown";
+  const e = (email ?? "").trim();
+  if (!e) {
+    return displayName;
+  }
+  return `${displayName} <${e}>`;
+}
+
+/**
+ * Helper function to download CSV data (UTF-8 BOM for Excel)
  */
 function downloadCSV(csvContent: string, filename: string) {
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob([UTF8_BOM + csvContent], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   const url = URL.createObjectURL(blob);
   link.setAttribute("href", url);
@@ -56,7 +88,7 @@ export type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"]["Tables"]["user_roles"]["Row"],
   "user_roles",
   Database["public"]["Tables"]["user_roles"]["Relationships"],
-  "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"
+  "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(email)"
 >;
 
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
@@ -70,11 +102,13 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   const { data: profiles } = useList<RolesWithProfilesAndGroupMemberships>({
     resource: "user_roles",
     meta: {
-      select: "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"
+      select:
+        "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(email)"
     },
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
       { field: "role", operator: "eq", value: "student" },
+      { field: "disabled", operator: "eq", value: false },
       { field: "profiles.assignment_groups_members.assignment_id", operator: "eq", value: assignment.id }
     ],
     pagination: { pageSize: 1000 }
@@ -447,49 +481,71 @@ function TableByGroups({
   groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
 }) {
   const { modProfiles, movesToFulfill } = useGroupManagement();
+  const graders = useGradersAndInstructors();
+  const supabase = createClient();
+  const invalidate = useInvalidate();
+  const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
+
+  const updateMentor = async (groupId: number, mentorProfileId: string | null) => {
+    setUpdatingMentorGroupId(groupId);
+    try {
+      const { error } = await supabase
+        .from("assignment_groups")
+        .update({ mentor_profile_id: mentorProfileId })
+        .eq("id", groupId);
+      if (error) {
+        Sentry.captureException(error);
+        toaster.create({ title: "Error updating mentor", description: error.message, type: "error" });
+      } else {
+        toaster.create({ title: "Mentor updated", type: "success" });
+        invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+      }
+    } catch (e) {
+      Sentry.captureException(e);
+      toaster.create({
+        title: "Error updating mentor",
+        description: e instanceof Error ? e.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setUpdatingMentorGroupId(null);
+    }
+  };
 
   /**
-   * Export groups data to CSV
+   * Export groups data to CSV: GroupName, StudentNames (Name <email> per member, comma-separated), MentorName.
    */
   const exportToCSV = () => {
-    const headers = ["Group", "Members", "Status"];
+    const headers = ["GroupName", "StudentNames", "MentorName"];
     const rows: string[][] = [];
 
-    groupsData.forEach((group) => {
-      const memberNames = group.assignment_groups_members
+    const sortedGroups = [...groupsData].sort((a, b) => a.name.localeCompare(b.name));
+
+    sortedGroups.forEach((group) => {
+      const studentLabels = group.assignment_groups_members
         .map((member) => {
-          const profile = profiles?.find((p) => p.private_profile_id === member.profile_id);
-          return profile?.profiles.name || member.profile_id;
+          const row = profiles?.find((p) => p.private_profile_id === member.profile_id);
+          return formatNameEmailLabel(row?.profiles.name, row?.users?.email ?? null);
         })
-        .join(", ");
+        .sort((a, b) => a.localeCompare(b));
 
-      let status = "OK";
-      if (assignment.min_group_size !== null && group.assignment_groups_members.length < assignment.min_group_size) {
-        status = `Too small (min: ${assignment.min_group_size})`;
-      } else if (
-        assignment.max_group_size !== null &&
-        group.assignment_groups_members.length > assignment.max_group_size
-      ) {
-        status = `Too large (max: ${assignment.max_group_size})`;
-      }
+      const mentor = group.mentor_profile_id ? graders.find((g) => g.id === group.mentor_profile_id) : undefined;
+      const mentorLabel = mentor ? formatNameEmailLabel(mentor.name, mentor.userEmail) : "";
 
-      rows.push([group.name, memberNames, status]);
+      rows.push([group.name, studentLabels.join(", "), mentorLabel]);
     });
 
-    // Add ungrouped students
-    const ungroupedProfiles = profiles?.filter((profile) => profile.profiles.assignment_groups_members.length === 0);
+    const ungroupedProfiles = profiles
+      ?.filter((profile) => profile.profiles.assignment_groups_members.length === 0)
+      .slice()
+      .sort((a, b) => (a.profiles.name ?? "").localeCompare(b.profiles.name ?? ""));
     ungroupedProfiles?.forEach((profile) => {
-      rows.push(["(Ungrouped)", profile.profiles.name || "Unknown", "Not in a group"]);
+      rows.push(["(Ungrouped)", formatNameEmailLabel(profile.profiles.name, profile.users?.email ?? null), ""]);
     });
 
-    // Convert to CSV format
-    const csvRows = [
-      headers.join(","),
-      ...rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
-    ];
-    const csvContent = csvRows.join("\n");
+    const csvContent = [headers.join(","), ...rows.map((row) => row.map(escapeCSVCell).join(","))].join("\n");
 
-    downloadCSV(csvContent, `groups_export_${new Date().toISOString().split("T")[0]}.csv`);
+    downloadCSV(csvContent, `assignment_groups_${new Date().toISOString().split("T")[0]}.csv`);
   };
 
   /**
@@ -544,6 +600,7 @@ function TableByGroups({
           <Table.Row>
             <Table.ColumnHeader>Group</Table.ColumnHeader>
             <Table.ColumnHeader>Members</Table.ColumnHeader>
+            <Table.ColumnHeader>Mentor</Table.ColumnHeader>
             <Table.ColumnHeader>Actions</Table.ColumnHeader>
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
@@ -601,6 +658,23 @@ function TableByGroups({
                   {newProfilesForGroup(group.id)}
                 </Table.Cell>
                 <Table.Cell>
+                  <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
+                    <NativeSelect.Field
+                      value={group.mentor_profile_id ?? ""}
+                      onChange={(e) => {
+                        updateMentor(group.id, e.target.value || null);
+                      }}
+                    >
+                      <option value="">No mentor</option>
+                      {graders.map((grader) => (
+                        <option key={grader.id} value={grader.id}>
+                          {grader.name}
+                        </option>
+                      ))}
+                    </NativeSelect.Field>
+                  </NativeSelect.Root>
+                </Table.Cell>
+                <Table.Cell>
                   <BulkModifyGroup
                     groups={groupsData}
                     assignment={assignment}
@@ -653,13 +727,17 @@ function TableByStudents({
   const [groupId, setGroupId] = useState<string | undefined>(undefined);
 
   /**
-   * Export students data to CSV
+   * Export students data to CSV (Student as Name <email>, group, validation status).
    */
   const exportToCSV = () => {
     const headers = ["Student", "Group", "Status"];
     const rows: string[][] = [];
 
-    profiles?.forEach((profile) => {
+    const sortedProfiles = profiles
+      ? [...profiles].sort((a, b) => (a.profiles.name ?? "").localeCompare(b.profiles.name ?? ""))
+      : [];
+
+    sortedProfiles.forEach((profile) => {
       const groupID =
         profile.profiles.assignment_groups_members.length > 0
           ? profile.profiles.assignment_groups_members[0].assignment_group_id
@@ -683,15 +761,14 @@ function TableByStudents({
         status = `Group too large (max: ${assignment.max_group_size})`;
       }
 
-      rows.push([profile.profiles.name || "Unknown", group ? group.name : "no group", status]);
+      rows.push([
+        formatNameEmailLabel(profile.profiles.name, profile.users?.email ?? null),
+        group ? group.name : "no group",
+        status
+      ]);
     });
 
-    // Convert to CSV format
-    const csvRows = [
-      headers.join(","),
-      ...rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
-    ];
-    const csvContent = csvRows.join("\n");
+    const csvContent = [headers.join(","), ...rows.map((row) => row.map(escapeCSVCell).join(","))].join("\n");
 
     downloadCSV(csvContent, `students_export_${new Date().toISOString().split("T")[0]}.csv`);
   };

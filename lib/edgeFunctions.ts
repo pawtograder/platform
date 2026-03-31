@@ -5,10 +5,17 @@ import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sd
 import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
 import * as Sentry from "@sentry/nextjs";
-export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>, assignmentId?: number) {
+
+/** Invokes autograder-create-repos-for-student. Use `opts.forTestAssignment` only from the instructor Test Assignment UI. */
+export async function autograderCreateReposForStudent(
+  supabase: SupabaseClient<Database>,
+  assignmentId?: number,
+  opts?: { forTestAssignment?: boolean }
+) {
   const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
     body: {
-      assignment_id: assignmentId
+      assignment_id: assignmentId,
+      ...(opts?.forTestAssignment && assignmentId !== undefined ? { for_test_assignment: true } : {})
     }
   });
   const { error } = data as FunctionTypes.GenericResponse;
@@ -166,10 +173,17 @@ export async function assignmentGroupCopyGroupsFromAssignment(
   params: FunctionTypes.AssignmentGroupCopyGroupsFromAssignmentRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-group-copy-groups-from-assignment", { body: params });
-  const { error } = data as FunctionTypes.GenericResponse;
+  const { data, error } = await (supabase.rpc as CallableFunction)("copy_groups_from_assignment", {
+    p_class_id: params.class_id,
+    p_source_assignment_id: params.source_assignment_id,
+    p_target_assignment_id: params.target_assignment_id
+  });
   if (error) {
-    throw new EdgeFunctionError(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: error.message,
+      recoverable: false
+    });
   }
   return data as unknown;
 }

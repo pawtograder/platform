@@ -167,6 +167,7 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
   // Survey related tables
   surveys: ["staff"], // Survey metadata (staff-only management)
+  survey_series: [], // No realtime broadcasts; staff manage via surveys
   survey_responses: ["staff"], // Response data only to staff
   survey_assignments: ["staff"], // Assignment data only to staff
 
@@ -478,7 +479,18 @@ export function useTableControllerValueById<
 
   return value;
 }
-export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller?: TableController<T>): boolean {
+export function useIsTableControllerReady<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T> | undefined | null,
+  ResultOne = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(controller?: TableController<T, Query, IDType, ResultOne>): boolean {
   const [ready, setReady] = useState(controller?.ready ?? false);
   useEffect(() => {
     if (!controller) {

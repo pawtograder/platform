@@ -1,6 +1,7 @@
 "use client";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
 import useAuthState from "@/hooks/useAuthState";
@@ -13,7 +14,6 @@ import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { UserIdentity } from "@supabase/supabase-js";
 import { addHours, differenceInHours } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaCheckCircle } from "react-icons/fa";
@@ -112,11 +112,10 @@ export default function StudentPage() {
         name: assignment.title!,
         type: "assignment",
         due_date: modifiedDueDate,
-        due_date_component: (
-          <>
-            {modifiedDueDate &&
-              formatInTimeZone(modifiedDueDate, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}
-          </>
+        due_date_component: modifiedDueDate ? (
+          <TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />
+        ) : (
+          <>-</>
         ),
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,

@@ -437,11 +437,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store the result in the database
+    // Store the result in the database (extraData.llm is defined after the guard above)
+    const llm = extraData!.llm!;
     const updatedExtraData: GraderResultTestExtraData = {
       ...extraData,
       llm: {
-        ...extraData.llm,
+        ...llm,
         result: resultText
       }
     };
@@ -481,7 +482,7 @@ export async function POST(request: NextRequest) {
       output_tokens: outputTokens,
       tags: {
         type: "grader_result_test_hint",
-        hint_type: extraData.llm.type || "v1"
+        hint_type: llm.type || "v1"
       }
     });
 

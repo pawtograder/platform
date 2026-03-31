@@ -28,11 +28,11 @@ import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LuCheck } from "react-icons/lu";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useTableControllerTableValues } from "@/lib/TableController";
-import { formatInTimeZone } from "date-fns-tz";
 
 // Helper function to calculate effective due date for a lab section
 function calculateLabSectionDueDate(
@@ -149,9 +149,11 @@ function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignm
                     color={effectiveDueDate ? "fg.default" : "fg.error"}
                     fontWeight={effectiveDueDate ? "normal" : "semibold"}
                   >
-                    {effectiveDueDate
-                      ? formatInTimeZone(effectiveDueDate, timezone, "MMM d, yyyy 'at' h:mm a")
-                      : "No lab meeting before due date"}
+                    {effectiveDueDate ? (
+                      <TimeZoneAwareDate date={effectiveDueDate} format="full" />
+                    ) : (
+                      "No lab meeting before due date"
+                    )}
                   </Table.Cell>
                 </Table.Row>
               );
@@ -866,6 +868,26 @@ export default function AssignmentForm({
                       <LuCheck />
                     </Checkbox.Control>
                     <Checkbox.Label>Show autograder leaderboard to students</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field helperText="When enabled, GitHub repository analytics (commits, PRs, issues, comments) will be collected and visible to graders/instructors on each submission.">
+              <Controller
+                name="enable_repo_analytics"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value || false}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Enable repository analytics</Checkbox.Label>
                   </Checkbox.Root>
                 )}
               />

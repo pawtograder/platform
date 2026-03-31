@@ -28,7 +28,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { BsCalendar, BsChatText } from "react-icons/bs";
 import { FaPlus } from "react-icons/fa";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 
 interface HelpDrawerProps {
   isOpen: boolean;
