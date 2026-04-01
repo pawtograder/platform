@@ -17,6 +17,7 @@
  *     - flashcards.list
  *
  *   WRITE (cli:write):
+ *     - surveys.copy
  *     - assignments.copy
  *     - assignments.delete
  *     - rubrics.import
@@ -41,6 +42,7 @@ import "./commands/classes.ts";
 import "./commands/assignments.ts";
 import "./commands/rubrics.ts";
 import "./commands/flashcards.ts";
+import "./commands/surveys.ts";
 import "./commands/submissions.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {

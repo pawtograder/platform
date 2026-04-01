@@ -21,6 +21,7 @@ import { hideBin } from "yargs/helpers";
 import * as authCommand from "./commands/auth";
 import * as classesCommand from "./commands/classes";
 import * as assignmentsCommand from "./commands/assignments";
+import * as surveysCommand from "./commands/surveys";
 import * as flashcardsCommand from "./commands/flashcards";
 import * as rubricsCommand from "./commands/rubrics";
 import * as submissionsCommand from "./commands/submissions";
@@ -100,6 +101,7 @@ yargs(hideBin(process.argv))
   // Resource commands
   .command(classesCommand)
   .command(assignmentsCommand)
+  .command(surveysCommand)
   .command(flashcardsCommand)
   .command(rubricsCommand)
   .command(submissionsCommand)

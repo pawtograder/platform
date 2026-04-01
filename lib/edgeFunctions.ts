@@ -478,7 +478,8 @@ export interface CLIResponse {
  *     - flashcards.list { class }
  *
  *   WRITE (cli:write):
- *     - assignments.copy { source_class, target_class, assignment|all|schedule, skip_repos?, skip_rubrics?, dry_run? }
+ *     - surveys.copy { source_class, target_class, survey|all, target_assignment?, dry_run? }
+ *     - assignments.copy { source_class, target_class, assignment|all|schedule, skip_repos?, skip_rubrics?, skip_surveys?, dry_run? }
  *     - assignments.delete { class, identifier }
  *     - rubrics.import { class, assignment, rubric, type?, dry_run? }
  *     - flashcards.copy { source_class, target_class, deck|all, dry_run? }

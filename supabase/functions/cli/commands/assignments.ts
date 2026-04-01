@@ -8,6 +8,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
+import { copyLinkedSurveysForAssignment, fetchLatestLinkedSurveysForAssignment } from "../utils/surveyCopy.ts";
 import { copyRubricTree } from "../utils/rubric.ts";
 import { repoExistsOnGitHub, copyRepoContentsViaGitHub, targetRepoHasContentFromSource } from "../utils/github.ts";
 import { CLICommandError } from "../errors.ts";
@@ -137,6 +138,7 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   const dryRun = p.dry_run === true;
   const skipRepos = p.skip_repos === true;
   const skipRubrics = p.skip_rubrics === true;
+  const skipSurveys = p.skip_surveys === true;
   const schedule = p.schedule;
 
   if (!sourceClassId) throw new CLICommandError("source_class is required");
@@ -208,18 +210,29 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   }
 
   if (dryRun) {
+    const assignments_to_copy = await Promise.all(
+      assignmentsToCopy.map(async (s) => {
+        const linked =
+          skipSurveys || !s.assignment.id
+            ? []
+            : await fetchLatestLinkedSurveysForAssignment(supabase, sourceClass.id, s.assignment.id);
+        return {
+          slug: s.assignment.slug,
+          title: s.assignment.title,
+          release_date: s.releaseDateOverride ?? s.assignment.release_date,
+          due_date: s.dueDateOverride ?? s.assignment.due_date,
+          linked_surveys: linked.map((x) => ({ id: x.id, survey_id: x.survey_id, title: x.title }))
+        };
+      })
+    );
+
     return {
       success: true,
       data: {
         dry_run: true,
         source_class: { id: sourceClass.id, slug: sourceClass.slug, name: sourceClass.name },
         target_class: { id: targetClass.id, slug: targetClass.slug, name: targetClass.name },
-        assignments_to_copy: assignmentsToCopy.map((s) => ({
-          slug: s.assignment.slug,
-          title: s.assignment.title,
-          release_date: s.releaseDateOverride ?? s.assignment.release_date,
-          due_date: s.dueDateOverride ?? s.assignment.due_date
-        }))
+        assignments_to_copy
       }
     };
   }
@@ -239,6 +252,7 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
       const result = await copySingleAssignment(supabase, spec.assignment, sourceClass, targetClass, {
         skipRepos,
         skipRubrics,
+        skipSurveys,
         releaseDateOverride: spec.releaseDateOverride,
         dueDateOverride: spec.dueDateOverride
       });
@@ -307,6 +321,7 @@ async function copySingleAssignment(
   options: {
     skipRepos: boolean;
     skipRubrics: boolean;
+    skipSurveys: boolean;
     releaseDateOverride?: string;
     dueDateOverride?: string;
   }
@@ -320,6 +335,7 @@ async function copySingleAssignment(
     handoutRepoContentsCopied: false,
     solutionRepoCreated: false,
     solutionRepoContentsCopied: false,
+    surveysCopied: false,
     errors: []
   };
 
@@ -630,6 +646,19 @@ async function copySingleAssignment(
         status.solutionRepoContentsCopied = true;
       }
     }
+  }
+
+  if (!options.skipSurveys && !wasExisting) {
+    await copyLinkedSurveysForAssignment(
+      supabase,
+      sourceClass.id,
+      sourceAssignment,
+      targetClass.id,
+      newAssignment,
+      newAssignment.release_date ?? undefined,
+      newAssignment.due_date ?? undefined,
+      status
+    );
   }
 
   return { assignmentId: newAssignment.id, status, wasExisting };

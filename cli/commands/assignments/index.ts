@@ -142,6 +142,11 @@ export const builder = (yargs: Argv) => {
             type: "boolean",
             default: false
           })
+          .option("skip-surveys", {
+            describe: "Skip copying surveys linked to assignments",
+            type: "boolean",
+            default: false
+          })
           .check((argv) => {
             const specifiedCount = [argv.assignment, argv.schedule, argv.all].filter(Boolean).length;
             if (specifiedCount !== 1) {

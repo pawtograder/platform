@@ -23,6 +23,7 @@ interface CopyOptions {
   dryRun: boolean;
   skipRepos: boolean;
   skipRubrics: boolean;
+  skipSurveys: boolean;
 }
 
 /**
@@ -37,7 +38,8 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
       target_class: args.targetClass,
       dry_run: args.dryRun,
       skip_repos: args.skipRepos,
-      skip_rubrics: args.skipRubrics
+      skip_rubrics: args.skipRubrics,
+      skip_surveys: args.skipSurveys
     };
 
     if (args.assignment) {
@@ -69,9 +71,10 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
       logger.info(`Target: ${data.target_class.name} (${data.target_class.slug})`);
       logger.blank();
 
-      logger.tableHeader(["Slug", "Title", "Release Date", "Due Date"]);
+      logger.tableHeader(["Slug", "Title", "Release", "Due", "Linked surveys"]);
       for (const a of data.assignments_to_copy) {
-        logger.tableRow([a.slug, a.title, a.release_date || "-", a.due_date || "-"]);
+        const n = Array.isArray(a.linked_surveys) ? a.linked_surveys.length : 0;
+        logger.tableRow([a.slug, a.title, a.release_date || "-", a.due_date || "-", String(n)]);
       }
       logger.blank();
       return;

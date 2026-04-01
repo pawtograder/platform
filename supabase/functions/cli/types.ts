@@ -16,6 +16,7 @@ export type RubricCheckRow = Database["public"]["Tables"]["rubric_checks"]["Row"
 export type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
 export type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 export type AutograderRow = Database["public"]["Tables"]["autograder"]["Row"];
+export type SurveyRow = Database["public"]["Tables"]["surveys"]["Row"];
 
 // ─── Nested rubric hierarchy (from select with relations) ─────────────────────
 
@@ -128,6 +129,7 @@ export interface CopyStatus {
   handoutRepoContentsCopied: boolean;
   solutionRepoCreated: boolean;
   solutionRepoContentsCopied: boolean;
+  surveysCopied: boolean;
   errors: { step: string; error: string }[];
 }
 
@@ -194,6 +196,17 @@ export interface AssignmentsCopyParams {
   dry_run?: boolean;
   skip_repos?: boolean;
   skip_rubrics?: boolean;
+  skip_surveys?: boolean;
+}
+
+export interface SurveysCopyParams {
+  source_class: string;
+  target_class: string;
+  survey?: string;
+  all?: boolean;
+  /** Target assignment (slug or id) — sets linkage; shifting uses offsets when source is linked */
+  target_assignment?: string;
+  dry_run?: boolean;
 }
 
 export interface RubricsListParams {
