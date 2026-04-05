@@ -44,6 +44,7 @@ import { toaster } from "@/components/ui/toaster";
 import {
   useAllRubricChecks,
   useAssignmentController,
+  useAssignmentData,
   useGraderPseudonymousMode,
   useReferenceCheckRecordsFromCheck,
   useReviewAssignment,
@@ -525,6 +526,8 @@ export function RubricCheckComment({
     check?.artifact && submission
       ? submission.submission_artifacts.find((a) => a.name === check.artifact)?.id
       : undefined;
+  const assignment = useAssignmentData();
+
   if (!comment) {
     return <Skeleton w="100%" h="100px" />;
   }
@@ -546,8 +549,11 @@ export function RubricCheckComment({
     }
   }
   const hasPoints = comment.points !== null;
+  const isSelfReviewComment =
+    criteria?.rubric_id !== undefined && criteria.rubric_id === assignment.self_review_rubric_id;
   // Check if student can create a regrade request
-  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
+  const canCreateRegradeRequest =
+    !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released && !isSelfReviewComment;
 
   return (
     <Box
