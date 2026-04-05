@@ -173,7 +173,8 @@ async function main() {
 
   console.log("\n=== Row counts ===\n");
   const headCount = async (table: string, col: string, val: number) => {
-    const { count, error } = await admin.from(table).select("*", { count: "exact", head: true }).eq(col, val);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { count, error } = await (admin as any).from(table).select("*", { count: "exact", head: true }).eq(col, val);
     console.log(`${table} (${col}=${val}): ${error ? error.message : (count ?? "?")}`);
   };
 

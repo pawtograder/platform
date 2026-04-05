@@ -1,9 +1,23 @@
-import { Box } from "@chakra-ui/react";
-import InstructorDashboard from "./instructorDashboard";
-import StudentDashboard from "./studentDashboard";
+import { Box, Skeleton, SkeletonText, Stack } from "@chakra-ui/react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
+import InstructorDashboard from "./instructorDashboard";
+import StudentDashboard from "./studentDashboard";
+
+function CourseHomeDashboardFallback() {
+  return (
+    <Box p={2}>
+      <Stack gap={4}>
+        <Skeleton height="28px" width="45%" maxW="320px" borderRadius="md" />
+        <Skeleton height="100px" borderRadius="md" />
+        <SkeletonText noOfLines={5} gap={3} />
+        <Skeleton height="180px" borderRadius="md" />
+      </Stack>
+    </Box>
+  );
+}
 
 export default async function CourseLanding({ params }: { params: Promise<{ course_id: string }> }) {
   const course_id = Number.parseInt((await params).course_id);
@@ -17,7 +31,9 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
   if (role?.role === "instructor" || role?.role === "grader") {
     return (
       <Box>
-        <InstructorDashboard course_id={course_id} />
+        <Suspense fallback={<CourseHomeDashboardFallback />}>
+          <InstructorDashboard course_id={course_id} />
+        </Suspense>
       </Box>
     );
   }
@@ -27,7 +43,9 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
   const private_profile_id = role.private_profile_id;
   return (
     <Box>
-      <StudentDashboard course_id={course_id} private_profile_id={private_profile_id} />
+      <Suspense fallback={<CourseHomeDashboardFallback />}>
+        <StudentDashboard course_id={course_id} private_profile_id={private_profile_id} />
+      </Suspense>
     </Box>
   );
 }

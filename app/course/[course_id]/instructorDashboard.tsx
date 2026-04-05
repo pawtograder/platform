@@ -4,8 +4,8 @@ import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { getCachedInstructorDashboardBundle } from "@/lib/course-dashboard-cache";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
-import { createClient } from "@/utils/supabase/server";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import {
@@ -177,8 +177,6 @@ type InstructorDashboardMetricRow = {
   students_without_submissions: number;
 };
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
-  const supabase = await createClient();
-
   // Validate current user can access course dashboard
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
@@ -190,72 +188,44 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     redirect("/");
   }
 
-  const [
-    { data: metricsRaw, error: metricsError },
-    { data: helpRequests, error: helpRequestsError },
-    { data: course, error: courseError },
-    { data: surveysForDashboardRaw, error: surveysDashboardError },
-    identities,
-    { data: workflowStatsHour, error: workflowStatsHourError },
-    { data: workflowStatsDay, error: workflowStatsDayError },
-    { data: recentErrors, error: recentErrorsError }
-  ] = await Promise.all([
-    supabase.rpc("get_instructor_dashboard_overview_metrics", { p_class_id: course_id }),
-    supabase
-      .from("help_requests")
-      .select("*")
-      .eq("class_id", course_id)
-      .eq("status", "open")
-      .order("created_at", { ascending: true }),
-    supabase.from("classes").select("time_zone, office_hours_ics_url, events_ics_url").eq("id", course_id).single(),
-    supabase
-      .from("surveys")
-      .select("id, survey_id, title, status, due_date, updated_at")
-      .eq("class_id", course_id)
-      .is("deleted_at", null)
-      .in("status", ["published", "closed"]),
-    supabase.auth.getUserIdentities(),
-    supabase.rpc("get_workflow_statistics", { p_class_id: course_id, p_duration_hours: 1 }),
-    supabase.rpc("get_workflow_statistics", { p_class_id: course_id, p_duration_hours: 24 }),
-    supabase
-      .from("workflow_run_error")
-      .select(
-        `
-      id,
-      name,
-      created_at,
-      submissions!submission_id(
-        profiles!profile_id(name, id),
-        assignments!assignment_id(title),
-        assignment_groups!assignment_group_id(name)
-      )
-    `
-      )
-      .eq("class_id", course_id)
-      .order("created_at", { ascending: false })
-      .limit(5)
-  ]);
+  const {
+    metricsRaw,
+    metricsError,
+    helpRequests,
+    helpRequestsError,
+    course,
+    courseError,
+    surveysForDashboardRaw,
+    surveysDashboardError,
+    identitiesJson,
+    workflowStatsHour,
+    workflowStatsHourError,
+    workflowStatsDay,
+    workflowStatsDayError,
+    recentErrors,
+    recentErrorsError
+  } = await getCachedInstructorDashboardBundle(course_id, user_id);
 
   if (metricsError) {
-    Sentry.captureException(metricsError);
+    Sentry.captureException(new Error(metricsError));
   }
   if (helpRequestsError) {
-    Sentry.captureException(helpRequestsError);
+    Sentry.captureException(new Error(helpRequestsError));
   }
   if (courseError) {
-    Sentry.captureException(courseError);
+    Sentry.captureException(new Error(courseError));
   }
   if (surveysDashboardError) {
-    Sentry.captureException(surveysDashboardError);
+    Sentry.captureException(new Error(surveysDashboardError));
   }
   if (workflowStatsHourError) {
-    Sentry.captureException(workflowStatsHourError);
+    Sentry.captureException(new Error(workflowStatsHourError));
   }
   if (workflowStatsDayError) {
-    Sentry.captureException(workflowStatsDayError);
+    Sentry.captureException(new Error(workflowStatsDayError));
   }
   if (recentErrorsError) {
-    Sentry.captureException(recentErrorsError);
+    Sentry.captureException(new Error(recentErrorsError));
   }
 
   const metricsLoadFailed = Boolean(metricsError);
@@ -286,7 +256,13 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const noSubmissionAssignments = metrics.filter((m) => m.grades_release_status === "no_submissions").length;
   const releasableAssignments = metrics.length - noSubmissionAssignments;
 
-  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
+  const githubIdentity = (identitiesJson?.identities ?? []).find(
+    (identity): identity is { provider: string } =>
+      typeof identity === "object" &&
+      identity !== null &&
+      "provider" in identity &&
+      (identity as { provider?: string }).provider === "github"
+  );
 
   // Extract workflow statistics from RPC response
   const extractWorkflowStats = (
@@ -904,7 +880,18 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CardBody>
                 <Stack spaceY={2}>
                   {recentErrors && recentErrors.length > 0 ? (
-                    recentErrors.map((error) => {
+                    (
+                      recentErrors as Array<{
+                        id: string;
+                        name: string;
+                        created_at: string;
+                        submissions?: {
+                          profiles?: { name: string | null } | null;
+                          assignment_groups?: { name: string | null } | null;
+                          assignments?: { title: string | null } | null;
+                        } | null;
+                      }>
+                    ).map((error) => {
                       const submission = error.submissions;
                       const studentName =
                         submission?.profiles?.name || submission?.assignment_groups?.name || "Unknown";

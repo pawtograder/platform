@@ -1,6 +1,6 @@
 "use client";
 import { PinnedPostsSidebar } from "@/components/discussion/PinnedPostsSidebar";
-import { PostRow } from "@/components/discussion/PostRow";
+import { VirtualizedPostRowList } from "@/components/discussion/VirtualizedPostRowList";
 import { TopPostsSidebar } from "@/components/discussion/TopPostsSidebar";
 import { TopicCard } from "@/components/discussion/TopicCard";
 import { TopicFollowMultiSelect } from "@/components/discussion/TopicFollowMultiSelect";
@@ -167,9 +167,7 @@ export default function DiscussionPage() {
                     No posts match your criteria.
                   </Text>
                 ) : (
-                  browseThreads.map((t) => (
-                    <PostRow key={t.id} threadId={t.id} href={`/course/${course_id}/discussion/${t.id}`} />
-                  ))
+                  <VirtualizedPostRowList threadIds={browseThreads.map((t) => t.id)} courseId={Number(course_id)} />
                 )}
               </Box>
             </Box>
@@ -200,9 +198,7 @@ export default function DiscussionPage() {
                 topics will appear in My Feed.
               </Text>
             ) : (
-              feedThreads.map((t) => (
-                <PostRow key={t.id} threadId={t.id} href={`/course/${course_id}/discussion/${t.id}`} />
-              ))
+              <VirtualizedPostRowList threadIds={feedThreads.map((t) => t.id)} courseId={Number(course_id)} />
             )}
           </Box>
         </Stack>

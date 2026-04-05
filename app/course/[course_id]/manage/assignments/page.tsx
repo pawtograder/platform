@@ -1,8 +1,9 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
-import { createClient } from "@/utils/supabase/server";
+import { getCachedManageAssignmentsOverview } from "@/lib/course-dashboard-cache";
 import { Box, Button, HStack, Table } from "@chakra-ui/react";
 import NextLink from "next/link";
+import { headers } from "next/headers";
 import SyncStaffTeamButton from "./syncStaffTeamButton";
 
 /**
@@ -15,16 +16,16 @@ import SyncStaffTeamButton from "./syncStaffTeamButton";
  */
 export default async function ManageAssignmentsPage({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
-  const client = await createClient();
-  const assignments = await client
-    .from("assignment_overview")
-    .select("*")
-    .eq("class_id", Number(course_id))
-    .order("due_date", { ascending: false });
+  const headersList = await headers();
+  const userId = headersList.get("X-User-ID") ?? "";
+  const { data: assignmentRows, error: overviewError } = await getCachedManageAssignmentsOverview(
+    Number(course_id),
+    userId
+  );
 
-  if (assignments.error) {
-    console.log("Unable to fetch assignments");
-    console.error(assignments.error);
+  if (overviewError) {
+    // eslint-disable-next-line no-console -- surfaced for local debugging of overview fetch
+    console.error("Unable to fetch assignments:", overviewError);
   }
 
   let actions = <></>;
@@ -49,7 +50,7 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {assignments?.data?.map((assignment) => (
+          {assignmentRows?.map((assignment) => (
             <Table.Row key={assignment.id}>
               <Table.Cell>
                 <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
