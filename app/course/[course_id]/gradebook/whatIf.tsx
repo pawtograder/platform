@@ -133,7 +133,7 @@ function WhatIfScoreCell({
   }
   return (
     <HStack flexShrink={0} minW="fit-content" gap={0} pr={2}>
-      {studentGrade?.score_override != null && (
+      {studentGrade?.score_override != null && studentGrade?.released && (
         <Tooltip
           content={`This value is overridden by an instructor, and does not reflect the calculated value. If you have a concern, please contact the instructor.${studentGrade?.score_override_note ? ` Note from instructor: ${studentGrade.score_override_note}` : ""}`}
         >
