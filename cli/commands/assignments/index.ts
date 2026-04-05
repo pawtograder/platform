@@ -147,6 +147,11 @@ export const builder = (yargs: Argv) => {
             type: "boolean",
             default: false
           })
+          .option("debug", {
+            describe: "Enable server-side timing logs (CLI edge function; see Supabase logs)",
+            type: "boolean",
+            default: false
+          })
           .check((argv) => {
             const specifiedCount = [argv.assignment, argv.schedule, argv.all].filter(Boolean).length;
             if (specifiedCount !== 1) {

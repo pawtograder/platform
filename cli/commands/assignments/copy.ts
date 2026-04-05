@@ -24,6 +24,8 @@ interface CopyOptions {
   skipRepos: boolean;
   skipRubrics: boolean;
   skipSurveys: boolean;
+  /** Server-side timing logs in the CLI edge function */
+  debug?: boolean;
 }
 
 /**
@@ -41,6 +43,9 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
       skip_rubrics: args.skipRubrics,
       skip_surveys: args.skipSurveys
     };
+    if (args.debug) {
+      params.debug = true;
+    }
 
     if (args.assignment) {
       params.assignment = args.assignment;

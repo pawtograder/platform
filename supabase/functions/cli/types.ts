@@ -197,6 +197,8 @@ export interface AssignmentsCopyParams {
   skip_repos?: boolean;
   skip_rubrics?: boolean;
   skip_surveys?: boolean;
+  /** When true, log detailed timing to edge function logs (or set CLI_ASSIGNMENTS_COPY_DEBUG) */
+  debug?: boolean;
 }
 
 export interface SurveysCopyParams {

@@ -25,6 +25,43 @@ import type {
   AssignmentRow
 } from "../types.ts";
 
+/** Optional verbose logs for troubleshooting timeouts (request `debug: true` or env CLI_ASSIGNMENTS_COPY_DEBUG). */
+function assignmentsCopyDebugEnabled(debugParam: boolean | undefined): boolean {
+  if (debugParam === true) return true;
+  const v = Deno.env.get("CLI_ASSIGNMENTS_COPY_DEBUG");
+  if (!v) return false;
+  const t = v.trim().toLowerCase();
+  return t === "1" || t === "true" || t === "yes";
+}
+
+type AssignmentCopyDebugLog = (phase: string, detail?: Record<string, unknown>) => void;
+
+function createAssignmentCopyDebugLog(context: Record<string, unknown>): {
+  log: AssignmentCopyDebugLog;
+} {
+  const t0 = performance.now();
+  let stepStart = t0;
+  return {
+    log(phase, detail = {}) {
+      const now = performance.now();
+      const stepMs = Math.round(now - stepStart);
+      const totalMs = Math.round(now - t0);
+      stepStart = now;
+      console.log(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          cli: "assignments.copy",
+          phase,
+          step_ms: stepMs,
+          total_ms: totalMs,
+          ...context,
+          ...detail
+        })
+      );
+    }
+  };
+}
+
 async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { class: classIdentifier } = params as unknown as AssignmentsListParams;
   if (!classIdentifier) throw new CLICommandError("class is required");
@@ -140,6 +177,7 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   const skipRubrics = p.skip_rubrics === true;
   const skipSurveys = p.skip_surveys === true;
   const schedule = p.schedule;
+  const copyDebug = assignmentsCopyDebugEnabled(p.debug);
 
   if (!sourceClassId) throw new CLICommandError("source_class is required");
   if (!targetClassId) throw new CLICommandError("target_class is required");
@@ -152,6 +190,24 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   const supabase = getAdminClient();
   const sourceClass = await resolveClass(supabase, sourceClassId);
   const targetClass = await resolveClass(supabase, targetClassId);
+
+  if (copyDebug) {
+    const { log } = createAssignmentCopyDebugLog({
+      source_class_id: sourceClass.id,
+      target_class_id: targetClass.id
+    });
+    log("request", {
+      dry_run: dryRun,
+      skip_repos: skipRepos,
+      skip_rubrics: skipRubrics,
+      skip_surveys: skipSurveys,
+      selection: assignmentIdentifier
+        ? { mode: "single", assignment: assignmentIdentifier }
+        : copyAll
+          ? { mode: "all" }
+          : { mode: "schedule", rows: schedule?.length ?? 0 }
+    });
+  }
 
   if (sourceClass.id === targetClass.id) {
     throw new CLICommandError("Source and target classes must be different");
@@ -210,6 +266,13 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
   }
 
   if (dryRun) {
+    if (copyDebug) {
+      const { log } = createAssignmentCopyDebugLog({
+        source_class_id: sourceClass.id,
+        target_class_id: targetClass.id
+      });
+      log("dry_run_ready", { assignment_count: assignmentsToCopy.length });
+    }
     const assignments_to_copy = await Promise.all(
       assignmentsToCopy.map(async (s) => {
         const linked =
@@ -247,14 +310,25 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
     error?: string;
   }> = [];
 
-  for (const spec of assignmentsToCopy) {
+  for (let i = 0; i < assignmentsToCopy.length; i++) {
+    const spec = assignmentsToCopy[i];
     try {
+      const debugLog = copyDebug
+        ? createAssignmentCopyDebugLog({
+            source_class_id: sourceClass.id,
+            target_class_id: targetClass.id,
+            index: i + 1,
+            of: assignmentsToCopy.length
+          }).log
+        : undefined;
+
       const result = await copySingleAssignment(supabase, spec.assignment, sourceClass, targetClass, {
         skipRepos,
         skipRubrics,
         skipSurveys,
         releaseDateOverride: spec.releaseDateOverride,
-        dueDateOverride: spec.dueDateOverride
+        dueDateOverride: spec.dueDateOverride,
+        debugLog
       });
       const hasErrors = result.status.errors.length > 0;
       results.push({
@@ -267,6 +341,18 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
         error: hasErrors ? result.status.errors.map((e) => `${e.step}: ${e.error}`).join("; ") : undefined
       });
     } catch (err) {
+      if (copyDebug) {
+        createAssignmentCopyDebugLog({
+          source_class_id: sourceClass.id,
+          target_class_id: targetClass.id,
+          index: i + 1,
+          of: assignmentsToCopy.length
+        }).log("assignment_failed", {
+          source_assignment_id: spec.assignment.id,
+          slug: spec.assignment.slug,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       results.push({
         source_slug: spec.assignment.slug,
         source_title: spec.assignment.title,
@@ -324,8 +410,22 @@ async function copySingleAssignment(
     skipSurveys: boolean;
     releaseDateOverride?: string;
     dueDateOverride?: string;
+    debugLog?: AssignmentCopyDebugLog;
   }
 ): Promise<CopyResult> {
+  const mark = (phase: string, detail?: Record<string, unknown>) => options.debugLog?.(phase, detail);
+
+  mark("assignment_start", {
+    source_assignment_id: sourceAssignment.id,
+    slug: sourceAssignment.slug,
+    title: sourceAssignment.title,
+    skip_repos: options.skipRepos,
+    skip_rubrics: options.skipRubrics,
+    skip_surveys: options.skipSurveys,
+    has_autograder: sourceAssignment.has_autograder,
+    template_repo: sourceAssignment.template_repo ?? null
+  });
+
   const status: CopyStatus = {
     assignmentCreated: false,
     selfReviewSettingsCopied: false,
@@ -357,6 +457,8 @@ async function copySingleAssignment(
 
   let newAssignment: AssignmentWithAutograder;
   const wasExisting = !!existingAssignment;
+
+  mark("resolved_target_assignment", { was_existing: wasExisting });
 
   if (existingAssignment) {
     newAssignment = existingAssignment as AssignmentWithAutograder;
@@ -446,7 +548,14 @@ async function copySingleAssignment(
     status.assignmentCreated = true;
   }
 
+  mark("assignment_row_ready", { target_assignment_id: newAssignment.id });
+
   if (!options.skipRubrics) {
+    mark("rubrics_start", {
+      grading_rubric_id: sourceAssignment.grading_rubric_id ?? null,
+      self_review_rubric_id: sourceAssignment.self_review_rubric_id ?? null,
+      meta_grading_rubric_id: sourceAssignment.meta_grading_rubric_id ?? null
+    });
     try {
       if (sourceAssignment.grading_rubric_id) {
         await copyRubricTree(
@@ -485,9 +594,11 @@ async function copySingleAssignment(
     } catch (err) {
       addError("rubrics", err);
     }
+    mark("rubrics_done", { rubrics_copied: status.rubricsCopied, rubric_errors: status.errors.filter((e) => e.step === "rubrics").length });
   }
 
   if (sourceAssignment.has_autograder) {
+    mark("autograder_config_start", {});
     try {
       const { data: sourceConfig } = await supabase
         .from("autograder")
@@ -529,9 +640,11 @@ async function copySingleAssignment(
     } catch (err) {
       addError("autograder_config", err);
     }
+    mark("autograder_config_done", { copied: status.autograderConfigCopied });
   }
 
   if (!options.skipRepos && targetClass.github_org) {
+    mark("repos_start", { github_org: targetClass.github_org });
     if (sourceAssignment.template_repo) {
       const handoutRepoExists = !!newAssignment.template_repo;
       const handoutContentsCopied =
@@ -540,6 +653,7 @@ async function copySingleAssignment(
           : false;
 
       if (!handoutRepoExists) {
+        mark("handout_repo_create_invoke", { source_template_repo: sourceAssignment.template_repo });
         try {
           const { data: handoutData } = await supabase.functions.invoke("assignment-create-handout-repo", {
             body: { assignment_id: newAssignment.id, class_id: targetClass.id }
@@ -551,18 +665,27 @@ async function copySingleAssignment(
           } else if (hd?.org_name && hd?.repo_name) {
             status.handoutRepoCreated = true;
             const targetRepoFullName = `${hd.org_name}/${hd.repo_name}`;
+            mark("handout_repo_copy_contents_start", {
+              from: sourceAssignment.template_repo,
+              to: targetRepoFullName
+            });
             try {
               await copyRepoContentsViaGitHub(sourceAssignment.template_repo, targetRepoFullName);
               status.handoutRepoContentsCopied = true;
             } catch (err) {
               addError("handout_repo_contents", err);
             }
+            mark("handout_repo_copy_contents_done", { copied: status.handoutRepoContentsCopied });
           }
         } catch (err) {
           addError("handout_repo_create", err);
         }
       } else if (!handoutContentsCopied && newAssignment.template_repo) {
         status.handoutRepoCreated = true;
+        mark("handout_repo_copy_contents_existing", {
+          from: sourceAssignment.template_repo,
+          to: newAssignment.template_repo
+        });
         try {
           await copyRepoContentsViaGitHub(sourceAssignment.template_repo, newAssignment.template_repo);
           status.handoutRepoContentsCopied = true;
@@ -573,6 +696,10 @@ async function copySingleAssignment(
         status.handoutRepoCreated = true;
         status.handoutRepoContentsCopied = true;
       }
+      mark("handout_repo_path_done", {
+        handoutRepoCreated: status.handoutRepoCreated,
+        handoutRepoContentsCopied: status.handoutRepoContentsCopied
+      });
     }
 
     const { data: sourceAutograder } = await supabase
@@ -601,6 +728,7 @@ async function copySingleAssignment(
 
       const needsSolution = !targetRepoSet || !targetRepoExists;
       if (needsSolution) {
+        mark("solution_repo_create_invoke", { source_grader_repo: sourceAutograder.grader_repo });
         try {
           const { data: solutionData } = await supabase.functions.invoke("assignment-create-solution-repo", {
             body: { assignment_id: newAssignment.id, class_id: targetClass.id }
@@ -623,18 +751,26 @@ async function copySingleAssignment(
             }
             status.solutionRepoCreated = true;
 
+            mark("solution_repo_copy_contents_start", {
+              from: sourceAutograder.grader_repo,
+              to: targetRepoFullName
+            });
             try {
               await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetRepoFullName);
               status.solutionRepoContentsCopied = true;
             } catch (err) {
               addError("solution_repo_contents", err);
             }
+            mark("solution_repo_copy_contents_done", { copied: status.solutionRepoContentsCopied });
           }
         } catch (err) {
           addError("solution_repo_create", err);
         }
       } else if (!solutionContentsCopied && targetAutograder?.grader_repo) {
         status.solutionRepoCreated = true;
+        mark("solution_repo_copy_contents_existing", {
+          repo: targetAutograder.grader_repo
+        });
         try {
           await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetAutograder.grader_repo);
           status.solutionRepoContentsCopied = true;
@@ -645,10 +781,16 @@ async function copySingleAssignment(
         status.solutionRepoCreated = true;
         status.solutionRepoContentsCopied = true;
       }
+      mark("solution_repo_path_done", {
+        solutionRepoCreated: status.solutionRepoCreated,
+        solutionRepoContentsCopied: status.solutionRepoContentsCopied
+      });
     }
+    mark("repos_done", {});
   }
 
   if (!options.skipSurveys && !wasExisting) {
+    mark("surveys_start", {});
     await copyLinkedSurveysForAssignment(
       supabase,
       sourceClass.id,
@@ -659,7 +801,13 @@ async function copySingleAssignment(
       newAssignment.due_date ?? undefined,
       status
     );
+    mark("surveys_done", { surveys_copied: status.surveysCopied });
   }
+
+  mark("assignment_complete", {
+    target_assignment_id: newAssignment.id,
+    error_steps: status.errors.map((e) => e.step)
+  });
 
   return { assignmentId: newAssignment.id, status, wasExisting };
 }

@@ -36,6 +36,10 @@ export function parseAssignmentScheduleCsv(filePath: string): AssignmentSchedule
   let content: string;
   try {
     content = readFileSync(filePath, "utf-8");
+    // Strip UTF-8 BOM so first column header matches (Excel often saves with BOM)
+    if (content.charCodeAt(0) === 0xfeff) {
+      content = content.slice(1);
+    }
   } catch (err) {
     throw new CLIError(`Failed to read CSV file: ${filePath}`);
   }
