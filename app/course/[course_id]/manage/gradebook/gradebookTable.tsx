@@ -77,7 +77,7 @@ import { Select } from "chakra-react-select";
 import { LucideInfo } from "lucide-react";
 import { useParams } from "next/navigation";
 import pluralize from "pluralize";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FieldValues } from "react-hook-form";
 import { FaLock } from "react-icons/fa";
 import { FaLockOpen } from "react-icons/fa6";
@@ -100,9 +100,36 @@ import {
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
 import { WhatIf } from "../../gradebook/whatIf";
 import GradebookCell from "./gradebookCell";
-import { GradebookPopoverProvider } from "./GradebookPopoverProvider";
+import { GradebookPopoverProvider, useGradebookPopover } from "./GradebookPopoverProvider";
 import ImportGradebookColumn from "./importGradebookColumn";
+
+const GRADE_COL_WIDTH = 120;
+
 const MemoizedGradebookCell = React.memo(GradebookCell);
+
+const GradebookPointerOpener = React.forwardRef<HTMLDivElement, React.ComponentProps<typeof Box>>(
+  function GradebookPointerOpener({ children, ...rest }, ref) {
+    const { openAt } = useGradebookPopover();
+    const onPointerDownCapture = useCallback(
+      (e: React.PointerEvent<HTMLDivElement>) => {
+        const el = (e.target as HTMLElement).closest("[data-gradebook-cell-trigger]");
+        if (!el || !(el instanceof HTMLElement)) return;
+        const columnId = el.getAttribute("data-column-id");
+        const studentId = el.getAttribute("data-student-id");
+        if (columnId == null || studentId == null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        openAt({ targetElement: el, columnId: Number(columnId), studentId });
+      },
+      [openAt]
+    );
+    return (
+      <Box ref={ref} onPointerDownCapture={onPointerDownCapture} {...rest}>
+        {children}
+      </Box>
+    );
+  }
+);
 
 function RenderExprDocs() {
   return (
@@ -1581,6 +1608,7 @@ function StudentNameCell({ uid }: { uid: string }) {
     </HStack>
   );
 }
+const MemoizedStudentNameCell = React.memo(StudentNameCell);
 function StudentDetailDialog() {
   const { view, setView } = useStudentDetailView();
   return (
@@ -1613,6 +1641,33 @@ export default function GradebookTable() {
   const courseController = useCourseController();
   const gradebookController = useGradebookController();
   const gradebookColumns = useGradebookColumns();
+  const [gradebookDataEpoch, setGradebookDataEpoch] = useState(0);
+  useEffect(() => {
+    return gradebookController.table.subscribeToData(() => {
+      setGradebookDataEpoch((n) => n + 1);
+    });
+  }, [gradebookController]);
+
+  const scoreMaps = useMemo(() => {
+    const sortVal = new Map<string, Map<number, string>>();
+    const filterVal = new Map<string, Map<number, string>>();
+    const preferPrivate = true;
+    for (const student of gradebookController.table.data) {
+      const sid = student.private_profile_id;
+      const sSort = new Map<number, string>();
+      const sFilt = new Map<number, string>();
+      for (const col of gradebookColumns) {
+        let entry = student.entries.find((e) => e.gc_id === col.id && e.is_private === preferPrivate);
+        if (!entry) entry = student.entries.find((e) => e.gc_id === col.id && e.is_private === !preferPrivate);
+        sSort.set(col.id, String(entry?.score_override ?? entry?.score ?? "missing"));
+        sFilt.set(col.id, String(entry?.score_override ?? entry?.score ?? ""));
+      }
+      sortVal.set(sid, sSort);
+      filterVal.set(sid, sFilt);
+    }
+    return { sortVal, filterVal };
+  }, [gradebookColumns, gradebookDataEpoch, gradebookController]);
+
   const isInstructor = useIsInstructor();
   const isRefetching = useGradebookRefetchStatus();
   const isGradebookDataReady = useIsGradebookDataReady();
@@ -1908,7 +1963,7 @@ export default function GradebookTable() {
         id: "student_name",
         header: "Student Name",
         accessorFn: (row) => row.name,
-        cell: ({ row }) => <StudentNameCell uid={row.original.id} />,
+        cell: ({ row }) => <MemoizedStudentNameCell uid={row.original.id} />,
         enableColumnFilter: true,
         filterFn: (row, columnId, filterValue) => {
           const studentName = row.original.name || "";
@@ -1976,19 +2031,18 @@ export default function GradebookTable() {
         cols.push({
           id: `grade_${col.id}`,
           header: col.name,
-          accessorFn: (row) => {
-            const controller = gradebookController.getStudentGradebookController(row.id);
-            const { item } = controller.getColumnForStudent(col.id);
-            // Always return a string for filtering
-            return String(item?.score_override ?? item?.score ?? "missing");
-          },
+          accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? "missing",
           cell: ({ row }) => {
             return <MemoizedGradebookCell columnId={col.id} studentId={row.original.id} />;
           },
           enableColumnFilter: true,
           filterFn: (row, columnId, filterValue) => {
-            const controller = gradebookController.getStudentGradebookController(row.original.id);
-            return controller.filter(col.id, filterValue);
+            const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? "";
+            if (!filterValue) return true;
+            if (Array.isArray(filterValue)) {
+              return filterValue.includes(fv);
+            }
+            return fv === filterValue;
           },
           enableSorting: true
         });
@@ -2001,19 +2055,18 @@ export default function GradebookTable() {
           cols.push({
             id: `grade_${col.id}`,
             header: col.name,
-            accessorFn: (row) => {
-              const controller = gradebookController.getStudentGradebookController(row.id);
-              const { item } = controller.getColumnForStudent(col.id);
-              // Always return a string for filtering
-              return String(item?.score_override ?? item?.score ?? "missing");
-            },
+            accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? "missing",
             cell: ({ row }) => {
               return <MemoizedGradebookCell columnId={col.id} studentId={row.original.id} />;
             },
             enableColumnFilter: true,
             filterFn: (row, columnId, filterValue) => {
-              const controller = gradebookController.getStudentGradebookController(row.original.id);
-              return controller.filter(col.id, filterValue);
+              const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? "";
+              if (!filterValue) return true;
+              if (Array.isArray(filterValue)) {
+                return filterValue.includes(fv);
+              }
+              return fv === filterValue;
             },
             enableSorting: true,
             meta: {
@@ -2034,7 +2087,8 @@ export default function GradebookTable() {
     collapsedGroups,
     findBestColumnToShow,
     classSections?.data,
-    labSections
+    labSections,
+    scoreMaps
   ]);
 
   const studentProfiles = useMemo(() => {
@@ -2056,6 +2110,16 @@ export default function GradebookTable() {
   const rowModel = table.getRowModel();
   const coreRowModel = table.getCoreRowModel();
 
+  const visibleLeafColumns = table.getVisibleLeafColumns();
+  const firstGradeColIdx = visibleLeafColumns.findIndex((c) => c.id.startsWith("grade_"));
+  const frozenColumnCount = firstGradeColIdx === -1 ? visibleLeafColumns.length : firstGradeColIdx;
+  const scrollableLeafColumns = useMemo(() => {
+    const leaf = table.getVisibleLeafColumns();
+    const idx = leaf.findIndex((c) => c.id.startsWith("grade_"));
+    return idx === -1 ? [] : leaf.slice(idx);
+  }, [table, columns, collapsedGroups, cachedColumnsKey]);
+  const scrollableWidth = scrollableLeafColumns.length * GRADE_COL_WIDTH;
+
   // Virtualization setup
   const parentRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLTableSectionElement>(null);
@@ -2065,6 +2129,9 @@ export default function GradebookTable() {
 
   // Header height state for Safari compatibility
   const [headerHeight, setHeaderHeight] = useState(0);
+
+  // Tallest leaf header cell height — all header cells are set to this so the row is uniform
+  const [leafHeaderHeight, setLeafHeaderHeight] = useState(48);
 
   // Detect Safari browser
   const isSafari = useMemo(() => {
@@ -2141,14 +2208,137 @@ export default function GradebookTable() {
     };
   }, [forceRecalculation]);
 
+  // Measure the tallest leaf header cell so every header in the row matches.
+  // Runs after every render because column virtualization swaps cells on scroll.
+  // Uses a 2px tolerance to prevent oscillation from border/padding rounding.
+  useLayoutEffect(() => {
+    if (!headerRef.current) return;
+    const rows = headerRef.current.querySelectorAll("tr");
+    const lastRow = rows[rows.length - 1];
+    if (!lastRow) return;
+
+    let maxH = 48;
+    lastRow.querySelectorAll(":scope > th").forEach((th) => {
+      const absChildren = th.querySelectorAll('[role="columnheader"]');
+      if (absChildren.length > 0) {
+        absChildren.forEach((child) => {
+          maxH = Math.max(maxH, (child as HTMLElement).scrollHeight);
+        });
+      } else {
+        maxH = Math.max(maxH, (th as HTMLElement).scrollHeight);
+      }
+    });
+
+    if (Math.abs(maxH - leafHeaderHeight) > 2) {
+      setLeafHeaderHeight(maxH);
+    }
+  });
+
+  const columnVirtualizer = useVirtualizer({
+    horizontal: true,
+    count: scrollableLeafColumns.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => GRADE_COL_WIDTH,
+    overscan: 3
+  });
+
   const virtualizer = useVirtualizer({
     count: rowModel.rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 45, // Estimated row height in pixels
-    overscan: 150 // Number of items to render outside visible area
+    overscan: 5
   });
 
   const virtualRows = virtualizer.getVirtualItems();
+
+  const scrollableRow1Segments = useMemo(() => {
+    type Seg = {
+      left: number;
+      width: number;
+      key: string;
+      groupName: string;
+      isCollapsed: boolean;
+      groupColumnsLen: number;
+    };
+    const segments: Seg[] = [];
+    let pos = 0;
+    let i = 0;
+    while (i < scrollableLeafColumns.length) {
+      const leaf = scrollableLeafColumns[i];
+      const columnId = Number(leaf.id.slice(6));
+      const column = gradebookColumns.find((c) => c.id === columnId);
+      if (!column) {
+        pos += GRADE_COL_WIDTH;
+        i++;
+        continue;
+      }
+      const prefix = column.slug.split("-")[0];
+      const baseGroupName = prefix || "other";
+      const groupEntry = Object.entries(groupedColumns).find(
+        ([key, group]) => key.startsWith(baseGroupName) && group.columns.some((col) => col.id === columnId)
+      );
+      if (!groupEntry || groupEntry[1].columns.length <= 1) {
+        pos += GRADE_COL_WIDTH;
+        i++;
+        continue;
+      }
+      const group = groupEntry[1];
+      const groupColumns = group.columns;
+      const isFirstInGroup = groupColumns[0].id === columnId;
+      const isCollapsed = collapsedGroups.has(group.groupName);
+      const bestCol = findBestColumnToShow(groupColumns);
+      const isVisibleWhenCollapsed = isCollapsed && columnId === bestCol.id;
+
+      if (isFirstInGroup || isVisibleWhenCollapsed) {
+        const span = isCollapsed ? 1 : groupColumns.length;
+        const width = GRADE_COL_WIDTH * span;
+        segments.push({
+          left: pos,
+          width,
+          key: `grp-${group.groupName}-${columnId}`,
+          groupName: group.groupName,
+          isCollapsed,
+          groupColumnsLen: groupColumns.length
+        });
+        pos += width;
+        i += span;
+      } else if (!isCollapsed) {
+        i++;
+      } else {
+        i++;
+      }
+    }
+    return segments;
+  }, [scrollableLeafColumns, gradebookColumns, groupedColumns, collapsedGroups, findBestColumnToShow]);
+
+  const filterHeader = useCallback(
+    (header: Header<UserProfile, unknown>) => {
+      if (header.column.id.startsWith("grade_")) {
+        const columnId = Number(header.column.id.slice(6));
+        const column = gradebookColumns.find((col) => col.id === columnId);
+
+        if (column) {
+          const prefix = column.slug.split("-")[0];
+          const baseGroupName = prefix || "other";
+
+          const groupEntry = Object.entries(groupedColumns).find(
+            ([key, group]) => key.startsWith(baseGroupName) && group.columns.some((col) => col.id === columnId)
+          );
+
+          if (groupEntry && groupEntry[1].columns.length > 1) {
+            const isCollapsed = collapsedGroups.has(groupEntry[1].groupName);
+
+            if (isCollapsed) {
+              const bestColumn = findBestColumnToShow(groupEntry[1].columns);
+              return columnId === bestColumn.id;
+            }
+          }
+        }
+      }
+      return true;
+    },
+    [gradebookColumns, groupedColumns, collapsedGroups, findBestColumnToShow]
+  );
 
   const renderVirtualRow = useCallback(
     (virtualRow: VirtualItem) => {
@@ -2156,6 +2346,115 @@ export default function GradebookTable() {
       if (!row) return null;
 
       const idx = virtualRow.index;
+      const cells = row.getVisibleCells();
+      const frozenCells = cells.slice(0, frozenColumnCount);
+      const scrollCells = cells.slice(frozenColumnCount);
+
+      const cellBody = (cell: (typeof cells)[0], isStickyFirst: boolean, asTableCell: boolean) => {
+        const isCollapsedColumn = (cell.column.columnDef.meta as { isCollapsed?: boolean })?.isCollapsed;
+        const inner = (
+          <>
+            {isCollapsedColumn && (
+              <IconButton
+                size="xs"
+                variant="ghost"
+                position="absolute"
+                left={0}
+                top={0}
+                bottom={0}
+                onClick={() => toggleGroup((cell.column.columnDef.meta as { groupName?: string })?.groupName || "")}
+                aria-label="Expand group"
+                colorPalette="blue"
+                opacity={0.8}
+                _hover={{ opacity: 1, bg: "bg.info" }}
+                zIndex={10}
+                minW="auto"
+                h="auto"
+                p={0}
+                w={8}
+                bg="bg.surface"
+                border="1px solid"
+                borderColor="border.muted"
+                borderRadius={0}
+              >
+                <Icon as={LuChevronRight} boxSize={5} />
+              </IconButton>
+            )}
+            <Box pl={isCollapsedColumn ? 8 : 0}>
+              {cell.column.columnDef.cell
+                ? flexRender(cell.column.columnDef.cell, cell.getContext())
+                : String(cell.getValue())}
+            </Box>
+          </>
+        );
+
+        const bg = isStickyFirst
+          ? idx % 2 === 0
+            ? "bg.subtle"
+            : "bg.muted"
+          : isCollapsedColumn
+            ? "bg.warning"
+            : idx % 2 === 0
+              ? "bg.subtle"
+              : "bg.muted";
+
+        const styleBase = {
+          ...(isStickyFirst
+            ? {
+                position: "sticky" as const,
+                left: 0,
+                zIndex: 18,
+                borderRight: "1px solid var(--chakra-colors-border-muted)",
+                width: `${firstColumnWidth}px`,
+                maxWidth: `${firstColumnWidth}px`,
+                minWidth: `${firstColumnWidth}px`
+              }
+            : {
+                width: `${GRADE_COL_WIDTH}px`,
+                maxWidth: `${GRADE_COL_WIDTH}px`,
+                minWidth: `${GRADE_COL_WIDTH}px`,
+                zIndex: 1
+              }),
+          ...(isCollapsedColumn
+            ? {
+                borderLeft: "2px solid var(--chakra-colors-border-warning)"
+              }
+            : {}),
+          height: `${virtualRow.size}px`,
+          verticalAlign: "middle" as const,
+          boxSizing: "border-box" as const
+        };
+
+        if (asTableCell) {
+          return (
+            <Table.Cell
+              key={cell.id}
+              p={2}
+              position="relative"
+              bg={bg}
+              style={{ ...styleBase, display: "table-cell" }}
+              className={isStickyFirst ? "sticky-first-cell" : undefined}
+            >
+              {inner}
+            </Table.Cell>
+          );
+        }
+
+        return (
+          <Box
+            key={cell.id}
+            data-gradebook-scroll-cell=""
+            p={2}
+            position="relative"
+            bg={bg}
+            {...styleBase}
+            display="flex"
+            alignItems="center"
+          >
+            {inner}
+          </Box>
+        );
+      };
 
       return (
         <Table.Row
@@ -2175,90 +2474,46 @@ export default function GradebookTable() {
             tableLayout: "fixed"
           }}
         >
-          {row.getVisibleCells().map((cell, colIdx) => {
-            const isCollapsedColumn = (cell.column.columnDef.meta as { isCollapsed?: boolean })?.isCollapsed;
-
-            return (
-              <Table.Cell
-                key={cell.id}
-                p={2}
-                position="relative"
-                bg={
-                  colIdx === 0
-                    ? idx % 2 === 0
-                      ? "bg.subtle"
-                      : "bg.muted"
-                    : isCollapsedColumn
-                      ? "bg.warning"
-                      : undefined
-                }
-                style={{
-                  ...(colIdx === 0
-                    ? {
-                        position: "sticky",
-                        left: 0,
-                        zIndex: 18,
-                        borderRight: "1px solid var(--chakra-colors-border-muted)",
-                        width: `${firstColumnWidth}px`,
-                        maxWidth: `${firstColumnWidth}px`,
-                        minWidth: `${firstColumnWidth}px`
-                      }
-                    : {
-                        width: "120px",
-                        maxWidth: "120px",
-                        minWidth: "120px",
-                        zIndex: 1
-                      }),
-                  ...(isCollapsedColumn
-                    ? {
-                        borderLeft: "2px solid var(--chakra-colors-border-warning)"
-                      }
-                    : {}),
-                  height: `${virtualRow.size}px`,
-                  verticalAlign: "middle",
-                  display: "table-cell",
-                  boxSizing: "border-box"
-                }}
-                className={colIdx === 0 ? "sticky-first-cell" : undefined}
-              >
-                {isCollapsedColumn && (
-                  <IconButton
-                    size="xs"
-                    variant="ghost"
-                    position="absolute"
-                    left={0}
-                    top={0}
-                    bottom={0}
-                    onClick={() => toggleGroup((cell.column.columnDef.meta as { groupName?: string })?.groupName || "")}
-                    aria-label="Expand group"
-                    colorPalette="blue"
-                    opacity={0.8}
-                    _hover={{ opacity: 1, bg: "bg.info" }}
-                    zIndex={10}
-                    minW="auto"
-                    h="auto"
-                    p={0}
-                    w={8}
-                    bg="bg.surface"
-                    border="1px solid"
-                    borderColor="border.muted"
-                    borderRadius={0}
-                  >
-                    <Icon as={LuChevronRight} boxSize={5} />
-                  </IconButton>
-                )}
-                <Box pl={isCollapsedColumn ? 8 : 0}>
-                  {cell.column.columnDef.cell
-                    ? flexRender(cell.column.columnDef.cell, cell.getContext())
-                    : String(cell.getValue())}
-                </Box>
-              </Table.Cell>
-            );
-          })}
+          {frozenCells.map((cell, colIdx) => cellBody(cell, colIdx === 0, true))}
+          <Table.Cell
+            key={`${row.id}-scroll-region`}
+            p={0}
+            position="relative"
+            style={{
+              width: scrollableWidth,
+              minWidth: scrollableWidth,
+              maxWidth: scrollableWidth,
+              height: `${virtualRow.size}px`,
+              verticalAlign: "middle",
+              display: "table-cell",
+              boxSizing: "border-box"
+            }}
+          >
+            <Box position="relative" w={`${scrollableWidth}px`} h={`${virtualRow.size}px`}>
+              {columnVirtualizer.getVirtualItems().map((vc) => {
+                const cell = scrollCells[vc.index];
+                if (!cell) return null;
+                return (
+                  <Box key={cell.id} position="absolute" top={0} left={`${vc.start}px`} w={`${vc.size}px`} h="100%">
+                    {cellBody(cell, false, false)}
+                  </Box>
+                );
+              })}
+            </Box>
+          </Table.Cell>
         </Table.Row>
       );
     },
-    [rowModel.rows, toggleGroup, firstColumnWidth, headerHeight, isSafari]
+    [
+      rowModel.rows,
+      frozenColumnCount,
+      scrollableWidth,
+      columnVirtualizer,
+      toggleGroup,
+      firstColumnWidth,
+      headerHeight,
+      isSafari
+    ]
   );
 
   if (!students || !isGradebookDataReady) {
@@ -2299,14 +2554,27 @@ export default function GradebookTable() {
       )}
 
       <style jsx global>{`
-        tr:hover .sticky-first-cell {
+        tbody tr:hover td,
+        tbody tr:hover [data-gradebook-scroll-cell] {
           background-color: var(--chakra-colors-bg-info) !important;
+        }
+        @keyframes gradebook-pulse {
+          0%,
+          100% {
+            opacity: 0.4;
+          }
+          50% {
+            opacity: 1;
+          }
+        }
+        .gradebook-cell-pulse {
+          animation: gradebook-pulse 2s ease-in-out infinite;
         }
       `}</style>
       <Toaster />
       <StudentDetailDialog />
       <GradebookPopoverProvider>
-        <Box
+        <GradebookPointerOpener
           ref={parentRef}
           overflowX="auto"
           overflowY="auto"
@@ -2319,7 +2587,7 @@ export default function GradebookTable() {
           tabIndex={0}
         >
           <Table.Root
-            minW="100%"
+            minW={`${firstColumnWidth + Math.max(0, frozenColumnCount - 1) * GRADE_COL_WIDTH + scrollableWidth}px`}
             w="100%"
             role="table"
             aria-label="Student grades by assignment"
@@ -2356,215 +2624,123 @@ export default function GradebookTable() {
             */}
               <Table.Row>
                 {headerGroups[0].headers
-                  .filter((header) => {
-                    // Filter out headers that should be hidden when collapsed
-                    if (header.column.id.startsWith("grade_")) {
-                      const columnId = Number(header.column.id.slice(6));
-                      const column = gradebookColumns.find((col) => col.id === columnId);
-
-                      if (column) {
-                        const prefix = column.slug.split("-")[0];
-                        const baseGroupName = prefix || "other";
-
-                        // Find the group this column belongs to
-                        const groupEntry = Object.entries(groupedColumns).find(
-                          ([key, group]) =>
-                            key.startsWith(baseGroupName) && group.columns.some((col) => col.id === columnId)
-                        );
-
-                        if (groupEntry && groupEntry[1].columns.length > 1) {
-                          const isCollapsed = collapsedGroups.has(groupEntry[1].groupName);
-
-                          if (isCollapsed) {
-                            // When collapsed, only show the best column to show
-                            const bestColumn = findBestColumnToShow(groupEntry[1].columns);
-                            return columnId === bestColumn.id;
-                          }
-                        }
-                      }
-                    }
-                    return true; // Show all non-gradebook columns and single-column groups
-                  })
-                  .map((header, colIdx) => {
-                    if (header.column.id.startsWith("grade_")) {
-                      // Find which group this column belongs to
-                      const columnId = Number(header.column.id.slice(6));
-                      const column = gradebookColumns.find((col) => col.id === columnId);
-
-                      if (column) {
-                        const prefix = column.slug.split("-")[0];
-                        const baseGroupName = prefix || "other";
-
-                        // Find the group this column belongs to
-                        const groupEntry = Object.entries(groupedColumns).find(
-                          ([key, group]) =>
-                            key.startsWith(baseGroupName) && group.columns.some((col) => col.id === columnId)
-                        );
-
-                        if (groupEntry && groupEntry[1].columns.length > 1) {
-                          // Check if this is the first column in its group
-                          const groupColumns = groupEntry[1].columns;
-                          const isFirstInGroup = groupColumns[0].id === columnId;
-                          const isCollapsed = collapsedGroups.has(groupEntry[1].groupName);
-
-                          // When collapsed, check if this is the column that was selected to be shown
-                          const isVisibleInCollapsedGroup = isCollapsed
-                            ? findBestColumnToShow(groupColumns).id === columnId
-                            : isFirstInGroup;
-
-                          // Show group header for first column when expanded, or for the visible column when collapsed
-                          if (isFirstInGroup || (isCollapsed && isVisibleInCollapsedGroup)) {
-                            // Calculate the number of columns this header should span
-                            // - When collapsed: span only 1 column (the representative column)
-                            // - When expanded: span all columns in the group for proper visual grouping
-                            const colSpan = isCollapsed ? 1 : groupColumns.length;
-
-                            return (
-                              <Table.ColumnHeader
-                                key={header.id}
-                                colSpan={colSpan}
-                                bg={isCollapsed ? "bg.warning" : "bg.emphasized"}
-                                cursor="pointer"
-                                onClick={() => toggleGroup(groupEntry[1].groupName)}
-                                _hover={{ bg: "bg.info" }}
-                                style={{
-                                  position: "sticky",
-                                  // Add emphasized border when expanded to show clear grouping
-                                  borderBottom: "1px solid var(--chakra-colors-border-emphasized)",
-                                  top: 0,
-                                  zIndex: 19,
-                                  textAlign: "center",
-                                  // When expanded, width should span all columns; when collapsed, just one column
-                                  width: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
-                                  minWidth: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
-                                  maxWidth: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
-                                  backgroundColor: isCollapsed
-                                    ? "var(--chakra-colors-bg-warning)"
-                                    : "var(--chakra-colors-bg-emphasized)"
-                                }}
+                  .filter(filterHeader)
+                  .slice(0, frozenColumnCount)
+                  .map((header, colIdx) => (
+                    <Table.ColumnHeader
+                      key={header.id}
+                      bg="bg.subtle"
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        left: colIdx === 0 ? 0 : undefined,
+                        zIndex: colIdx === 0 ? 21 : 19,
+                        minWidth: colIdx === 0 ? firstColumnWidth : 120,
+                        width: colIdx === 0 ? firstColumnWidth : 120,
+                        backgroundColor: "var(--chakra-colors-bg-subtle)"
+                      }}
+                    >
+                      {colIdx === 0 &&
+                        Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
+                          0 && (
+                          <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                            <WrappedTooltip content="Auto-layout columns">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={autoLayout}
+                                colorPalette="blue"
+                                aria-label="Auto-layout columns"
+                                disabled={isAutoLayouting}
+                                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
                               >
-                                <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
-                                  <Icon
-                                    as={collapsedGroups.has(groupEntry[1].groupName) ? LuChevronRight : LuChevronDown}
-                                    boxSize={3}
-                                    color="fg.muted"
-                                  />
-                                  <Text fontWeight="bold" fontSize="sm" color="fg.muted">
-                                    {groupEntry[1].columns.length}{" "}
-                                    {pluralize(
-                                      groupEntry[1].groupName.charAt(0).toUpperCase() + groupEntry[1].groupName.slice(1)
-                                    )}
-                                    ...
-                                  </Text>
-                                </HStack>
-                              </Table.ColumnHeader>
-                            );
-                          } else if (!isCollapsed) {
-                            // When expanded, skip non-first columns as they're covered by the group header's colspan
-                            return null;
-                          } else {
-                            // When collapsed, this column should not be rendered at all (filtered out earlier)
-                            return null;
-                          }
-                        }
-                      }
-                    }
+                                {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
+                              </IconButton>
+                            </WrappedTooltip>
 
-                    return (
-                      <Table.ColumnHeader
-                        key={header.id}
-                        bg="bg.subtle"
-                        style={{
-                          position: "sticky",
-                          top: 0,
-                          left: colIdx === 0 ? 0 : undefined,
-                          zIndex: colIdx === 0 ? 21 : 19,
-                          minWidth: colIdx === 0 ? firstColumnWidth : 120,
-                          width: colIdx === 0 ? firstColumnWidth : 120,
-                          backgroundColor: "var(--chakra-colors-bg-subtle)"
-                        }}
+                            <WrappedTooltip content="Expand all groups">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={expandAll}
+                                colorPalette="blue"
+                                aria-label="Expand all groups"
+                              >
+                                <Icon as={LuChevronDown} boxSize={3} />
+                              </IconButton>
+                            </WrappedTooltip>
+                            <WrappedTooltip content="Collapse all groups">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={collapseAll}
+                                colorPalette="blue"
+                                aria-label="Collapse all groups"
+                              >
+                                <Icon as={LuChevronRight} boxSize={3} />
+                              </IconButton>
+                            </WrappedTooltip>
+                          </HStack>
+                        )}
+                    </Table.ColumnHeader>
+                  ))}
+                <Table.ColumnHeader
+                  key="gradebook-h1-scroll"
+                  p={0}
+                  bg="bg.subtle"
+                  verticalAlign="top"
+                  style={{
+                    width: scrollableWidth,
+                    minWidth: scrollableWidth,
+                    maxWidth: scrollableWidth,
+                    position: "relative",
+                    zIndex: 19
+                  }}
+                >
+                  <Box position="relative" w={`${scrollableWidth}px`} minH="36px">
+                    {scrollableRow1Segments.map((seg) => (
+                      <Box
+                        key={seg.key}
+                        position="absolute"
+                        left={`${seg.left}px`}
+                        top={0}
+                        w={`${seg.width}px`}
+                        minH="36px"
+                        bg={seg.isCollapsed ? "bg.warning" : "bg.emphasized"}
+                        cursor="pointer"
+                        onClick={() => toggleGroup(seg.groupName)}
+                        _hover={{ bg: "bg.info" }}
+                        borderBottom="1px solid"
+                        borderColor="border.emphasized"
+                        display="flex"
+                        alignItems="center"
+                        justifyContent="center"
                       >
-                        {/* Add expand/collapse buttons in the space above Student Name */}
-                        {colIdx === 0 &&
-                          Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
-                            0 && (
-                            <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
-                              <WrappedTooltip content="Auto-layout columns">
-                                <IconButton
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={autoLayout}
-                                  colorPalette="blue"
-                                  aria-label="Auto-layout columns"
-                                  disabled={isAutoLayouting}
-                                  _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
-                                >
-                                  {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
-                                </IconButton>
-                              </WrappedTooltip>
-
-                              <WrappedTooltip content="Expand all groups">
-                                <IconButton
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={expandAll}
-                                  colorPalette="blue"
-                                  aria-label="Expand all groups"
-                                >
-                                  <Icon as={LuChevronDown} boxSize={3} />
-                                </IconButton>
-                              </WrappedTooltip>
-                              <WrappedTooltip content="Collapse all groups">
-                                <IconButton
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={collapseAll}
-                                  colorPalette="blue"
-                                  aria-label="Collapse all groups"
-                                >
-                                  <Icon as={LuChevronRight} boxSize={3} />
-                                </IconButton>
-                              </WrappedTooltip>
-                            </HStack>
-                          )}
-                      </Table.ColumnHeader>
-                    );
-                  })}
+                        <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
+                          <Icon
+                            as={collapsedGroups.has(seg.groupName) ? LuChevronRight : LuChevronDown}
+                            boxSize={3}
+                            color="fg.muted"
+                          />
+                          <Text fontWeight="bold" fontSize="sm" color="fg.muted">
+                            {seg.groupColumnsLen}{" "}
+                            {pluralize(seg.groupName.charAt(0).toUpperCase() + seg.groupName.slice(1))}
+                            ...
+                          </Text>
+                        </HStack>
+                      </Box>
+                    ))}
+                  </Box>
+                </Table.ColumnHeader>
               </Table.Row>
               {/* Regular header row */}
-              {headerGroups.map((headerGroup) => (
-                <Table.Row key={headerGroup.id}>
-                  {headerGroup.headers
-                    .filter((header) => {
-                      // Filter out headers that should be hidden when collapsed
-                      if (header.column.id.startsWith("grade_")) {
-                        const columnId = Number(header.column.id.slice(6));
-                        const column = gradebookColumns.find((col) => col.id === columnId);
-
-                        if (column) {
-                          const prefix = column.slug.split("-")[0];
-                          const baseGroupName = prefix || "other";
-
-                          // Find the group this column belongs to
-                          const groupEntry = Object.entries(groupedColumns).find(
-                            ([key, group]) =>
-                              key.startsWith(baseGroupName) && group.columns.some((col) => col.id === columnId)
-                          );
-
-                          if (groupEntry && groupEntry[1].columns.length > 1) {
-                            const isCollapsed = collapsedGroups.has(groupEntry[1].groupName);
-
-                            if (isCollapsed) {
-                              // When collapsed, only show the best column to show
-                              const bestColumn = findBestColumnToShow(groupEntry[1].columns);
-                              return columnId === bestColumn.id;
-                            }
-                          }
-                        }
-                      }
-                      return true; // Show all non-gradebook columns and single-column groups
-                    })
-                    .map((header, colIdx) => (
+              {headerGroups.map((headerGroup) => {
+                const row2Filtered = headerGroup.headers.filter(filterHeader);
+                const h2Frozen = row2Filtered.slice(0, frozenColumnCount);
+                const h2Scroll = row2Filtered.slice(frozenColumnCount);
+                return (
+                  <Table.Row key={headerGroup.id}>
+                    {h2Frozen.map((header, colIdx) => (
                       <Table.ColumnHeader
                         key={header.id}
                         bg="bg.muted"
@@ -2608,8 +2784,71 @@ export default function GradebookTable() {
                         )}
                       </Table.ColumnHeader>
                     ))}
-                </Table.Row>
-              ))}
+                    <Table.ColumnHeader
+                      key={`${headerGroup.id}-scroll-h2`}
+                      p={0}
+                      borderBottom="1px solid"
+                      borderColor="border.emphasized"
+                      verticalAlign="top"
+                      style={{
+                        width: scrollableWidth,
+                        minWidth: scrollableWidth,
+                        maxWidth: scrollableWidth,
+                        position: "relative",
+                        height: "auto",
+                        backgroundColor: "var(--chakra-colors-bg-subtle)"
+                      }}
+                    >
+                      <Box position="relative" w={`${scrollableWidth}px`} minH={`${leafHeaderHeight}px`}>
+                        {columnVirtualizer.getVirtualItems().map((vc) => {
+                          const header = h2Scroll[vc.index];
+                          if (!header) return null;
+                          return (
+                            <Box
+                              key={header.id}
+                              position="absolute"
+                              left={`${vc.start}px`}
+                              top={0}
+                              w={`${vc.size}px`}
+                              role="columnheader"
+                              bg="bg.muted"
+                              p={2}
+                              pb={0}
+                              borderBottom="1px solid"
+                              borderLeft="1px solid"
+                              borderColor="border.emphasized"
+                              verticalAlign="top"
+                              minH={`${leafHeaderHeight}px`}
+                            >
+                              {header.column.id.startsWith("grade_") ? (
+                                <GradebookColumnHeader
+                                  column_id={Number(header.column.id.slice(6))}
+                                  isSorted={header.column.getIsSorted()}
+                                  toggleSorting={header.column.toggleSorting}
+                                  clearSorting={header.column.clearSorting}
+                                  columnModel={header.column}
+                                />
+                              ) : header.isPlaceholder ? null : (
+                                <GenericGradebookColumnHeader
+                                  columnName={header.column.id}
+                                  isSorted={header.column.getIsSorted()}
+                                  toggleSorting={header.column.toggleSorting}
+                                  clearSorting={header.column.clearSorting}
+                                  columnModel={header.column}
+                                  header={header}
+                                  coreRowModel={coreRowModel}
+                                  classSections={classSections?.data}
+                                  labSections={labSections}
+                                />
+                              )}
+                            </Box>
+                          );
+                        })}
+                      </Box>
+                    </Table.ColumnHeader>
+                  </Table.Row>
+                );
+              })}
             </Table.Header>
             <Table.Body
               style={{
@@ -2625,7 +2864,7 @@ export default function GradebookTable() {
               {virtualRows.map((virtualRow) => renderVirtualRow(virtualRow))}
             </Table.Body>
           </Table.Root>
-        </Box>
+        </GradebookPointerOpener>
       </GradebookPopoverProvider>
       {/* Show row count info */}
       <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">

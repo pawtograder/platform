@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { termToTermText } from "@/components/ui/semesterText";
-import { getCachedUserCoursesWithClasses } from "@/lib/server-route-cache";
+import { fetchUserCoursesWithClasses } from "@/lib/ssr-platform-data";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Card, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
 import { headers } from "next/headers";
@@ -19,8 +19,8 @@ export default async function ProtectedPage() {
 
   const userId = claims.data.claims.sub;
   const headerUserId = (await headers()).get("X-User-ID");
-  const cacheUserId = headerUserId || userId;
-  const { data: roleRows, error: rolesError } = await getCachedUserCoursesWithClasses(cacheUserId);
+  const effectiveUserId = headerUserId || userId;
+  const { data: roleRows, error: rolesError } = await fetchUserCoursesWithClasses(supabase, effectiveUserId);
   if (rolesError) {
     // eslint-disable-next-line no-console -- operational visibility when cache layer fails
     console.error("course picker: user_roles fetch", rolesError);

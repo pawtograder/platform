@@ -5,7 +5,7 @@ import { revalidateTag } from "next/cache";
 import * as Sentry from "@sentry/nextjs";
 
 /**
- * Revalidate Next.js `unstable_cache` tags for a course after client-side mutations
+ * Revalidate Next.js cache tags for a course after client-side mutations
  * (e.g. Refine assignment update). Requires an authenticated staff session for the class.
  */
 export async function POST(request: NextRequest) {

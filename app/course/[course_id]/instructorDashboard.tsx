@@ -4,7 +4,7 @@ import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { getCachedInstructorDashboardBundle } from "@/lib/course-dashboard-cache";
+import { fetchInstructorDashboardBundle } from "@/lib/ssr-course-dashboard";
 import { findGithubIdentity } from "@/lib/githubIdentity";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -190,6 +190,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     redirect("/");
   }
 
+  const supabase = await createClient();
   const {
     metricsRaw,
     metricsError,
@@ -205,10 +206,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     workflowStatsDayError,
     recentErrors,
     recentErrorsError
-  } = await getCachedInstructorDashboardBundle(course_id, user_id);
+  } = await fetchInstructorDashboardBundle(supabase, course_id);
 
-  const supabaseForIdentities = await createClient();
-  const identitiesResult = await supabaseForIdentities.auth.getUserIdentities();
+  const identitiesResult = await supabase.auth.getUserIdentities();
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   if (metricsError) {

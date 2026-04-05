@@ -1,6 +1,8 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
-import { getCachedAdminDashboardStats } from "@/lib/server-route-cache";
+import { fetchAdminDashboardStats } from "@/lib/ssr-platform-data";
+import { createAdminClient } from "@/utils/supabase/client";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import * as Sentry from "@sentry/nextjs";
 import { Card, Flex, Grid, HStack, Icon, Text, VStack } from "@chakra-ui/react";
 import { FileText, GraduationCap, MessageSquare, Plus, Settings, Users } from "lucide-react";
@@ -10,9 +12,10 @@ function formatCount(value: number | null): string {
   return value === null ? "—" : String(value);
 }
 
-/** Cached admin metrics grid and quick actions (suspended by `app/admin/page.tsx`). */
+/** Admin metrics grid and quick actions (suspended by `app/admin/page.tsx`). */
 export async function AdminDashboardContent() {
-  const { totalClasses, totalUsers, totalEnrollments, recentClasses, errors } = await getCachedAdminDashboardStats();
+  const admin = createAdminClient<Database>();
+  const { totalClasses, totalUsers, totalEnrollments, recentClasses, errors } = await fetchAdminDashboardStats(admin);
   const hasErrors = errors.length > 0;
   if (hasErrors) {
     Sentry.captureMessage(`Admin dashboard stats partial failure: ${errors.join("; ")}`);

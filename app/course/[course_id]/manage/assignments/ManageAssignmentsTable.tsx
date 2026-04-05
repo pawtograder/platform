@@ -1,13 +1,12 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
-import { getCachedManageAssignmentsOverview } from "@/lib/course-dashboard-cache";
+import { fetchManageAssignmentsOverview } from "@/lib/ssr-course-dashboard";
+import { createClient } from "@/utils/supabase/server";
 import { Alert, Table, Text } from "@chakra-ui/react";
-import { headers } from "next/headers";
 
 export async function ManageAssignmentsTable({ courseId }: { courseId: number }) {
-  const headersList = await headers();
-  const userId = headersList.get("X-User-ID") ?? "";
-  const { data: assignmentRows, error: overviewError } = await getCachedManageAssignmentsOverview(courseId, userId);
+  const supabase = await createClient();
+  const { data: assignmentRows, error: overviewError } = await fetchManageAssignmentsOverview(supabase, courseId);
 
   if (overviewError) {
     return (

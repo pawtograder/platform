@@ -1,7 +1,7 @@
 /**
- * Central definitions for Next.js `unstable_cache` / `revalidateTag` keys.
- * Keep in sync with `lib/course-dashboard-cache.ts`, `lib/server-route-cache.ts`,
- * and PostgreSQL `invalidate_*` trigger functions (see migrations).
+ * Keys passed to `revalidateTag()` (client route + PostgreSQL `call_cache_invalidate` triggers).
+ * Dashboards are not Data Cached (`unstable_cache`); tags are effectively no-ops for those paths but remain
+ * defined so trigger payloads stay stable. Do not use `unstable_cache` with cookie-based `createClient()`.
  */
 export function courseAssignmentsOverviewTag(classId: number) {
   return `course:${classId}:assignments-overview`;
@@ -27,7 +27,7 @@ export function adminDashboardStatsTag() {
   return "admin:dashboard-stats";
 }
 
-/** All `unstable_cache` tags derived from class-scoped data (assignments, roster, etc.). */
+/** Tags emitted for class-scoped data invalidation (assignments, roster, dashboards, flashcards, …). */
 export function courseDerivedDataTags(classId: number): string[] {
   return [
     courseAssignmentsOverviewTag(classId),

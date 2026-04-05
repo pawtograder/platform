@@ -41,7 +41,7 @@ BEGIN
     ];
     PERFORM public.call_cache_invalidate(tags);
 
-    -- Next.js unstable_cache tags (lib/next-cache-tags.ts, lib/course-dashboard-cache.ts)
+    -- Next.js revalidateTag keys (lib/next-cache-tags.ts, lib/ssr-course-dashboard.ts)
     tags := ARRAY[
       'course:' || class_id_value || ':assignments-overview',
       'course:' || class_id_value || ':instructor-dashboard',
@@ -51,7 +51,7 @@ BEGIN
     PERFORM public.call_cache_invalidate(tags);
   END LOOP;
 
-  -- Course picker cache (lib/server-route-cache getCachedUserCoursesWithClasses)
+  -- Course picker tag (lib/ssr-platform-data fetchUserCoursesWithClasses)
   IF table_name = 'user_roles' THEN
     IF TG_OP = 'DELETE' THEN
       SELECT ARRAY_AGG(DISTINCT user_id ORDER BY user_id)

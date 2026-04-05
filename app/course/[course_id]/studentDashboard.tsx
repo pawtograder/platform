@@ -1,4 +1,4 @@
-import { getCachedStudentDashboardBundle } from "@/lib/course-dashboard-cache";
+import { fetchStudentDashboardBundle } from "@/lib/ssr-course-dashboard";
 import { findGithubIdentity } from "@/lib/githubIdentity";
 import { Survey, SurveyResponse } from "@/types/survey";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
@@ -93,11 +93,11 @@ export default async function StudentDashboard({
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
 
+  const supabase = await createClient();
   const { course, assignments, surveysRaw, regradeRequests, responsesRaw, classSection, labSection, leadersRaw } =
-    await getCachedStudentDashboardBundle(course_id, user_id ?? "", private_profile_id);
+    await fetchStudentDashboardBundle(supabase, course_id, user_id ?? "", private_profile_id);
 
-  const supabaseForIdentities = await createClient();
-  const identitiesResult = await supabaseForIdentities.auth.getUserIdentities();
+  const identitiesResult = await supabase.auth.getUserIdentities();
   const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
