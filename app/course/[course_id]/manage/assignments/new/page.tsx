@@ -6,6 +6,7 @@ import {
   assignmentCreateSolutionRepo,
   assignmentGroupCopyGroupsFromAssignment
 } from "@/lib/edgeFunctions";
+import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -143,6 +144,7 @@ export default function NewAssignmentPage() {
             type: "success"
           });
 
+          await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
           router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`);
         }
       } catch (error) {

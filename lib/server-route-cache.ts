@@ -1,5 +1,6 @@
 import "server-only";
 
+import { adminDashboardStatsTag, courseFlashcardDecksTag, userCoursesTag } from "@/lib/next-cache-tags";
 import { createClient } from "@/utils/supabase/server";
 import type { FlashcardDeck } from "@/utils/supabase/DatabaseTypes";
 import { unstable_cache } from "next/cache";
@@ -19,7 +20,7 @@ export async function getCachedUserCoursesWithClasses(userId: string) {
       return { data: data ?? [], error: error?.message ?? null };
     },
     ["user-courses-with-classes", userId],
-    { revalidate: SHORT_REVALIDATE_SECONDS, tags: [`user:${userId}:courses`] }
+    { revalidate: SHORT_REVALIDATE_SECONDS, tags: [userCoursesTag(userId)] }
   )();
 }
 
@@ -60,7 +61,7 @@ export async function getCachedAdminDashboardStats(): Promise<AdminDashboardStat
       };
     },
     ["admin-dashboard-stats"],
-    { revalidate: SHORT_REVALIDATE_SECONDS, tags: ["admin:dashboard-stats"] }
+    { revalidate: SHORT_REVALIDATE_SECONDS, tags: [adminDashboardStatsTag()] }
   )();
 }
 
@@ -80,6 +81,6 @@ export async function getCachedFlashcardDecksForCourse(classId: number, userId: 
       };
     },
     ["flashcard-decks", String(classId), userId],
-    { revalidate: SHORT_REVALIDATE_SECONDS, tags: [`course:${classId}:flashcard-decks`] }
+    { revalidate: SHORT_REVALIDATE_SECONDS, tags: [courseFlashcardDecksTag(classId)] }
   )();
 }

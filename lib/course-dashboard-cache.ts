@@ -1,5 +1,10 @@
 import "server-only";
 
+import {
+  courseAssignmentsOverviewTag,
+  courseInstructorDashboardTag,
+  courseStudentDashboardTag
+} from "@/lib/next-cache-tags";
 import { createClient } from "@/utils/supabase/server";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { unstable_cache } from "next/cache";
@@ -26,7 +31,7 @@ export async function getCachedManageAssignmentsOverview(
     ["course-manage-assignments-overview", String(classId), userId],
     {
       revalidate: DASHBOARD_REVALIDATE_SECONDS,
-      tags: [`course:${classId}:assignments-overview`]
+      tags: [courseAssignmentsOverviewTag(classId)]
     }
   )();
 }
@@ -139,7 +144,7 @@ export async function getCachedInstructorDashboardBundle(
     ["instructor-dashboard-bundle", String(courseId), userId],
     {
       revalidate: DASHBOARD_REVALIDATE_SECONDS,
-      tags: [`course:${courseId}:instructor-dashboard`]
+      tags: [courseInstructorDashboardTag(courseId)]
     }
   )();
 }
@@ -275,7 +280,7 @@ export async function getCachedStudentDashboardBundle(
     ["student-dashboard-bundle", String(courseId), userId, privateProfileId],
     {
       revalidate: DASHBOARD_REVALIDATE_SECONDS,
-      tags: [`course:${courseId}:student-dashboard`]
+      tags: [courseStudentDashboardTag(courseId)]
     }
   )();
 }
