@@ -1,7 +1,9 @@
 import { Container, Heading, SimpleGrid, Text, VStack, Box, Badge } from "@chakra-ui/react";
-import { createClient } from "@/utils/supabase/server";
 import FlashcardDeckCard from "@/app/course/[course_id]/flashcards/flashcard-deck";
+import { getCachedFlashcardDecksForCourse } from "@/lib/server-route-cache";
 import type { FlashcardDeck } from "@/utils/supabase/DatabaseTypes";
+import * as Sentry from "@sentry/nextjs";
+import { headers } from "next/headers";
 
 /**
  * This type defines the props for the FlashcardsPage component.
@@ -20,17 +22,14 @@ type FlashcardsPageProps = {
 export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
   const { course_id } = await params;
 
-  const client = await createClient();
+  const userId = (await headers()).get("X-User-ID") ?? "";
+  const { decks: flashcardDecks, error: fetchError } = await getCachedFlashcardDecksForCourse(
+    Number(course_id),
+    userId
+  );
 
-  // Fetch flashcard decks for the current course
-  const { data: flashcardDecks, error } = await client
-    .from("flashcard_decks")
-    .select("*")
-    .eq("class_id", Number(course_id))
-    .is("deleted_at", null) // Only show non-deleted decks
-    .order("created_at", { ascending: false });
-
-  if (error) {
+  if (fetchError) {
+    Sentry.captureException(new Error(fetchError));
     return (
       <Container py={8}>
         <VStack align="stretch" gap={6}>

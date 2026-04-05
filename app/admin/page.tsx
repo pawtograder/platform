@@ -1,6 +1,7 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
-import { createClient } from "@/utils/supabase/server";
+import { getCachedAdminDashboardStats } from "@/lib/server-route-cache";
+import * as Sentry from "@sentry/nextjs";
 import { Card, Flex, Grid, Heading, HStack, Icon, Text, VStack } from "@chakra-ui/react";
 import { FileText, GraduationCap, MessageSquare, Plus, Settings, Users } from "lucide-react";
 import Link from "next/link";
@@ -9,16 +10,10 @@ import Link from "next/link";
  * Admin dashboard overview page
  */
 export default async function AdminPage() {
-  const supabase = await createClient();
-
-  // Get system statistics
-  const [{ count: totalClasses }, { count: totalUsers }, { count: totalEnrollments }, { data: recentClasses }] =
-    await Promise.all([
-      supabase.from("classes").select("*", { count: "exact", head: true }),
-      supabase.from("users").select("*", { count: "exact", head: true }),
-      supabase.from("user_roles").select("*", { count: "exact", head: true }),
-      supabase.from("classes").select("id, name, created_at").order("created_at", { ascending: false }).limit(5)
-    ]);
+  const { totalClasses, totalUsers, totalEnrollments, recentClasses, errors } = await getCachedAdminDashboardStats();
+  if (errors.length > 0) {
+    Sentry.captureMessage(`Admin dashboard stats partial failure: ${errors.join("; ")}`);
+  }
 
   return (
     <VStack align="stretch" gap={6}>
