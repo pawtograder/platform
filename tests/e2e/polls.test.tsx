@@ -84,7 +84,14 @@ test.describe("Polls", () => {
   test.afterEach(async ({}, testInfo) => {
     if (testInfo.status !== "failed") return;
     for (const user of [student, instructor].filter(Boolean)) {
-      console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+      try {
+        const link = await generateMagicLink(user!);
+        console.log(`\nFailed test - login as ${user!.email}: ${link}`);
+      } catch (err) {
+        console.warn(
+          `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
   });
 

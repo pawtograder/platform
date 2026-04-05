@@ -91,7 +91,14 @@ test.beforeAll(async () => {
 test.afterEach(async ({}, testInfo) => {
   if (testInfo.status !== "failed") return;
   for (const user of [student, student2, instructor].filter(Boolean)) {
-    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+    try {
+      const link = await generateMagicLink(user!);
+      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
+    } catch (err) {
+      console.warn(
+        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
 });
 const HELP_REQUEST_MESSAGE_1 = "My algorithm keeps timing out on large datasets - any optimization tips?";
