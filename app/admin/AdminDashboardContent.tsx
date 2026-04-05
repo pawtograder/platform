@@ -10,6 +10,7 @@ function formatCount(value: number | null): string {
   return value === null ? "—" : String(value);
 }
 
+/** Cached admin metrics grid and quick actions (suspended by `app/admin/page.tsx`). */
 export async function AdminDashboardContent() {
   const { totalClasses, totalUsers, totalEnrollments, recentClasses, errors } = await getCachedAdminDashboardStats();
   const hasErrors = errors.length > 0;

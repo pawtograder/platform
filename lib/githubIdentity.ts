@@ -1,4 +1,7 @@
-/** Find linked GitHub identity in Supabase auth identities payload (from getUserIdentities). */
+/**
+ * Returns the first identity whose `provider` is `"github"` from a Supabase
+ * `getUserIdentities()` identities array.
+ */
 export function findGithubIdentity(identities: unknown[] | undefined | null): { provider: string } | undefined {
   return (identities ?? []).find(
     (identity): identity is { provider: string } =>

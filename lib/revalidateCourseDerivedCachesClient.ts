@@ -1,7 +1,6 @@
 /**
- * Call after client-side mutations that should drop Next.js unstable_cache entries
- * for course-scoped dashboards and lists (see `courseDerivedDataTags`).
- * Never throws: failures are logged only (best-effort).
+ * POSTs to `/api/cache/revalidate-tags` with `{ classId }` using the session cookie.
+ * Best-effort: logs warnings on failure; does not throw.
  */
 export async function revalidateCourseDerivedCachesClient(classId: number): Promise<void> {
   try {
