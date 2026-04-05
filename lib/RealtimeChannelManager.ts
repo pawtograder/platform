@@ -1,4 +1,5 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { AuthChangeEvent } from "@supabase/auth-js";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import * as Sentry from "@sentry/nextjs";
@@ -158,6 +159,48 @@ export class RealtimeChannelManager {
   setClient(client: SupabaseClient<Database>) {
     this._client = client;
     this._breadcrumb("manager", "setClient", { hasClient: !!client });
+    this.bindRealtimeAuth(client);
+  }
+
+  private _realtimeAuthClient: SupabaseClient<Database> | null = null;
+  private _realtimeAuthUnsubscribe: (() => void) | null = null;
+
+  /**
+   * Keep Realtime JWT in sync with the browser auth client without polling `getSession()`.
+   * Call once per browser Supabase client (e.g. from ClassRealTimeController).
+   */
+  bindRealtimeAuth(client: SupabaseClient<Database>) {
+    if (this._realtimeAuthClient === client && this._realtimeAuthUnsubscribe) {
+      return;
+    }
+    if (this._realtimeAuthUnsubscribe) {
+      this._realtimeAuthUnsubscribe();
+      this._realtimeAuthUnsubscribe = null;
+    }
+    this._realtimeAuthClient = client;
+
+    const applyToken = async (token: string | undefined) => {
+      if (!token) {
+        return;
+      }
+      try {
+        if (client.realtime.accessTokenValue !== token) {
+          await client.realtime.setAuth(token);
+          this._breadcrumb("auth", "realtime_auth_from_auth_listener");
+        }
+      } catch (error) {
+        this._breadcrumb("auth", "realtime_setAuth_error", { message: String(error) }, "error");
+      }
+    };
+
+    const { data } = client.auth.onAuthStateChange((event: AuthChangeEvent, session) => {
+      if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        void applyToken(session?.access_token);
+      } else if (event === "SIGNED_OUT") {
+        void client.realtime.setAuth(null);
+      }
+    });
+    this._realtimeAuthUnsubscribe = () => data.subscription.unsubscribe();
   }
 
   /**
@@ -388,7 +431,7 @@ export class RealtimeChannelManager {
       } else {
         // Start creation and store the promise to serialize concurrent calls
         const createPromise = (async () => {
-          await this._refreshSessionIfNeeded(client);
+          await this._ensureRealtimeAuth(client);
           const channel = client.channel(topic, { config: { private: true } });
           this._breadcrumb("channel", "created", { topic });
 
@@ -574,62 +617,43 @@ export class RealtimeChannelManager {
     };
   }
 
-  private _lastSessionRefreshTime: number = 0;
-  private _sessionRefreshPromise: Promise<void> | null = null;
+  private _realtimeBootstrapPromise: Promise<void> | null = null;
 
   /**
-   * Refresh the session token if needed and set it for Supabase Realtime
+   * Ensure Realtime has a JWT before subscribing. Avoids periodic `getSession()`;
+   * normal updates come from `bindRealtimeAuth` + auth auto-refresh.
    */
-  private async _refreshSessionIfNeeded(client: SupabaseClient<Database>) {
-    if (Date.now() - this._lastSessionRefreshTime < 1000 * 60 * 2) {
-      // 2 minutes
-      this._breadcrumb("auth", "session_refresh_skipped", {
-        message: "Session refresh skipped because it was too recent"
-      });
+  private async _ensureRealtimeAuth(client: SupabaseClient<Database>) {
+    if (client.realtime.accessTokenValue) {
       return;
     }
 
-    // If there's already a refresh in progress, wait for it
-    if (this._sessionRefreshPromise) {
-      this._breadcrumb("auth", "session_refresh_awaiting_in_flight");
-      await this._sessionRefreshPromise;
+    if (this._realtimeBootstrapPromise) {
+      this._breadcrumb("auth", "realtime_bootstrap_await_in_flight");
+      await this._realtimeBootstrapPromise;
       return;
     }
 
-    // Start the refresh process
-    this._breadcrumb("auth", `time since last session refresh: ${Date.now() - this._lastSessionRefreshTime}`);
-    this._breadcrumb("auth", "session_refresh_attempting");
-
-    this._sessionRefreshPromise = this._performSessionRefresh(client);
+    this._breadcrumb("auth", "realtime_bootstrap_getSession");
+    this._realtimeBootstrapPromise = (async () => {
+      const { data, error } = await client.auth.getSession();
+      if (error) {
+        this._breadcrumb("auth", "getSession_error", { message: error.message }, "error");
+        throw error;
+      }
+      if (!data.session?.access_token) {
+        this._breadcrumb("auth", "no_session", {}, "warning");
+        throw new Error("Session not found");
+      }
+      await client.realtime.setAuth(data.session.access_token);
+      this._breadcrumb("auth", "realtime_auth_bootstrapped");
+    })();
 
     try {
-      await this._sessionRefreshPromise;
+      await this._realtimeBootstrapPromise;
     } finally {
-      this._sessionRefreshPromise = null;
+      this._realtimeBootstrapPromise = null;
     }
-  }
-
-  /**
-   * Performs the actual session refresh logic
-   */
-  private async _performSessionRefresh(client: SupabaseClient<Database>) {
-    const { data, error } = await client.auth.getSession();
-    if (error) {
-      this._breadcrumb("auth", "getSession_error", { message: error.message }, "error");
-      throw error;
-    }
-    if (!data.session) {
-      this._breadcrumb("auth", "no_session", {}, "warning");
-      throw new Error("Session not found");
-    }
-    if (client.realtime.accessTokenValue !== data.session.access_token) {
-      await client.realtime.setAuth(data.session.access_token);
-      this._breadcrumb("auth", "realtime_auth_updated");
-    }
-
-    // Only update the timestamp after successful completion
-    this._lastSessionRefreshTime = Date.now();
-    this._breadcrumb("auth", "session_refresh_completed");
   }
 
   /**
@@ -729,8 +753,7 @@ export class RealtimeChannelManager {
     if (!managedChannel) return;
 
     try {
-      // Refresh session first
-      await this._refreshSessionIfNeeded(managedChannel.client);
+      await this._ensureRealtimeAuth(managedChannel.client);
 
       // Remove the old channel
       managedChannel.channel.unsubscribe();
@@ -853,7 +876,7 @@ export class RealtimeChannelManager {
           // Reset reconnection state for fresh start
           managedChannel.reconnectAttempts = 0;
           managedChannel.isReconnecting = false;
-          await this._refreshSessionIfNeeded(managedChannel.client);
+          await this._ensureRealtimeAuth(managedChannel.client);
           await this._resubscribeToChannel(topic);
           this._breadcrumb("reconnect", "resubscribed_topic", { topic });
         }

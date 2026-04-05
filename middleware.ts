@@ -17,6 +17,9 @@ export const config = {
      * - /tunnel (Sentry)
      * Feel free to modify this pattern to include more paths.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)|paws|tunnel$).*)"
+    /*
+     * Skip API routes: they use their own auth and do not need cookie refresh or X-User-ID.
+     */
+    "/((?!_next/static|_next/image|favicon.ico|api/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)|paws|tunnel$).*)"
   ]
 };
