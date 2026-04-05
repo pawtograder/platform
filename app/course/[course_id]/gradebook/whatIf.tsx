@@ -134,7 +134,9 @@ function WhatIfScoreCell({
   return (
     <HStack flexShrink={0} minW="fit-content" gap={0} pr={2}>
       {studentGrade?.score_override != null && (
-        <Tooltip content={`This value is overridden by an instructor, and does not reflect the calculated value. If you have a concern, please contact the instructor.${studentGrade?.score_override_note ? ` Note from instructor: ${studentGrade.score_override_note}` : ""}`}>
+        <Tooltip
+          content={`This value is overridden by an instructor, and does not reflect the calculated value. If you have a concern, please contact the instructor.${studentGrade?.score_override_note ? ` Note from instructor: ${studentGrade.score_override_note}` : ""}`}
+        >
           <Float placement="top-end" offset={2}>
             <Icon as={FaPencil} color="fg.warning" size="xs" />
           </Float>
