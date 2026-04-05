@@ -71,9 +71,7 @@ async function benchmarkCourseLayout(courseId: number, isStaff: boolean) {
     isStaff
       ? fetchAllPages(client.from("assignment_due_date_exceptions").select("*").eq("class_id", courseId))
       : Promise.resolve(undefined),
-    fetchAllPages(
-      client.from("assignments").select("*").eq("class_id", courseId).order("due_date", { ascending: true })
-    ),
+    fetchAllPages(client.from("assignments").select("*").eq("class_id", courseId)),
     fetchAllPages(
       client
         .from("assignment_groups")
@@ -102,7 +100,10 @@ async function benchmarkCourseLayout(courseId: number, isStaff: boolean) {
 async function benchmarkAssignmentLayout(assignmentId: number, isStaff: boolean) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const client = createClient<Database>(url!, key!);
+  if (!url || !key) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required in .env.local");
+  }
+  const client = createClient<Database>(url, key);
 
   const t0 = performance.now();
   await Promise.all([

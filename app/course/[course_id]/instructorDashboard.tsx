@@ -5,6 +5,7 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { getCachedInstructorDashboardBundle } from "@/lib/course-dashboard-cache";
+import { findGithubIdentity } from "@/lib/githubIdentity";
 import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -28,6 +29,7 @@ import {
 } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { formatInTimeZone } from "date-fns-tz";
+import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -197,7 +199,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     courseError,
     surveysForDashboardRaw,
     surveysDashboardError,
-    identitiesJson,
     workflowStatsHour,
     workflowStatsHourError,
     workflowStatsDay,
@@ -205,6 +206,10 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     recentErrors,
     recentErrorsError
   } = await getCachedInstructorDashboardBundle(course_id, user_id);
+
+  const supabaseForIdentities = await createClient();
+  const identitiesResult = await supabaseForIdentities.auth.getUserIdentities();
+  const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   if (metricsError) {
     Sentry.captureException(new Error(metricsError));
@@ -255,14 +260,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const unreleasedAssignments = metrics.filter((m) => m.grades_release_status === "not_released").length;
   const noSubmissionAssignments = metrics.filter((m) => m.grades_release_status === "no_submissions").length;
   const releasableAssignments = metrics.length - noSubmissionAssignments;
-
-  const githubIdentity = (identitiesJson?.identities ?? []).find(
-    (identity): identity is { provider: string } =>
-      typeof identity === "object" &&
-      identity !== null &&
-      "provider" in identity &&
-      (identity as { provider?: string }).provider === "github"
-  );
 
   // Extract workflow statistics from RPC response
   const extractWorkflowStats = (

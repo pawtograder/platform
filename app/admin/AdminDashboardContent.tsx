@@ -6,9 +6,14 @@ import { Card, Flex, Grid, HStack, Icon, Text, VStack } from "@chakra-ui/react";
 import { FileText, GraduationCap, MessageSquare, Plus, Settings, Users } from "lucide-react";
 import Link from "next/link";
 
+function formatCount(value: number | null): string {
+  return value === null ? "—" : String(value);
+}
+
 export async function AdminDashboardContent() {
   const { totalClasses, totalUsers, totalEnrollments, recentClasses, errors } = await getCachedAdminDashboardStats();
-  if (errors.length > 0) {
+  const hasErrors = errors.length > 0;
+  if (hasErrors) {
     Sentry.captureMessage(`Admin dashboard stats partial failure: ${errors.join("; ")}`);
   }
 
@@ -28,7 +33,7 @@ export async function AdminDashboardContent() {
           </Card.Header>
           <Card.Body>
             <Text fontSize="2xl" fontWeight="bold">
-              {totalClasses || 0}
+              {formatCount(totalClasses)}
             </Text>
             <Text fontSize="xs" color="fg.subtle">
               Active courses
@@ -49,7 +54,7 @@ export async function AdminDashboardContent() {
           </Card.Header>
           <Card.Body>
             <Text fontSize="2xl" fontWeight="bold">
-              {totalUsers || 0}
+              {formatCount(totalUsers)}
             </Text>
             <Text fontSize="xs" color="gray.500">
               Registered users
@@ -70,7 +75,7 @@ export async function AdminDashboardContent() {
           </Card.Header>
           <Card.Body>
             <Text fontSize="2xl" fontWeight="bold">
-              {totalEnrollments || 0}
+              {formatCount(totalEnrollments)}
             </Text>
             <Text fontSize="xs" color="gray.500">
               User enrollments
@@ -90,11 +95,11 @@ export async function AdminDashboardContent() {
             </Flex>
           </Card.Header>
           <Card.Body>
-            <Text fontSize="2xl" fontWeight="bold" color="green.600">
-              Healthy
+            <Text fontSize="2xl" fontWeight="bold" color={hasErrors ? "orange.600" : "green.600"}>
+              {hasErrors ? "Degraded" : "Healthy"}
             </Text>
             <Text fontSize="xs" color="gray.500">
-              All systems operational
+              {hasErrors ? "Some admin metrics are currently unavailable" : "All systems operational"}
             </Text>
           </Card.Body>
         </Card.Root>
@@ -108,21 +113,23 @@ export async function AdminDashboardContent() {
           </Card.Header>
           <Card.Body>
             <VStack gap={8}>
-              {recentClasses?.map((course) => (
-                <Flex key={course.id} align="center" w="full">
-                  <VStack align="start" flex={1} gap={1}>
-                    <Text fontSize="sm" fontWeight="medium">
-                      {course.name}
-                    </Text>
-                    <Text fontSize="sm" color="fg.subtle">
-                      <TimeZoneAwareDate date={course.created_at} format="dateOnly" />
-                    </Text>
-                  </VStack>
-                  <Button variant="ghost" size="sm" asChild>
-                    <Link href="/admin/classes">Manage</Link>
-                  </Button>
-                </Flex>
-              )) || (
+              {recentClasses && recentClasses.length > 0 ? (
+                recentClasses.map((course) => (
+                  <Flex key={course.id} align="center" w="full">
+                    <VStack align="start" flex={1} gap={1}>
+                      <Text fontSize="sm" fontWeight="medium">
+                        {course.name}
+                      </Text>
+                      <Text fontSize="sm" color="fg.subtle">
+                        <TimeZoneAwareDate date={course.created_at} format="dateOnly" />
+                      </Text>
+                    </VStack>
+                    <Button variant="ghost" size="sm" asChild>
+                      <Link href="/admin/classes">Manage</Link>
+                    </Button>
+                  </Flex>
+                ))
+              ) : (
                 <Text fontSize="sm" color="fg.subtle">
                   No classes yet
                 </Text>

@@ -35,13 +35,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "classId must be a number" }, { status: 400 });
     }
 
-    const { data: roleRow } = await supabase
+    const { data: roleRow, error: roleError } = await supabase
       .from("user_roles")
       .select("role")
       .eq("class_id", classId)
       .eq("user_id", user.id)
       .eq("disabled", false)
       .maybeSingle();
+
+    if (roleError) {
+      Sentry.captureException(roleError);
+      return NextResponse.json({ error: "Unable to verify course role" }, { status: 500 });
+    }
 
     const r = roleRow?.role;
     const allowed = r === "instructor" || r === "grader" || r === "admin";

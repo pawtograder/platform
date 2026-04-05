@@ -1,4 +1,4 @@
-import { AppRouteLoadingSkeleton } from "@/components/ui/route-loading-skeleton";
+import { AdminDashboardSkeleton } from "@/components/ui/route-loading-skeleton";
 import { Button } from "@/components/ui/button";
 import { Flex, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { Plus } from "lucide-react";
@@ -27,7 +27,7 @@ export default function AdminPage() {
         </Button>
       </Flex>
 
-      <Suspense fallback={<AppRouteLoadingSkeleton />}>
+      <Suspense fallback={<AdminDashboardSkeleton />}>
         <AdminDashboardContent />
       </Suspense>
     </VStack>

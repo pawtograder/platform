@@ -3,12 +3,9 @@ import { getCachedFlashcardDecksForCourse } from "@/lib/server-route-cache";
 import type { FlashcardDeck } from "@/utils/supabase/DatabaseTypes";
 import * as Sentry from "@sentry/nextjs";
 import { Badge, Box, Heading, SimpleGrid, Text, VStack } from "@chakra-ui/react";
-import { headers } from "next/headers";
-
 export async function FlashcardsDecksBody({ course_id }: { course_id: string }) {
-  const userId = (await headers()).get("X-User-ID") ?? "";
   const classId = Number(course_id);
-  const { decks: flashcardDecks, error: fetchError } = await getCachedFlashcardDecksForCourse(classId, userId);
+  const { decks: flashcardDecks, error: fetchError } = await getCachedFlashcardDecksForCourse(classId);
 
   if (fetchError) {
     Sentry.captureException(new Error(fetchError));

@@ -19,6 +19,11 @@ export async function ManageSurveysBody({ course_id }: { course_id: string }) {
     Sentry.captureException(error);
   }
 
+  const list = surveys ?? [];
+  if (list.length === 0) {
+    return <EmptySurveysState courseId={course_id} />;
+  }
+
   const { count: totalStudents } = await supabase
     .from("user_roles")
     .select("*", { count: "exact", head: true })
@@ -26,38 +31,55 @@ export async function ManageSurveysBody({ course_id }: { course_id: string }) {
     .eq("role", "student")
     .eq("disabled", false);
 
-  const surveysWithCounts = await Promise.all(
-    (surveys || []).map(async (survey: Survey) => {
-      const { count: responseCount } = await supabase
-        .from("survey_responses")
-        .select("*", { count: "exact", head: true })
-        .eq("survey_id", survey.id)
-        .eq("is_submitted", true)
-        .is("deleted_at", null);
+  const surveyIds = list.map((s) => s.id);
 
-      let assignedStudentCount = totalStudents || 0;
+  const { data: responseRows, error: respErr } = await supabase
+    .from("survey_responses")
+    .select("survey_id")
+    .in("survey_id", surveyIds)
+    .eq("is_submitted", true)
+    .is("deleted_at", null);
 
-      if (!survey.assigned_to_all) {
-        const { count: assignmentCount } = await supabase
-          .from("survey_assignments")
-          .select("*", { count: "exact", head: true })
-          .eq("survey_id", survey.id);
-
-        assignedStudentCount = assignmentCount || 0;
-      }
-
-      return {
-        ...survey,
-        response_count: responseCount || 0,
-        submitted_count: responseCount || 0,
-        assigned_student_count: assignedStudentCount
-      };
-    })
-  );
-
-  if (!surveys || surveys.length === 0) {
-    return <EmptySurveysState courseId={course_id} />;
+  if (respErr) {
+    Sentry.captureException(respErr);
   }
+
+  const responseCountBySurvey = new Map<string, number>();
+  for (const row of responseRows ?? []) {
+    const sid = row.survey_id;
+    responseCountBySurvey.set(sid, (responseCountBySurvey.get(sid) ?? 0) + 1);
+  }
+
+  const targetedSurveyIds = list.filter((s) => !s.assigned_to_all).map((s) => s.id);
+  const assignmentCountBySurvey = new Map<string, number>();
+  if (targetedSurveyIds.length > 0) {
+    const { data: assignRows, error: assignErr } = await supabase
+      .from("survey_assignments")
+      .select("survey_id")
+      .in("survey_id", targetedSurveyIds);
+
+    if (assignErr) {
+      Sentry.captureException(assignErr);
+    }
+    for (const row of assignRows ?? []) {
+      const sid = row.survey_id;
+      assignmentCountBySurvey.set(sid, (assignmentCountBySurvey.get(sid) ?? 0) + 1);
+    }
+  }
+
+  const totalStudentCount = totalStudents ?? 0;
+  const surveysWithCounts = list.map((survey: Survey) => {
+    const response_count = responseCountBySurvey.get(survey.id) ?? 0;
+    const assigned_student_count = survey.assigned_to_all
+      ? totalStudentCount
+      : (assignmentCountBySurvey.get(survey.id) ?? 0);
+
+    return {
+      ...survey,
+      response_count,
+      assigned_student_count
+    };
+  });
 
   return <SurveysTable surveys={surveysWithCounts} courseId={course_id} />;
 }

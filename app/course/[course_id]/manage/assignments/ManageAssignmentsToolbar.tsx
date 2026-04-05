@@ -2,7 +2,7 @@
 
 import { Button, HStack } from "@chakra-ui/react";
 import NextLink from "next/link";
-import SyncStaffTeamButton from "./syncStaffTeamButton";
+import SyncStaffTeamButton from "@/app/course/[course_id]/manage/assignments/syncStaffTeamButton";
 
 export function ManageAssignmentsToolbar({ courseId }: { courseId: number }) {
   return (

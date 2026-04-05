@@ -65,7 +65,7 @@ export async function getCachedAdminDashboardStats(): Promise<AdminDashboardStat
   )();
 }
 
-export async function getCachedFlashcardDecksForCourse(classId: number, userId: string) {
+export async function getCachedFlashcardDecksForCourse(classId: number) {
   return unstable_cache(
     async () => {
       const client = await createClient();
@@ -80,7 +80,7 @@ export async function getCachedFlashcardDecksForCourse(classId: number, userId: 
         error: error?.message ?? null
       };
     },
-    ["flashcard-decks", String(classId), userId],
+    ["flashcard-decks", String(classId)],
     { revalidate: SHORT_REVALIDATE_SECONDS, tags: [courseFlashcardDecksTag(classId)] }
   )();
 }

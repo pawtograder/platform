@@ -49,7 +49,16 @@ export function VirtualizedPostRowList({
     <Box ref={parentRef} overflowY="auto" maxH={maxHeight} minH="120px" css={{ contain: "strict" }}>
       <Box height={`${rowVirtualizer.getTotalSize()}px`} position="relative" width="100%">
         {rowVirtualizer.getVirtualItems().map((vi) => (
-          <Box key={vi.key} position="absolute" top={0} left={0} width="100%" transform={`translateY(${vi.start}px)`}>
+          <Box
+            key={vi.key}
+            ref={rowVirtualizer.measureElement}
+            data-index={vi.index}
+            position="absolute"
+            top={0}
+            left={0}
+            width="100%"
+            transform={`translateY(${vi.start}px)`}
+          >
             <PostRow threadId={threadIds[vi.index]} href={`/course/${courseId}/discussion/${threadIds[vi.index]}`} />
           </Box>
         ))}

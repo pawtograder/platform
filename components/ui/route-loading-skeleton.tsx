@@ -26,3 +26,20 @@ export function AppNestedRouteLoadingSkeleton() {
     </Box>
   );
 }
+
+/** Matches admin dashboard grid + two-column layout (lighter than full route skeleton). */
+export function AdminDashboardSkeleton() {
+  return (
+    <Stack gap={6}>
+      <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap={4}>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} height="100px" borderRadius="md" />
+        ))}
+      </Box>
+      <Box display="grid" gridTemplateColumns={{ base: "1fr", lg: "2fr 1fr" }} gap={4}>
+        <Skeleton height="220px" borderRadius="md" />
+        <Skeleton height="220px" borderRadius="md" />
+      </Box>
+    </Stack>
+  );
+}

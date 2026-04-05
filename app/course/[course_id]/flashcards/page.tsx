@@ -1,7 +1,16 @@
-import { AppNestedRouteLoadingSkeleton } from "@/components/ui/route-loading-skeleton";
-import { Box, Container, Heading, Text, VStack } from "@chakra-ui/react";
+import { Box, Container, Heading, SimpleGrid, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { Suspense } from "react";
 import { FlashcardsDecksBody } from "./FlashcardsDecksBody";
+
+function FlashcardsDecksFallback() {
+  return (
+    <SimpleGrid columns={{ base: 1, sm: 2, md: 3 }} gap={6} px={4} py={2}>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <Skeleton key={i} height="140px" borderRadius="md" />
+      ))}
+    </SimpleGrid>
+  );
+}
 
 type FlashcardsPageProps = {
   params: Promise<{ course_id: string }>;
@@ -21,7 +30,7 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
             Practice and reinforce your learning with interactive flashcard decks
           </Text>
         </Box>
-        <Suspense fallback={<AppNestedRouteLoadingSkeleton />}>
+        <Suspense fallback={<FlashcardsDecksFallback />}>
           <FlashcardsDecksBody course_id={course_id} />
         </Suspense>
       </VStack>

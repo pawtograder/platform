@@ -56,7 +56,6 @@ export type InstructorDashboardCachedBundle = {
     updated_at: string | null;
   }> | null;
   surveysDashboardError: string | null;
-  identitiesJson: { identities: unknown[] } | null;
   workflowStatsHour: Database["public"]["Functions"]["get_workflow_statistics"]["Returns"] | null;
   workflowStatsHourError: string | null;
   workflowStatsDay: Database["public"]["Functions"]["get_workflow_statistics"]["Returns"] | null;
@@ -78,7 +77,6 @@ export async function getCachedInstructorDashboardBundle(
         { data: helpRequests, error: helpRequestsError },
         { data: course, error: courseError },
         { data: surveysForDashboardRaw, error: surveysDashboardError },
-        identities,
         { data: workflowStatsHour, error: workflowStatsHourError },
         { data: workflowStatsDay, error: workflowStatsDayError },
         { data: recentErrors, error: recentErrorsError }
@@ -97,7 +95,6 @@ export async function getCachedInstructorDashboardBundle(
           .eq("class_id", courseId)
           .is("deleted_at", null)
           .in("status", ["published", "closed"]),
-        supabase.auth.getUserIdentities(),
         supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 1 }),
         supabase.rpc("get_workflow_statistics", { p_class_id: courseId, p_duration_hours: 24 }),
         supabase
@@ -128,11 +125,6 @@ export async function getCachedInstructorDashboardBundle(
         courseError: courseError?.message ?? null,
         surveysForDashboardRaw: surveysForDashboardRaw ?? null,
         surveysDashboardError: surveysDashboardError?.message ?? null,
-        identitiesJson: identities.data
-          ? { identities: identities.data.identities as unknown[] }
-          : identities.error
-            ? null
-            : { identities: [] },
         workflowStatsHour: workflowStatsHour ?? null,
         workflowStatsHourError: workflowStatsHourError?.message ?? null,
         workflowStatsDay: workflowStatsDay ?? null,
@@ -161,7 +153,6 @@ export type StudentDashboardCachedBundle = {
   surveysError: string | null;
   regradeRequests: unknown;
   regradeError: string | null;
-  identitiesJson: { identities: unknown[] } | null;
   userRole: { class_section_id: number | null; lab_section_id: number | null } | null;
   userRoleError: string | null;
   responsesRaw: unknown[] | null;
@@ -185,7 +176,6 @@ export async function getCachedStudentDashboardBundle(
         { data: assignments, error: assignmentsError },
         { data: surveysRaw, error: surveysError },
         { data: regradeRequests, error: regradeError },
-        identities,
         { data: userRole, error: userRoleError }
       ] = await Promise.all([
         supabase.from("classes").select("time_zone, office_hours_ics_url, events_ics_url").eq("id", courseId).single(),
@@ -222,7 +212,6 @@ export async function getCachedStudentDashboardBundle(
           .eq("class_id", courseId)
           .order("created_at", { ascending: false })
           .limit(5),
-        supabase.auth.getUserIdentities(),
         userId
           ? supabase
               .from("user_roles")
@@ -267,7 +256,6 @@ export async function getCachedStudentDashboardBundle(
         surveysError: surveysError?.message ?? null,
         regradeRequests: regradeRequests ?? null,
         regradeError: regradeError?.message ?? null,
-        identitiesJson: identities.data ? { identities: identities.data.identities as unknown[] } : null,
         userRole: userRole ?? null,
         userRoleError: userRoleError?.message ?? null,
         responsesRaw: responsesRaw ?? null,

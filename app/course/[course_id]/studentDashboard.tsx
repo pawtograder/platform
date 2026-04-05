@@ -1,4 +1,5 @@
 import { getCachedStudentDashboardBundle } from "@/lib/course-dashboard-cache";
+import { findGithubIdentity } from "@/lib/githubIdentity";
 import { Survey, SurveyResponse } from "@/types/survey";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -27,6 +28,7 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -91,31 +93,18 @@ export default async function StudentDashboard({
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
 
-  const {
-    course,
-    assignments,
-    surveysRaw,
-    regradeRequests,
-    identitiesJson,
-    responsesRaw,
-    classSection,
-    labSection,
-    leadersRaw
-  } = await getCachedStudentDashboardBundle(course_id, user_id ?? "", private_profile_id);
+  const { course, assignments, surveysRaw, regradeRequests, responsesRaw, classSection, labSection, leadersRaw } =
+    await getCachedStudentDashboardBundle(course_id, user_id ?? "", private_profile_id);
+
+  const supabaseForIdentities = await createClient();
+  const identitiesResult = await supabaseForIdentities.auth.getUserIdentities();
+  const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
 
   const nowMs = Date.now();
   const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(
     (s) => s.status === "published" && (s.available_at == null || new Date(s.available_at).getTime() <= nowMs)
-  );
-
-  const githubIdentity = (identitiesJson?.identities ?? []).find(
-    (identity): identity is { provider: string } =>
-      typeof identity === "object" &&
-      identity !== null &&
-      "provider" in identity &&
-      (identity as { provider?: string }).provider === "github"
   );
 
   const surveyResponses = (responsesRaw ?? []) as unknown as SurveyResponse[];
@@ -170,7 +159,7 @@ export default async function StudentDashboard({
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
-      {identitiesJson && !githubIdentity && <LinkAccount />}
+      {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
 
       {incompleteSurveysForBanner.length > 0 && (

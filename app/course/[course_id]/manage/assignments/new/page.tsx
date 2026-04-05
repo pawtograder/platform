@@ -144,7 +144,7 @@ export default function NewAssignmentPage() {
             type: "success"
           });
 
-          await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
+          void revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
           router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`);
         }
       } catch (error) {

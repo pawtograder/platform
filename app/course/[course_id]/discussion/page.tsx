@@ -161,7 +161,12 @@ export default function DiscussionPage() {
               display="flex"
               flexDirection="column"
             >
-              <Box overflowY={{ base: "visible", lg: "auto" }} minH={0}>
+              <Box
+                overflowY={
+                  browseThreads.length > 24 ? { base: "visible", lg: "visible" } : { base: "visible", lg: "auto" }
+                }
+                minH={0}
+              >
                 {browseThreads.length === 0 ? (
                   <Text px="4" py="3" color="fg.muted" fontSize="sm">
                     No posts match your criteria.

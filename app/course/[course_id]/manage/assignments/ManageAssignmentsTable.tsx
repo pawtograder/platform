@@ -1,7 +1,7 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { getCachedManageAssignmentsOverview } from "@/lib/course-dashboard-cache";
-import { Table } from "@chakra-ui/react";
+import { Alert, Table, Text } from "@chakra-ui/react";
 import { headers } from "next/headers";
 
 export async function ManageAssignmentsTable({ courseId }: { courseId: number }) {
@@ -10,8 +10,12 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
   const { data: assignmentRows, error: overviewError } = await getCachedManageAssignmentsOverview(courseId, userId);
 
   if (overviewError) {
-    // eslint-disable-next-line no-console
-    console.error("Unable to fetch assignments:", overviewError);
+    return (
+      <Alert.Root status="error" borderRadius="md">
+        <Alert.Title>Could not load assignments</Alert.Title>
+        <Alert.Description>{overviewError}</Alert.Description>
+      </Alert.Root>
+    );
   }
 
   return (
@@ -25,24 +29,34 @@ export async function ManageAssignmentsTable({ courseId }: { courseId: number })
         </Table.Row>
       </Table.Header>
       <Table.Body>
-        {assignmentRows?.map((assignment) => (
-          <Table.Row key={assignment.id}>
-            <Table.Cell>
-              <Link href={`/course/${courseId}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
-            </Table.Cell>
-            <Table.Cell>
-              {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
-            </Table.Cell>
-            <Table.Cell>
-              {assignment.due_date ? <TimeZoneAwareDate date={assignment.due_date} format="Pp" /> : "N/A"}
-            </Table.Cell>
-            <Table.Cell>
-              <Link href={`/course/${courseId}/manage/assignments/${assignment.id}/regrade-requests`}>
-                {assignment.open_regrade_requests_count}
-              </Link>
+        {assignmentRows?.length === 0 ? (
+          <Table.Row>
+            <Table.Cell colSpan={4}>
+              <Text color="fg.muted" fontSize="sm">
+                No assignments in this course.
+              </Text>
             </Table.Cell>
           </Table.Row>
-        ))}
+        ) : (
+          assignmentRows?.map((assignment) => (
+            <Table.Row key={assignment.id}>
+              <Table.Cell>
+                <Link href={`/course/${courseId}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
+              </Table.Cell>
+              <Table.Cell>
+                {assignment.release_date ? <TimeZoneAwareDate date={assignment.release_date} format="Pp" /> : "N/A"}
+              </Table.Cell>
+              <Table.Cell>
+                {assignment.due_date ? <TimeZoneAwareDate date={assignment.due_date} format="Pp" /> : "N/A"}
+              </Table.Cell>
+              <Table.Cell>
+                <Link href={`/course/${courseId}/manage/assignments/${assignment.id}/regrade-requests`}>
+                  {assignment.open_regrade_requests_count}
+                </Link>
+              </Table.Cell>
+            </Table.Row>
+          ))
+        )}
       </Table.Body>
     </Table.Root>
   );
