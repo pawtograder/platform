@@ -1216,7 +1216,7 @@ function GradebookColumnHeader({
       });
 
       if (error) throw error;
-      await gradebookController.gradebook_columns.refetchAll();
+      await gradebookController.gradebook_columns.refetchByIds([column_id]);
 
       toaster.create({
         title: "Column moved left",
@@ -1245,7 +1245,7 @@ function GradebookColumnHeader({
 
       if (error) throw error;
 
-      await gradebookController.gradebook_columns.refetchAll();
+      await gradebookController.gradebook_columns.refetchByIds([column_id]);
 
       toaster.create({
         title: "Column moved right",
@@ -1270,7 +1270,7 @@ function GradebookColumnHeader({
 
       if (error) throw error;
 
-      await gradebookController.gradebook_columns.refetchAll();
+      await gradebookController.gradebook_columns.refetchByIds([column_id]);
 
       toaster.create({
         title: "Column released",
@@ -1295,7 +1295,7 @@ function GradebookColumnHeader({
 
       if (error) throw error;
 
-      await gradebookController.gradebook_columns.refetchAll();
+      await gradebookController.gradebook_columns.refetchByIds([column_id]);
 
       toaster.create({
         title: "Column unreleased",
@@ -2554,8 +2554,8 @@ export default function GradebookTable() {
       )}
 
       <style jsx global>{`
-        tbody tr:hover td,
-        tbody tr:hover [data-gradebook-scroll-cell] {
+        [data-gradebook-container] tbody tr:hover td,
+        [data-gradebook-container] tbody tr:hover [data-gradebook-scroll-cell] {
           background-color: var(--chakra-colors-bg-info) !important;
         }
         @keyframes gradebook-pulse {
@@ -2576,6 +2576,7 @@ export default function GradebookTable() {
       <GradebookPopoverProvider>
         <GradebookPointerOpener
           ref={parentRef}
+          data-gradebook-container=""
           overflowX="auto"
           overflowY="auto"
           maxW="100%"

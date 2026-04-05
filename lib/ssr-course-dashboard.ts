@@ -121,6 +121,7 @@ export type StudentDashboardBundle = {
     office_hours_ics_url: string | null;
     events_ics_url: string | null;
   } | null;
+  courseError: string | null;
   assignments: unknown;
   assignmentsError: string | null;
   surveysRaw: unknown[] | null;
@@ -132,8 +133,11 @@ export type StudentDashboardBundle = {
   responsesRaw: unknown[] | null;
   responsesError: string | null;
   classSection: Database["public"]["Tables"]["class_sections"]["Row"] | null;
+  classSectionError: string | null;
   labSection: Database["public"]["Tables"]["lab_sections"]["Row"] | null;
+  labSectionError: string | null;
   leadersRaw: Array<{ profiles: { name: string | null } | null }> | null;
+  leadersError: string | null;
 };
 
 export async function fetchStudentDashboardBundle(
@@ -143,7 +147,7 @@ export async function fetchStudentDashboardBundle(
   privateProfileId: string
 ): Promise<StudentDashboardBundle> {
   const [
-    { data: course },
+    { data: course, error: courseError },
     { data: assignments, error: assignmentsError },
     { data: surveysRaw, error: surveysError },
     { data: regradeRequests, error: regradeError },
@@ -195,32 +199,36 @@ export async function fetchStudentDashboardBundle(
   ]);
 
   const surveysList = (surveysRaw ?? []) as { id: string }[];
-  const [{ data: responsesRaw, error: responsesError }, { data: classSection }, { data: labSection }] =
-    await Promise.all([
-      surveysList.length > 0
-        ? supabase
-            .from("survey_responses")
-            .select("*")
-            .eq("profile_id", privateProfileId)
-            .in(
-              "survey_id",
-              surveysList.map((s) => s.id)
-            )
-        : Promise.resolve({ data: null, error: null }),
-      userRole?.class_section_id
-        ? supabase.from("class_sections").select("*").eq("id", userRole.class_section_id).single()
-        : Promise.resolve({ data: null, error: null }),
-      userRole?.lab_section_id
-        ? supabase.from("lab_sections").select("*").eq("id", userRole.lab_section_id).single()
-        : Promise.resolve({ data: null, error: null })
-    ]);
+  const [
+    { data: responsesRaw, error: responsesError },
+    { data: classSection, error: classSectionError },
+    { data: labSection, error: labSectionError }
+  ] = await Promise.all([
+    surveysList.length > 0
+      ? supabase
+          .from("survey_responses")
+          .select("*")
+          .eq("profile_id", privateProfileId)
+          .in(
+            "survey_id",
+            surveysList.map((s) => s.id)
+          )
+      : Promise.resolve({ data: null, error: null }),
+    userRole?.class_section_id
+      ? supabase.from("class_sections").select("*").eq("id", userRole.class_section_id).single()
+      : Promise.resolve({ data: null, error: null }),
+    userRole?.lab_section_id
+      ? supabase.from("lab_sections").select("*").eq("id", userRole.lab_section_id).single()
+      : Promise.resolve({ data: null, error: null })
+  ]);
 
-  const { data: leadersRaw } = labSection?.id
+  const { data: leadersRaw, error: leadersError } = labSection?.id
     ? await supabase.from("lab_section_leaders").select("profiles(name)").eq("lab_section_id", labSection.id)
-    : { data: null };
+    : { data: null, error: null };
 
   return {
     course: course ?? null,
+    courseError: courseError?.message ?? null,
     assignments: assignments ?? null,
     assignmentsError: assignmentsError?.message ?? null,
     surveysRaw: surveysRaw ?? null,
@@ -232,7 +240,10 @@ export async function fetchStudentDashboardBundle(
     responsesRaw: responsesRaw ?? null,
     responsesError: responsesError?.message ?? null,
     classSection: classSection ?? null,
+    classSectionError: classSectionError?.message ?? null,
     labSection: labSection ?? null,
-    leadersRaw: leadersRaw ?? null
+    labSectionError: labSectionError?.message ?? null,
+    leadersRaw: leadersRaw ?? null,
+    leadersError: leadersError?.message ?? null
   };
 }

@@ -79,6 +79,7 @@ export default function ImportGradebookColumns() {
     const supabase = createClient();
     const existingColumnsNotFromHook = [...gradebookController.gradebook_columns.rows];
     try {
+      const touchedGradebookColumnIds = new Set<number>();
       // 1. For new columns, insert them and get their IDs
       const newCols = previewData.previewCols.filter((col) => col.isNew);
       let sortOrder = existingColumnsNotFromHook.length;
@@ -114,6 +115,7 @@ export default function ImportGradebookColumns() {
           throw new Error(error.message);
         }
         col.newColId = data.id;
+        touchedGradebookColumnIds.add(data.id);
       }
       // 1b. For each OLD column that was created by an import, update its expression to refer to the new file
       await Promise.all(
@@ -141,6 +143,7 @@ export default function ImportGradebookColumns() {
             if (error) {
               throw new Error(error.message);
             }
+            touchedGradebookColumnIds.add(col.id);
             return true;
           })
       );
@@ -216,6 +219,10 @@ export default function ImportGradebookColumns() {
         if (rpcError) throw new Error(rpcError.message);
       }
 
+      for (const u of updatesPayload) {
+        touchedGradebookColumnIds.add(u.gradebook_column_id);
+      }
+
       // Show warning if grades were preserved
       if (preservedGradesCount > 0) {
         toaster.info({
@@ -224,7 +231,7 @@ export default function ImportGradebookColumns() {
         });
       }
 
-      gradebookController.gradebook_columns.refetchAll();
+      await gradebookController.gradebook_columns.refetchByIds(Array.from(touchedGradebookColumnIds));
       toaster.success({
         title: "Import successful!",
         description: "Gradebook columns and scores have been imported."

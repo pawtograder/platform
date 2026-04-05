@@ -24,6 +24,7 @@ export default async function ProtectedPage() {
   if (rolesError) {
     // eslint-disable-next-line no-console -- operational visibility when cache layer fails
     console.error("course picker: user_roles fetch", rolesError);
+    throw new Error(`Failed to load your courses: ${rolesError}`);
   }
 
   const sortedRoles = roleRows?.sort((a, b) => {

@@ -876,7 +876,11 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               </CardHeader>
               <CardBody>
                 <Stack spaceY={2}>
-                  {recentErrors && recentErrors.length > 0 ? (
+                  {recentErrorsError ? (
+                    <Text fontSize="sm" color="fg.muted" textAlign="center">
+                      Unable to load recent errors.
+                    </Text>
+                  ) : recentErrors && recentErrors.length > 0 ? (
                     (
                       recentErrors as Array<{
                         id: string;

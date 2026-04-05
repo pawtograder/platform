@@ -90,30 +90,34 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   }
 
   let scoreAdvice: string | undefined = undefined;
-  if (column.score_expression) {
-    scoreAdvice = `This column is automatically calculated.`;
-  } else if (studentGradebookColumn?.score_override) {
-    if (studentGradebookColumn.score) {
-      scoreAdvice = `This column has been overridden from ${studentGradebookColumn.score} to ${studentGradebookColumn.score_override}`;
-    } else {
-      scoreAdvice = `This column has been overridden from undefined to ${studentGradebookColumn.score_override}`;
+  if (canShowGradeFor) {
+    if (column.score_expression) {
+      scoreAdvice = `This column is automatically calculated.`;
+    } else if (studentGradebookColumn?.score_override) {
+      if (studentGradebookColumn.score) {
+        scoreAdvice = `This column has been overridden from ${studentGradebookColumn.score} to ${studentGradebookColumn.score_override}`;
+      } else {
+        scoreAdvice = `This column has been overridden from undefined to ${studentGradebookColumn.score_override}`;
+      }
+      if (studentGradebookColumn.score_override_note) {
+        scoreAdvice += ` with note: ${studentGradebookColumn.score_override_note}`;
+      }
     }
-    if (studentGradebookColumn.score_override_note) {
-      scoreAdvice += ` with note: ${studentGradebookColumn.score_override_note}`;
+    if (column.render_expression && !scoreAdvice) {
+      scoreAdvice = `Raw score: ${studentGradebookColumn?.score_override ?? studentGradebookColumn?.score ?? "Missing"}`;
     }
-  }
-  if (column.render_expression && !scoreAdvice) {
-    scoreAdvice = `Raw score: ${studentGradebookColumn?.score_override ?? studentGradebookColumn?.score ?? "Missing"}`;
+    if (studentGradebookColumn?.incomplete_values) {
+      scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}This calculated column is missing these values: ${IncompleteValuesList(studentGradebookColumn.incomplete_values as IncompleteValuesAdvice)}`;
+    }
   }
   const isSpecial =
     studentGradebookColumn?.score_override || studentGradebookColumn?.is_excused || !studentGradebookColumn;
 
-  if (!studentGradebookColumn) {
-    scoreAdvice = `Missing ${columnId} for ${studentId}`;
-  }
-  if (studentGradebookColumn?.incomplete_values) {
-    scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}This calculated column is missing these values: ${IncompleteValuesList(studentGradebookColumn.incomplete_values as IncompleteValuesAdvice)}`;
-  }
+  const hasRenderableScore =
+    Boolean(
+      studentGradebookColumn &&
+        (studentGradebookColumn.score !== undefined || studentGradebookColumn.score_override !== undefined)
+    ) && canShowGradeFor;
 
   const cellInner = (
     <Box
@@ -132,36 +136,40 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
       data-gradebook-cell-trigger=""
       data-column-id={String(columnId)}
       data-student-id={studentId}
-      aria-label={`Grade cell for ${column.name}: ${
-        studentGradebookColumn &&
-        (studentGradebookColumn?.score !== undefined || studentGradebookColumn?.score_override !== undefined)
-          ? gradebookController.getRendererForColumn(column.id)({
-              ...studentGradebookColumn,
-              max_score: column.max_score
-            })
-          : "Not available"
-      }`}
-      aria-describedby={scoreAdvice ? contentId : undefined}
+      aria-label={
+        canShowGradeFor
+          ? `Grade cell for ${column.name}: ${
+              studentGradebookColumn &&
+              (studentGradebookColumn.score !== undefined || studentGradebookColumn.score_override !== undefined)
+                ? gradebookController.getRendererForColumn(column.id)({
+                    ...studentGradebookColumn,
+                    max_score: column.max_score
+                  })
+                : "Not available"
+            }`
+          : `Grade cell for ${column.name}: Grade not available`
+      }
+      aria-describedby={canShowGradeFor && scoreAdvice ? contentId : undefined}
       tabIndex={0}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onKeyDown={onKeyDown}
     >
-      {isSpecial && (
+      {canShowGradeFor && isSpecial && (
         <Float placement="top-end" offset={3}>
           <Box color="red.500" fontWeight="bold" fontSize="lg" pointerEvents="none">
             *
           </Box>
         </Float>
       )}
-      {studentGradebookColumn?.is_recalculating && (
+      {canShowGradeFor && studentGradebookColumn?.is_recalculating && (
         <Float placement="bottom-end" offset={2}>
           <Box color="fg.info" pointerEvents="none" className="gradebook-cell-pulse">
             <Icon as={LuCalculator} size="sm" />
           </Box>
         </Float>
       )}
-      {studentGradebookColumn?.incomplete_values && (
+      {canShowGradeFor && studentGradebookColumn?.incomplete_values && (
         <Float placement="top-end" offset={3}>
           <Box color="blue.500" fontWeight="bold" fontSize="lg" pointerEvents="none">
             *
@@ -169,13 +177,14 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
         </Float>
       )}
       <Text>
-        {studentGradebookColumn &&
-        (studentGradebookColumn?.score !== undefined || studentGradebookColumn?.score_override !== undefined)
+        {hasRenderableScore
           ? gradebookController.getRendererForColumn(column.id)({
               ...studentGradebookColumn,
               max_score: column.max_score
             })
-          : "(N/A)"}
+          : canShowGradeFor
+            ? "(N/A)"
+            : "Hidden"}
       </Text>
     </Box>
   );
@@ -189,7 +198,7 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
       position="relative"
       _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
     >
-      {hovered && scoreAdvice ? (
+      {hovered && canShowGradeFor && scoreAdvice ? (
         <Tooltip
           content={scoreAdvice}
           positioning={{ placement: "bottom" }}

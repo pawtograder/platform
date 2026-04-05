@@ -117,7 +117,11 @@ export async function AdminDashboardContent() {
           </Card.Header>
           <Card.Body>
             <VStack gap={8}>
-              {recentClasses && recentClasses.length > 0 ? (
+              {recentClasses === null ? (
+                <Text fontSize="sm" color="fg.subtle">
+                  Recent classes unavailable
+                </Text>
+              ) : recentClasses.length > 0 ? (
                 recentClasses.map((course) => (
                   <Flex key={course.id} align="center" w="full">
                     <VStack align="start" flex={1} gap={1}>

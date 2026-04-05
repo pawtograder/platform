@@ -10,10 +10,13 @@ export default async function ManageGradebookLayout({
   params: Promise<{ course_id: string }>;
 }) {
   const { course_id } = await params;
-  const classId = Number.parseInt(course_id, 10);
   let initialGradebookRecords: GradebookRecordsForStudent[] | null = null;
 
-  if (!Number.isNaN(classId)) {
+  // Reject partially numeric segments (parseInt("123foo", 10) === 123).
+  const hasValidCourseIdSegment = course_id != null && /^\d+$/.test(course_id);
+  const classId = hasValidCourseIdSegment ? Number.parseInt(course_id, 10) : Number.NaN;
+
+  if (hasValidCourseIdSegment && !Number.isNaN(classId)) {
     try {
       const supabase = await createClient();
       const { data, error } = await supabase.rpc("get_gradebook_records_for_all_students", {
