@@ -2,7 +2,7 @@ import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, generateMagicLink, loginAsUser, TestingUser } from "./TestingUtils";
 import { random } from "mathjs";
 dotenv.config({ path: ".env.local" });
 
@@ -36,7 +36,12 @@ test.beforeAll(async () => {
     }
   ]);
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student1, instructor1].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 test.describe("Enrollments Page", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeEach(async ({ page }) => {

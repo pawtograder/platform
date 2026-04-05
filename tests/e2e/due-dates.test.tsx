@@ -10,7 +10,8 @@ import {
   insertAssignment,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 
 let course: Course;
@@ -167,7 +168,12 @@ test.beforeEach(async () => {
     throw new Error(`Failed to add student 2 to group: ${member2Error.message}`);
   }
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, student2, instructor, labLeader].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 const expectedLabAssignmentDueDate =
   labAssignmentDueDate.getDay() === 1 ? labAssignmentDueDate : previousMonday(labAssignmentDueDate);
 expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);

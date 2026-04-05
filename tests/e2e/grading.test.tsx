@@ -11,7 +11,8 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -126,7 +127,12 @@ test.beforeAll(async () => {
     })
     .select("id");
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, instructor, grader, student2].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
 const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glove test";
 const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great job on making your logic understandable!";

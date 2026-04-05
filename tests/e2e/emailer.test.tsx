@@ -9,7 +9,8 @@ import {
   createUsersInClass,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 
 let course: Course;
@@ -120,7 +121,12 @@ test.beforeAll(async () => {
   lab2 = _lab2;
   lab2Students = _lab2Students;
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 async function sendBatchEmails({
   page,
   target_text,

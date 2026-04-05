@@ -11,7 +11,8 @@ import {
   TestingUser,
   createUsersInClass,
   submitFeedbackViaAPI,
-  createSampleGradingResult
+  createSampleGradingResult,
+  generateMagicLink
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
 
@@ -119,6 +120,12 @@ test.beforeAll(async () => {
     class_id: course.id,
     name: "Create Submission Assignment Not Graded"
   });
+});
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
 });
 test.describe("Create submission", () => {
   test("If the deadline is in the future, the student can create a submission", async ({ page }) => {

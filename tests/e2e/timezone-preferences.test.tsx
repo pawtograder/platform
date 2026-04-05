@@ -1,7 +1,7 @@
 import { type Course } from "@/utils/supabase/DatabaseTypes";
 import dotenv from "dotenv";
 import { expect, test } from "../global-setup";
-import { createClass, createUsersInClass, loginAsUser, type TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, generateMagicLink, loginAsUser, type TestingUser } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
 
@@ -23,6 +23,12 @@ test.describe("Time zone dialog and indicator", () => {
         useMagicLink: true
       }
     ]);
+  });
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== "failed") return;
+    for (const user of [student].filter(Boolean)) {
+      console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+    }
   });
 
   test("Opens dialog when no preference and time zones differ; persists selection", async ({ page }) => {

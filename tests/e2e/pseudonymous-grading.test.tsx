@@ -10,7 +10,8 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -79,7 +80,12 @@ test.beforeAll(async () => {
   });
   submission_id = submission_res.submission_id;
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 const SELF_REVIEW_COMMENT = "This is my self-review comment for pseudonymous grading test";
 const GRADING_REVIEW_COMMENT_1 = "Great work on this implementation! - Pseudonymous grading test";
 const GRADING_REVIEW_COMMENT_2 = "Excellent code quality - Pseudonymous grading test";

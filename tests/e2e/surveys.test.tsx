@@ -2,7 +2,7 @@ import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, getAuthTokenForUser, loginAsUser, supabase } from "./TestingUtils";
+import { createClass, createUsersInClass, generateMagicLink, getAuthTokenForUser, loginAsUser, supabase } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
 
@@ -95,6 +95,12 @@ test.describe("Surveys Page", () => {
     ]);
     [studentA, studentB, instructor, grader] = users;
     await clearCourseSurveys();
+  });
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== "failed") return;
+    for (const user of [studentA, studentB, instructor, grader].filter(Boolean)) {
+      console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+    }
   });
 
   test("student sees empty state when no surveys exist", async ({ page }) => {

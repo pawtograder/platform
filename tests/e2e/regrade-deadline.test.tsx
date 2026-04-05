@@ -10,7 +10,8 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 import { SupabaseClient } from "@supabase/supabase-js";
 
@@ -43,7 +44,12 @@ test.beforeAll(async () => {
   // Create an authenticated client for the student to use for RPC calls
   studentClient = await createAuthenticatedClient(student!);
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 test.describe("Regrade request deadline enforcement", () => {
   test.describe.configure({ mode: "serial" });
 

@@ -7,7 +7,8 @@ import {
   insertPreBakedSubmission,
   supabase,
   TestingUser,
-  getAuthTokenForUser
+  getAuthTokenForUser,
+  generateMagicLink
 } from "./TestingUtils";
 import { Course, Assignment, RubricPart, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 
@@ -193,7 +194,12 @@ test.beforeAll(async () => {
     }
   }
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 // Helper function to call the LLM hint API with authentication
 async function callLLMHintAPI(
   request: {

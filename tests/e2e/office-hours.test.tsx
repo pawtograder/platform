@@ -10,7 +10,8 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
 
@@ -87,7 +88,12 @@ test.beforeAll(async () => {
   });
   submission_id = submission_res.submission_id;
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, student2, instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 const HELP_REQUEST_MESSAGE_1 = "My algorithm keeps timing out on large datasets - any optimization tips?";
 const PRIVATE_HELP_REQUEST_MESSAGE_1 = "Specifically struggling with the nested loop in my sorting function 🤔";
 const HELP_REQUEST_FOLLOW_UP_MESSAGE_1 = "Update: tried memoization but still getting stack overflow errors";

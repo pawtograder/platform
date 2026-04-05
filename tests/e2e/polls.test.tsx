@@ -1,5 +1,5 @@
 import { expect, test } from "../global-setup";
-import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
+import { createClass, createUsersInClass, generateMagicLink, loginAsUser, supabase } from "./TestingUtils";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -80,6 +80,12 @@ test.describe("Polls", () => {
       { role: "instructor", class_id: course.id, name: "Poll Instructor", useMagicLink: true }
     ]);
     [student, instructor] = users;
+  });
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== "failed") return;
+    for (const user of [student, instructor].filter(Boolean)) {
+      console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+    }
   });
 
   test.beforeEach(async () => {

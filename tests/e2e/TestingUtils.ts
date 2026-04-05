@@ -494,6 +494,16 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
   }
 }
+export async function generateMagicLink(user: TestingUser): Promise<string> {
+  const { data, error } = await supabase.auth.admin.generateLink({
+    email: user.email,
+    type: "magiclink"
+  });
+  if (error) throw new Error(`Failed to generate magic link for ${user.email}: ${error.message}`);
+  const baseUrl = process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL ?? "http://localhost:3000";
+  return `${baseUrl}/auth/magic-link?token_hash=${data.properties?.hashed_token}`;
+}
+
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);

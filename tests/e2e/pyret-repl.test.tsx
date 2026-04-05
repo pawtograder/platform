@@ -8,7 +8,8 @@ import {
   loginAsUser,
   supabase,
   TestingUser,
-  getTestRunPrefix
+  getTestRunPrefix,
+  generateMagicLink
 } from "./TestingUtils";
 
 let course: Course;
@@ -48,7 +49,12 @@ test.beforeAll(async () => {
     class_id: course.id
   });
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 async function insertPyretSubmission({
   student_profile_id,
   assignment_id,

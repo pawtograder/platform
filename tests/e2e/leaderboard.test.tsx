@@ -9,7 +9,8 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -100,7 +101,12 @@ test.beforeAll(async () => {
   // Student 3: lowest score (70)
   await insertSubmissionWithScore(student3!.private_profile_id, assignment!.id, course.id, 70, 100);
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student1, student2, student3, instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 test.describe("Assignment Leaderboard", () => {
   test.describe.configure({ mode: "serial" });
 

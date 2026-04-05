@@ -11,7 +11,8 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -178,6 +179,12 @@ test.describe("Manual grading score calculation", () => {
         useMagicLink: true
       }
     ]);
+  });
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== "failed") return;
+    for (const user of [instructor, studentA, studentB, studentC].filter(Boolean)) {
+      console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+    }
   });
 
   // ──────────────── Individual assignment grading ────────────────

@@ -10,7 +10,8 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -72,7 +73,12 @@ test.beforeAll(async () => {
     }
   }
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [instructor, student].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 test.describe("Rubric editor", () => {
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {
     await loginAsUser(page, instructor!, course);

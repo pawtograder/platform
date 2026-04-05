@@ -11,7 +11,8 @@ import {
   TestingUser,
   createAssignmentsAndGradebookColumns,
   insertPreBakedSubmission,
-  supabase
+  supabase,
+  generateMagicLink
 } from "./TestingUtils";
 // removed unused import
 
@@ -434,7 +435,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
     }).toPass();
   });
-
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== "failed") return;
+    for (const user of [...students, instructor].filter(Boolean)) {
+      console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+    }
+  });
   test.beforeEach(async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     const navRegion = page.locator("#course-nav");

@@ -9,7 +9,8 @@ import {
   insertAssignment,
   loginAsUser,
   supabase,
-  TestingUser
+  TestingUser,
+  generateMagicLink
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
 
@@ -400,7 +401,12 @@ Tests failed: 7/10 (file access denied in sandbox)`
     // No instructor output - submission is clean
   });
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [instructor, student1, student2, student3, grader].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 // Clean up test data after all tests complete
 test.afterAll(async () => {
   // Clean up in reverse dependency order

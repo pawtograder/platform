@@ -9,7 +9,8 @@ import {
   insertAssignment,
   loginAsUser,
   TestingUser,
-  supabase
+  supabase,
+  generateMagicLink
 } from "@/tests/e2e/TestingUtils";
 
 let course: Course;
@@ -99,7 +100,12 @@ test.beforeEach(async () => {
     throw new Error(`Failed to gift tokens: ${giftError.message}`);
   }
 });
-
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== "failed") return;
+  for (const user of [student, instructor].filter(Boolean)) {
+    console.log(`\nFailed test - login as ${user!.email}: ${await generateMagicLink(user!)}`);
+  }
+});
 test.describe("Gifted tokens bug (#648)", () => {
   test("Student with gifted tokens can still see and apply remaining tokens", async ({ page }) => {
     const lastAssignment = assignments[NUM_ASSIGNMENTS_TO_USE_TOKENS];
