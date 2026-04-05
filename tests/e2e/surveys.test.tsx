@@ -2,7 +2,14 @@ import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, generateMagicLink, getAuthTokenForUser, loginAsUser, supabase } from "./TestingUtils";
+import {
+  createClass,
+  createUsersInClass,
+  generateMagicLink,
+  getAuthTokenForUser,
+  loginAsUser,
+  supabase
+} from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
 
