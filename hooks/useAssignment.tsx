@@ -327,10 +327,12 @@ function makeAssignmentTableShim<TableName extends keyof Database["public"]["Tab
     _setQueryClient(qc: unknown) {
       _queryClient = qc;
     },
-    /** Cached rows — populated by the provider via _setRows. Used by PreviewAssignmentController. */
-    rows: [] as Row[],
-    _setRows(rows: Row[]) {
-      this.rows = rows;
+    /** Cached rows — reads from TanStack Query cache. */
+    get rows(): Row[] {
+      return (_queryClient?.getQueryData?.(queryKey) ?? []) as Row[];
+    },
+    _setRows(_rows: Row[]) {
+      // No-op: data lives in TanStack Query cache.
     },
     async create(row: Insert): Promise<Row> {
       const { data, error } = await db.from(table).insert(row).select("*").single();

@@ -20,4 +20,13 @@ export function useSubmissionDataContext(): SubmissionDataContextValue {
   return ctx;
 }
 
+/**
+ * Like useSubmissionDataContext, but returns null instead of throwing
+ * when there is no SubmissionDataProvider. Useful for hooks that may
+ * be called from components that optionally render inside a SubmissionProvider.
+ */
+export function useSubmissionDataContextMaybe(): SubmissionDataContextValue | null {
+  return useContext(SubmissionDataContext);
+}
+
 export const SubmissionDataProvider = SubmissionDataContext.Provider;

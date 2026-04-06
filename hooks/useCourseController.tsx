@@ -426,11 +426,19 @@ export class CourseController {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       list(callback?: any) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return { data: [] as any[], unsubscribe: () => {} };
+        const d = (self._qc?.getQueryData?.(["course", cid, keySuffix]) ?? []) as any[];
+        if (callback) callback(d);
+        return { data: d, unsubscribe: () => {} };
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       getById(id: any, callback?: any) {
-        return { data: undefined, unsubscribe: () => {} };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const d = ((self._qc?.getQueryData?.(["course", cid, keySuffix]) ?? []) as any[]).find(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (r: any) => r.id === id
+        );
+        if (callback) callback(d);
+        return { data: d, unsubscribe: () => {} };
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async getOneByFilters(filters: any[]) {
@@ -442,10 +450,20 @@ export class CourseController {
         const { data } = await query.single();
         return data;
       },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async getByIdAsync(id: any) {
+        const { data, error } = await db.from(table).select("*").eq("id", id).single();
+        if (error) throw error;
+        self._qc?.invalidateQueries?.({ queryKey: ["course", cid, keySuffix] });
+        return data;
+      },
       readyPromise: Promise.resolve(),
       close() {},
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rows: [] as any[],
+      get rows(): any[] {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (self._qc?.getQueryData?.(["course", cid, keySuffix]) ?? []) as any[];
+      },
       get ready() {
         return true;
       }

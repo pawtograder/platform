@@ -1,4 +1,4 @@
-export { SubmissionDataProvider, useSubmissionDataContext } from "./useSubmissionDataContext";
+export { SubmissionDataProvider, useSubmissionDataContext, useSubmissionDataContextMaybe } from "./useSubmissionDataContext";
 export type { SubmissionDataContextValue } from "./useSubmissionDataContext";
 export { SubmissionDataBridge } from "./SubmissionDataBridge";
 

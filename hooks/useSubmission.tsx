@@ -87,7 +87,27 @@ function makeTableShim<TableName extends keyof Database["public"]["Tables"]>(
     async refetchAll(): Promise<void> {
       _queryClient?.invalidateQueries({ queryKey });
     },
-    readyPromise: Promise.resolve()
+    /** Cached rows — reads from TanStack Query cache. */
+    get rows(): Row[] {
+      return (_queryClient?.getQueryData?.(queryKey) ?? []) as Row[];
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    list(callback?: (data: Row[], params?: any) => void): { data: Row[]; unsubscribe: () => void } {
+      const d = this.rows;
+      if (callback) callback(d);
+      return { data: d, unsubscribe: () => {} };
+    },
+    getById(
+      id: number | string,
+      callback?: (data: Row | undefined) => void
+    ): { data: Row | undefined; unsubscribe: () => void } {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const found = this.rows.find((r: any) => r.id === id);
+      if (callback) callback(found);
+      return { data: found, unsubscribe: () => {} };
+    },
+    readyPromise: Promise.resolve(),
+    close() {}
   };
 }
 
@@ -657,7 +677,7 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
 }
 
 export function useSubmissionReviewForRubric(rubricId?: number | null): SubmissionReview | undefined {
-  const submission = useSubmission();
+  const submission = useSubmissionMaybe();
   const reviews = useSubmissionReviews();
 
   return useMemo(() => {
@@ -680,7 +700,8 @@ export function useWritableReferencingRubricChecks(rubric_check_id: number | nul
 }
 
 export function useWritableSubmissionReviews(rubric_id?: number) {
-  const id = useSubmissionController().submission.id;
+  const submission = useSubmissionMaybe();
+  const id = submission?.id;
   const submissionReviews = useSubmissionReviews();
   const { data: rubrics = [] } = useRubricsQuery();
   const { data: allMyReviewAssignments = [] } = useReviewAssignmentsQuery();
