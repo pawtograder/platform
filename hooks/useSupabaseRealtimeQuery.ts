@@ -48,6 +48,10 @@ export type UseSupabaseRealtimeQueryConfig<
   submissionId?: number;
   /** Additional realtime controllers to subscribe to (e.g. office hours RT controller) */
   additionalRealTimeControllers?: PawtograderRealTimeController[];
+  /** See useRealtimeBridge RealtimeBridgeConfig.timestampColumn */
+  timestampColumn?: string;
+  /** See useRealtimeBridge RealtimeBridgeConfig.timestampColumnFallback */
+  timestampColumnFallback?: string;
 };
 
 /**
@@ -90,7 +94,9 @@ export function useSupabaseRealtimeQuery<
     staleTime,
     gcTime,
     submissionId,
-    additionalRealTimeControllers
+    additionalRealTimeControllers,
+    timestampColumn,
+    timestampColumnFallback
   } = config;
 
   const { leader, diffChannel } = useLeaderContext();
@@ -131,6 +137,8 @@ export function useSupabaseRealtimeQuery<
     enabled,
     submissionId,
     additionalRealTimeControllers,
+    timestampColumn,
+    timestampColumnFallback,
     leader,
     diffChannel
   });

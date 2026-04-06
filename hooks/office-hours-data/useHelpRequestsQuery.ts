@@ -3,7 +3,7 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 
 import { useSupabaseRealtimeQuery } from "@/hooks/useSupabaseRealtimeQuery";
-import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
+import { useOfficeHoursDataContext } from "@/hooks/office-hours-data/useOfficeHoursDataContext";
 
 /**
  * Fetches all help requests for the current class with cross-tab realtime sync.

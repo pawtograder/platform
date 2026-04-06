@@ -3,7 +3,7 @@
  * Maintains a static registry so instances with the same channel name can communicate.
  *
  * Features:
- * - `_closed` tracking: closed channels ignore postMessage and don't receive
+ * - `_closed` tracking: `postMessage` throws `InvalidStateError` when closed; closed peers don't receive
  * - `addEventListener`/`removeEventListener`/`dispatchEvent` stubs for spec completeness
  * - Static `_registry` exposed for tests that need direct registry access
  */
@@ -29,7 +29,12 @@ export class MockBroadcastChannel {
   }
 
   postMessage(data: unknown): void {
-    if (this._closed) return;
+    if (this._closed) {
+      throw new DOMException(
+        "Failed to execute 'postMessage' on 'BroadcastChannel': The channel is closed.",
+        "InvalidStateError"
+      );
+    }
     const peers = registry.get(this.name);
     if (!peers) return;
     for (const peer of peers) {

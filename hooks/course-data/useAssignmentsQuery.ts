@@ -24,6 +24,7 @@ export function useAssignmentsQuery() {
         .order("id", { ascending: true }),
     classRtc,
     supabase,
-    scope: "class"
+    scope: "class",
+    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId
   });
 }

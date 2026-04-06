@@ -68,6 +68,7 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (!canShowGradeFor) return;
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         if (triggerRef.current) {
@@ -75,7 +76,7 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
         }
       }
     },
-    [openAt, columnId, studentId]
+    [canShowGradeFor, openAt, columnId, studentId]
   );
 
   // Handle case where student doesn't have a gradebook entry yet (normal during imports or new columns)
@@ -150,10 +151,10 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
           : `Grade cell for ${column.name}: Grade not available`
       }
       aria-describedby={canShowGradeFor && scoreAdvice ? contentId : undefined}
-      tabIndex={0}
+      tabIndex={canShowGradeFor ? 0 : -1}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onKeyDown={onKeyDown}
+      onKeyDown={canShowGradeFor ? onKeyDown : undefined}
     >
       {canShowGradeFor && isSpecial && (
         <Float placement="top-end" offset={3}>

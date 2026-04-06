@@ -362,12 +362,17 @@ class StudentGradebookController {
   private _columnStudentSnapshotEqual(a: GradebookColumnStudent, b: GradebookColumnStudent): boolean {
     return (
       a.id === b.id &&
+      a.gradebook_column_id === b.gradebook_column_id &&
       a.score === b.score &&
       a.score_override === b.score_override &&
-      a.gradebook_column_id === b.gradebook_column_id &&
+      a.score_override_note === b.score_override_note &&
       a.is_recalculating === b.is_recalculating &&
       a.is_missing === b.is_missing &&
-      a.is_excused === b.is_excused
+      a.is_excused === b.is_excused &&
+      a.is_droppable === b.is_droppable &&
+      a.released === b.released &&
+      a.is_private === b.is_private &&
+      JSON.stringify(a.incomplete_values) === JSON.stringify(b.incomplete_values)
     );
   }
 
@@ -400,9 +405,17 @@ class StudentGradebookController {
       !this._arraysEqual(newColumns, this._columnsForStudent)
     ) {
       const prevByColId = new Map(this._columnsForStudent.map((c) => [c.gradebook_column_id, c]));
+      const newByColId = new Map(newColumns.map((c) => [c.gradebook_column_id, c]));
       this._columnsForStudent = newColumns;
 
-      // Notify only subscribers for columns that actually changed (avoids N-column fan-out per update)
+      // Removals: column ids no longer present (subscriber must clear e.g. React state)
+      for (const colId of prevByColId.keys()) {
+        if (!newByColId.has(colId)) {
+          this._columnStudentSubscribers.get(colId)?.forEach((cb) => cb(undefined));
+        }
+      }
+
+      // Additions and updates — same semantics as _columnStudentSnapshotEqual / _arraysEqual
       for (const col of newColumns) {
         const prev = prevByColId.get(col.gradebook_column_id);
         if (!prev || !this._columnStudentSnapshotEqual(prev, col)) {
@@ -415,16 +428,8 @@ class StudentGradebookController {
   private _arraysEqual(a: GradebookColumnStudent[], b: GradebookColumnStudent[]): boolean {
     if (a.length !== b.length) return false;
 
-    // Simple check - compare by id and basic score fields
     for (let i = 0; i < a.length; i++) {
-      const aItem = a[i];
-      const bItem = b[i];
-      if (
-        aItem.id !== bItem.id ||
-        aItem.score !== bItem.score ||
-        aItem.score_override !== bItem.score_override ||
-        aItem.gradebook_column_id !== bItem.gradebook_column_id
-      ) {
+      if (!this._columnStudentSnapshotEqual(a[i], b[i])) {
         return false;
       }
     }

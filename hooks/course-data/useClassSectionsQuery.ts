@@ -1,7 +1,7 @@
 "use client";
 
 import { useSupabaseRealtimeQuery } from "@/hooks/useSupabaseRealtimeQuery";
-import { useCourseDataContext } from "./useCourseDataContext";
+import { useCourseDataContext } from "@/hooks/course-data/useCourseDataContext";
 import type { ClassSection } from "@/utils/supabase/DatabaseTypes";
 
 /**

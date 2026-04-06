@@ -29,6 +29,7 @@ export function useSubmissionCommentsQuery() {
     classRtc,
     supabase,
     scope: "scoped",
-    enabled: !!ctx
+    enabled: !!ctx,
+    realtimeFilter: (row) => (row as Record<string, unknown>).submission_id === submissionId
   });
 }

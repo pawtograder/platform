@@ -36,6 +36,16 @@ export type RealtimeBridgeConfig = {
   submissionId?: number;
   /** Additional realtime controllers to subscribe to (e.g. office hours RT controller). */
   additionalRealTimeControllers?: PawtograderRealTimeController[];
+  /**
+   * Column for incremental catch-up (`.gt` / `.order`) and watermark extraction.
+   * Default `updated_at`. Use another column (e.g. `created_at`) when the table has no `updated_at`.
+   */
+  timestampColumn?: string;
+  /**
+   * When a row has no usable value on `timestampColumn`, try this column for watermark / seeding only.
+   * The catch-up query still uses `timestampColumn` only.
+   */
+  timestampColumnFallback?: string;
 
   leader: TabLeaderElection | null;
   diffChannel: RealtimeDiffChannel | null;
@@ -100,8 +110,10 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
       const result = await processRealtimeBatch(messages, batchConfig);
 
       // Advance watermark from processed rows
+      const tsCol = cfg.timestampColumn ?? "updated_at";
+      const tsFallback = cfg.timestampColumnFallback;
       for (const row of result.updatedRows) {
-        const ts = extractUpdatedAtMs(row);
+        const ts = extractTimestampMs(row as Record<string, unknown>, tsCol, tsFallback);
         if (ts != null) {
           maxUpdatedAtRef.current = maxUpdatedAtRef.current == null ? ts : Math.max(maxUpdatedAtRef.current, ts);
         }
@@ -169,10 +181,13 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
       RealtimeDiffChannel.applyDiff(queryClient, diff);
 
       // Advance our watermark so catch-up on promotion starts from here
+      const cfg = configRef.current;
+      const tsCol = cfg.timestampColumn ?? "updated_at";
+      const tsFallback = cfg.timestampColumnFallback;
       for (const op of diff.operations) {
         if (op.type === "upsert") {
           for (const row of op.rows) {
-            const ts = extractUpdatedAtMs(row);
+            const ts = extractTimestampMs(row as Record<string, unknown>, tsCol, tsFallback);
             if (ts != null) {
               maxUpdatedAtRef.current = maxUpdatedAtRef.current == null ? ts : Math.max(maxUpdatedAtRef.current, ts);
             }
@@ -194,15 +209,28 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
     const cfg = configRef.current;
     if (!cfg.supabase || !cfg.table) return;
 
+    const tsCol = cfg.timestampColumn ?? "updated_at";
+    const tsFallback = cfg.timestampColumnFallback;
+
     try {
       const sinceIso = new Date(maxUpdatedAtRef.current).toISOString();
       const { data, error } = await cfg.supabase
         .from(cfg.table)
         .select(cfg.selectForRefetch ?? "*")
-        .gt("updated_at", sinceIso)
-        .order("updated_at", { ascending: true });
+        .gt(tsCol, sinceIso)
+        .order(tsCol, { ascending: true });
 
-      if (error || !data || (data as unknown[]).length === 0) return;
+      if (error) {
+        throw error;
+      }
+
+      if (data == null) {
+        throw new Error("catchUp: Supabase returned no data");
+      }
+
+      if ((data as unknown[]).length === 0) {
+        return;
+      }
 
       const rows = data as Record<string, unknown>[];
       const accepted = cfg.realtimeFilter ? rows.filter((r: Record<string, unknown>) => cfg.realtimeFilter!(r)) : rows;
@@ -232,7 +260,7 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
 
       // Advance watermark
       for (const row of accepted) {
-        const ts = extractUpdatedAtMs(row);
+        const ts = extractTimestampMs(row, tsCol, tsFallback);
         if (ts != null) {
           maxUpdatedAtRef.current = maxUpdatedAtRef.current == null ? ts : Math.max(maxUpdatedAtRef.current, ts);
         }
@@ -247,8 +275,13 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
           timestamp: Date.now()
         });
       }
-    } catch {
-      // Catch-up failure is non-fatal; next realtime event will trigger another attempt
+    } catch (err) {
+      console.error("[useRealtimeBridge] catchUp failed", {
+        table: cfg.table,
+        queryKey: cfg.queryKey,
+        timestampColumn: tsCol,
+        err
+      });
     }
   }, [queryClient]);
 
@@ -266,12 +299,15 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
     // Seed watermark from existing cached data so that a newly promoted
     // follower can do an incremental catch-up instead of returning early.
     if (maxUpdatedAtRef.current == null) {
-      const currentKey = configRef.current.queryKey;
+      const cfgSeed = configRef.current;
+      const tsColSeed = cfgSeed.timestampColumn ?? "updated_at";
+      const tsFallbackSeed = cfgSeed.timestampColumnFallback;
+      const currentKey = cfgSeed.queryKey;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cached = queryClient.getQueryData<any[]>(currentKey);
       if (Array.isArray(cached)) {
         for (const row of cached) {
-          const ts = extractUpdatedAtMs(row as Record<string, unknown>);
+          const ts = extractTimestampMs(row as Record<string, unknown>, tsColSeed, tsFallbackSeed);
           if (ts != null) {
             maxUpdatedAtRef.current = maxUpdatedAtRef.current == null ? ts : Math.max(maxUpdatedAtRef.current, ts);
           }
@@ -312,7 +348,7 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
 
         if (nowLeader && classRtc) {
           rtcUnsub = classRtc.subscribeToTable(table, enqueue);
-          catchUp();
+          void catchUp();
         } else if (!nowLeader && diffChannel) {
           diffUnsub = diffChannel.onDiff(applyDiff);
         }
@@ -346,16 +382,28 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function extractUpdatedAtMs(row: Record<string, unknown>): number | null {
-  const value = row.updated_at;
-  if (!value) return null;
+function parseTimestampValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
   if (typeof value === "string") {
     const t = new Date(value).getTime();
-    return isNaN(t) ? null : t;
+    return Number.isNaN(t) ? null : t;
   }
   if (value instanceof Date) {
     const t = value.getTime();
-    return isNaN(t) ? null : t;
+    return Number.isNaN(t) ? null : t;
+  }
+  return null;
+}
+
+function extractTimestampMs(
+  row: Record<string, unknown>,
+  timestampColumn: string,
+  timestampColumnFallback?: string
+): number | null {
+  const primary = parseTimestampValue(row[timestampColumn]);
+  if (primary != null) return primary;
+  if (timestampColumnFallback && timestampColumnFallback !== timestampColumn) {
+    return parseTimestampValue(row[timestampColumnFallback]);
   }
   return null;
 }

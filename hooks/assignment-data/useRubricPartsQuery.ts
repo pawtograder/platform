@@ -3,7 +3,7 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 
 import { useSupabaseRealtimeQuery } from "@/hooks/useSupabaseRealtimeQuery";
-import { useAssignmentDataContext } from "./useAssignmentDataContext";
+import { useAssignmentDataContext } from "@/hooks/assignment-data/useAssignmentDataContext";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 type RubricPartRow = Database["public"]["Tables"]["rubric_parts"]["Row"];

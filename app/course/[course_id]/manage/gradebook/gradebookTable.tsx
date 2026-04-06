@@ -1635,6 +1635,7 @@ function StudentDetailDialog() {
     </Dialog.Root>
   );
 }
+
 export default function GradebookTable() {
   const { course_id } = useParams();
   const students = useAllStudentRoles();
@@ -1649,17 +1650,17 @@ export default function GradebookTable() {
   }, [gradebookController]);
 
   const scoreMaps = useMemo(() => {
-    const sortVal = new Map<string, Map<number, string>>();
+    const sortVal = new Map<string, Map<number, number | null>>();
     const filterVal = new Map<string, Map<number, string>>();
     const preferPrivate = true;
     for (const student of gradebookController.table.data) {
       const sid = student.private_profile_id;
-      const sSort = new Map<number, string>();
+      const sSort = new Map<number, number | null>();
       const sFilt = new Map<number, string>();
       for (const col of gradebookColumns) {
         let entry = student.entries.find((e) => e.gc_id === col.id && e.is_private === preferPrivate);
         if (!entry) entry = student.entries.find((e) => e.gc_id === col.id && e.is_private === !preferPrivate);
-        sSort.set(col.id, String(entry?.score_override ?? entry?.score ?? "missing"));
+        sSort.set(col.id, (entry?.score_override ?? entry?.score) ?? null);
         sFilt.set(col.id, String(entry?.score_override ?? entry?.score ?? ""));
       }
       sortVal.set(sid, sSort);
@@ -2031,7 +2032,9 @@ export default function GradebookTable() {
         cols.push({
           id: `grade_${col.id}`,
           header: col.name,
-          accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? "missing",
+          accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? undefined,
+          sortingFn: "basic",
+          sortUndefined: "last",
           cell: ({ row }) => {
             return <MemoizedGradebookCell columnId={col.id} studentId={row.original.id} />;
           },
@@ -2055,7 +2058,9 @@ export default function GradebookTable() {
           cols.push({
             id: `grade_${col.id}`,
             header: col.name,
-            accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? "missing",
+            accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? undefined,
+            sortingFn: "basic",
+            sortUndefined: "last",
             cell: ({ row }) => {
               return <MemoizedGradebookCell columnId={col.id} studentId={row.original.id} />;
             },
