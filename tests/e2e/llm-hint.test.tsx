@@ -8,7 +8,7 @@ import {
   supabase,
   TestingUser,
   getAuthTokenForUser,
-  generateMagicLink
+  logMagicLinkOnFailure
 } from "./TestingUtils";
 import { Course, Assignment, RubricPart, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 
@@ -196,16 +196,7 @@ test.beforeAll(async () => {
 });
 test.afterEach(async ({}, testInfo) => {
   if (testInfo.status !== "failed") return;
-  for (const user of [student, instructor].filter(Boolean)) {
-    try {
-      const link = await generateMagicLink(user!);
-      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
-    } catch (err) {
-      console.warn(
-        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
+  await logMagicLinkOnFailure([student, instructor]);
 });
 // Helper function to call the LLM hint API with authentication
 async function callLLMHintAPI(

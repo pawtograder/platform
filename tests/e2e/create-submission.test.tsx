@@ -12,7 +12,7 @@ import {
   createUsersInClass,
   submitFeedbackViaAPI,
   createSampleGradingResult,
-  generateMagicLink
+  logMagicLinkOnFailure
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
 
@@ -123,16 +123,7 @@ test.beforeAll(async () => {
 });
 test.afterEach(async ({}, testInfo) => {
   if (testInfo.status !== "failed") return;
-  for (const user of [student].filter(Boolean)) {
-    try {
-      const link = await generateMagicLink(user!);
-      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
-    } catch (err) {
-      console.warn(
-        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
+  await logMagicLinkOnFailure([student]);
 });
 test.describe("Create submission", () => {
   test("If the deadline is in the future, the student can create a submission", async ({ page }) => {

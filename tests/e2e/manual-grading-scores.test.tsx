@@ -12,7 +12,7 @@ import {
   loginAsUser,
   supabase,
   TestingUser,
-  generateMagicLink
+  logMagicLinkOnFailure
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -182,16 +182,7 @@ test.describe("Manual grading score calculation", () => {
   });
   test.afterEach(async ({}, testInfo) => {
     if (testInfo.status !== "failed") return;
-    for (const user of [instructor, studentA, studentB, studentC].filter(Boolean)) {
-      try {
-        const link = await generateMagicLink(user!);
-        console.log(`\nFailed test - login as ${user!.email}: ${link}`);
-      } catch (err) {
-        console.warn(
-          `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
+    await logMagicLinkOnFailure([instructor, studentA, studentB, studentC]);
   });
 
   // ──────────────── Individual assignment grading ────────────────

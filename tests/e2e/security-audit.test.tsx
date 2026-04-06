@@ -10,7 +10,7 @@ import {
   loginAsUser,
   supabase,
   TestingUser,
-  generateMagicLink
+  logMagicLinkOnFailure
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
 
@@ -403,16 +403,7 @@ Tests failed: 7/10 (file access denied in sandbox)`
 });
 test.afterEach(async ({}, testInfo) => {
   if (testInfo.status !== "failed") return;
-  for (const user of [instructor, student1, student2, student3, grader].filter(Boolean)) {
-    try {
-      const link = await generateMagicLink(user!);
-      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
-    } catch (err) {
-      console.warn(
-        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
+  await logMagicLinkOnFailure([instructor, student1, student2, student3, grader]);
 });
 // Clean up test data after all tests complete
 test.afterAll(async () => {

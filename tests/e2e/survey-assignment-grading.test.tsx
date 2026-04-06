@@ -8,7 +8,7 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  generateMagicLink
+  logMagicLinkOnFailure
 } from "./TestingUtils";
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { addDays } from "date-fns";
@@ -92,16 +92,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
   });
   test.afterEach(async ({}, testInfo) => {
     if (testInfo.status !== "failed") return;
-    for (const user of [studentA, studentB, studentC, instructor, grader].filter(Boolean)) {
-      try {
-        const link = await generateMagicLink(user!);
-        console.log(`\nFailed test - login as ${user!.email}: ${link}`);
-      } catch (err) {
-        console.warn(
-          `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
+    await logMagicLinkOnFailure([studentA, studentB, studentC, instructor, grader]);
   });
 
   test("student views team collaboration survey and takes it", async ({ page }) => {

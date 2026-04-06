@@ -10,7 +10,7 @@ import {
   loginAsUser,
   supabase,
   TestingUser,
-  generateMagicLink
+  logMagicLinkOnFailure
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -103,16 +103,7 @@ test.beforeAll(async () => {
 });
 test.afterEach(async ({}, testInfo) => {
   if (testInfo.status !== "failed") return;
-  for (const user of [student1, student2, student3, instructor].filter(Boolean)) {
-    try {
-      const link = await generateMagicLink(user!);
-      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
-    } catch (err) {
-      console.warn(
-        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
+  await logMagicLinkOnFailure([student1, student2, student3, instructor]);
 });
 test.describe("Assignment Leaderboard", () => {
   test.describe.configure({ mode: "serial" });

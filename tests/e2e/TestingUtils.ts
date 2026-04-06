@@ -500,8 +500,24 @@ export async function generateMagicLink(user: TestingUser): Promise<string> {
     type: "magiclink"
   });
   if (error) throw new Error(`Failed to generate magic link for ${user.email}: ${error.message}`);
-  const baseUrl = process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL ?? "http://localhost:3000";
-  return `${baseUrl}/auth/magic-link?token_hash=${data.properties?.hashed_token}`;
+  const tokenHash = data.properties?.hashed_token;
+  if (!tokenHash) throw new Error(`Failed to generate magic link for ${user.email}: missing token hash`);
+  const baseUrl = (process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return `${baseUrl}/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
+}
+
+export async function logMagicLinkOnFailure(users: (TestingUser | undefined)[]) {
+  if (!process.env.E2E_PRINT_MAGIC_LINKS) return;
+  for (const user of users.filter(Boolean)) {
+    try {
+      const link = await generateMagicLink(user!);
+      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
+    } catch (err) {
+      console.warn(
+        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
 }
 
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
