@@ -86,19 +86,20 @@ describe("CourseDataBridge", () => {
     expect(screen.getByTestId("classRtc").textContent).toBe("present");
   });
 
-  it("survives classRtc being null (not yet initialized)", () => {
+  it("handles controller that has not started (follower tab)", () => {
+    // The controller always exists now (even for followers), but may not
+    // have started its WebSocket channels.
     mockedUseCourseController.mockReturnValue(
-      makeController({ classRtcThrows: true })
+      makeController({ classRtc: { profileId: "follower-profile", started: false } })
     );
 
-    // Should not throw
     render(
       <CourseDataBridge>
         <ContextConsumer />
       </CourseDataBridge>
     );
 
-    expect(screen.getByTestId("classRtc").textContent).toBe("null");
+    expect(screen.getByTestId("classRtc").textContent).toBe("present");
   });
 
   it("passes isStaff correctly: instructor -> true, student -> false", () => {

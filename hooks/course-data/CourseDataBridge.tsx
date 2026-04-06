@@ -25,14 +25,9 @@ export function CourseDataBridge({
   const controller = useCourseController();
   const { user } = useAuthState();
 
-  // classRealTimeController getter throws if not yet initialized.
-  // Safely read it via try/catch during the startup window.
-  let classRtc: typeof controller.classRealTimeController | null = null;
-  try {
-    classRtc = controller.classRealTimeController;
-  } catch {
-    // Not yet initialized — will re-render when CourseControllerProvider sets state
-  }
+  // The controller always exists (even for follower tabs that haven't started
+  // class-wide channels), so this access is safe without try/catch.
+  const classRtc = controller.classRealTimeController;
 
   const userId = user?.id ?? "";
   const profileId = classRtc?.profileId ?? null;

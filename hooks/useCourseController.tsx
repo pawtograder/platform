@@ -39,6 +39,7 @@ import { LiveEvent, useList } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useLeaderContext } from "@/lib/cross-tab/LeaderProvider";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -1452,7 +1453,11 @@ export function CourseControllerProvider({
   const [courseController, setCourseController] = useState<CourseController | null>(null);
   const { user } = useAuthState();
   const userId = user?.id;
-  // Initialize ClassRealTimeController and ensure it is started before use
+  const { leader } = useLeaderContext();
+
+  // Initialize ClassRealTimeController.
+  // Only the leader tab calls start() to open class-wide WebSocket channels.
+  // Follower tabs receive data via BroadcastChannel diffs from the leader.
   useEffect(() => {
     if (userId) {
       let cancelled = false;
@@ -1465,9 +1470,12 @@ export function CourseControllerProvider({
       });
       const _courseController = new CourseController(role, course_id, client, realTimeController, userId, initialData);
       setCourseController(_courseController);
-      const start = async () => {
+      const init = async () => {
         try {
-          await realTimeController.start();
+          // Only start WebSocket channels if this tab is the leader
+          if (leader?.isLeader) {
+            await realTimeController.start();
+          }
 
           if (cancelled) {
             _courseController?.close();
@@ -1475,9 +1483,7 @@ export function CourseControllerProvider({
             return;
           }
 
-          // Initialize the critical controllers now that everything is stable
           _courseController.initializeEagerControllers();
-
           setClassRealTimeController(realTimeController);
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -1486,15 +1492,26 @@ export function CourseControllerProvider({
           await realTimeController.close();
         }
       };
-      start();
+      init();
+
+      // React to leader changes: start/stop class-wide channels
+      const leaderUnsub = leader?.onLeaderChange(async (nowLeader) => {
+        if (cancelled) return;
+        if (nowLeader) {
+          await realTimeController.start();
+        } else {
+          await realTimeController.closeClassChannels();
+        }
+      });
 
       return () => {
         cancelled = true;
+        leaderUnsub?.();
         _courseController?.close();
         realTimeController.close();
       };
     }
-  }, [course_id, profile_id, role, userId, initialData]);
+  }, [course_id, profile_id, role, userId, initialData, leader]);
 
   if (!courseController || !userId) {
     return (

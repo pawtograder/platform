@@ -87,7 +87,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
   private _inactiveTabTimer: ReturnType<typeof setTimeout> | undefined;
   private _visibilityChangeListener: (() => void) | undefined;
   private _started = false;
-  private _initializationPromise: Promise<void>;
+  private _initializationPromise: Promise<void> | null = null;
 
   constructor({
     client,
@@ -112,8 +112,8 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
       this._inactiveTabTimeoutSeconds = config.inactiveTabTimeoutSeconds;
     }
 
-    // Start async initialization immediately
-    this._initializationPromise = this._initializeChannels();
+    // Channel initialization is deferred to start().
+    // Only the leader tab calls start(); follower tabs receive data via BroadcastChannel diffs.
   }
 
   get isStaff(): boolean {
@@ -127,19 +127,65 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
    * Start the realtime controller with enhanced features
    * Returns true when initialization is complete
    */
+  /**
+   * Whether this controller has active class-wide WebSocket channels.
+   * False for follower tabs (they receive data via BroadcastChannel diffs).
+   */
+  get started(): boolean {
+    return this._started;
+  }
+
   async start(): Promise<boolean> {
     if (this._started) {
-      await this._initializationPromise;
+      if (this._initializationPromise) {
+        await this._initializationPromise;
+      }
       return true;
     }
 
     this._started = true;
+    this._initializationPromise = this._initializeChannels();
     this._addOnVisibilityChangeListener();
 
-    // Wait for initialization that started in constructor
     await this._initializationPromise;
-
     return true;
+  }
+
+  /**
+   * Tear down class-wide channels (user, staff/students) without destroying
+   * scoped channels or clearing local subscriptions. Used when this tab is
+   * demoted from leader — scoped channels remain active, and the subscription
+   * map stays so that if we're promoted again, start() re-creates channels
+   * and messages flow to existing subscribers.
+   */
+  async closeClassChannels(): Promise<void> {
+    // Stop the visibility change listener
+    if (this._visibilityChangeListener) {
+      this._visibilityChangeListener();
+      this._visibilityChangeListener = undefined;
+    }
+    if (this._inactiveTabTimer) {
+      clearTimeout(this._inactiveTabTimer);
+      this._inactiveTabTimer = undefined;
+    }
+
+    // Unsubscribe from class-wide channels only
+    const classChannelTopics = [
+      `class:${this._classId}:staff`,
+      `class:${this._classId}:students`,
+      `class:${this._classId}:user:${this._profileId}`
+    ];
+
+    for (const topic of classChannelTopics) {
+      const unsub = this._channelUnsubscribers.get(topic);
+      if (unsub) {
+        unsub();
+        this._channelUnsubscribers.delete(topic);
+      }
+    }
+
+    this._started = false;
+    this._initializationPromise = null;
   }
 
   private _authUnsubscriber?: ReturnType<typeof this._client.auth.onAuthStateChange>;
@@ -221,13 +267,17 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
   }
 
   /**
-   * Handle visibility changes - disconnect when inactive, reconnect when visible
+   * Handle visibility changes — only manages the inactive-tab disconnect timeout.
+   * Reconnection on tab-visible is handled by RealtimeChannelManager's own
+   * visibilitychange handler, so we do NOT call resubscribeToAllChannels() here
+   * (that caused a double-fire).
    */
   private _handleVisibilityChange() {
+    if (!this._started) return;
+
     if (document.hidden) {
       if (!this._inactiveTabTimer) {
         this._inactiveTabTimer = setTimeout(async () => {
-          console.log(`Tab inactive for ${this._inactiveTabTimeoutSeconds} seconds. Disconnecting from realtime.`);
           this._channelManager.disconnectAllChannels();
         }, this._inactiveTabTimeoutSeconds * 1000);
       }
@@ -236,8 +286,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
         clearTimeout(this._inactiveTabTimer);
         this._inactiveTabTimer = undefined;
       }
-
-      this._channelManager.resubscribeToAllChannels();
+      // Reconnection is handled by RealtimeChannelManager._handleEnhancedVisibilityChange()
     }
   }
 
