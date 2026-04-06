@@ -43,7 +43,7 @@ export class RealtimeDiffChannel {
 
     this.channel.onmessage = (event: MessageEvent<CacheDiff>) => {
       const diff = event.data;
-      // Echo prevention — ignore diffs originating from this tab
+      if (!diff || typeof diff !== "object" || !diff.source || !Array.isArray(diff.operations)) return;
       if (diff.source === this.tabId) return;
       for (const cb of this.listeners) {
         cb(diff);

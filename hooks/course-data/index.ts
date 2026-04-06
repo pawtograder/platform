@@ -19,7 +19,6 @@ export type { UserRoleWithPrivateProfileAndUser } from "./useUserRolesQuery";
 export { useAssignmentGroupsQuery } from "./useAssignmentGroupsQuery";
 export type { AssignmentGroupWithMembers } from "./useAssignmentGroupsQuery";
 
-// Phase 3 Batch 4 — lab sections, class sections
 export { useLabSectionsQuery } from "./useLabSectionsQuery";
 export { useLabSectionMeetingsQuery } from "./useLabSectionMeetingsQuery";
 export { useLabSectionLeadersQuery } from "./useLabSectionLeadersQuery";
@@ -36,10 +35,8 @@ export {
   useLabSectionLeaderDelete
 } from "./useLabSectionLeadersMutation";
 
-// Phase 3 Batch 6 — discussion thread teasers
 export { useDiscussionThreadTeasersQuery } from "./useDiscussionThreadTeasersQuery";
 
-// Phase 3 — discussion mutation hooks
 export {
   useDiscussionTopicFollowerInsert,
   useDiscussionTopicFollowerUpdate,
@@ -57,16 +54,13 @@ export {
 export { useDiscussionThreadTeaserUpdate } from "./useDiscussionThreadTeasersMutation";
 export { useDiscussionThreadReadStatusUpdate } from "./useDiscussionThreadReadStatusMutation";
 
-// Phase 3 — assignment due date exception mutation hooks
 export {
   useAssignmentDueDateExceptionInsert,
   useAssignmentDueDateExceptionDelete
 } from "./useAssignmentDueDateExceptionsMutation";
 
-// Phase 3 — survey mutation hooks
 export { useSurveyUpdate } from "./useSurveysMutation";
 
-// Phase 3 Batch 5 — calendar, staff settings, discord, polls, surveys
 export { useCalendarEventsQuery } from "./useCalendarEventsQuery";
 export { useClassStaffSettingsQuery } from "./useClassStaffSettingsQuery";
 export { useDiscordChannelsQuery } from "./useDiscordChannelsQuery";

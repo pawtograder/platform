@@ -874,7 +874,6 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const courseController = useCourseController();
 
-  // TODO: Remove this once we migrate to TableController for submissions tracking
   // Listen for submission broadcasts to detect when a new active submission appears
   useEffect(() => {
     if (!courseController?.classRealTimeController) return;

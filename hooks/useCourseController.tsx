@@ -28,7 +28,7 @@ import {
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useList } from "@refinedev/core";
+import type { LiveEvent } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { addHours, addMinutes } from "date-fns";
@@ -357,10 +357,6 @@ export class CourseController {
   /**
    * No-op. Data flows through TanStack Query hooks.
    */
-  initializeEagerControllers() {
-    // No-op
-  }
-
   get classRealTimeController(): ClassRealTimeController {
     if (!this._classRealTimeController) {
       throw new Error("ClassRealTimeController not initialized.");
@@ -596,10 +592,6 @@ export class CourseController {
     return data;
   }
 
-  private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
-  private genericData: { [key in string]: Map<number, unknown> } = {};
-  private genericDataListSubscribers: { [key in string]: UpdateCallback<unknown>[] } = {};
-  private genericDataTypeToId: { [key in string]: (item: unknown) => number } = {};
   private _course: Course | undefined;
 
   set course(course: Course) {
@@ -610,115 +602,6 @@ export class CourseController {
       throw new Error("Course not loaded");
     }
     return this._course;
-  }
-
-  registerGenericDataType(typeName: string, idGetter: (item: never) => number) {
-    if (!this.genericDataTypeToId[typeName]) {
-      this.genericDataTypeToId[typeName] = idGetter as (item: unknown) => number;
-      this.genericDataSubscribers[typeName] = new Map();
-      this.genericDataListSubscribers[typeName] = [];
-    }
-  }
-
-  setGeneric(typeName: string, data: unknown[]) {
-    if (!this.genericData[typeName]) {
-      this.genericData[typeName] = new Map();
-    }
-    const idGetter = this.genericDataTypeToId[typeName];
-    for (const item of data) {
-      const id = idGetter(item);
-      this.genericData[typeName].set(id, item);
-      const itemSubscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-      itemSubscribers.forEach((cb) => cb(item));
-    }
-    const listSubscribers = this.genericDataListSubscribers[typeName] || [];
-    listSubscribers.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
-  }
-  listGenericData<T>(typeName: string, callback?: UpdateCallback<T[]>): { unsubscribe: Unsubscribe; data: T[] } {
-    const subscribers = this.genericDataListSubscribers[typeName] || [];
-    if (callback) {
-      subscribers.push(callback as UpdateCallback<unknown>);
-      this.genericDataListSubscribers[typeName] = subscribers;
-    }
-    const currentData = this.genericData[typeName]?.values() || [];
-    return {
-      unsubscribe: () => {
-        this.genericDataListSubscribers[typeName] =
-          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== callback) || [];
-      },
-      data: Array.from(currentData) as T[]
-    };
-  }
-  getValueWithSubscription<T>(
-    typeName: string,
-    id: number | ((item: T) => boolean),
-    callback?: UpdateCallback<T>
-  ): { unsubscribe: Unsubscribe; data: T | undefined } {
-    if (!this.genericDataTypeToId[typeName]) {
-      throw new Error(`No id getter for type ${typeName}`);
-    }
-    if (typeof id === "function") {
-      const relevantIds = Array.from(this.genericData[typeName]?.keys() || []).filter((_id) =>
-        id(this.genericData[typeName]?.get(_id) as T)
-      );
-      if (relevantIds.length == 0) {
-        return {
-          unsubscribe: () => {},
-          data: undefined
-        };
-      } else if (relevantIds.length == 1) {
-        const id = relevantIds[0];
-        const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-        if (callback) {
-          this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as UpdateCallback<unknown>]);
-        }
-        return {
-          unsubscribe: () => {
-            this.genericDataSubscribers[typeName]?.set(
-              id,
-              subscribers.filter((cb) => cb !== callback)
-            );
-          },
-          data: this.genericData[typeName]?.get(id) as T | undefined
-        };
-      } else {
-        throw new Error(`Multiple ids found for type ${typeName}`);
-      }
-    } else if (typeof id === "number") {
-      const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-      if (callback) {
-        this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as UpdateCallback<unknown>]);
-      }
-      return {
-        unsubscribe: () => {
-          this.genericDataSubscribers[typeName]?.set(
-            id,
-            subscribers.filter((cb) => cb !== callback)
-          );
-        },
-        data: this.genericData[typeName]?.get(id) as T | undefined
-      };
-    } else {
-      throw new Error(`Invalid id type ${typeof id}`);
-    }
-  }
-  handleGenericDataEvent(typeName: string, event: LiveEvent) {
-    const body = event.payload;
-    const idGetter = this.genericDataTypeToId[typeName];
-    const id = idGetter(body);
-    if (event.type === "created") {
-      this.genericData[typeName].set(id, body);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
-    } else if (event.type === "updated") {
-      this.genericData[typeName].set(id, body);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
-    } else if (event.type === "deleted") {
-      this.genericData[typeName].delete(id);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
-    }
   }
 
   setObfuscatedGradesMode(val: boolean) {
@@ -763,101 +646,11 @@ export class CourseController {
 }
 
 function CourseControllerProviderImpl({ controller }: { controller: CourseController }) {
-  const { user } = useAuthState();
   const course = useCourse();
 
   useEffect(() => {
     controller.course = course;
   }, [course, controller]);
-
-  const { data: notifications } = useList<Notification>({
-    resource: "notifications",
-    filters: [{ field: "user_id", operator: "eq", value: user?.id }],
-    // liveMode: "manual",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity,
-      enabled: !!user?.id
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    onLiveEvent: (event) => {
-      controller.handleGenericDataEvent("notifications", event);
-    },
-    sorters: [
-      { field: "viewed_at", order: "desc" },
-      { field: "created_at", order: "desc" }
-    ]
-  });
-  useEffect(() => {
-    controller.registerGenericDataType("notifications", (item: Notification) => item.id);
-    if (notifications?.data) {
-      controller.setGeneric("notifications", notifications.data);
-    }
-  }, [controller, notifications?.data]);
-
-  const { data: threadWatches } = useList<DiscussionThreadWatcher>({
-    resource: "discussion_thread_watchers",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity,
-      enabled: !!user?.id
-    },
-    filters: [
-      {
-        field: "user_id",
-        operator: "eq",
-        value: user?.id
-      }
-    ],
-    pagination: {
-      pageSize: 1000
-    },
-    // liveMode: "manual",
-    onLiveEvent: (event) => {
-      controller.handleGenericDataEvent("discussion_thread_watchers", event);
-    }
-  });
-  useEffect(() => {
-    controller.registerGenericDataType(
-      "discussion_thread_watchers",
-      (item: DiscussionThreadWatcher) => item.discussion_thread_root_id
-    );
-    if (threadWatches?.data) {
-      controller.setGeneric("discussion_thread_watchers", threadWatches.data);
-    }
-  }, [controller, threadWatches?.data]);
-
-  // Fetch help request watchers for the current user
-  const { data: helpRequestWatches } = useList<HelpRequestWatcher>({
-    resource: "help_request_watchers",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity,
-      enabled: !!user?.id
-    },
-    filters: [
-      {
-        field: "user_id",
-        operator: "eq",
-        value: user?.id
-      }
-    ],
-    pagination: {
-      pageSize: 1000
-    },
-    // liveMode: "manual",
-    onLiveEvent: (event) => {
-      controller.handleGenericDataEvent("help_request_watchers", event);
-    }
-  });
-  useEffect(() => {
-    controller.registerGenericDataType("help_request_watchers", (item: HelpRequestWatcher) => item.help_request_id);
-    if (helpRequestWatches?.data) {
-      controller.setGeneric("help_request_watchers", helpRequestWatches.data);
-    }
-  }, [controller, helpRequestWatches?.data]);
 
   return <></>;
 }
@@ -910,7 +703,6 @@ export function CourseControllerProvider({
             return;
           }
 
-          _courseController.initializeEagerControllers();
           setClassRealTimeController(realTimeController);
         } catch (e) {
           // eslint-disable-next-line no-console

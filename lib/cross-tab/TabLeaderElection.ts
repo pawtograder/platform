@@ -54,7 +54,9 @@ export class TabLeaderElection {
     const channelName = options?.channelName ?? DEFAULT_CHANNEL_NAME;
     this._channel = new BroadcastChannel(channelName);
     this._channel.onmessage = (event: MessageEvent<LeaderMessage>) => {
-      this._handleMessage(event.data);
+      const msg = event.data;
+      if (!msg || typeof msg !== "object" || !msg.type || !msg.tabId) return;
+      this._handleMessage(msg);
     };
 
     // Register beforeunload so the leader resigns cleanly on tab close.

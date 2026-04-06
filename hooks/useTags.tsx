@@ -1,29 +1,19 @@
+"use client";
 import { Tag } from "@/utils/supabase/DatabaseTypes";
-import { useEffect, useState } from "react";
-import { useCourseController } from "./useCourseController";
+import { useMemo } from "react";
+import { useTagsQuery } from "./course-data";
 
 export function useTagsForProfile(profile_id: string): {
   tags: Tag[];
 } {
-  const courseController = useCourseController();
-  const [tags, setTags] = useState<Tag[]>([]);
-  useEffect(() => {
-    const { unsubscribe, data } = courseController.getTagsForProfile(profile_id, setTags);
-    setTags(data ?? []);
-    return () => unsubscribe();
-  }, [courseController, profile_id]);
+  const { data: allTags = [] } = useTagsQuery();
+  const tags = useMemo(() => allTags.filter((t) => t.profile_id === profile_id), [allTags, profile_id]);
   return { tags };
 }
 
 export default function useTags(): {
   tags: Tag[];
 } {
-  const courseController = useCourseController();
-  const [tags, setTags] = useState<Tag[]>([]);
-  useEffect(() => {
-    const { unsubscribe, data } = courseController.listTags(setTags);
-    setTags(data);
-    return () => unsubscribe();
-  }, [courseController]);
+  const { data: tags = [] } = useTagsQuery();
   return { tags };
 }

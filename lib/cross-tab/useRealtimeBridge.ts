@@ -111,6 +111,9 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
       if (result.cacheDiff && configRef.current.diffChannel) {
         configRef.current.diffChannel.broadcastDiff(result.cacheDiff);
       }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[RealtimeBridge] flush error:", err);
     } finally {
       processingRef.current = false;
 

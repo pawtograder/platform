@@ -4,7 +4,7 @@ import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController, useStudentRoster } from "@/hooks/useCourseController";
 import { getScore, useGradebookController } from "@/hooks/useGradebook";
-import { useGradebookColumnsQuery } from "@/hooks/course-data";
+import { useGradebookColumnsQuery, useUserRolesQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { GradebookColumn, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
@@ -51,6 +51,7 @@ type PreviewData = {
 export default function ImportGradebookColumns() {
   const courseController = useCourseController();
   const { private_profile_id } = useClassProfiles();
+  const { data: userRolesData = [] } = useUserRolesQuery();
 
   // State for managing collapsed/expanded sections in preview
   const [expandedSections, setExpandedSections] = useState({
@@ -160,17 +161,15 @@ export default function ImportGradebookColumns() {
               // Trim identifier for lookup (should already be trimmed, but ensure it)
               const trimmedIdentifier = (s.identifier ?? "").trim();
               if (previewData.idType === "email") {
-                // Normalize email for comparison (lowercase, trimmed)
                 const normalizedEmail = trimmedIdentifier.toLowerCase();
                 studentPrivateProfileId =
-                  courseController
-                    .getRosterWithUserInfo()
-                    .data.find((r) => r.users.email?.trim().toLowerCase() === normalizedEmail)?.private_profile_id ??
-                  null;
+                  userRolesData.find((r) => r.users?.email?.trim().toLowerCase() === normalizedEmail)
+                    ?.private_profile_id ?? null;
               } else if (previewData.idType === "sid") {
                 const sid = parseInt(trimmedIdentifier, 10);
                 if (!isNaN(sid) && isFinite(sid) && sid > 0) {
-                  studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                  const role = userRolesData.find((r) => r.users?.sis_user_id === sid);
+                  studentPrivateProfileId = role?.private_profile_id ?? null;
                 }
               }
               if (!studentPrivateProfileId) return null;
@@ -269,8 +268,8 @@ export default function ImportGradebookColumns() {
     gradebookController.class_id,
     private_profile_id,
     importJob?.filename,
-    courseController,
-    gradebookController.gradebook_columns
+    gradebookController.gradebook_columns,
+    userRolesData
   ]);
   const importFile = useCallback((file: File) => {
     const reader = new FileReader();
@@ -676,19 +675,17 @@ export default function ImportGradebookColumns() {
                               const newValue = (row[col.idx] ?? "").trim();
                               let studentPrivateProfileId: string | null = null;
                               if (idType === "email") {
-                                // Normalize email for comparison (lowercase, trimmed)
                                 const normalizedEmail = identifier.toLowerCase();
                                 studentPrivateProfileId =
-                                  courseController
-                                    .getRosterWithUserInfo()
-                                    .data.find((r) => r.users.email?.trim().toLowerCase() === normalizedEmail)
+                                  userRolesData.find((r) => r.users?.email?.trim().toLowerCase() === normalizedEmail)
                                     ?.private_profile_id ?? null;
                               } else if (idType === "sid") {
                                 const sid = parseInt(identifier, 10);
                                 if (isNaN(sid)) {
                                   studentPrivateProfileId = null;
                                 } else {
-                                  studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
+                                  const role = userRolesData.find((r) => r.users?.sis_user_id === sid);
+                                  studentPrivateProfileId = role?.private_profile_id ?? null;
                                 }
                               }
                               let oldValue = null;
