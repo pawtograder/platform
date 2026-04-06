@@ -13,10 +13,8 @@ import Markdown from "@/components/ui/markdown";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
-import { useActiveUserRolesWithProfiles, useCourseController } from "@/hooks/useCourseController";
+import { useActiveUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { useClassSectionsQuery, useLabSectionsQuery } from "@/hooks/course-data";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -35,10 +33,10 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { ColumnDef, flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { FaDownload, FaEye, FaSearch, FaShieldAlt, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
 // The joined select query for submission_files with submissions and grader_results
@@ -277,7 +275,7 @@ function GraderOutputModal({
 export default function SecurityAuditPage() {
   const { assignment_id, course_id } = useParams();
   const { assignment } = useAssignmentController();
-  const { classRealTimeController } = useCourseController();
+  // classRealTimeController removed - using direct queries now
   const isInstructor = useIsInstructor();
 
   // Use existing hooks for user data
@@ -293,12 +291,6 @@ export default function SecurityAuditPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
-
-  // Create TableController for submission_files when search is triggered
-  const [tableController, setTableController] = useState<TableController<
-    "submission_files",
-    typeof SUBMISSION_FILES_SELECT
-  > | null>(null);
 
   // Create lookup maps from hooks data
   const profileToUserData = useMemo(() => {
@@ -334,56 +326,7 @@ export default function SecurityAuditPage() {
     return new Map(labSections.map((s) => [s.id, s.name]));
   }, [labSections]);
 
-  // Perform search by creating a new TableController
-  const performSearch = useCallback(async () => {
-    const trimmedSearchTerm = searchTerm.trim();
-    if (!trimmedSearchTerm) {
-      toaster.error({ title: "Error", description: "Please enter a search term" });
-      return;
-    }
-
-    // Capture the executed search term to prevent mutations from affecting results
-    setActiveSearchTerm(trimmedSearchTerm);
-    setHasSearched(true);
-    setIsSearching(true);
-
-    // Create new TableController with the search query
-    const query = supabase
-      .from("submission_files")
-      .select(SUBMISSION_FILES_SELECT)
-      .eq("submissions.assignment_id", Number(assignment_id))
-      .eq("class_id", Number(course_id))
-      .ilike("contents", `%${trimmedSearchTerm}%`);
-
-    const tc = new TableController<"submission_files", typeof SUBMISSION_FILES_SELECT>({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      query: query as any,
-      client: supabase,
-      table: "submission_files",
-      classRealTimeController,
-      selectForSingleRow: SUBMISSION_FILES_SELECT
-    });
-
-    setTableController(tc);
-
-    // Wait for the controller to be ready and then stop loading
-    try {
-      await tc.readyPromise;
-    } catch {
-      // Ignore errors - just stop loading
-    } finally {
-      setIsSearching(false);
-    }
-  }, [searchTerm, supabase, assignment_id, course_id, classRealTimeController]);
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      tableController?.close();
-    };
-  }, [tableController]);
-
-  // Transform data from TableController to SecurityAuditResult format
+  // Transform data to SecurityAuditResult format
   const transformToResults = useCallback(
     (files: SubmissionFileWithSubmission[]): SecurityAuditResult[] => {
       const results: SecurityAuditResult[] = [];
@@ -438,6 +381,38 @@ export default function SecurityAuditPage() {
     },
     [activeSearchTerm, profileToUserData, classSectionMap, labSectionMap]
   );
+
+  // Perform search by querying supabase directly
+  const performSearch = useCallback(async () => {
+    const trimmedSearchTerm = searchTerm.trim();
+    if (!trimmedSearchTerm) {
+      toaster.error({ title: "Error", description: "Please enter a search term" });
+      return;
+    }
+
+    // Capture the executed search term to prevent mutations from affecting results
+    setActiveSearchTerm(trimmedSearchTerm);
+    setHasSearched(true);
+    setIsSearching(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("submission_files")
+        .select(SUBMISSION_FILES_SELECT)
+        .eq("submissions.assignment_id", Number(assignment_id))
+        .eq("class_id", Number(course_id))
+        .ilike("contents", `%${trimmedSearchTerm}%`);
+
+      if (error) throw error;
+
+      const results = transformToResults((data ?? []) as unknown as SubmissionFileWithSubmission[]);
+      setTransformedData(results);
+    } catch {
+      setTransformedData([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, [searchTerm, supabase, assignment_id, course_id, transformToResults]);
 
   // Define columns for the table
   const columns = useMemo<ColumnDef<SecurityAuditResult>[]>(
@@ -565,30 +540,12 @@ export default function SecurityAuditPage() {
   // Use TableControllerTable hook with transformed data
   const [transformedData, setTransformedData] = useState<SecurityAuditResult[]>([]);
 
-  // Subscribe to table controller data changes
-  useEffect(() => {
-    if (!tableController) {
-      setTransformedData([]);
-      return;
-    }
-
-    const { data, unsubscribe } = tableController.list((newData) => {
-      const results = transformToResults(newData as unknown as SubmissionFileWithSubmission[]);
-      setTransformedData(results);
-    });
-
-    // Set initial data if already available
-    const results = transformToResults(data as unknown as SubmissionFileWithSubmission[]);
-    setTransformedData(results);
-
-    return () => unsubscribe();
-  }, [tableController, transformToResults]);
-
-  // Use the table controller table hook for table features (we manage loading state manually)
-  const { getHeaderGroups } = useTableControllerTable({
+  // Simple table for header/sorting functionality
+  const securityTable = useReactTable({
+    data: transformedData,
     columns,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tableController: tableController as any,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
     initialState: {
       pagination: {
         pageIndex: 0,
@@ -597,6 +554,7 @@ export default function SecurityAuditPage() {
       sorting: [{ id: "student_name", desc: false }]
     }
   });
+  const getHeaderGroups = securityTable.getHeaderGroups.bind(securityTable);
 
   // Helper to render cell content
   const renderCell = useCallback(

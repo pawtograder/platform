@@ -19,6 +19,8 @@ export type BatchHandlerConfig = {
   selectForRefetch?: string;
   realtimeFilter?: (row: Record<string, unknown>) => boolean;
   tabId: string;
+  /** Submission ID for scoped channel awareness — identifies which submission this batch is for. */
+  submissionId?: number;
 };
 
 export type BatchResult = {

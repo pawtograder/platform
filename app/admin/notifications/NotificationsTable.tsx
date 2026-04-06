@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { useNotificationsTable } from "@/hooks/useNotificationsTable";
 import { createClient } from "@/utils/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { Badge, Box, HStack, IconButton, Table, Text, VStack } from "@chakra-ui/react";
 import { ChevronLeft, ChevronRight, Eye, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 export default function NotificationsTable() {
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
+  const queryClient = useQueryClient();
   const table = useNotificationsTable({ onDelete: handleDelete });
 
   async function handleDelete(notificationId: number) {
@@ -32,7 +34,7 @@ export default function NotificationsTable() {
       }
 
       // Refresh the table to remove the deleted row from the UI
-      await table.controller.refetchAll();
+      await queryClient.invalidateQueries({ queryKey: ["notifications", "system"] });
 
       toaster.success({
         title: "Notification deleted",

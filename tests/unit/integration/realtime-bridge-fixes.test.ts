@@ -12,7 +12,8 @@ import React from "react";
 import { processRealtimeBatch, BatchHandlerConfig } from "@/lib/cross-tab/createRealtimeBatchHandler";
 import { useRealtimeBridge, RealtimeBridgeConfig } from "@/lib/cross-tab/useRealtimeBridge";
 import type { BroadcastMessage } from "@/lib/TableController";
-import type { CacheDiff } from "@/lib/cross-tab/RealtimeDiffChannel";
+import type { CacheDiff, RealtimeDiffChannel } from "@/lib/cross-tab/RealtimeDiffChannel";
+import type { TabLeaderElection } from "@/lib/cross-tab/TabLeaderElection";
 import { setupMockBroadcastChannel, resetAllChannels } from "@/tests/mocks/MockBroadcastChannel";
 
 // ---------------------------------------------------------------------------
@@ -372,7 +373,7 @@ describe("BULK_UPDATE handling (processRealtimeBatch)", () => {
     const msg = makeBroadcast({
       operation: "BULK_UPDATE",
       table: "other_table"
-    });
+    } as any);
 
     await processRealtimeBatch([msg], baseConfig());
 
@@ -420,8 +421,8 @@ describe("watermark initialization (useRealtimeBridge)", () => {
       classRtc: rtc as any,
       supabase: createMockSupabase(),
       scope: "class",
-      leader,
-      diffChannel: diff,
+      leader: leader as unknown as TabLeaderElection,
+      diffChannel: diff as unknown as RealtimeDiffChannel,
       ...overrides
     };
 
@@ -458,7 +459,7 @@ describe("watermark initialization (useRealtimeBridge)", () => {
     // Start as follower — watermark gets seeded from cache
     const leaderObj = mockLeader(false);
     const { diff } = renderBridge({
-      leader: leaderObj,
+      leader: leaderObj as unknown as TabLeaderElection,
       supabase
     });
 
@@ -485,7 +486,7 @@ describe("watermark initialization (useRealtimeBridge)", () => {
     // Start as follower, then promote to leader
     const leaderObj = mockLeader(false);
     renderBridge({
-      leader: leaderObj,
+      leader: leaderObj as unknown as TabLeaderElection,
       supabase
     });
 
@@ -524,7 +525,7 @@ describe("watermark initialization (useRealtimeBridge)", () => {
 
     // Start as leader so we can process messages
     const { fire } = renderBridge({
-      leader: mockLeader(true),
+      leader: mockLeader(true) as unknown as TabLeaderElection,
       supabase,
       debounceMs: 100
     });

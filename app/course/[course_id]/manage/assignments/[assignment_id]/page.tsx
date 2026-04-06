@@ -3,30 +3,36 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
-import TableController, { useTableControllerTableValues, useIsTableControllerReady } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
+import { ActiveSubmissionsWithGradesForAssignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
-import * as Sentry from "@sentry/nextjs";
+import { useQuery } from "@tanstack/react-query";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useMemo } from "react";
 import AssignmentDashboard from "./assignmentDashboard";
 import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
 const VALID_TABS = ["assigned-grading", "all-submissions", "dashboard"] as const;
 
-function AssignmentDashboardWrapper({ tableController }: { tableController: TableController<"submissions"> | null }) {
-  const rows = useTableControllerTableValues(tableController ?? undefined);
-  const isReady = useIsTableControllerReady(tableController ?? undefined);
-  return <AssignmentDashboard data={rows} isLoading={!isReady} />;
+function AssignmentDashboardWrapper({
+  data,
+  isLoading
+}: {
+  data: ActiveSubmissionsWithGradesForAssignment[];
+  isLoading: boolean;
+}) {
+  return <AssignmentDashboard data={data} isLoading={isLoading} />;
 }
 
 function AssignmentHomeTabs({
   hasReviewAssignments,
-  tableController
+  submissionsData,
+  isLoadingSubmissions
 }: {
   hasReviewAssignments: boolean;
-  tableController: TableController<"submissions"> | null;
+  submissionsData: ActiveSubmissionsWithGradesForAssignment[];
+  isLoadingSubmissions: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -60,10 +66,10 @@ function AssignmentHomeTabs({
         <ReviewAssignmentsTable />
       </Tabs.Content>
       <Tabs.Content value="all-submissions">
-        <AssignmentsTable tableController={tableController} />
+        <AssignmentsTable sharedData={submissionsData} sharedIsLoading={isLoadingSubmissions} />
       </Tabs.Content>
       <Tabs.Content value="dashboard">
-        <AssignmentDashboardWrapper tableController={tableController} />
+        <AssignmentDashboardWrapper data={submissionsData} isLoading={isLoadingSubmissions} />
       </Tabs.Content>
     </Tabs.Root>
   );
@@ -74,40 +80,23 @@ export default function AssignmentHome() {
   const assignment = controller.assignment;
   const myReviewAssignments = useMyReviewAssignments();
   const hasReviewAssignments = myReviewAssignments.length > 0;
-  const { course, classRealTimeController } = useCourseController();
+  const { course } = useCourseController();
   const { assignment_id } = useParams();
   const supabase = useMemo(() => createClient(), []);
 
-  const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
-
-  useEffect(() => {
-    if (!assignment_id) return;
-
-    Sentry.addBreadcrumb({
-      category: "tableController",
-      message: "Creating TableController for submissions_with_grades_for_assignment_nice",
-      level: "info"
-    });
-
-    const query = supabase
-      .from("submissions_with_grades_for_assignment_nice")
-      .select("*")
-      .eq("assignment_id", Number(assignment_id));
-
-    const tc = new TableController({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      query: query as any,
-      client: supabase,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      table: "submissions_with_grades_for_assignment_nice" as any
-    });
-
-    setTableController(tc);
-
-    return () => {
-      tc.close();
-    };
-  }, [supabase, assignment_id, classRealTimeController]);
+  const { data: submissionsData = [], isLoading: isLoadingSubmissions } = useQuery({
+    queryKey: ["manage", "submissions_with_grades_for_assignment_nice", assignment_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("submissions_with_grades_for_assignment_nice")
+        .select("*")
+        .eq("assignment_id", Number(assignment_id));
+      if (error) throw error;
+      return data as ActiveSubmissionsWithGradesForAssignment[];
+    },
+    enabled: !!assignment_id,
+    staleTime: 30_000
+  });
 
   if (!assignment) {
     return <div>Assignment not found</div>;
@@ -155,7 +144,11 @@ export default function AssignmentHome() {
         </HStack>
       </Box>
       <Suspense fallback={null}>
-        <AssignmentHomeTabs hasReviewAssignments={hasReviewAssignments} tableController={tableController} />
+        <AssignmentHomeTabs
+          hasReviewAssignments={hasReviewAssignments}
+          submissionsData={submissionsData}
+          isLoadingSubmissions={isLoadingSubmissions}
+        />
       </Suspense>
     </Box>
   );

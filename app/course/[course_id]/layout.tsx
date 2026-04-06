@@ -8,8 +8,9 @@ import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { CourseDataBridge } from "@/hooks/course-data/CourseDataBridge";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
 import { OfficeHoursDataBridge } from "@/hooks/office-hours-data";
-import { fetchCourseControllerData, getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { getCourse, getUserRolesForCourse, prefetchCourseData } from "@/lib/ssrUtils";
 import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
+import { HydrationBoundary } from "@tanstack/react-query";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
@@ -41,44 +42,47 @@ const ProtectedLayout = async ({
     redirect("/");
   }
 
-  // Pre-fetch all course controller data on the server with caching
-  const initialData = await fetchCourseControllerData(Number.parseInt(course_id), user_role.role);
+  const courseIdNum = Number.parseInt(course_id);
+
+  // Pre-fetch all course controller data and dehydrate for TanStack Query HydrationBoundary
+  const dehydratedState = await prefetchCourseData(courseIdNum, user_role.role, user_id, user_role.private_profile_id);
 
   // Get course information for timezone
-  const course = await getCourse(Number.parseInt(course_id));
+  const course = await getCourse(courseIdNum);
   const courseTimeZone = course?.time_zone || "America/New_York";
 
   return (
     <Box minH="100vh">
       <NavigationProgressProvider>
-        <TimeZoneProvider courseTimeZone={courseTimeZone}>
-          <CourseControllerProvider
-            course_id={Number.parseInt(course_id)}
-            profile_id={user_role.private_profile_id}
-            role={user_role.role}
-            initialData={initialData}
-          >
-            <CourseDataBridge initialData={initialData}>
-              <OfficeHoursControllerProvider
-                classId={Number.parseInt(course_id)}
-                profileId={user_role.private_profile_id}
-                role={user_role.role}
-              >
-                <OfficeHoursDataBridge>
-                  <HelpDrawerProvider>
-                    <DynamicCourseNav />
-                    {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
-                    {/* mobilenav */}
-                    <Box pt="0" ml="0" mr="0" pb="80px">
-                      {children}
-                    </Box>
-                    <FloatingHelpRequestWidget />
-                  </HelpDrawerProvider>
-                </OfficeHoursDataBridge>
-              </OfficeHoursControllerProvider>
-            </CourseDataBridge>
-          </CourseControllerProvider>
-        </TimeZoneProvider>
+        <HydrationBoundary state={dehydratedState}>
+          <TimeZoneProvider courseTimeZone={courseTimeZone}>
+            <CourseControllerProvider
+              course_id={courseIdNum}
+              profile_id={user_role.private_profile_id}
+              role={user_role.role}
+            >
+              <CourseDataBridge>
+                <OfficeHoursControllerProvider
+                  classId={courseIdNum}
+                  profileId={user_role.private_profile_id}
+                  role={user_role.role}
+                >
+                  <OfficeHoursDataBridge>
+                    <HelpDrawerProvider>
+                      <DynamicCourseNav />
+                      {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
+                      {/* mobilenav */}
+                      <Box pt="0" ml="0" mr="0" pb="80px">
+                        {children}
+                      </Box>
+                      <FloatingHelpRequestWidget />
+                    </HelpDrawerProvider>
+                  </OfficeHoursDataBridge>
+                </OfficeHoursControllerProvider>
+              </CourseDataBridge>
+            </CourseControllerProvider>
+          </TimeZoneProvider>
+        </HydrationBoundary>
       </NavigationProgressProvider>
     </Box>
   );

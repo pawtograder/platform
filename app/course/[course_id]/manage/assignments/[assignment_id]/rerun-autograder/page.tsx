@@ -3,10 +3,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { rerunGrader } from "@/lib/edgeFunctions";
-import TableController from "@/lib/TableController";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import { ActiveSubmissionsWithRegressionTestResults, Assignment, Autograder } from "@/utils/supabase/DatabaseTypes";
@@ -32,8 +29,18 @@ import {
 } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
 import { formatInTimeZone } from "date-fns-tz";
-import * as Sentry from "@sentry/nextjs";
-import { CellContext, ColumnDef, flexRender } from "@tanstack/react-table";
+
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  CellContext,
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable
+} from "@tanstack/react-table";
 import { Select as ReactSelect } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -63,11 +70,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   const [autoPromote, setAutoPromote] = useState(true);
   const [showDevColumns, setShowDevColumns] = useState(false);
   const supabase = useMemo(() => createClient(), []);
-  const { classRealTimeController } = useCourseController();
-  const [tableController, setTableController] = useState<
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    TableController<any, any, any, ActiveSubmissionsWithRegressionTestResults> | undefined
-  >(undefined);
+  const queryClient = useQueryClient();
   const [promotingResults, setPromotingResults] = useState<Record<number, boolean>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyResults, setHistoryResults] = useState<WhatIfGraderResult[]>([]);
@@ -87,7 +90,9 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         if (error) {
           throw new Error(error.message);
         }
-        await tableController?.refetchAll();
+        await queryClient.invalidateQueries({
+          queryKey: ["manage", "submissions_regression_test", assignment_id]
+        });
         toaster.success({
           title: "Promoted result",
           description: "The what-if result is now the official autograder result."
@@ -101,7 +106,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
         setPromotingResults((prev) => ({ ...prev, [graderResultId]: false }));
       }
     },
-    [course.id, supabase, tableController]
+    [course.id, supabase, queryClient, assignment_id]
   );
 
   const openHistory = useCallback(
@@ -473,42 +478,28 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
     };
   }, [assignment_id, supabase]);
 
-  useEffect(() => {
-    Sentry.addBreadcrumb({
-      category: "tableController",
-      message: "Creating TableController for submissions_with_grades_for_assignment_and_regression_test",
-      level: "info"
-    });
+  const { data: queryData = [], isLoading: isTableLoading } = useQuery({
+    queryKey: ["manage", "submissions_regression_test", assignment_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("submissions_with_grades_for_assignment_and_regression_test")
+        .select("*")
+        .eq("assignment_id", Number(assignment_id));
+      if (error) throw error;
+      return data as ActiveSubmissionsWithRegressionTestResults[];
+    },
+    enabled: !!assignment_id,
+    staleTime: 30_000
+  });
+  const data = queryData;
 
-    const query = supabase
-      .from("submissions_with_grades_for_assignment_and_regression_test")
-      .select("*")
-      .eq("assignment_id", Number(assignment_id));
-
-    const tc = new TableController({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      query: query as any,
-      client: supabase,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      table: "submissions_with_grades_for_assignment_and_regression_test" as any
-    });
-
-    setTableController(tc);
-
-    return () => {
-      tc.close();
-    };
-  }, [supabase, assignment_id, classRealTimeController]);
-  const {
-    getHeaderGroups,
-    getRowModel,
-    getRowCount,
-    getCoreRowModel,
-    data,
-    isLoading: isTableLoading
-  } = useTableControllerTable({
+  const rerunTable = useReactTable({
+    data: queryData,
     columns,
-    tableController,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     initialState: {
       sorting: [{ id: "name", desc: false }],
       pagination: {
@@ -517,6 +508,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
       }
     }
   });
+  const { getHeaderGroups, getRowModel, getRowCount, getCoreRowModel: getUnfilteredRowModel } = rerunTable;
 
   // Determine which columns to show based on data
   const columnVisibility = useMemo(() => {
@@ -588,7 +580,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
   // Compute unique values for each column from ALL rows (before filtering)
   // Depends on 'data' so it recalculates when async data loads
   const columnUniqueValues = useMemo(() => {
-    const rows = getCoreRowModel().rows; // Use getCoreRowModel to get ALL rows before filtering
+    const rows = getUnfilteredRowModel().rows; // Use getUnfilteredRowModel to get ALL rows before filtering
     const uniqueValuesMap: Record<string, SelectOption[]> = {};
 
     columns.forEach((column) => {
@@ -631,7 +623,7 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
     return uniqueValuesMap;
     // data is what actually changes, so we need to include it in the dependency array
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, columns, timeZone, getCoreRowModel]);
+  }, [data, columns, timeZone, getUnfilteredRowModel]);
 
   return (
     <VStack>
@@ -950,7 +942,9 @@ function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string })
                   },
                   supabase
                 );
-                await tableController?.refetchAll();
+                await queryClient.invalidateQueries({
+                  queryKey: ["manage", "submissions_regression_test", assignment_id]
+                });
                 toaster.success({
                   title: "Regrading started",
                   description: "This may take a while... Use the Workflow Runs page to view the complete status."

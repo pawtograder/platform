@@ -1,6 +1,7 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
 import { AssignmentDataBridge } from "@/hooks/assignment-data";
-import { createClientWithCaching, fetchAssignmentControllerData, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { createClientWithCaching, getUserRolesForCourse, prefetchAssignmentData } from "@/lib/ssrUtils";
+import { HydrationBoundary } from "@tanstack/react-query";
 import { TZDate } from "@date-fns/tz";
 import { isAfter } from "date-fns";
 import { headers } from "next/headers";
@@ -49,16 +50,16 @@ export default async function AssignmentLayout({
     }
   }
 
-  // Pre-fetch all assignment controller data on the server with caching
-  const initialData = await fetchAssignmentControllerData(
-    assignmentId,
-    role.role === "instructor" || role.role === "grader"
-  );
+  const isStaff = role.role === "instructor" || role.role === "grader";
+
+  // Pre-fetch all assignment data and dehydrate for TanStack Query HydrationBoundary
+  const dehydratedState = await prefetchAssignmentData(Number(course_id), assignmentId, isStaff);
+
   return (
-    <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
-      <AssignmentDataBridge assignmentId={assignmentId} initialData={initialData}>
-        {children}
-      </AssignmentDataBridge>
-    </AssignmentProvider>
+    <HydrationBoundary state={dehydratedState}>
+      <AssignmentProvider assignment_id={assignmentId}>
+        <AssignmentDataBridge assignmentId={assignmentId}>{children}</AssignmentDataBridge>
+      </AssignmentProvider>
+    </HydrationBoundary>
   );
 }

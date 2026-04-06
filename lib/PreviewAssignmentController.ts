@@ -1,10 +1,8 @@
 import type { AssignmentController } from "@/hooks/useAssignment";
 import type { HydratedRubric, Rubric, RubricPart, RubricCriteria, RubricCheck } from "@/utils/supabase/DatabaseTypes";
-import type TableController from "@/lib/TableController";
-import { TablesThatHaveAnIDField } from "@/lib/TableController";
 
 /**
- * Flattens a HydratedRubric into normalized arrays suitable for TableController preview
+ * Flattens a HydratedRubric into normalized arrays suitable for preview
  *
  * Ensures all foreign keys are correctly set to match the parent rubric's ID,
  * which is critical for hook predicates to work correctly.
@@ -92,13 +90,14 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
 }
 
 /**
- * Creates a preview-aware TableController wrapper
+ * Creates a preview-aware table shim wrapper
  */
-function createPreviewTableController<TTableName extends TablesThatHaveAnIDField, TData extends { id: number }>(
-  originalController: TableController<TTableName>,
+function createPreviewTableShim<TData extends { id: number }>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  originalShim: any,
   previewData: TData[]
-): TableController<TTableName> {
-  // Cache overridden methods to maintain stable references
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
   const overrides = {
     rows: previewData,
     getById: (id: number, callback?: (data: TData | undefined) => void) => {
@@ -107,22 +106,17 @@ function createPreviewTableController<TTableName extends TablesThatHaveAnIDField
       return { data, unsubscribe: () => {} };
     },
     list: (callback?: (data: TData[], params: { entered: TData[]; left: TData[] }) => void) => {
-      // In preview mode, data is static - no items entering or leaving
       if (callback) callback(previewData, { entered: [], left: [] });
       return { data: previewData, unsubscribe: () => {} };
     }
   };
 
-  // Create a proxy that intercepts method calls
-  return new Proxy(originalController, {
-    get(target, prop) {
-      // Return cached override if it exists
+  return new Proxy(originalShim, {
+    get(target: Record<string, unknown>, prop: string) {
       if (prop in overrides) {
         return overrides[prop as keyof typeof overrides];
       }
-
-      // For all other properties, return the original
-      return target[prop as keyof typeof target];
+      return target[prop];
     }
   });
 }
@@ -166,10 +160,10 @@ export function createPreviewAssignmentController(
   // Cache wrapped controllers to maintain stable references
   // Note: rubricCheckReferencesController uses live data (no preview references)
   const wrappedControllers = {
-    rubricsController: createPreviewTableController(baseController.rubricsController, mergedRubrics),
-    rubricPartsController: createPreviewTableController(baseController.rubricPartsController, mergedParts),
-    rubricCriteriaController: createPreviewTableController(baseController.rubricCriteriaController, mergedCriteria),
-    rubricChecksController: createPreviewTableController(baseController.rubricChecksController, mergedChecks),
+    rubricsController: createPreviewTableShim(baseController.rubricsController, mergedRubrics),
+    rubricPartsController: createPreviewTableShim(baseController.rubricPartsController, mergedParts),
+    rubricCriteriaController: createPreviewTableShim(baseController.rubricCriteriaController, mergedCriteria),
+    rubricChecksController: createPreviewTableShim(baseController.rubricChecksController, mergedChecks),
     // Use live controller for references - they don't have preview data anyway
     rubricCheckReferencesController: baseController.rubricCheckReferencesController
   };

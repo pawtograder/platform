@@ -1,6 +1,7 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
 import { AssignmentDataBridge } from "@/hooks/assignment-data";
-import { createClientWithCaching, fetchAssignmentControllerData, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { createClientWithCaching, getUserRolesForCourse, prefetchAssignmentData } from "@/lib/ssrUtils";
+import { HydrationBoundary } from "@tanstack/react-query";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ManageAssignmentNav } from "./ManageAssignmentNav";
@@ -47,11 +48,10 @@ export default async function ManageAssignmentLayout({
     redirect(`/course/${courseId}`);
   }
 
-  // Pre-fetch all assignment controller data on the server with caching
-  const initialData = await fetchAssignmentControllerData(
-    assignmentId,
-    role.role === "instructor" || role.role === "grader"
-  );
+  const isStaff = role.role === "instructor" || role.role === "grader";
+
+  // Pre-fetch all assignment data and dehydrate for TanStack Query HydrationBoundary
+  const dehydratedState = await prefetchAssignmentData(courseId, assignmentId, isStaff);
 
   // Fetch assignment metadata for the title
   const client = await createClientWithCaching({ tags: ["assignment_metadata"] });
@@ -67,10 +67,12 @@ export default async function ManageAssignmentLayout({
   }
 
   return (
-    <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
-      <AssignmentDataBridge assignmentId={assignmentId} initialData={initialData}>
-        <ManageAssignmentNav assignmentTitle={assignment.title}>{children}</ManageAssignmentNav>
-      </AssignmentDataBridge>
-    </AssignmentProvider>
+    <HydrationBoundary state={dehydratedState}>
+      <AssignmentProvider assignment_id={assignmentId}>
+        <AssignmentDataBridge assignmentId={assignmentId}>
+          <ManageAssignmentNav assignmentTitle={assignment.title}>{children}</ManageAssignmentNav>
+        </AssignmentDataBridge>
+      </AssignmentProvider>
+    </HydrationBoundary>
   );
 }

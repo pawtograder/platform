@@ -7,15 +7,8 @@ import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useAssignmentScopedGroupsQuery } from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import {
-  useCanShowGradeFor,
-  useCourseController,
-  useObfuscatedGradesMode,
-  useSetOnlyShowGradesFor
-} from "@/hooks/useCourseController";
+import { useCanShowGradeFor, useObfuscatedGradesMode, useSetOnlyShowGradesFor } from "@/hooks/useCourseController";
 import { useClassSectionsQuery } from "@/hooks/course-data";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import TableController from "@/lib/TableController";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -41,9 +34,17 @@ import {
 } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TZDate } from "@date-fns/tz";
-import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable
+} from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams, useRouter } from "next/navigation";
@@ -279,9 +280,11 @@ function TotalScoreCell({
   );
 }
 export default function AssignmentsTable({
-  tableController: providedTableController
+  sharedData,
+  sharedIsLoading
 }: {
-  tableController?: TableController<"submissions"> | null;
+  sharedData?: ActiveSubmissionsWithGradesForAssignment[];
+  sharedIsLoading?: boolean;
 } = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
@@ -289,7 +292,6 @@ export default function AssignmentsTable({
   const { assignment } = useAssignmentController();
   const { data: assignmentGroups = [] } = useAssignmentScopedGroupsQuery();
 
-  const { classRealTimeController } = useCourseController();
   const { timeZone } = useTimeZone();
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
@@ -583,62 +585,43 @@ export default function AssignmentsTable({
     [timeZone, course_id, assignment_id, assignment]
   );
 
-  const [internalTableController, setInternalTableController] = useState<TableController<"submissions"> | null>(null);
+  const queryClient = useQueryClient();
 
-  // Use provided tableController if available, otherwise create our own
-  const tableController = providedTableController ?? internalTableController;
+  // Use shared data from parent if available, otherwise fetch our own
+  const { data: ownData = [], isLoading: ownIsLoading } = useQuery({
+    queryKey: ["manage", "submissions_with_grades_for_assignment_nice", assignment_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("submissions_with_grades_for_assignment_nice")
+        .select("*")
+        .eq("assignment_id", Number(assignment_id));
+      if (error) throw error;
+      return data as ActiveSubmissionsWithGradesForAssignment[];
+    },
+    enabled: !sharedData && !!assignment_id,
+    staleTime: 30_000
+  });
 
-  useEffect(() => {
-    // Only create internal tableController if one wasn't provided
-    if (providedTableController) {
-      return;
-    }
+  const data = sharedData ?? ownData;
+  const isLoading = sharedIsLoading ?? ownIsLoading;
 
-    Sentry.addBreadcrumb({
-      category: "tableController",
-      message: "Creating TableController for submissions_with_grades_for_assignment_nice",
-      level: "info"
+  const refetchAll = async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ["manage", "submissions_with_grades_for_assignment_nice", assignment_id]
     });
+  };
 
-    const query = supabase
-      .from("submissions_with_grades_for_assignment_nice")
-      .select("*")
-      .eq("assignment_id", Number(assignment_id));
-
-    const tc = new TableController({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      query: query as any,
-      client: supabase,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      table: "submissions_with_grades_for_assignment_nice" as any
-    });
-
-    setInternalTableController(tc);
-
-    return () => {
-      tc.close();
-    };
-  }, [supabase, assignment_id, classRealTimeController, providedTableController]);
-
-  const {
-    getHeaderGroups,
-    getRowModel,
-    getCoreRowModel,
-    getState,
-    getRowCount,
-    setPageIndex,
-    getCanPreviousPage,
-    getPageCount,
-    getCanNextPage,
-    nextPage,
-    previousPage,
-    setPageSize,
-    isLoading
-  } = useTableControllerTable({
+  const table = useReactTable({
+    data,
     columns,
-    //TODO: Longer term, we should fix to make this work with views!
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tableController: tableController as any,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: false,
+    manualFiltering: false,
+    manualSorting: false,
+    filterFromLeafRows: true,
     initialState: {
       columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
       pagination: {
@@ -648,6 +631,21 @@ export default function AssignmentsTable({
       sorting: [{ id: "name", desc: false }]
     }
   });
+
+  const {
+    getHeaderGroups,
+    getRowModel,
+    getCoreRowModel: getUnfilteredRowModel,
+    getState,
+    getRowCount,
+    setPageIndex,
+    getCanPreviousPage,
+    getPageCount,
+    getCanNextPage,
+    nextPage,
+    previousPage,
+    setPageSize
+  } = table;
   const isInstructor = classRole.role === "instructor";
 
   const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
@@ -678,7 +676,7 @@ export default function AssignmentsTable({
                     throw new Error(`Failed to release reviews: ${error.message}`);
                   }
 
-                  await tableController?.refetchAll();
+                  await refetchAll();
 
                   toaster.success({ title: "Success", description: "All submission reviews released" });
                 } catch (error) {
@@ -712,7 +710,7 @@ export default function AssignmentsTable({
                     throw new Error(`Failed to unrelease reviews: ${error.message}`);
                   }
 
-                  await tableController?.refetchAll();
+                  await refetchAll();
                   toaster.success({ title: "Success", description: "All submission reviews unreleased" });
                 } catch (error) {
                   // eslint-disable-next-line no-console
@@ -732,7 +730,7 @@ export default function AssignmentsTable({
             <MarkAllCompleteButton
               assignment_id={Number(assignment_id)}
               supabase={supabase}
-              tableController={tableController}
+              refetchAll={refetchAll}
               isReleasingAll={isReleasingAll}
               isUnreleasingAll={isUnreleasingAll}
               isMarkingAllComplete={isMarkingAllComplete}
@@ -853,7 +851,7 @@ export default function AssignmentsTable({
                                   header.column.setFilterValue(values.length > 0 ? values : undefined);
                                 }}
                                 options={Array.from(
-                                  getCoreRowModel()
+                                  getUnfilteredRowModel()
                                     .rows.reduce((map, row) => {
                                       const name = row.original.name;
                                       if (name && !map.has(name)) {
@@ -876,7 +874,7 @@ export default function AssignmentsTable({
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getCoreRowModel()
+                                    getUnfilteredRowModel()
                                       .rows.reduce((map, row) => {
                                         const sectionName = row.original.class_section_name;
                                         if (sectionName && !map.has(sectionName)) {
@@ -901,7 +899,7 @@ export default function AssignmentsTable({
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getCoreRowModel()
+                                    getUnfilteredRowModel()
                                       .rows.reduce((map, row) => {
                                         const sectionName = row.original.lab_section_name;
                                         if (sectionName && !map.has(sectionName)) {
@@ -926,7 +924,7 @@ export default function AssignmentsTable({
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getCoreRowModel()
+                                    getUnfilteredRowModel()
                                       .rows.reduce((map, row) => {
                                         const graderName = row.original.gradername;
                                         if (graderName && !map.has(graderName)) {
@@ -951,7 +949,7 @@ export default function AssignmentsTable({
                                 }}
                                 options={[
                                   ...Array.from(
-                                    getCoreRowModel()
+                                    getUnfilteredRowModel()
                                       .rows.reduce((map, row) => {
                                         const checkerName = row.original.checkername;
                                         if (checkerName && !map.has(checkerName)) {
@@ -1573,7 +1571,7 @@ type EligibilityData = {
 function MarkAllCompleteButton({
   assignment_id,
   supabase,
-  tableController,
+  refetchAll,
   isReleasingAll,
   isUnreleasingAll,
   isMarkingAllComplete,
@@ -1581,7 +1579,7 @@ function MarkAllCompleteButton({
 }: {
   assignment_id: number;
   supabase: ReturnType<typeof createClient>;
-  tableController: TableController<"submissions"> | null;
+  refetchAll: () => Promise<void>;
   isReleasingAll: boolean;
   isUnreleasingAll: boolean;
   isMarkingAllComplete: boolean;
@@ -1635,7 +1633,7 @@ function MarkAllCompleteButton({
         p_assignment_id: assignment_id
       });
       if (error) throw new Error(error.message);
-      await tableController?.refetchAll();
+      await refetchAll();
       const count = typeof data === "number" ? data : 0;
       toaster.success({
         title: "Success",
@@ -1650,7 +1648,7 @@ function MarkAllCompleteButton({
     } finally {
       setIsMarkingAllComplete(false);
     }
-  }, [assignment_id, supabase, tableController, setIsMarkingAllComplete]);
+  }, [assignment_id, supabase, refetchAll, setIsMarkingAllComplete]);
 
   const canComplete = (eligibilityData?.completable ?? 0) > 0;
   const isDisabled = isReleasingAll || isUnreleasingAll || isMarkingAllComplete;

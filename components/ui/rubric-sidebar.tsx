@@ -567,7 +567,7 @@ export function RubricCheckComment({
         >
           <Box bg={criteria ? "bg.info" : "bg.muted"} pl={1} borderTopRadius="md">
             <HStack justify="space-between">
-              {comment.__db_pending && <Spinner size="sm" />}
+              {(comment as { __db_pending?: boolean }).__db_pending && <Spinner size="sm" />}
               <Text fontSize="sm" color="fg.muted">
                 {author?.name}
                 {isGraderOrInstructor && author?.real_name && (

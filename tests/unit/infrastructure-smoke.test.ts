@@ -59,7 +59,7 @@ describe("MockClassRealTimeController", () => {
       operation: "INSERT",
       table: "assignments",
       row_id: 42
-    });
+    } as any);
     expect(messages).toHaveLength(1);
 
     unsub();

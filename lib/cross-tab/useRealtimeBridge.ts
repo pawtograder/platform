@@ -32,6 +32,10 @@ export type RealtimeBridgeConfig = {
   debounceMs?: number; // default 500
   scope: "class" | "scoped";
   enabled?: boolean; // default true
+  /** Submission ID for scoped channel awareness — tells the batch handler which submission this bridge is for. */
+  submissionId?: number;
+  /** Additional realtime controllers to subscribe to (e.g. office hours RT controller). */
+  additionalRealTimeControllers?: PawtograderRealTimeController[];
 
   leader: TabLeaderElection | null;
   diffChannel: RealtimeDiffChannel | null;
@@ -89,7 +93,8 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
         supabase: cfg.supabase,
         selectForRefetch: cfg.selectForRefetch,
         realtimeFilter: cfg.realtimeFilter,
-        tabId: cfg.leader?.tabId ?? "unknown"
+        tabId: cfg.leader?.tabId ?? "unknown",
+        submissionId: cfg.submissionId
       };
 
       const result = await processRealtimeBatch(messages, batchConfig);
@@ -280,6 +285,14 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
     if (shouldSubscribeRtc) {
       const unsub = classRtc.subscribeToTable(table, enqueue);
       cleanups.push(unsub);
+
+      // Also subscribe to any additional RT controllers (e.g. office hours)
+      if (configRef.current.additionalRealTimeControllers) {
+        for (const rtc of configRef.current.additionalRealTimeControllers) {
+          const additionalUnsub = rtc.subscribeToTable(table, enqueue);
+          cleanups.push(additionalUnsub);
+        }
+      }
     }
 
     if (scope === "class" && !isLeader && diffChannel) {

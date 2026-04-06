@@ -3,15 +3,21 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Badge } from "@/components/ui/badge";
 import PersonName from "@/components/ui/person-name";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Table, Text } from "@chakra-ui/react";
-import { ColumnDef, Row } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ColumnDef,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  Row,
+  useReactTable
+} from "@tanstack/react-table";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"] & {
   submissions: {
@@ -40,7 +46,7 @@ export default function ReviewAssignmentsTable() {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
   const { private_profile_id } = useClassProfiles();
-  const { classRealTimeController } = useCourseController();
+  const supabase = useMemo(() => createClient(), []);
 
   // Handle row click to navigate to submission review
   const handleRowClick = (row: ReviewAssignmentRow) => {
@@ -50,52 +56,35 @@ export default function ReviewAssignmentsTable() {
     router.push(url);
   };
 
-  // Create a TableController with the necessary joins for populated data
-  const [tableController, setTableController] = useState<
-    | TableController<
-        "review_assignments",
-        "*, profiles!assignee_profile_id(id, name), rubrics!review_assignments_rubric_id_fkey(id, name, review_round), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))",
-        number
-      >
-    | undefined
-  >(undefined);
-
-  useEffect(() => {
-    const supabase = createClient();
-    const query = supabase
-      .from("review_assignments")
-      .select(
+  const {
+    data: reviewAssignmentsData = [],
+    isLoading,
+    error
+  } = useQuery({
+    queryKey: ["manage", "review_assignments_for_me", assignment_id, private_profile_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("review_assignments")
+        .select(
+          `
+          *,
+          profiles!assignee_profile_id(id, name),
+          rubrics!review_assignments_rubric_id_fkey(id, name, review_round),
+          submissions(
+            id,
+            profiles!profile_id(id, name),
+            assignment_groups(id, name)
+          )
         `
-        *,
-        profiles!assignee_profile_id(id, name),
-        rubrics!review_assignments_rubric_id_fkey(id, name, review_round),
-        submissions(
-          id,
-          profiles!profile_id(id, name),
-          assignment_groups(id, name)
         )
-      `
-      )
-      .eq("assignment_id", Number(assignment_id))
-      .eq("assignee_profile_id", private_profile_id);
-
-    const tc = new TableController<
-      "review_assignments",
-      "*, profiles!assignee_profile_id(id, name), rubrics!review_assignments_rubric_id_fkey(id, name, review_round), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))",
-      number
-    >({
-      query,
-      client: supabase,
-      table: "review_assignments",
-      classRealTimeController
-    });
-
-    setTableController(tc);
-
-    return () => {
-      tc.close();
-    };
-  }, [assignment_id, classRealTimeController, private_profile_id]);
+        .eq("assignment_id", Number(assignment_id))
+        .eq("assignee_profile_id", private_profile_id);
+      if (error) throw error;
+      return data as unknown as ReviewAssignmentRow[];
+    },
+    enabled: !!assignment_id && !!private_profile_id,
+    staleTime: 30_000
+  });
 
   const columns = useMemo<ColumnDef<ReviewAssignmentRow>[]>(
     () => [
@@ -177,12 +166,13 @@ export default function ReviewAssignmentsTable() {
     []
   );
 
-  const table = useTableControllerTable<
-    "review_assignments",
-    "*, profiles!assignee_profile_id(id, name), rubrics!review_assignments_rubric_id_fkey(id, name, review_round), submissions(id, profiles!profile_id(id, name), assignment_groups(id, name))"
-  >({
+  const table = useReactTable({
+    data: reviewAssignmentsData,
     columns,
-    tableController,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     initialState: {
       columnVisibility: {
         assignment_id_filter: false
@@ -196,7 +186,7 @@ export default function ReviewAssignmentsTable() {
     }
   });
 
-  const { getHeaderGroups, getRowModel, isLoading, error } = table;
+  const { getHeaderGroups, getRowModel } = table;
 
   if (isLoading) {
     return <Spinner />;

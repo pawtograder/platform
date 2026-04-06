@@ -9,7 +9,6 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { useTagsQuery, useAssignmentGroupsQuery } from "@/hooks/course-data";
 import { useAllReviewAssignmentsQuery } from "@/hooks/assignment-data";
-import TableController, { PossiblyTentativeResult, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -30,6 +29,7 @@ import { useInvalidate } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import { MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
@@ -98,48 +98,32 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
 
   // Map of review_assignment_id -> assigned rubric_part_ids
   const [reviewAssignmentPartsById, setReviewAssignmentPartsById] = useState<Map<number, number[]>>(new Map());
-  const reviewAssignmentPartsController = useMemo(() => {
-    const controller = new TableController<
-      "review_assignment_rubric_parts",
-      "id, review_assignment_id, rubric_part_id"
-    >({
-      client: supabase,
-      table: "review_assignment_rubric_parts",
-      query: supabase
+
+  const { data: reviewAssignmentParts = [] } = useQuery({
+    queryKey: ["manage", "review_assignment_rubric_parts", course_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
         .from("review_assignment_rubric_parts")
-        .select("id,review_assignment_id, rubric_part_id")
-        .eq("class_id", Number(course_id))
-    });
-    return controller;
-  }, [supabase, course_id]);
-  const reviewAssignmentsPredicate = useCallback(
-    (
-      row: PossiblyTentativeResult<{
-        id: number;
-        review_assignment_id: number;
-        rubric_part_id: number;
-      }>
-    ) => {
-      return currentReviewAssignments.some((r) => r.id === row.review_assignment_id);
+        .select("id, review_assignment_id, rubric_part_id")
+        .eq("class_id", Number(course_id));
+      if (error) throw error;
+      return data as { id: number; review_assignment_id: number; rubric_part_id: number }[];
     },
-    [currentReviewAssignments]
-  );
-  const reviewAssignmentParts = useListTableControllerValues(
-    reviewAssignmentPartsController,
-    reviewAssignmentsPredicate
-  );
+    enabled: !!course_id,
+    staleTime: 30_000
+  });
+
   useEffect(() => {
     const ids = currentReviewAssignments.map((r) => r.id);
     if (ids.length === 0) {
       setReviewAssignmentPartsById(new Map());
       return;
     }
-    if (!reviewAssignmentParts) {
-      setReviewAssignmentPartsById(new Map());
-      return;
-    }
+    const filteredParts = reviewAssignmentParts.filter((part) =>
+      currentReviewAssignments.some((r) => r.id === part.review_assignment_id)
+    );
     const map = new Map<number, number[]>();
-    reviewAssignmentParts.forEach((part) => {
+    filteredParts.forEach((part) => {
       const list = map.get(part.review_assignment_id) ?? [];
       list.push(part.rubric_part_id);
       map.set(part.review_assignment_id, list);

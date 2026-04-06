@@ -1,7 +1,7 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
-import { BroadcastMessage } from "./TableController";
+import { BroadcastMessage } from "./BroadcastMessageTypes";
 import { PawtograderRealTimeController, ChannelStatus, ConnectionStatus } from "./PawtograderRealTimeController";
 
 type MessageFilter = {

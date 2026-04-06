@@ -9,7 +9,7 @@
  * - DiscussionThreadRealTimeController - Per-thread channels (discussion_thread:$root_id)
  */
 
-import { BroadcastMessage } from "./TableController";
+import { BroadcastMessage } from "./BroadcastMessageTypes";
 
 export type ChannelStatus = {
   name: string;

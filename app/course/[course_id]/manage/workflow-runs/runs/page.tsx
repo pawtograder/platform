@@ -13,17 +13,25 @@ import {
   NativeSelect,
   Spinner
 } from "@chakra-ui/react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
 import PersonName from "@/components/ui/person-name";
 import { Table } from "@chakra-ui/react";
-import { flexRender, ColumnDef, CellContext } from "@tanstack/react-table";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  flexRender,
+  ColumnDef,
+  CellContext,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable
+} from "@tanstack/react-table";
 import { CreatableSelect } from "chakra-react-select";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import TableController from "@/lib/TableController";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { useCourseController } from "@/hooks/useCourseController";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { LuRefreshCw } from "react-icons/lu";
@@ -52,11 +60,7 @@ type WorkflowRunRow = Database["public"]["Tables"]["workflow_runs"]["Row"] & {
 function WorkflowRunTable() {
   const { course_id } = useParams();
   const supabase = useMemo(() => createClient(), []);
-  const {
-    classRealTimeController,
-    assignments: assignmentsController,
-    profiles: profilesController
-  } = useCourseController();
+  const { assignments: assignmentsController, profiles: profilesController } = useCourseController();
 
   // Get data from TableControllers
   const assignmentsData = assignmentsController.rows;
@@ -65,7 +69,8 @@ function WorkflowRunTable() {
   // Create maps for quick lookups
   const assignments = useMemo(() => {
     const map = new Map<number, string>();
-    assignmentsData.forEach((assignment) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    assignmentsData.forEach((assignment: any) => {
       map.set(assignment.id, assignment.title);
     });
     return map;
@@ -73,7 +78,8 @@ function WorkflowRunTable() {
 
   const profiles = useMemo(() => {
     const map = new Map<string, string>();
-    profilesData.forEach((profile) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    profilesData.forEach((profile: any) => {
       if (profile.name) {
         map.set(profile.id, profile.name);
       }
@@ -416,30 +422,40 @@ function WorkflowRunTable() {
     [assignments, profiles]
   );
 
-  const [tableController, setTableController] = useState<TableController<"workflow_runs"> | undefined>(undefined);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    const query = supabase
-      .from("workflow_runs")
-      .select("*")
-      .eq("class_id", Number(course_id))
-      .order("requested_at", { ascending: false })
-      .limit(1000);
+  const { data: queryData = [], isLoading } = useQuery({
+    queryKey: ["manage", "workflow_runs", course_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("workflow_runs")
+        .select("*")
+        .eq("class_id", Number(course_id))
+        .order("requested_at", { ascending: false })
+        .limit(1000);
+      if (error) throw error;
+      return data as WorkflowRunRow[];
+    },
+    enabled: !!course_id,
+    staleTime: 30_000
+  });
+  const data = queryData;
 
-    const tc = new TableController({
-      query: query,
-      client: supabase,
-      table: "workflow_runs",
-      classRealTimeController,
-      loadEntireTable: false
-    });
-
-    setTableController(tc);
-
-    return () => {
-      tc.close();
-    };
-  }, [supabase, course_id, classRealTimeController]);
+  const workflowTable = useReactTable({
+    data: queryData,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: {
+      sorting: [{ id: "requested_at", desc: true }],
+      pagination: {
+        pageIndex: 0,
+        pageSize: 25
+      }
+    }
+  });
 
   const {
     getHeaderGroups,
@@ -452,21 +468,8 @@ function WorkflowRunTable() {
     getCanNextPage,
     nextPage,
     previousPage,
-    setPageSize,
-    isLoading,
-    data,
-    tableController: controller
-  } = useTableControllerTable({
-    columns,
-    tableController,
-    initialState: {
-      sorting: [{ id: "requested_at", desc: true }],
-      pagination: {
-        pageIndex: 0,
-        pageSize: 25
-      }
-    }
-  });
+    setPageSize
+  } = workflowTable;
 
   // Use getRowModel for displaying filtered data
   const filteredWorkflowRuns = getRowModel().rows;
@@ -480,7 +483,7 @@ function WorkflowRunTable() {
           size="sm"
           variant="outline"
           onClick={async () => {
-            await controller?.refetchAll();
+            await queryClient.invalidateQueries({ queryKey: ["manage", "workflow_runs", course_id] });
           }}
         >
           <LuRefreshCw />

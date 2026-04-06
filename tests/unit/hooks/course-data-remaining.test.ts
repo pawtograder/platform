@@ -88,7 +88,7 @@ function createMockRtc() {
 function createMockSupabase(data: any[] = [], error: any = null) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function fluent(): any {
-    const obj = {
+    const obj: Record<string, any> = {
       select: jest.fn(() => obj),
       eq: jest.fn(() => obj),
       is: jest.fn(() => obj),

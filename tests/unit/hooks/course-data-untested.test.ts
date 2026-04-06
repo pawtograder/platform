@@ -92,7 +92,7 @@ function createMockRtc() {
 function createMockSupabase(data: any[] = [], error: any = null) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function fluent(): any {
-    const obj = {
+    const obj: Record<string, any> = {
       select: jest.fn(() => obj),
       eq: jest.fn(() => obj),
       order: jest.fn(() => obj),
@@ -119,11 +119,10 @@ function setCtx(overrides: Record<string, unknown> = {}) {
     courseId: 1,
     userId: "user-123",
     profileId: "profile-123",
-    supabase,
+    supabase: overrides.supabase ?? supabase,
     classRtc: rtc,
     isStaff: overrides.isStaff ?? true,
-    ...overrides,
-    supabase: overrides.supabase ?? supabase
+    ...overrides
   };
   return { rtc, supabase: mockCtxValue.supabase };
 }

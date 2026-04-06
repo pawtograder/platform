@@ -10,19 +10,28 @@ import { toaster } from "@/components/ui/toaster";
 import { useRubricPartsQuery, useRubricsQuery, useSubmissionsQuery } from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import TableController from "@/lib/TableController";
+import { useRealtimeTableInvalidation } from "@/hooks/useRealtimeTableInvalidation";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { EmptyState, HStack, IconButton, Input, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useDelete } from "@refinedev/core";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  Row,
+  useReactTable
+} from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { FaDownload, FaEdit, FaTrash } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
 
@@ -143,8 +152,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       // Fetch all review assignments data
       let csvData: PopulatedReviewAssignment[];
       try {
-        //Use existing TableController logic that can fetch all pages, making sure to clean up afterwards
-        // Only select fields actually used in the CSV export
+        // Direct supabase query for CSV export data
         const joinData = `id, assignee_profile_id, assignment_id, rubric_id, submission_id, due_date, completed_at,
               profiles!assignee_profile_id(name),
               rubrics(name),
@@ -160,20 +168,14 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
               review_assignment_rubric_parts(review_assignment_id, rubric_part_id,
                 rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(name)
               )`;
-        const tableController = new TableController<"review_assignments", typeof joinData, number>({
-          client: supabase,
-          table: "review_assignments",
-          query: supabase
-            .from("review_assignments")
-            .select(joinData)
-            .eq("assignment_id", Number(assignmentId))
-            .not("rubric_id", "eq", selfReviewRubric?.id || 0)
-            .order("id", { ascending: true })
-        });
-        await tableController.readyPromise;
-        // Type assertion is safe here - we've selected all fields used in CSV export
-        csvData = tableController.rows as unknown as PopulatedReviewAssignment[];
-        tableController.close();
+        const { data: exportData, error: exportError } = await supabase
+          .from("review_assignments")
+          .select(joinData)
+          .eq("assignment_id", Number(assignmentId))
+          .not("rubric_id", "eq", selfReviewRubric?.id || 0)
+          .order("id", { ascending: true });
+        if (exportError) throw exportError;
+        csvData = (exportData ?? []) as unknown as PopulatedReviewAssignment[];
       } catch (error: unknown) {
         const description = error instanceof Error ? error.message : "Unknown error";
         toaster.error({ title: "Error fetching data for export", description });
@@ -208,7 +210,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
       // Create email lookup map
       const emailMap = new Map<string, string>();
-      emailData?.forEach((item) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      emailData?.forEach((item: any) => {
         if (item.private_profile_id && item.users && "email" in item.users && typeof item.users.email === "string") {
           emailMap.set(item.private_profile_id, item.users.email);
         }
@@ -228,8 +231,10 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }>
       >();
       assignmentDueDateExceptions.rows
-        ?.filter((ext) => ext.assignment_id === Number(assignmentId))
-        .forEach((ext) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ?.filter((ext: any) => ext.assignment_id === Number(assignmentId))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .forEach((ext: any) => {
           const key = ext.student_id || ext.assignment_group_id?.toString();
           if (key) {
             if (!extensionMap.has(key)) {
@@ -567,39 +572,39 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   );
   const joinedSelect =
     "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
-  const [tableController, setTableController] =
-    useState<TableController<"review_assignments", typeof joinedSelect, number>>();
-  useEffect(() => {
-    if (!classRealTimeController) return;
 
-    const query = supabase
-      .from("review_assignments")
-      .select(joinedSelect)
-      .eq("assignment_id", Number(assignmentId))
-      .not("rubric_id", "eq", selfReviewRubric?.id || 0);
+  const reviewAssignmentsQueryKey = useMemo(
+    () => ["manage", "review_assignments_table", assignmentId, selfReviewRubric?.id],
+    [assignmentId, selfReviewRubric?.id]
+  );
 
-    const tc = new TableController<"review_assignments", typeof joinedSelect, number>({
-      query,
-      client: supabase,
-      table: "review_assignments",
-      classRealTimeController,
-      selectForSingleRow: joinedSelect,
-      debounceInterval: 1000
-    });
-    setTableController(tc);
-    return () => {
-      tc.close();
-    };
-  }, [classRealTimeController, supabase, assignmentId, selfReviewRubric]);
+  const {
+    data: reviewAssignmentsData = [],
+    isLoading: isLoadingReviewAssignments,
+    error
+  } = useQuery({
+    queryKey: reviewAssignmentsQueryKey,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("review_assignments")
+        .select(joinedSelect)
+        .eq("assignment_id", Number(assignmentId))
+        .not("rubric_id", "eq", selfReviewRubric?.id || 0);
+      if (error) throw error;
+      return data as unknown as PopulatedReviewAssignment[];
+    },
+    enabled: !!assignmentId,
+    staleTime: 30_000
+  });
+  const data = reviewAssignmentsData;
 
-  const table = useTableControllerTable<
-    "review_assignments",
-    "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))",
-    number,
-    PopulatedReviewAssignment
-  >({
+  const table = useReactTable({
+    data: reviewAssignmentsData,
     columns,
-    tableController,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     initialState: {
       pagination: {
         pageIndex: 0,
@@ -618,99 +623,20 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     nextPage,
     previousPage,
     setPageSize,
-    getPageCount,
-    data,
-    isLoading: isLoadingReviewAssignments,
-    error
+    getPageCount
   } = table;
 
   const isError = !!error;
 
-  // Keep table in sync when related tables change in realtime
-  useEffect(() => {
-    if (!classRealTimeController || !tableController) return;
-
-    let isEffectActive = true;
-    let debouncedRefetchTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const debouncedRefetch = () => {
-      if (debouncedRefetchTimeout) {
-        return;
-      }
-      debouncedRefetchTimeout = setTimeout(() => {
-        debouncedRefetchTimeout = null;
-        if (isEffectActive && tableController) {
-          void tableController.refetchAll();
-        }
-      }, 1000);
-    };
-    // When a submission_review changes, invalidate the matching review_assignment row (or refetch all as fallback)
-    const unsubscribeSubmissionReviews = classRealTimeController.subscribeToTable("submission_reviews", (message) => {
-      try {
-        // Attempt targeted invalidation when we have enough data
-        const data = message.data as { submission_id?: number; grader?: string; rubric_id?: number } | undefined;
-        if (data && data.submission_id && data.grader && data.rubric_id) {
-          const current = tableController.list().data as unknown as PopulatedReviewAssignment[];
-          const match = current.find(
-            (ra) =>
-              ra.submission_id === data.submission_id &&
-              ra.assignee_profile_id === data.grader &&
-              ra.rubric_id === data.rubric_id
-          );
-          if (match?.id) {
-            void tableController.invalidate(match.id);
-            return;
-          }
-        }
-        // Fallback to a lightweight full refresh
-        debouncedRefetch();
-      } catch {
-        debouncedRefetch();
-      }
-    });
-
-    // If rubric parts for a review assignment change, invalidate that review assignment row
-    const unsubscribeReviewAssignmentRubricParts = classRealTimeController.subscribeToTable(
-      "review_assignment_rubric_parts",
-      (message) => {
-        const data = message.data as { review_assignment_id?: number } | undefined;
-        if (data?.review_assignment_id) {
-          void tableController.invalidate(data.review_assignment_id as number);
-        } else {
-          debouncedRefetch();
-        }
-      }
-    );
-
-    // Keep in sync with direct changes to review_assignments
-    const unsubscribeReviewAssignments = classRealTimeController.subscribeToTable("review_assignments", (message) => {
-      try {
-        if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "DELETE") {
-          const assignmentIdNum = Number(assignmentId);
-          const mData = message.data as { id?: number; assignment_id?: number } | undefined;
-          if (mData?.assignment_id === assignmentIdNum && typeof mData.id === "number") {
-            void tableController.invalidate(mData.id as number);
-          } else if (typeof message.row_id === "number") {
-            void tableController.invalidate(message.row_id as number);
-          } else {
-            debouncedRefetch();
-          }
-        }
-      } catch {
-        debouncedRefetch();
-      }
-    });
-
-    return () => {
-      isEffectActive = false;
-      if (debouncedRefetchTimeout) {
-        clearTimeout(debouncedRefetchTimeout);
-      }
-      unsubscribeSubmissionReviews();
-      unsubscribeReviewAssignmentRubricParts();
-      unsubscribeReviewAssignments();
-    };
-  }, [classRealTimeController, tableController, assignmentId]);
+  // Keep table in sync when related tables change in realtime.
+  // The leader tab subscribes to the three related tables and invalidates
+  // the joined review_assignments query on any change.
+  useRealtimeTableInvalidation({
+    tables: ["submission_reviews", "review_assignment_rubric_parts", "review_assignments"],
+    queryKey: reviewAssignmentsQueryKey,
+    classRtc: classRealTimeController,
+    debounceMs: 1000
+  });
 
   // Generate filter options from data
   const filterOptions = useMemo(() => {
@@ -747,14 +673,17 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     const roles = ["grader", "instructor"];
     return new Set(
       userRolesWithProfiles.rows
-        ?.filter((r) => roles.includes((r.role as string) ?? ""))
-        .map((r) => r.private_profile_id)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ?.filter((r: any) => roles.includes((r.role as string) ?? ""))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((r: any) => r.private_profile_id)
         .filter(Boolean) as string[]
     );
   }, [userRolesWithProfiles.rows]);
   const activeProfileIds = useMemo(() => {
     const map = new Map<string, boolean>();
-    userRolesWithProfiles.rows?.forEach((r) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    userRolesWithProfiles.rows?.forEach((r: any) => {
       if (r.private_profile_id) {
         map.set(r.private_profile_id, !r.disabled);
       }
@@ -764,9 +693,14 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   const groupMembersByGroupId = useMemo(() => {
     const map = new Map<number, string[]>();
     assignmentGroupsWithMembers.rows
-      ?.filter((ag) => ag.assignment_id === assignmentIdNumber)
-      .forEach((ag) => {
-        const members = ag.assignment_groups_members?.map((m) => m.profile_id).filter(Boolean) as string[] | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ?.filter((ag: any) => ag.assignment_id === assignmentIdNumber)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .forEach((ag: any) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const members = ag.assignment_groups_members?.map((m: any) => m.profile_id).filter(Boolean) as
+          | string[]
+          | undefined;
         if (members && ag.id !== undefined && ag.id !== null) {
           map.set(ag.id, members);
         }

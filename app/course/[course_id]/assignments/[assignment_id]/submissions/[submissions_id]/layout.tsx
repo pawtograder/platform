@@ -881,7 +881,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
 
     const unsubscribe = courseController.classRealTimeController.subscribe(
       { table: "submissions" },
-      (message: import("@/lib/TableController").BroadcastMessage) => {
+      (message: import("@/lib/BroadcastMessageTypes").BroadcastMessage) => {
         // Check if this is a new/updated submission for the same student/group
         if (
           (message.operation === "INSERT" || message.operation === "UPDATE") &&

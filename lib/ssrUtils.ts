@@ -2,6 +2,7 @@ import "server-only";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@supabase/supabase-js";
+import { QueryClient, dehydrate, type DehydratedState } from "@tanstack/react-query";
 import type {
   Assignment,
   AssignmentDueDateException,
@@ -523,4 +524,154 @@ export async function fetchAssignmentControllerData(
     rubricChecks,
     rubricCheckReferences
   };
+}
+
+/**
+ * Pre-fetch all course-level data and return a dehydrated QueryClient
+ * for use with TanStack Query's HydrationBoundary.
+ *
+ * Uses the same query keys as the client-side hooks in hooks/course-data/.
+ */
+export async function prefetchCourseData(
+  course_id: number,
+  role: "instructor" | "student" | "grader" | "admin",
+  userId: string,
+  profileId: string
+): Promise<DehydratedState> {
+  const queryClient = new QueryClient();
+  const data = await fetchCourseControllerData(course_id, role);
+  const isStaff = role === "instructor" || role === "grader" || role === "admin";
+
+  // Set data using the EXACT same query keys that the client-side hooks use.
+  // Simple keys (no dynamic suffix)
+  if (data.profiles) {
+    queryClient.setQueryData(["course", course_id, "profiles"], data.profiles);
+  }
+  if (data.tags) {
+    queryClient.setQueryData(["course", course_id, "tags"], data.tags);
+  }
+  if (data.assignments) {
+    queryClient.setQueryData(["course", course_id, "assignments"], data.assignments);
+  }
+  if (data.labSections) {
+    queryClient.setQueryData(["course", course_id, "lab_sections"], data.labSections);
+  }
+  if (data.labSectionMeetings) {
+    queryClient.setQueryData(["course", course_id, "lab_section_meetings"], data.labSectionMeetings);
+  }
+  if (data.classSections) {
+    queryClient.setQueryData(["course", course_id, "class_sections"], data.classSections);
+  }
+  if (data.assignmentGroupsWithMembers) {
+    queryClient.setQueryData(["course", course_id, "assignment_groups"], data.assignmentGroupsWithMembers);
+  }
+  if (data.discussionTopics) {
+    queryClient.setQueryData(["course", course_id, "discussion_topics"], data.discussionTopics);
+  }
+  if (data.gradebookColumns) {
+    queryClient.setQueryData(["course", course_id, "gradebook_columns"], data.gradebookColumns);
+  }
+  if (data.labSectionLeaders) {
+    queryClient.setQueryData(["course", course_id, "lab_section_leaders"], data.labSectionLeaders);
+  }
+
+  // Keys with dynamic suffix that depends on role/user
+  // useUserRolesQuery: ["course", courseId, "user_roles", isStaff ? "all" : userId]
+  if (data.userRolesWithProfiles) {
+    queryClient.setQueryData(["course", course_id, "user_roles", isStaff ? "all" : userId], data.userRolesWithProfiles);
+  }
+
+  // useDiscussionThreadTeasersQuery: ["course", courseId, "discussion_thread_teasers"]
+  if (data.discussionThreadTeasers) {
+    queryClient.setQueryData(["course", course_id, "discussion_thread_teasers"], data.discussionThreadTeasers);
+  }
+
+  // useStudentDeadlineExtensionsQuery: ["course", courseId, "student_deadline_extensions", isStaff ? "staff" : profileId]
+  if (data.studentDeadlineExtensions) {
+    queryClient.setQueryData(
+      ["course", course_id, "student_deadline_extensions", isStaff ? "staff" : profileId],
+      data.studentDeadlineExtensions
+    );
+  }
+
+  // useAssignmentDueDateExceptionsQuery: ["course", courseId, "assignment_due_date_exceptions", isStaff ? "staff" : profileId]
+  if (data.assignmentDueDateExceptions) {
+    queryClient.setQueryData(
+      ["course", course_id, "assignment_due_date_exceptions", isStaff ? "staff" : profileId],
+      data.assignmentDueDateExceptions
+    );
+  }
+
+  // useRepositoriesQuery: ["course", courseId, "repositories", isStaff ? "staff" : profileId]
+  if (data.repositories) {
+    queryClient.setQueryData(["course", course_id, "repositories", isStaff ? "staff" : profileId], data.repositories);
+  }
+
+  // Staff-only tables with simple keys
+  if (data.discordChannels) {
+    queryClient.setQueryData(["course", course_id, "discord_channels"], data.discordChannels);
+  }
+  if (data.discordMessages) {
+    queryClient.setQueryData(["course", course_id, "discord_messages"], data.discordMessages);
+  }
+  if (data.surveys) {
+    queryClient.setQueryData(["course", course_id, "surveys"], data.surveys);
+  }
+
+  return dehydrate(queryClient);
+}
+
+/**
+ * Pre-fetch all assignment-level data and return a dehydrated QueryClient
+ * for use with TanStack Query's HydrationBoundary.
+ *
+ * Uses the same query keys as the client-side hooks in hooks/assignment-data/.
+ */
+export async function prefetchAssignmentData(
+  course_id: number,
+  assignment_id: number,
+  isStaff: boolean
+): Promise<DehydratedState> {
+  const queryClient = new QueryClient();
+  const data = await fetchAssignmentControllerData(assignment_id, isStaff);
+
+  // Set data using the EXACT same query keys that the client-side hooks use.
+  if (data.submissions) {
+    queryClient.setQueryData(["course", course_id, "assignment", assignment_id, "submissions"], data.submissions);
+  }
+  if (data.assignmentGroups) {
+    queryClient.setQueryData(
+      ["course", course_id, "assignment", assignment_id, "assignment_groups"],
+      data.assignmentGroups
+    );
+  }
+  if (data.regradeRequests) {
+    queryClient.setQueryData(
+      ["course", course_id, "assignment", assignment_id, "regrade_requests"],
+      data.regradeRequests
+    );
+  }
+  if (data.rubrics) {
+    queryClient.setQueryData(["course", course_id, "assignment", assignment_id, "rubrics"], data.rubrics);
+  }
+  if (data.rubricParts) {
+    queryClient.setQueryData(["course", course_id, "assignment", assignment_id, "rubric_parts"], data.rubricParts);
+  }
+  if (data.rubricCriteria) {
+    queryClient.setQueryData(
+      ["course", course_id, "assignment", assignment_id, "rubric_criteria"],
+      data.rubricCriteria
+    );
+  }
+  if (data.rubricChecks) {
+    queryClient.setQueryData(["course", course_id, "assignment", assignment_id, "rubric_checks"], data.rubricChecks);
+  }
+  if (data.rubricCheckReferences) {
+    queryClient.setQueryData(
+      ["course", course_id, "assignment", assignment_id, "rubric_check_references"],
+      data.rubricCheckReferences
+    );
+  }
+
+  return dehydrate(queryClient);
 }

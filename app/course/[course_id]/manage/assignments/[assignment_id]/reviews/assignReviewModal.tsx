@@ -23,8 +23,7 @@ import { toaster } from "@/components/ui/toaster";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { PopulatedReviewAssignment } from "./ReviewsTable";
-import { useCourseController } from "@/hooks/useCourseController";
-import TableController from "@/lib/TableController";
+import { useQuery } from "@tanstack/react-query";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -146,71 +145,24 @@ export default function AssignReviewModal({
     queryOptions: { enabled: isOpen }
   });
 
-  const { classRealTimeController, client: supabase } = useCourseController();
-
-  // Create a TableController for populated submissions using AssignmentController pattern
-  const populatedSubmissionsSelect =
-    "*, profiles!profile_id(id, name), assignment_groups(id, name, assignment_groups_members(profiles!profile_id(id, name)))";
-  const [submissionsTableController, setSubmissionsTableController] = useState<TableController<
-    "submissions",
-    typeof populatedSubmissionsSelect,
-    number
-  > | null>(null);
-
-  useEffect(() => {
-    if (!isOpen || !assignmentId || !classRealTimeController) {
-      setSubmissionsTableController(null);
-      return;
-    }
-
-    const query = supabase
-      .from("submissions")
-      .select(populatedSubmissionsSelect)
-      .eq("assignment_id", assignmentId)
-      .eq("is_active", true)
-      .eq("class_id", courseId);
-
-    const tc = new TableController<"submissions", typeof populatedSubmissionsSelect, number>({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      query: query as any,
-      client: supabase,
-      table: "submissions",
-      classRealTimeController
-    });
-
-    setSubmissionsTableController(tc);
-
-    return () => {
-      tc.close();
-    };
-  }, [isOpen, assignmentId, courseId, supabase, classRealTimeController]);
-
-  // Get all submissions from the table controller
-  const [submissionsDataArray, setSubmissionsDataArray] = useState<PopulatedSubmission[]>([]);
-  const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(true);
-
-  useEffect(() => {
-    if (!submissionsTableController) {
-      setSubmissionsDataArray([]);
-      setIsLoadingSubmissions(true);
-      return;
-    }
-
-    setIsLoadingSubmissions(true);
-    const { data, unsubscribe } = submissionsTableController.list((newData) => {
-      setSubmissionsDataArray(newData as PopulatedSubmission[]);
-      setIsLoadingSubmissions(false);
-    });
-    setSubmissionsDataArray(data as PopulatedSubmission[]);
-    setIsLoadingSubmissions(!submissionsTableController.ready);
-
-    // Wait for controller to be ready
-    submissionsTableController.readyPromise.then(() => {
-      setIsLoadingSubmissions(false);
-    });
-
-    return unsubscribe;
-  }, [submissionsTableController]);
+  // Fetch populated submissions for the assignment
+  const { data: submissionsDataArray = [], isLoading: isLoadingSubmissions } = useQuery({
+    queryKey: ["manage", "submissions_for_review_modal", assignmentId, courseId],
+    queryFn: async () => {
+      const populatedSubmissionsSelect =
+        "*, profiles!profile_id(id, name), assignment_groups(id, name, assignment_groups_members(profiles!profile_id(id, name)))";
+      const { data, error } = await supabaseClient
+        .from("submissions")
+        .select(populatedSubmissionsSelect)
+        .eq("assignment_id", assignmentId)
+        .eq("is_active", true)
+        .eq("class_id", courseId);
+      if (error) throw error;
+      return (data ?? []) as unknown as PopulatedSubmission[];
+    },
+    enabled: isOpen && !!assignmentId,
+    staleTime: 30_000
+  });
 
   const assigneeOptions = useMemo(() => {
     if (!courseUsersData?.data) return [];

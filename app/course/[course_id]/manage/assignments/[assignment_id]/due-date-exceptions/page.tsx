@@ -6,13 +6,16 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate, useCourse, useCourseController, useStudentRoster } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useCourse, useStudentRoster } from "@/hooks/useCourseController";
 import {
   useAssignmentDueDateExceptionsQuery,
   useAssignmentDueDateExceptionInsert,
   useAssignmentDueDateExceptionDelete,
   useAssignmentGroupsQuery,
-  useAssignmentsQuery
+  useAssignmentsQuery,
+  useLabSectionsQuery,
+  useLabSectionMeetingsQuery,
+  useUserRolesQuery
 } from "@/hooks/course-data";
 import { Assignment, AssignmentDueDateException, AssignmentGroup, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -32,6 +35,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
+import { UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { addHours, addMinutes, differenceInMinutes } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
@@ -616,7 +620,9 @@ export default function DueDateExceptions() {
   const { data: allAssignments = [] } = useAssignmentsQuery();
   const { data: allGroupsData = [] } = useAssignmentGroupsQuery();
   const { data: allExceptionsData = [] } = useAssignmentDueDateExceptionsQuery();
-  const controller = useCourseController();
+  const { data: labSections = [] } = useLabSectionsQuery();
+  const { data: labSectionMeetings = [] } = useLabSectionMeetingsQuery();
+  const { data: userRoles = [] } = useUserRolesQuery();
 
   // Get assignment data
   const assignment = useMemo(
@@ -664,12 +670,34 @@ export default function DueDateExceptions() {
 
       // Calculate effective due date (lab-based if applicable)
       let effectiveDueDate = originalDueDate;
-      if (hasLabScheduling && originalDueDate && assignment) {
+      if (hasLabScheduling && originalDueDate && assignment && assignment.minutes_due_after_lab) {
         try {
-          const calculatedDate = controller.calculateEffectiveDueDate(assignment, {
-            studentPrivateProfileId: student.id
-          });
-          effectiveDueDate = new TZDate(calculatedDate, course.time_zone || "America/New_York");
+          const userRole = (userRoles as UserRoleWithPrivateProfileAndUser[]).find(
+            (r) => r.private_profile_id === student.id
+          );
+          const studentLabSectionId = userRole?.lab_section_id || null;
+          if (studentLabSectionId) {
+            const labSection = labSections.find((s) => s.id === studentLabSectionId);
+            if (labSection) {
+              const assignmentDueDate = new Date(assignment.due_date);
+              const assignmentDueDateStr = `${assignmentDueDate.getFullYear()}-${String(assignmentDueDate.getMonth() + 1).padStart(2, "0")}-${String(assignmentDueDate.getDate()).padStart(2, "0")}`;
+              const relevantMeetings = labSectionMeetings
+                .filter(
+                  (m) =>
+                    m.lab_section_id === studentLabSectionId && !m.cancelled && m.meeting_date < assignmentDueDateStr
+                )
+                .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
+              if (relevantMeetings.length > 0) {
+                const mostRecentLabMeeting = relevantMeetings[0];
+                const labMeetingDate = new TZDate(
+                  mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
+                  course.time_zone ?? "America/New_York"
+                );
+                const calculatedDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
+                effectiveDueDate = new TZDate(calculatedDate, course.time_zone ?? "America/New_York");
+              }
+            }
+          }
         } catch {
           // Fallback to original due date if calculation fails
           effectiveDueDate = originalDueDate;
@@ -702,7 +730,9 @@ export default function DueDateExceptions() {
     allExtensions,
     originalDueDate,
     hasLabScheduling,
-    controller,
+    labSections,
+    labSectionMeetings,
+    userRoles,
     course.time_zone
   ]);
   const { time_zone } = useCourse();

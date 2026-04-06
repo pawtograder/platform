@@ -478,7 +478,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
    */
   subscribeToTable(
     table: string,
-    callback: (message: import("./TableController").BroadcastMessage) => void
+    callback: (message: import("./BroadcastMessageTypes").BroadcastMessage) => void
   ): () => void {
     // Cast the callback to handle our extended BroadcastMessage type internally
     return this.subscribe({ table: table as KnownBroadcastTables }, callback as unknown as MessageCallback);

@@ -22,8 +22,8 @@ test.beforeAll(async () => {
     { role: "instructor", class_id: course.id, name: "TQ Instructor" },
     { role: "student", class_id: course.id, name: "TQ Student" }
   ]);
-  instructor = users.find((u) => u.role === "instructor")!;
-  student = users.find((u) => u.role === "student")!;
+  instructor = users[0]; // first user created with role "instructor"
+  student = users[1]; // second user created with role "student"
 });
 
 test.describe("TanStack Migration Smoke Tests", () => {

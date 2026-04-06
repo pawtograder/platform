@@ -1,10 +1,8 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useCourse, useCourseController } from "@/hooks/useCourseController";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import { useCourse } from "@/hooks/useCourseController";
 import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
-import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -23,7 +21,16 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable
+} from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon, RefreshCw, GitPullRequest, ShieldCheck } from "lucide-react";
 import Link from "next/link";
@@ -174,13 +181,7 @@ function SyncStatusBadge({ row, latestTemplateSha }: { row: RepositoryRow; lates
   return <Badge colorPalette="yellow">Sync in Progress</Badge>;
 }
 
-function SyncButton({
-  repoId,
-  tableController
-}: {
-  repoId: number;
-  tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
-}) {
+function SyncButton({ repoId, onSyncComplete }: { repoId: number; onSyncComplete?: () => void }) {
   const [isSyncing, setIsSyncing] = useState(false);
 
   const handleSync = async () => {
@@ -201,8 +202,7 @@ function SyncButton({
           title: "Sync Queued",
           description: "Repository sync has been queued. This page will automatically update."
         });
-        // Invalidate the row to refetch its updated state
-        await tableController?.invalidate(repoId);
+        onSyncComplete?.();
       } else if (result.skipped_count > 0) {
         toaster.info({
           title: "Already Up to Date",
@@ -236,11 +236,11 @@ function SyncButton({
 function FixRepoPermissionsButton({
   courseId,
   assignmentId,
-  tableController
+  onRefetch
 }: {
   courseId: number;
   assignmentId: number;
-  tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
+  onRefetch?: () => void;
 }) {
   const [isFixing, setIsFixing] = useState(false);
   const [lastResult, setLastResult] = useState<{
@@ -276,11 +276,7 @@ function FixRepoPermissionsButton({
         });
       }
 
-      try {
-        await tableController?.refetchAll();
-      } catch (refetchErr) {
-        console.error("refetchAll failed:", refetchErr);
-      }
+      onRefetch?.();
     } catch (error) {
       console.error(error);
       toaster.error({
@@ -408,7 +404,8 @@ const joinedSelect = "*, assignment_groups(*), profiles(*), user_roles(*)";
 
 export default function RepositoriesPage() {
   const { assignment_id, course_id } = useParams();
-  const courseController = useCourseController();
+  const supabase = useMemo(() => createClient(), []);
+  const queryClient = useQueryClient();
 
   // Get assignment data for latest template SHA
   const { data: assignment } = useOne<Database["public"]["Tables"]["assignments"]["Row"]>({
@@ -416,35 +413,26 @@ export default function RepositoriesPage() {
     id: Number(assignment_id)
   });
 
-  const [repositories, setRepositories] = useState<
-    TableController<"repositories", typeof joinedSelect, number> | undefined
-  >(undefined);
+  const { data: repositoriesData = [] } = useQuery({
+    queryKey: ["manage", "repositories", assignment_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("repositories")
+        .select(joinedSelect)
+        .eq("assignment_id", Number(assignment_id))
+        .eq("user_roles.disabled", false);
+      if (error) throw error;
+      return data as unknown as RepositoryRow[];
+    },
+    enabled: !!assignment_id,
+    staleTime: 30_000
+  });
 
-  useEffect(() => {
-    const client = createClient();
-    const query = client
-      .from("repositories")
-      .select(joinedSelect)
-      .eq("assignment_id", Number(assignment_id))
-      .eq("user_roles.disabled", false);
-    const controller = new TableController({
-      query,
-      client: client,
-      table: "repositories",
-      selectForSingleRow: joinedSelect,
-      classRealTimeController: courseController.classRealTimeController,
-      realtimeFilter: {
-        assignment_id: Number(assignment_id)
-      },
-      debounceInterval: 500 // Debounce rapid updates during bulk syncs
+  const refetchRepositories = useCallback(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ["manage", "repositories", assignment_id]
     });
-
-    setRepositories(controller);
-
-    return () => {
-      controller.close();
-    };
-  }, [assignment_id, courseController.classRealTimeController]);
+  }, [queryClient, assignment_id]);
 
   const [isBulkSyncing, setIsBulkSyncing] = useState(false);
 
@@ -600,11 +588,27 @@ export default function RepositoriesPage() {
       {
         id: "actions",
         header: "Actions",
-        cell: ({ row }) => <SyncButton repoId={row.original.id} tableController={repositories} />
+        cell: ({ row }) => <SyncButton repoId={row.original.id} onSyncComplete={refetchRepositories} />
       }
     ],
-    [repositories, assignment]
+    [refetchRepositories, assignment]
   );
+
+  const repoTable = useReactTable({
+    data: repositoriesData,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    enableRowSelection: true,
+    initialState: {
+      pagination: {
+        pageIndex: 0,
+        pageSize: 1000
+      }
+    }
+  });
 
   const {
     getHeaderGroups,
@@ -616,20 +620,10 @@ export default function RepositoriesPage() {
     nextPage,
     previousPage,
     setPageSize,
-    data,
     getSelectedRowModel,
     toggleAllRowsSelected
-  } = useTableControllerTable({
-    columns,
-    tableController: repositories,
-    enableRowSelection: true,
-    initialState: {
-      pagination: {
-        pageIndex: 0,
-        pageSize: 1000
-      }
-    }
-  });
+  } = repoTable;
+  const data = repositoriesData;
 
   const handleBulkSync = useCallback(async () => {
     const selectedRows = getSelectedRowModel().rows;
@@ -661,8 +655,8 @@ export default function RepositoriesPage() {
       });
 
       toggleAllRowsSelected(false);
-      // Invalidate all synced rows to refetch their updated state
-      await repositories?.refetchByIds(selectedIds);
+      // Refetch all repositories to get updated state
+      await refetchRepositories();
     } catch (error) {
       console.error(error);
       toaster.error({
@@ -672,7 +666,7 @@ export default function RepositoriesPage() {
     } finally {
       setIsBulkSyncing(false);
     }
-  }, [getSelectedRowModel, toggleAllRowsSelected, repositories]);
+  }, [getSelectedRowModel, toggleAllRowsSelected, refetchRepositories]);
 
   const [pageCount, setPageCount] = useState(0);
   const nRows = getRowModel().rows.length;
@@ -749,7 +743,7 @@ export default function RepositoriesPage() {
             <FixRepoPermissionsButton
               courseId={Number(course_id)}
               assignmentId={Number(assignment_id)}
-              tableController={repositories}
+              onRefetch={refetchRepositories}
             />
           </HStack>
           <Table.Root minW="0" w="100%">
