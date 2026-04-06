@@ -101,7 +101,7 @@ test.beforeEach(async () => {
   }
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student, instructor]);
 });
 test.describe("Gifted tokens bug (#648)", () => {

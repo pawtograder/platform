@@ -75,7 +75,7 @@ test.beforeAll(async () => {
   }
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([instructor1, instructor2]);
 });
 test.describe("Lab Sections Page", () => {

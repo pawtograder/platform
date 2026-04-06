@@ -102,7 +102,7 @@ test.beforeAll(async () => {
   await insertSubmissionWithScore(student3!.private_profile_id, assignment!.id, course.id, 70, 100);
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student1, student2, student3, instructor]);
 });
 test.describe("Assignment Leaderboard", () => {

@@ -181,7 +181,7 @@ test.describe("Manual grading score calculation", () => {
     ]);
   });
   test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status !== "failed") return;
+    if (testInfo.status === testInfo.expectedStatus) return;
     await logMagicLinkOnFailure([instructor, studentA, studentB, studentC]);
   });
 

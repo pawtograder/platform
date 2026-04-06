@@ -104,7 +104,7 @@ test.describe("Surveys Page", () => {
     await clearCourseSurveys();
   });
   test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status !== "failed") return;
+    if (testInfo.status === testInfo.expectedStatus) return;
     await logMagicLinkOnFailure([studentA, studentB, instructor, grader]);
   });
 

@@ -25,7 +25,7 @@ test.describe("Time zone dialog and indicator", () => {
     ]);
   });
   test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status !== "failed") return;
+    if (testInfo.status === testInfo.expectedStatus) return;
     await logMagicLinkOnFailure([student]);
   });
 

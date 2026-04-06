@@ -45,7 +45,7 @@ test.beforeAll(async () => {
   studentClient = await createAuthenticatedClient(student!);
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student, instructor]);
 });
 test.describe("Regrade request deadline enforcement", () => {

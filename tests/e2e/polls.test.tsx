@@ -82,7 +82,7 @@ test.describe("Polls", () => {
     [student, instructor] = users;
   });
   test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status !== "failed") return;
+    if (testInfo.status === testInfo.expectedStatus) return;
     await logMagicLinkOnFailure([student, instructor]);
   });
 

@@ -89,7 +89,7 @@ test.beforeAll(async () => {
   submission_id = submission_res.submission_id;
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student, student2, instructor]);
 });
 const HELP_REQUEST_MESSAGE_1 = "My algorithm keeps timing out on large datasets - any optimization tips?";

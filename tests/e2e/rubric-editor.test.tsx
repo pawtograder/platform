@@ -74,7 +74,7 @@ test.beforeAll(async () => {
   }
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([instructor, student]);
 });
 test.describe("Rubric editor", () => {

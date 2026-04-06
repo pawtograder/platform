@@ -81,7 +81,7 @@ test.beforeAll(async () => {
   submission_id = submission_res.submission_id;
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student, instructor]);
 });
 const SELF_REVIEW_COMMENT = "This is my self-review comment for pseudonymous grading test";

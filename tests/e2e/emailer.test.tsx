@@ -122,7 +122,7 @@ test.beforeAll(async () => {
   lab2Students = _lab2Students;
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([instructor]);
 });
 async function sendBatchEmails({

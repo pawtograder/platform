@@ -436,7 +436,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass();
   });
   test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status !== "failed") return;
+    if (testInfo.status === testInfo.expectedStatus) return;
     await logMagicLinkOnFailure([...students, instructor]);
   });
   test.beforeEach(async ({ page }) => {

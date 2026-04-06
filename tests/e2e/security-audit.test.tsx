@@ -402,7 +402,7 @@ Tests failed: 7/10 (file access denied in sandbox)`
   });
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([instructor, student1, student2, student3, grader]);
 });
 // Clean up test data after all tests complete

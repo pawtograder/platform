@@ -169,7 +169,7 @@ test.beforeEach(async () => {
   }
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student, student2, instructor, labLeader]);
 });
 const expectedLabAssignmentDueDate =

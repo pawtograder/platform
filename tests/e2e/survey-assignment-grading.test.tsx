@@ -91,7 +91,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await clearCourseSurveys();
   });
   test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status !== "failed") return;
+    if (testInfo.status === testInfo.expectedStatus) return;
     await logMagicLinkOnFailure([studentA, studentB, studentC, instructor, grader]);
   });
 

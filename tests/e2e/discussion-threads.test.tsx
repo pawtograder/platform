@@ -37,7 +37,7 @@ test.beforeAll(async () => {
   ]);
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student1, student2, instructor]);
 });
 test.describe("Discussion Thread Page", () => {

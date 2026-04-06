@@ -195,7 +195,7 @@ test.beforeAll(async () => {
   }
 });
 test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status !== "failed") return;
+  if (testInfo.status === testInfo.expectedStatus) return;
   await logMagicLinkOnFailure([student, instructor]);
 });
 // Helper function to call the LLM hint API with authentication
