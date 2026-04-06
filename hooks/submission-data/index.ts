@@ -23,3 +23,19 @@ export {
   useSubmissionFileCommentUpdate,
   useSubmissionFileCommentDelete
 } from "./useSubmissionFileCommentMutations";
+
+// Mutation hooks — submission_artifact_comments
+export {
+  useSubmissionArtifactCommentInsert,
+  useSubmissionArtifactCommentUpdate,
+  useSubmissionArtifactCommentDelete
+} from "./useSubmissionArtifactCommentMutations";
+
+// Mutation hooks — submission_reviews
+export { useSubmissionReviewUpdate } from "./useSubmissionReviewMutations";
+
+// Mutation hooks — submission_regrade_request_comments
+export {
+  useSubmissionRegradeRequestCommentInsert,
+  useSubmissionRegradeRequestCommentUpdate
+} from "./useSubmissionRegradeRequestCommentMutations";

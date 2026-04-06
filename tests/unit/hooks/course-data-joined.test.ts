@@ -161,8 +161,7 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: true,
-      initialData: undefined
+      isStaff: true
     };
 
     const { result } = renderHook(() => useUserRolesQuery(), {
@@ -206,8 +205,7 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useUserRolesQuery(), {
@@ -226,9 +224,9 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 3. useUserRolesQuery uses initialData
+  // 3. useUserRolesQuery uses pre-populated cache (HydrationBoundary)
   // -----------------------------------------------------------------------
-  it("useUserRolesQuery uses initialData — data available immediately", () => {
+  it("useUserRolesQuery uses pre-populated cache — data available immediately", () => {
     const qc = makeQueryClient();
     const { rtc } = createMockRtc();
     const roles = [
@@ -241,6 +239,8 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
         users: { id: "u1" }
       }
     ];
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", COURSE_ID, "user_roles", "all"], roles);
     const supabase = createMockSupabase();
 
     mockCtxValue = {
@@ -250,8 +250,7 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: true,
-      initialData: { userRolesWithProfiles: roles }
+      isStaff: true
     };
 
     const { result } = renderHook(() => useUserRolesQuery(), {
@@ -294,8 +293,7 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useAssignmentGroupsQuery(), {
@@ -315,9 +313,9 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 5. useAssignmentGroupsQuery uses initialData
+  // 5. useAssignmentGroupsQuery uses pre-populated cache (HydrationBoundary)
   // -----------------------------------------------------------------------
-  it("useAssignmentGroupsQuery uses initialData — data available immediately", () => {
+  it("useAssignmentGroupsQuery uses pre-populated cache — data available immediately", () => {
     const qc = makeQueryClient();
     const { rtc } = createMockRtc();
     const groups = [
@@ -328,6 +326,8 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
         mentor: { name: "Mentor A" }
       }
     ];
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", COURSE_ID, "assignment_groups"], groups);
     const supabase = createMockSupabase();
 
     mockCtxValue = {
@@ -337,8 +337,7 @@ describe("Phase 3 Batch 3 — joined-select query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: { assignmentGroupsWithMembers: groups }
+      isStaff: false
     };
 
     const { result } = renderHook(() => useAssignmentGroupsQuery(), {

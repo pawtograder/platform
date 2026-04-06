@@ -6,7 +6,9 @@
  *   values to the new AssignmentDataProvider context
  * - It handles classRtc being null (during initialization)
  * - It sets isStaff correctly based on role
- * - It passes initialData through to consumers
+ *
+ * Note: initialData is no longer passed through the bridge — SSR data is now
+ * delivered via TanStack Query's HydrationBoundary.
  */
 
 import React from "react";
@@ -54,7 +56,6 @@ function ContextConsumer() {
       <span data-testid="profileId">{ctx.profileId ?? "null"}</span>
       <span data-testid="isStaff">{String(ctx.isStaff)}</span>
       <span data-testid="classRtc">{ctx.classRtc === null ? "null" : "present"}</span>
-      <span data-testid="hasInitialData">{ctx.initialData ? "yes" : "no"}</span>
     </div>
   );
 }
@@ -80,9 +81,7 @@ describe("AssignmentDataBridge", () => {
   });
 
   it("survives classRtc being null (not yet initialized)", () => {
-    mockedUseCourseController.mockReturnValue(
-      makeController({ classRtcThrows: true })
-    );
+    mockedUseCourseController.mockReturnValue(makeController({ classRtcThrows: true }));
 
     render(
       <AssignmentDataBridge>
@@ -111,19 +110,5 @@ describe("AssignmentDataBridge", () => {
       </AssignmentDataBridge>
     );
     expect(screen.getByTestId("isStaff").textContent).toBe("false");
-  });
-
-  it("passes initialData through to context consumers", () => {
-    mockedUseCourseController.mockReturnValue(makeController());
-
-    const initialData = { rubrics: [{ id: 1, name: "Review" }] } as any;
-
-    render(
-      <AssignmentDataBridge initialData={initialData}>
-        <ContextConsumer />
-      </AssignmentDataBridge>
-    );
-
-    expect(screen.getByTestId("hasInitialData").textContent).toBe("yes");
   });
 });

@@ -10,7 +10,7 @@ import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
  * Replaces: OfficeHoursController.helpRequestWorkSessions
  */
 export function useHelpRequestWorkSessionsQuery() {
-  const { classId, supabase, classRtc } = useOfficeHoursDataContext();
+  const { classId, supabase, classRtc, officeHoursRtc } = useOfficeHoursDataContext();
 
   return useSupabaseRealtimeQuery<"help_request_work_sessions">({
     queryKey: ["office_hours", classId, "help_request_work_sessions"],
@@ -19,6 +19,7 @@ export function useHelpRequestWorkSessionsQuery() {
     classRtc,
     supabase,
     scope: "scoped",
-    realtimeFilter: (row) => row.class_id === classId
+    realtimeFilter: (row) => row.class_id === classId,
+    additionalRealTimeControllers: officeHoursRtc ? [officeHoursRtc] : undefined
   });
 }

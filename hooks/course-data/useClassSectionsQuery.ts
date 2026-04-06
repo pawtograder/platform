@@ -9,7 +9,7 @@ import type { ClassSection } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.classSections
  */
 export function useClassSectionsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"class_sections", ClassSection>({
     queryKey: ["course", courseId, "class_sections"],
@@ -17,7 +17,6 @@ export function useClassSectionsQuery() {
     queryFn: () => supabase.from("class_sections").select("*").eq("class_id", courseId),
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.classSections
+    scope: "class"
   });
 }

@@ -151,8 +151,7 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useDiscussionTopicsQuery(), {
@@ -183,8 +182,7 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useNotificationsQuery(), {
@@ -215,6 +213,9 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
     ];
     const supabase = createMockSupabase(repos);
 
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", COURSE_ID, "repositories", "staff"], repos);
+
     mockCtxValue = {
       courseId: COURSE_ID,
       userId: USER_ID,
@@ -222,15 +223,14 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: true,
-      initialData: { repositories: repos }
+      isStaff: true
     };
 
     const { result } = renderHook(() => useRepositoriesQuery(), {
       wrapper: createWrapper(qc)
     });
 
-    // Staff gets initialData immediately
+    // Staff gets pre-populated cache data immediately
     expect(result.current.isLoading).toBe(false);
     expect(result.current.data).toEqual(repos);
 
@@ -252,8 +252,7 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useRepositoriesQuery(), {
@@ -290,8 +289,7 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useGradebookColumnsQuery(), {
@@ -307,13 +305,16 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 5. Hooks use initialData when available
+  // 5. Hooks use pre-populated cache (HydrationBoundary)
   // -----------------------------------------------------------------------
-  it("hooks use initialData — data available immediately without loading", () => {
+  it("hooks use pre-populated cache — data available immediately without loading", () => {
     const qc = makeQueryClient();
     const { rtc } = createMockRtc();
     const topics = [{ id: 1, class_id: COURSE_ID, title: "Announcements" }];
     const columns = [{ id: 1, class_id: COURSE_ID, name: "Final" }];
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", COURSE_ID, "discussion_topics"], topics);
+    qc.setQueryData(["course", COURSE_ID, "gradebook_columns"], columns);
     const supabase = createMockSupabase();
 
     mockCtxValue = {
@@ -323,22 +324,17 @@ describe("Phase 3 Batch 1B — course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: {
-        discussionTopics: topics,
-        gradebookColumns: columns
-      }
+      isStaff: false
     };
 
-    // Discussion topics — has initialData
+    // Discussion topics — has pre-populated cache
     const { result: topicsResult } = renderHook(() => useDiscussionTopicsQuery(), { wrapper: createWrapper(qc) });
 
     expect(topicsResult.current.isLoading).toBe(false);
     expect(topicsResult.current.data).toEqual(topics);
 
-    // Gradebook columns — has initialData
-    const qc2 = makeQueryClient();
-    const { result: colsResult } = renderHook(() => useGradebookColumnsQuery(), { wrapper: createWrapper(qc2) });
+    // Gradebook columns — uses the same QueryClient (cache was pre-populated above)
+    const { result: colsResult } = renderHook(() => useGradebookColumnsQuery(), { wrapper: createWrapper(qc) });
 
     expect(colsResult.current.isLoading).toBe(false);
     expect(colsResult.current.data).toEqual(columns);

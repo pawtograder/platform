@@ -148,8 +148,7 @@ describe("Phase 3 Batch 2 — user-scoped course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useDiscussionThreadReadStatusQuery(), {
@@ -183,8 +182,7 @@ describe("Phase 3 Batch 2 — user-scoped course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useDiscussionThreadWatchersQuery(), {
@@ -215,8 +213,7 @@ describe("Phase 3 Batch 2 — user-scoped course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useDiscussionTopicFollowersQuery(), {
@@ -246,8 +243,7 @@ describe("Phase 3 Batch 2 — user-scoped course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useDiscussionThreadLikesQuery(), {
@@ -271,6 +267,9 @@ describe("Phase 3 Batch 2 — user-scoped course-data query hooks", () => {
     ];
     const supabase = createMockSupabase(extensions);
 
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", COURSE_ID, "student_deadline_extensions", "staff"], extensions);
+
     mockCtxValue = {
       courseId: COURSE_ID,
       userId: USER_ID,
@@ -278,15 +277,14 @@ describe("Phase 3 Batch 2 — user-scoped course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: true,
-      initialData: { studentDeadlineExtensions: extensions }
+      isStaff: true
     };
 
     const { result } = renderHook(() => useStudentDeadlineExtensionsQuery(), {
       wrapper: createWrapper(qc)
     });
 
-    // Staff gets initialData immediately
+    // Staff gets pre-populated cache data immediately
     expect(result.current.isLoading).toBe(false);
     expect(result.current.data).toEqual(extensions);
 
@@ -311,8 +309,7 @@ describe("Phase 3 Batch 2 — user-scoped course-data query hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useAssignmentDueDateExceptionsQuery(), {

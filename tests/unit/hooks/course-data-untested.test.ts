@@ -74,7 +74,9 @@ function createMockRtc() {
     subscribeToTable: jest.fn((table: string, cb: (msg: BroadcastMessage) => void) => {
       if (!subscribers.has(table)) subscribers.set(table, new Set());
       subscribers.get(table)!.add(cb);
-      return () => { subscribers.get(table)?.delete(cb); };
+      return () => {
+        subscribers.get(table)?.delete(cb);
+      };
     }),
     subscribeToStatus: jest.fn(() => () => {}),
     getConnectionStatus: jest.fn(() => ({
@@ -112,7 +114,7 @@ function createMockSupabase(data: any[] = [], error: any = null) {
 
 function setCtx(overrides: Record<string, unknown> = {}) {
   const { rtc } = createMockRtc();
-  const supabase = createMockSupabase(overrides.data as any[] ?? []);
+  const supabase = createMockSupabase((overrides.data as any[]) ?? []);
   mockCtxValue = {
     courseId: 1,
     userId: "user-123",
@@ -120,7 +122,6 @@ function setCtx(overrides: Record<string, unknown> = {}) {
     supabase,
     classRtc: rtc,
     isStaff: overrides.isStaff ?? true,
-    initialData: undefined,
     ...overrides,
     supabase: overrides.supabase ?? supabase
   };

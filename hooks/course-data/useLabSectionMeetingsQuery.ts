@@ -9,7 +9,7 @@ import type { LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.labSectionMeetings
  */
 export function useLabSectionMeetingsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"lab_section_meetings", LabSectionMeeting>({
     queryKey: ["course", courseId, "lab_section_meetings"],
@@ -17,7 +17,6 @@ export function useLabSectionMeetingsQuery() {
     queryFn: () => supabase.from("lab_section_meetings").select("*").eq("class_id", courseId),
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.labSectionMeetings
+    scope: "class"
   });
 }

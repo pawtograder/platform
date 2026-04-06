@@ -13,7 +13,7 @@ type RegradeRequestRow = Database["public"]["Tables"]["submission_regrade_reques
  * Replaces: AssignmentController.regradeRequests
  */
 export function useRegradeRequestsQuery() {
-  const { assignmentId, courseId, supabase, classRtc, initialData } = useAssignmentDataContext();
+  const { assignmentId, courseId, supabase, classRtc } = useAssignmentDataContext();
 
   return useSupabaseRealtimeQuery<"submission_regrade_requests", RegradeRequestRow>({
     queryKey: ["course", courseId, "assignment", assignmentId, "regrade_requests"],
@@ -22,7 +22,6 @@ export function useRegradeRequestsQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId,
-    initialData: initialData?.regradeRequests
+    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId
   });
 }

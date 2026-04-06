@@ -13,7 +13,7 @@ type SubmissionRow = Database["public"]["Tables"]["submissions"]["Row"];
  * Replaces: AssignmentController.submissions
  */
 export function useSubmissionsQuery() {
-  const { assignmentId, courseId, supabase, classRtc, initialData } = useAssignmentDataContext();
+  const { assignmentId, courseId, supabase, classRtc } = useAssignmentDataContext();
 
   return useSupabaseRealtimeQuery<"submissions", SubmissionRow>({
     queryKey: ["course", courseId, "assignment", assignmentId, "submissions"],
@@ -25,7 +25,6 @@ export function useSubmissionsQuery() {
     realtimeFilter: (row) => {
       const r = row as Record<string, unknown>;
       return r.assignment_id === assignmentId && r.is_active === true;
-    },
-    initialData: initialData?.submissions
+    }
   });
 }

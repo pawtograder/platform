@@ -12,7 +12,7 @@ type Survey = Database["public"]["Tables"]["surveys"]["Row"];
  * Replaces: CourseController.surveys
  */
 export function useSurveysQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"surveys", Survey>({
     queryKey: ["course", courseId, "surveys"],
@@ -27,7 +27,6 @@ export function useSurveysQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId,
-    initialData: initialData?.surveys
+    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId
   });
 }

@@ -10,7 +10,7 @@ import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
  * Replaces: OfficeHoursController.helpRequestTemplates
  */
 export function useHelpRequestTemplatesQuery() {
-  const { classId, supabase, classRtc } = useOfficeHoursDataContext();
+  const { classId, supabase, classRtc, officeHoursRtc } = useOfficeHoursDataContext();
 
   return useSupabaseRealtimeQuery<"help_request_templates">({
     queryKey: ["office_hours", classId, "help_request_templates"],
@@ -19,6 +19,7 @@ export function useHelpRequestTemplatesQuery() {
     classRtc,
     supabase,
     scope: "scoped",
-    realtimeFilter: (row) => row.class_id === classId
+    realtimeFilter: (row) => row.class_id === classId,
+    additionalRealTimeControllers: officeHoursRtc ? [officeHoursRtc] : undefined
   });
 }

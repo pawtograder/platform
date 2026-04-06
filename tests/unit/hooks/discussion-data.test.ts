@@ -164,15 +164,12 @@ describe("useDiscussionThreadTeasersQuery", () => {
     expect(mockSupabase.from).toHaveBeenCalledWith("discussion_threads");
   });
 
-  it("uses initialData immediately without loading", () => {
+  it("uses pre-populated QueryClient data immediately without loading", () => {
     const qc = makeQueryClient();
     const initialTeasers = [{ id: 1, title: "Pre-loaded", root_class_id: 1 }];
-    const ctx = createCourseContextValue({
-      initialData: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        discussionThreadTeasers: initialTeasers as any
-      }
-    });
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", 1, "discussion_thread_teasers"], initialTeasers);
+    const ctx = createCourseContextValue();
     const wrapper = createCourseWrapper(qc, ctx);
 
     const { result } = renderHook(() => useDiscussionThreadTeasersQuery(), {

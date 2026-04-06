@@ -18,7 +18,7 @@ const USER_ROLES_SELECT = "*, profiles!private_profile_id(*), users(*)";
  * Replaces: CourseController.userRolesWithProfiles
  */
 export function useUserRolesQuery() {
-  const { courseId, userId, supabase, classRtc, isStaff, initialData } = useCourseDataContext();
+  const { courseId, userId, supabase, classRtc, isStaff } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"user_roles", UserRoleWithPrivateProfileAndUser>({
     queryKey: ["course", courseId, "user_roles", isStaff ? "all" : userId],
@@ -33,8 +33,6 @@ export function useUserRolesQuery() {
     classRtc,
     supabase,
     selectForRefetch: USER_ROLES_SELECT,
-    scope: "class",
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    initialData: initialData?.userRolesWithProfiles as any
+    scope: "class"
   });
 }

@@ -4,7 +4,6 @@ import { createContext, useContext } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import type { PawtograderRealTimeController } from "@/lib/PawtograderRealTimeController";
-import type { CourseControllerInitialData } from "@/lib/ssrUtils";
 
 export type CourseDataContextValue = {
   courseId: number;
@@ -14,7 +13,6 @@ export type CourseDataContextValue = {
   supabase: SupabaseClient<Database>;
   classRtc: PawtograderRealTimeController | null;
   isStaff: boolean;
-  initialData?: CourseControllerInitialData;
 };
 
 const CourseDataContext = createContext<CourseDataContextValue | null>(null);

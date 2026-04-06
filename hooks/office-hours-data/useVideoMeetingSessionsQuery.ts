@@ -10,7 +10,7 @@ import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
  * Replaces: OfficeHoursController.videoMeetingSessions
  */
 export function useVideoMeetingSessionsQuery() {
-  const { classId, supabase, classRtc } = useOfficeHoursDataContext();
+  const { classId, supabase, classRtc, officeHoursRtc } = useOfficeHoursDataContext();
 
   return useSupabaseRealtimeQuery<"video_meeting_sessions">({
     queryKey: ["office_hours", classId, "video_meeting_sessions"],
@@ -19,6 +19,7 @@ export function useVideoMeetingSessionsQuery() {
     classRtc,
     supabase,
     scope: "scoped",
-    realtimeFilter: (row) => row.class_id === classId
+    realtimeFilter: (row) => row.class_id === classId,
+    additionalRealTimeControllers: officeHoursRtc ? [officeHoursRtc] : undefined
   });
 }

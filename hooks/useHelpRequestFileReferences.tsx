@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { useOfficeHoursController } from "./useOfficeHoursRealtime";
+import { useMemo } from "react";
 import type { HelpRequestFileReference } from "@/utils/supabase/DatabaseTypes";
+import { useHelpRequestFileReferencesQuery } from "@/hooks/office-hours-data";
 
 export interface UseHelpRequestFileReferencesReturn {
   // File references data
@@ -19,16 +19,7 @@ export interface UseHelpRequestFileReferencesReturn {
  * This hook replaces the file reference functionality from useOfficeHoursRealtime.
  */
 export function useHelpRequestFileReferences(helpRequestId?: number): UseHelpRequestFileReferencesReturn {
-  const controller = useOfficeHoursController();
-  const [allFileReferences, setAllFileReferences] = useState<HelpRequestFileReference[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.helpRequestFileReferences.list((data) => {
-      setAllFileReferences(data);
-    });
-    setAllFileReferences(data);
-    return unsubscribe;
-  }, [controller]);
+  const { data: allFileReferences = [], isLoading } = useHelpRequestFileReferencesQuery();
 
   // Filter by help request ID if provided
   const fileReferences = useMemo(() => {
@@ -40,6 +31,6 @@ export function useHelpRequestFileReferences(helpRequestId?: number): UseHelpReq
 
   return {
     fileReferences,
-    isLoading: !controller.isReady
+    isLoading
   };
 }

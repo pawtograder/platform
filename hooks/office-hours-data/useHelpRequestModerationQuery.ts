@@ -10,7 +10,7 @@ import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
  * Replaces: OfficeHoursController.helpRequestModeration
  */
 export function useHelpRequestModerationQuery() {
-  const { classId, supabase, classRtc } = useOfficeHoursDataContext();
+  const { classId, supabase, classRtc, officeHoursRtc } = useOfficeHoursDataContext();
 
   return useSupabaseRealtimeQuery<"help_request_moderation">({
     queryKey: ["office_hours", classId, "help_request_moderation"],
@@ -18,6 +18,7 @@ export function useHelpRequestModerationQuery() {
     queryFn: () => supabase.from("help_request_moderation").select("*").eq("class_id", classId),
     classRtc,
     supabase,
-    scope: "scoped"
+    scope: "scoped",
+    additionalRealTimeControllers: officeHoursRtc ? [officeHoursRtc] : undefined
   });
 }

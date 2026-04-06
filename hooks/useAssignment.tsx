@@ -7,14 +7,14 @@ import {
   Submission
 } from "@/utils/supabase/DatabaseTypes";
 
-import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import type { AssignmentControllerInitialData } from "@/lib/ssrUtils";
-import TableController from "@/lib/TableController";
+// AssignmentControllerInitialData is no longer needed — SSR data is delivered
+// via TanStack Query's HydrationBoundary.
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
@@ -29,7 +29,8 @@ import {
   useRubricPartsQuery,
   useRubricCriteriaQuery,
   useRubricChecksQuery,
-  useRubricCheckReferencesQuery
+  useRubricCheckReferencesQuery,
+  useReviewAssignmentRubricPartsQuery
 } from "@/hooks/assignment-data";
 
 export function useSubmission(submission_id: number | null | undefined) {
@@ -185,53 +186,19 @@ export function useAllRubricChecks() {
 }
 
 export function useReviewAssignmentRubricParts(review_assignment_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const [parts, setParts] = useState<ReviewAssignmentParts[]>([]);
-
-  const partsController = useMemo(() => {
-    if (!review_assignment_id) return null;
-    return controller.getReviewAssignmentRubricPartsController(review_assignment_id);
-  }, [controller, review_assignment_id]);
-
-  useEffect(() => {
-    if (!partsController) {
-      setParts([]);
-      return;
-    }
-    const { unsubscribe, data } = partsController.list((data) => {
-      setParts(data as unknown as ReviewAssignmentParts[]);
-    });
-    setParts(data as unknown as ReviewAssignmentParts[]);
-    return () => {
-      unsubscribe();
-      if (review_assignment_id) {
-        controller.releaseReviewAssignmentRubricPartsController(review_assignment_id);
-      }
-    };
-  }, [partsController, controller, review_assignment_id]);
-
-  return parts;
+  const { data = [] } = useReviewAssignmentRubricPartsQuery(review_assignment_id ?? null);
+  return data as unknown as ReviewAssignmentParts[];
 }
 export function useActiveSubmissions() {
   const { data } = useSubmissionsQuery();
   return (data ?? []) as Submission[];
 }
 export function useReviewAssignment(review_assignment_id: number | null | undefined) {
-  const controller = useAssignmentController();
-
-  const [reviewAssignment, setReviewAssignment] = useState<ReviewAssignments | undefined>(undefined);
-  useEffect(() => {
-    if (!review_assignment_id) {
-      setReviewAssignment(undefined);
-      return;
-    }
-    const { data, unsubscribe } = controller.reviewAssignments.getById(review_assignment_id, (data) => {
-      setReviewAssignment(data);
-    });
-    setReviewAssignment(data);
-    return () => unsubscribe();
-  }, [controller, review_assignment_id]);
-  return reviewAssignment;
+  const { data } = useReviewAssignmentsQuery();
+  return useMemo(
+    () => (review_assignment_id ? (data ?? []).find((ra) => ra.id === review_assignment_id) : undefined),
+    [data, review_assignment_id]
+  ) as ReviewAssignments | undefined;
 }
 
 export function useMyReviewAssignments(submission_id?: number) {
@@ -339,195 +306,157 @@ export function useLeaderboardEntry(id: number | null | undefined) {
   return useMemo(() => (id ? (data ?? []).find((e) => e.id === id) : undefined), [data, id]);
 }
 
+/**
+ * Lightweight adapter providing the same mutation API as the old
+ * TableController-based shims. No realtime subscriptions; data flows
+ * through TanStack Query hooks in assignment-data/.
+ */
+function makeAssignmentTableShim<TableName extends keyof Database["public"]["Tables"]>(
+  client: SupabaseClient<Database>,
+  table: TableName,
+  queryKey: readonly unknown[]
+) {
+  type Row = Database["public"]["Tables"][TableName]["Row"];
+  type Insert = Database["public"]["Tables"][TableName]["Insert"];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = client as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let _queryClient: any = null;
+
+  return {
+    _setQueryClient(qc: unknown) {
+      _queryClient = qc;
+    },
+    /** Cached rows — populated by the provider via _setRows. Used by PreviewAssignmentController. */
+    rows: [] as Row[],
+    _setRows(rows: Row[]) {
+      this.rows = rows;
+    },
+    async create(row: Insert): Promise<Row> {
+      const { data, error } = await db.from(table).insert(row).select("*").single();
+      if (error) throw error;
+      _queryClient?.invalidateQueries?.({ queryKey });
+      return data as Row;
+    },
+    async update(id: number | string, values: Partial<Row>): Promise<Row> {
+      const { data, error } = await db.from(table).update(values).eq("id", id).select("*").single();
+      if (error) throw error;
+      _queryClient?.invalidateQueries?.({ queryKey });
+      return data as Row;
+    },
+    async delete(id: number | string): Promise<void> {
+      const { error } = await db.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", id);
+      if (error) throw error;
+      _queryClient?.invalidateQueries?.({ queryKey });
+    },
+    async hardDelete(id: number | string): Promise<void> {
+      const { error } = await db.from(table).delete().eq("id", id);
+      if (error) throw error;
+      _queryClient?.invalidateQueries?.({ queryKey });
+    },
+    async invalidate(id?: number | string): Promise<void> {
+      _queryClient?.invalidateQueries?.({ queryKey });
+    },
+    async refetchAll(): Promise<void> {
+      _queryClient?.invalidateQueries?.({ queryKey });
+    },
+    /** Compatibility: return all rows and an unsubscribe no-op. */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    list(callback?: (data: Row[], params: any) => void): { data: Row[]; unsubscribe: () => void } {
+      if (callback) callback(this.rows, { entered: [], left: [] });
+      return { data: this.rows, unsubscribe: () => {} };
+    },
+    /** Compatibility: find a row by id. */
+    getById(
+      id: number,
+      callback?: (data: Row | undefined) => void
+    ): { data: Row | undefined; unsubscribe: () => void } {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const found = this.rows.find((r: any) => r.id === id);
+      if (callback) callback(found);
+      return { data: found, unsubscribe: () => {} };
+    },
+    readyPromise: Promise.resolve(),
+    close() {
+      // No-op — no subscriptions to tear down.
+    }
+  };
+}
+
+type AssignmentTableShim<T extends keyof Database["public"]["Tables"]> = ReturnType<typeof makeAssignmentTableShim<T>>;
+
 export class AssignmentController {
   private _assignment?: AssignmentWithRubricsAndReferences;
   private _client: SupabaseClient<Database>;
-  private _classRealTimeController: ClassRealTimeController;
 
-  readonly reviewAssignments: TableController<"review_assignments">;
-  private _allReviewAssignments: TableController<"review_assignments"> | null = null;
-  readonly regradeRequests: TableController<"submission_regrade_requests">;
-  readonly submissions: TableController<"submissions">;
-  readonly assignmentGroups: TableController<"assignment_groups">;
-  readonly leaderboard: TableController<"assignment_leaderboard">;
+  readonly reviewAssignments: AssignmentTableShim<"review_assignments">;
+  readonly regradeRequests: AssignmentTableShim<"submission_regrade_requests">;
+  readonly submissions: AssignmentTableShim<"submissions">;
+  readonly assignmentGroups: AssignmentTableShim<"assignment_groups">;
+  readonly leaderboard: AssignmentTableShim<"assignment_leaderboard">;
 
-  // Rubric table controllers
-  readonly rubricsController: TableController<"rubrics">;
-  readonly rubricPartsController: TableController<"rubric_parts">;
-  readonly rubricCriteriaController: TableController<"rubric_criteria">;
-  readonly rubricChecksController: TableController<"rubric_checks">;
-  readonly rubricCheckReferencesController: TableController<"rubric_check_references">;
+  // Rubric table shims
+  readonly rubricsController: AssignmentTableShim<"rubrics">;
+  readonly rubricPartsController: AssignmentTableShim<"rubric_parts">;
+  readonly rubricCriteriaController: AssignmentTableShim<"rubric_criteria">;
+  readonly rubricChecksController: AssignmentTableShim<"rubric_checks">;
+  readonly rubricCheckReferencesController: AssignmentTableShim<"rubric_check_references">;
 
-  // Error pin table controllers
-  readonly errorPins: TableController<"error_pins">;
-  readonly errorPinRules: TableController<"error_pin_rules">;
-
-  private _reviewAssignmentRubricPartsByReviewAssignmentId: Map<
-    number,
-    TableController<"review_assignment_rubric_parts">
-  > = new Map();
-  private _reviewAssignmentRubricPartsRefCount: Map<number, number> = new Map();
+  // Error pin table shims
+  readonly errorPins: AssignmentTableShim<"error_pins">;
+  readonly errorPinRules: AssignmentTableShim<"error_pin_rules">;
 
   constructor({
     client,
     assignment_id,
-    classRealTimeController,
-    initialData
+    courseId
   }: {
     client: SupabaseClient<Database>;
     assignment_id: number;
-    classRealTimeController: ClassRealTimeController;
-    initialData?: AssignmentControllerInitialData;
+    courseId: number;
   }) {
     this._client = client;
-    this._classRealTimeController = classRealTimeController;
-    this.submissions = new TableController({
-      query: client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true),
-      client: client,
-      table: "submissions",
-      classRealTimeController,
-      initialData: initialData?.submissions
-    });
-    this.assignmentGroups = new TableController({
-      query: client.from("assignment_groups").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "assignment_groups",
-      classRealTimeController,
-      initialData: initialData?.assignmentGroups
-    });
-    this.reviewAssignments = new TableController({
-      query: client
-        .from("review_assignments")
-        .select("*")
-        .eq("assignment_id", assignment_id)
-        .eq("assignee_profile_id", classRealTimeController.profileId),
-      client: client,
-      table: "review_assignments",
-      classRealTimeController,
-      realtimeFilter: {
-        assignment_id,
-        assignee_profile_id: classRealTimeController.profileId
-      }
-    });
-    this.regradeRequests = new TableController({
-      query: client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "submission_regrade_requests",
-      classRealTimeController,
-      initialData: initialData?.regradeRequests,
-      realtimeFilter: { assignment_id }
-    });
+    const ck = (suffix: string) => ["course", courseId, "assignment", assignment_id, suffix] as const;
 
-    // Initialize leaderboard controller - filtered by assignment_id, sorted by score descending
-    this.leaderboard = new TableController({
-      query: client
-        .from("assignment_leaderboard")
-        .select("*")
-        .eq("assignment_id", assignment_id)
-        .order("autograder_score", { ascending: false }),
-      client: client,
-      table: "assignment_leaderboard",
-      classRealTimeController,
-      realtimeFilter: { assignment_id }
-    });
+    this.submissions = makeAssignmentTableShim(client, "submissions", ck("submissions"));
+    this.assignmentGroups = makeAssignmentTableShim(client, "assignment_groups", ck("assignment_groups"));
+    this.reviewAssignments = makeAssignmentTableShim(client, "review_assignments", ck("review_assignments"));
+    this.regradeRequests = makeAssignmentTableShim(client, "submission_regrade_requests", ck("regrade_requests"));
+    this.leaderboard = makeAssignmentTableShim(client, "assignment_leaderboard", ck("leaderboard"));
 
-    // Initialize rubric table controllers - each filtered by assignment_id
-    this.rubricsController = new TableController({
-      query: client.from("rubrics").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "rubrics",
-      classRealTimeController,
-      realtimeFilter: { assignment_id },
-      initialData: initialData?.rubrics
-    });
-
-    this.rubricPartsController = new TableController({
-      query: client.from("rubric_parts").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "rubric_parts",
-      classRealTimeController,
-      realtimeFilter: { assignment_id },
-      initialData: initialData?.rubricParts
-    });
-
-    this.rubricCriteriaController = new TableController({
-      query: client.from("rubric_criteria").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "rubric_criteria",
-      classRealTimeController,
-      realtimeFilter: { assignment_id },
-      initialData: initialData?.rubricCriteria
-    });
-
-    this.rubricChecksController = new TableController({
-      query: client.from("rubric_checks").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "rubric_checks",
-      classRealTimeController,
-      realtimeFilter: { assignment_id },
-      initialData: initialData?.rubricChecks
-    });
-
-    this.rubricCheckReferencesController = new TableController({
-      query: client.from("rubric_check_references").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "rubric_check_references",
-      classRealTimeController,
-      realtimeFilter: { assignment_id },
-      initialData: initialData?.rubricCheckReferences
-    });
-
-    // Initialize error pin table controllers
-    this.errorPins = new TableController({
-      query: client.from("error_pins").select("*").eq("assignment_id", assignment_id),
-      client: client,
-      table: "error_pins",
-      classRealTimeController,
-      realtimeFilter: { assignment_id }
-    });
-
-    // Filter error_pin_rules to only include rules for pins belonging to this assignment
-    // Use inner join on error_pins to filter by assignment_id
-    // The join acts as a filter - PostgREST requires the joined table in select when using !inner
-    // @ts-expect-error - The join changes the return type to include error_pins data, but the functionality works correctly
-    this.errorPinRules = new TableController({
-      query: client
-        .from("error_pin_rules")
-        .select("*,error_pins!inner(assignment_id)")
-        .eq("error_pins.assignment_id", assignment_id),
-      client: client,
-      table: "error_pin_rules",
-      classRealTimeController
-    });
+    this.rubricsController = makeAssignmentTableShim(client, "rubrics", ck("rubrics"));
+    this.rubricPartsController = makeAssignmentTableShim(client, "rubric_parts", ck("rubric_parts"));
+    this.rubricCriteriaController = makeAssignmentTableShim(client, "rubric_criteria", ck("rubric_criteria"));
+    this.rubricChecksController = makeAssignmentTableShim(client, "rubric_checks", ck("rubric_checks"));
+    this.rubricCheckReferencesController = makeAssignmentTableShim(
+      client,
+      "rubric_check_references",
+      ck("rubric_check_references")
+    );
+    this.errorPins = makeAssignmentTableShim(client, "error_pins", ck("error_pins"));
+    this.errorPinRules = makeAssignmentTableShim(client, "error_pin_rules", ck("error_pin_rules"));
   }
+
+  /** Inject the QueryClient so shims can invalidate TanStack caches. */
+  _setQueryClient(qc: unknown) {
+    this.reviewAssignments._setQueryClient(qc);
+    this.regradeRequests._setQueryClient(qc);
+    this.submissions._setQueryClient(qc);
+    this.assignmentGroups._setQueryClient(qc);
+    this.leaderboard._setQueryClient(qc);
+    this.rubricsController._setQueryClient(qc);
+    this.rubricPartsController._setQueryClient(qc);
+    this.rubricCriteriaController._setQueryClient(qc);
+    this.rubricChecksController._setQueryClient(qc);
+    this.rubricCheckReferencesController._setQueryClient(qc);
+    this.errorPins._setQueryClient(qc);
+    this.errorPinRules._setQueryClient(qc);
+  }
+
   close() {
-    this.reviewAssignments.close();
-    this.regradeRequests.close();
-    this.submissions.close();
-    this.assignmentGroups.close();
-    this.leaderboard.close();
-
-    if (this._allReviewAssignments) {
-      this._allReviewAssignments.close();
-      this._allReviewAssignments = null;
-    }
-    // Close rubric table controllers
-    this.rubricsController.close();
-    this.rubricPartsController.close();
-    this.rubricCriteriaController.close();
-    this.rubricChecksController.close();
-    this.rubricCheckReferencesController.close();
-
-    // Close error pin table controllers
-    this.errorPins.close();
-    this.errorPinRules.close();
-
-    for (const controller of this._reviewAssignmentRubricPartsByReviewAssignmentId.values()) {
-      controller.close();
-    }
-    this._reviewAssignmentRubricPartsByReviewAssignmentId.clear();
+    // No subscriptions to tear down.
   }
-  // Assignment
+
   set assignment(assignment: AssignmentWithRubricsAndReferences) {
     if (this._assignment) {
       return;
@@ -541,55 +470,6 @@ export class AssignmentController {
 
   get isReady() {
     return !!this._assignment;
-  }
-
-  get allReviewAssignments() {
-    if (!this._allReviewAssignments) {
-      this._allReviewAssignments = new TableController({
-        query: this._client.from("review_assignments").select("*").eq("assignment_id", this.assignment.id),
-        client: this._client,
-        table: "review_assignments",
-        classRealTimeController: this._classRealTimeController,
-        realtimeFilter: { assignment_id: this.assignment.id }
-      });
-    }
-    return this._allReviewAssignments;
-  }
-
-  getReviewAssignmentRubricPartsController(
-    review_assignment_id: number
-  ): TableController<"review_assignment_rubric_parts"> {
-    let controller = this._reviewAssignmentRubricPartsByReviewAssignmentId.get(review_assignment_id);
-    if (!controller) {
-      controller = new TableController({
-        query: this._client
-          .from("review_assignment_rubric_parts")
-          .select("*")
-          .eq("review_assignment_id", review_assignment_id),
-        client: this._client,
-        table: "review_assignment_rubric_parts",
-        classRealTimeController: this._classRealTimeController,
-        realtimeFilter: { review_assignment_id }
-      });
-      this._reviewAssignmentRubricPartsByReviewAssignmentId.set(review_assignment_id, controller);
-    }
-    const current = this._reviewAssignmentRubricPartsRefCount.get(review_assignment_id) ?? 0;
-    this._reviewAssignmentRubricPartsRefCount.set(review_assignment_id, current + 1);
-    return controller;
-  }
-
-  releaseReviewAssignmentRubricPartsController(review_assignment_id: number) {
-    const current = this._reviewAssignmentRubricPartsRefCount.get(review_assignment_id) ?? 0;
-    if (current <= 1) {
-      const controller = this._reviewAssignmentRubricPartsByReviewAssignmentId.get(review_assignment_id);
-      if (controller) {
-        controller.close();
-      }
-      this._reviewAssignmentRubricPartsByReviewAssignmentId.delete(review_assignment_id);
-      this._reviewAssignmentRubricPartsRefCount.delete(review_assignment_id);
-    } else {
-      this._reviewAssignmentRubricPartsRefCount.set(review_assignment_id, current - 1);
-    }
   }
 }
 
@@ -618,44 +498,39 @@ export function useAssignmentData() {
 
 export function AssignmentProvider({
   assignment_id: initial_assignment_id,
-  children,
-  initialData
+  children
 }: {
   assignment_id?: number;
   children: React.ReactNode;
-  initialData?: AssignmentControllerInitialData;
 }) {
   const params = useParams();
-  const controller = useRef<AssignmentController | null>(null);
   const courseController = useCourseController();
+  const queryClient = useQueryClient();
+  const controllerRef = useRef<AssignmentController | null>(null);
   const [ready, setReady] = useState(false);
   const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
+  const course_id = Number(params.course_id);
 
-  if (controller.current === null) {
-    controller.current = new AssignmentController({
+  if (controllerRef.current === null) {
+    controllerRef.current = new AssignmentController({
       client: createClient(),
-      assignment_id: initial_assignment_id ?? Number(params.assignment_id),
-      classRealTimeController: courseController.classRealTimeController,
-      initialData
+      assignment_id,
+      courseId: course_id
     });
     setReady(false);
   }
-  useEffect(() => {
-    return () => {
-      if (controller.current) {
-        controller.current.close();
-        controller.current = null;
-      }
-    };
-  }, []);
+  const controller = controllerRef.current;
+
+  // Inject QueryClient so shims can invalidate TanStack caches
+  controller._setQueryClient(queryClient);
 
   if (!assignment_id || isNaN(assignment_id)) {
     return <Text>Error: Invalid Assignment ID.</Text>;
   }
 
   return (
-    <AssignmentContext.Provider value={{ assignmentController: controller.current }}>
-      <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller.current} />
+    <AssignmentContext.Provider value={{ assignmentController: controller }}>
+      <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller} />
       {ready && children}
     </AssignmentContext.Provider>
   );
@@ -679,8 +554,6 @@ function AssignmentControllerCreator({
   setReady: (ready: boolean) => void;
   controller: AssignmentController;
 }) {
-  const [tableControllersReady, setTableControllersReady] = useState(false);
-
   // Assignment base data (no nested rubrics)
   const { query: assignmentQuery } = useShow<AssignmentWithRubricsAndReferences>({
     resource: "assignments",
@@ -691,35 +564,16 @@ function AssignmentControllerCreator({
     }
   });
 
-  // Wait for all table controllers to be ready
-  useEffect(() => {
-    const promises = [
-      controller.reviewAssignments.readyPromise,
-      controller.regradeRequests.readyPromise,
-      controller.rubricsController.readyPromise,
-      controller.rubricPartsController.readyPromise,
-      controller.rubricCriteriaController.readyPromise,
-      controller.rubricChecksController.readyPromise,
-      controller.rubricCheckReferencesController.readyPromise,
-      controller.submissions.readyPromise,
-      controller.assignmentGroups.readyPromise,
-      controller.leaderboard.readyPromise
-    ];
-    Promise.all(promises).then(() => {
-      setTableControllersReady(true);
-    });
-  }, [controller]);
-
-  // Set assignment base data
+  // Set assignment base data and signal ready
   useEffect(() => {
     if (assignmentQuery.data?.data) {
       controller.assignment = assignmentQuery.data.data;
     }
 
-    if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
+    if (!assignmentQuery.isLoading && assignmentQuery.data?.data) {
       setReady(true);
     }
-  }, [assignmentQuery.data, assignmentQuery.isLoading, controller, setReady, tableControllersReady]);
+  }, [assignmentQuery.data, assignmentQuery.isLoading, controller, setReady]);
 
   return null;
 }

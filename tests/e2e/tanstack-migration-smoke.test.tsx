@@ -20,7 +20,7 @@ test.beforeAll(async () => {
   course = await createClass();
   const users = await createUsersInClass([
     { role: "instructor", class_id: course.id, name: "TQ Instructor" },
-    { role: "student", class_id: course.id, name: "TQ Student" },
+    { role: "student", class_id: course.id, name: "TQ Student" }
   ]);
   instructor = users.find((u) => u.role === "instructor")!;
   student = users.find((u) => u.role === "student")!;

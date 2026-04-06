@@ -2,34 +2,41 @@
 
 import { useMemo } from "react";
 import { createClient } from "@/utils/supabase/client";
-import TableController from "@/lib/TableController";
-import { useTableControllerTable } from "./useTableControllerTable";
-import { ColumnDef } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ColumnDef,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable
+} from "@tanstack/react-table";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
-
-export function useNotificationsTableController() {
-  const supabase = useMemo(() => createClient(), []);
-  return useMemo(() => {
-    const query = supabase
-      .from("notifications")
-      .select("*")
-      .eq("body->>type", "system")
-      .order("created_at", { ascending: false });
-
-    return new TableController({
-      query,
-      client: supabase,
-      table: "notifications"
-    });
-  }, [supabase]);
-}
 
 export interface NotificationsTableProps {
   onDelete?: (id: number) => void;
 }
 
 export function useNotificationsTable({ onDelete }: NotificationsTableProps = {}) {
-  const tableController = useNotificationsTableController();
+  const supabase = useMemo(() => createClient(), []);
+
+  const {
+    data = [],
+    isLoading,
+    error
+  } = useQuery({
+    queryKey: ["notifications", "system"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("*")
+        .eq("body->>type", "system")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data as Notification[];
+    },
+    staleTime: 30_000
+  });
 
   const columns = useMemo<ColumnDef<Notification>[]>(
     () => [
@@ -58,9 +65,13 @@ export function useNotificationsTable({ onDelete }: NotificationsTableProps = {}
     [onDelete]
   );
 
-  const table = useTableControllerTable({
+  const table = useReactTable({
+    data,
     columns,
-    tableController,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     initialState: {
       pagination: {
         pageIndex: 0,
@@ -77,6 +88,8 @@ export function useNotificationsTable({ onDelete }: NotificationsTableProps = {}
 
   return {
     ...table,
-    controller: tableController
+    data,
+    isLoading,
+    error
   };
 }

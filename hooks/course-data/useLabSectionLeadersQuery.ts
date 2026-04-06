@@ -11,7 +11,7 @@ import type { LabSectionLeader } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.labSectionLeaders
  */
 export function useLabSectionLeadersQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"lab_section_leaders", LabSectionLeader>({
     queryKey: ["course", courseId, "lab_section_leaders"],
@@ -20,7 +20,6 @@ export function useLabSectionLeadersQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId,
-    initialData: initialData?.labSectionLeaders
+    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId
   });
 }

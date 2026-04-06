@@ -10,7 +10,7 @@ import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
  * Replaces: OfficeHoursController.studentHelpActivity
  */
 export function useStudentHelpActivityQuery() {
-  const { classId, supabase, classRtc } = useOfficeHoursDataContext();
+  const { classId, supabase, classRtc, officeHoursRtc } = useOfficeHoursDataContext();
 
   return useSupabaseRealtimeQuery<"student_help_activity">({
     queryKey: ["office_hours", classId, "student_help_activity"],
@@ -18,6 +18,7 @@ export function useStudentHelpActivityQuery() {
     queryFn: () => supabase.from("student_help_activity").select("*").eq("class_id", classId),
     classRtc,
     supabase,
-    scope: "scoped"
+    scope: "scoped",
+    additionalRealTimeControllers: officeHoursRtc ? [officeHoursRtc] : undefined
   });
 }

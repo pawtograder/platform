@@ -10,7 +10,7 @@ import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
  * Replaces: OfficeHoursController.helpQueueAssignments
  */
 export function useHelpQueueAssignmentsQuery() {
-  const { classId, supabase, classRtc } = useOfficeHoursDataContext();
+  const { classId, supabase, classRtc, officeHoursRtc } = useOfficeHoursDataContext();
 
   return useSupabaseRealtimeQuery<"help_queue_assignments">({
     queryKey: ["office_hours", classId, "help_queue_assignments"],
@@ -19,6 +19,7 @@ export function useHelpQueueAssignmentsQuery() {
     classRtc,
     supabase,
     scope: "scoped",
-    realtimeFilter: (row) => row.class_id === classId
+    realtimeFilter: (row) => row.class_id === classId,
+    additionalRealTimeControllers: officeHoursRtc ? [officeHoursRtc] : undefined
   });
 }

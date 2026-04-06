@@ -13,7 +13,7 @@ type RubricCheckRow = Database["public"]["Tables"]["rubric_checks"]["Row"];
  * Replaces: AssignmentController.rubricChecksController
  */
 export function useRubricChecksQuery() {
-  const { assignmentId, courseId, supabase, classRtc, initialData } = useAssignmentDataContext();
+  const { assignmentId, courseId, supabase, classRtc } = useAssignmentDataContext();
 
   return useSupabaseRealtimeQuery<"rubric_checks", RubricCheckRow>({
     queryKey: ["course", courseId, "assignment", assignmentId, "rubric_checks"],
@@ -22,7 +22,6 @@ export function useRubricChecksQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId,
-    initialData: initialData?.rubricChecks
+    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId
   });
 }

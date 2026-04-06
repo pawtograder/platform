@@ -56,7 +56,9 @@ function createMockRtc() {
     subscribeToTable: jest.fn((table: string, cb: (msg: BroadcastMessage) => void) => {
       if (!subscribers.has(table)) subscribers.set(table, new Set());
       subscribers.get(table)!.add(cb);
-      return () => { subscribers.get(table)?.delete(cb); };
+      return () => {
+        subscribers.get(table)?.delete(cb);
+      };
     }),
     subscribeToStatus: jest.fn(() => () => {}),
     getConnectionStatus: jest.fn(() => ({

@@ -9,7 +9,7 @@ import type { DiscussionThread } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.discussionThreadTeasers + useTableControllerTableValues()
  */
 export function useDiscussionThreadTeasersQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"discussion_threads", DiscussionThread>({
     queryKey: ["course", courseId, "discussion_thread_teasers"],
@@ -18,7 +18,6 @@ export function useDiscussionThreadTeasersQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).root_class_id === courseId,
-    initialData: initialData?.discussionThreadTeasers
+    realtimeFilter: (row) => (row as Record<string, unknown>).root_class_id === courseId
   });
 }

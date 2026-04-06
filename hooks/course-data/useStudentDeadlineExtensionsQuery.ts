@@ -13,7 +13,7 @@ type StudentDeadlineExtension = Database["public"]["Tables"]["student_deadline_e
  * - Student with profileId: only their own extensions.
  */
 export function useStudentDeadlineExtensionsQuery() {
-  const { courseId, supabase, classRtc, isStaff, profileId, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc, isStaff, profileId } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"student_deadline_extensions", StudentDeadlineExtension>({
     queryKey: ["course", courseId, "student_deadline_extensions", isStaff ? "staff" : profileId],
@@ -27,7 +27,6 @@ export function useStudentDeadlineExtensionsQuery() {
     },
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.studentDeadlineExtensions
+    scope: "class"
   });
 }

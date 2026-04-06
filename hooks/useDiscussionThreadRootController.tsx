@@ -1,5 +1,7 @@
-import TableController from "@/lib/TableController";
 import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { SupabaseClient } from "@supabase/supabase-js";
+import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { DiscussionThreadRealTimeController } from "@/lib/DiscussionThreadRealTimeController";
@@ -144,27 +146,60 @@ export function useAllDiscussionThreads(): DiscussionThread[] {
   return data ?? [];
 }
 /**
- * Controller for managing a specific discussion thread and its realtime subscriptions.
- * Subscribes to the thread-specific channel (discussion_thread:$root_id) for targeted updates.
+ * Lightweight controller for a discussion thread root.
+ * The old TableController is replaced by a thin shim providing
+ * create/update/delete via direct Supabase calls.
  */
 export class DiscussionThreadsController {
-  public readonly tableController: TableController<"discussion_threads">;
-  public readonly threadRealTimeController: DiscussionThreadRealTimeController;
   public readonly root_id: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public readonly tableController: any;
 
   constructor(
     root_id: number,
-    tableController: TableController<"discussion_threads">,
-    threadRealTimeController: DiscussionThreadRealTimeController
+    client: SupabaseClient<Database>,
+    courseId: number,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryClient: any
   ) {
     this.root_id = root_id;
-    this.tableController = tableController;
-    this.threadRealTimeController = threadRealTimeController;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = client as any;
+    const qk = ["discussion", courseId, "threads", root_id];
+    this.tableController = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async create(row: any) {
+        const { data, error } = await db.from("discussion_threads").insert(row).select("*").single();
+        if (error) throw error;
+        queryClient?.invalidateQueries?.({ queryKey: qk });
+        return data;
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async update(id: number, values: any) {
+        const { data, error } = await db.from("discussion_threads").update(values).eq("id", id).select("*").single();
+        if (error) throw error;
+        queryClient?.invalidateQueries?.({ queryKey: qk });
+        return data;
+      },
+      async delete(id: number) {
+        const { error } = await db
+          .from("discussion_threads")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("id", id);
+        if (error) throw error;
+        queryClient?.invalidateQueries?.({ queryKey: qk });
+      },
+      async invalidate() {
+        queryClient?.invalidateQueries?.({ queryKey: qk });
+      },
+      async refetchAll() {
+        queryClient?.invalidateQueries?.({ queryKey: qk });
+      }
+    };
   }
 
   close() {
-    // Controllers are closed in the provider's useEffect cleanup
-    this.threadRealTimeController.close();
+    // No subscriptions to tear down.
   }
 }
 
@@ -178,14 +213,10 @@ export function DiscussionThreadsControllerProvider({
   root_id: number;
 }) {
   const courseController = useCourseController();
+  const queryClient = useQueryClient();
   const [controller, setController] = useState<DiscussionThreadsController | null>(null);
-  const controllersRef = useRef<{
-    threadController: DiscussionThreadsController;
-    tableController: TableController<"discussion_threads">;
-    threadRealTimeController: DiscussionThreadRealTimeController;
-  } | null>(null);
+  const threadRtcRef = useRef<DiscussionThreadRealTimeController | null>(null);
 
-  // Create all controllers with async initialization
   useEffect(() => {
     let cancelled = false;
 
@@ -194,13 +225,11 @@ export function DiscussionThreadsControllerProvider({
         return;
       }
 
-      // Create DiscussionThreadRealTimeController for per-thread channel
       const threadRealTimeController = new DiscussionThreadRealTimeController({
         client: courseController.client,
         threadRootId: root_id
       });
 
-      // Start the realtime controller
       await threadRealTimeController.start();
 
       if (cancelled) {
@@ -208,35 +237,14 @@ export function DiscussionThreadsControllerProvider({
         return;
       }
 
-      // Create TableController with BOTH class and thread-specific realtime controllers
-      const tableController = new TableController({
-        client: courseController.client,
-        table: "discussion_threads",
-        query: courseController.client
-          .from("discussion_threads")
-          .select("*")
-          .eq("root", root_id)
-          .order("created_at", { ascending: true }),
-        classRealTimeController: courseController.classRealTimeController,
-        additionalRealTimeControllers: [threadRealTimeController],
-        realtimeFilter: { root: root_id },
-        loadEntireTable: true
-      });
+      threadRtcRef.current = threadRealTimeController;
 
-      if (cancelled) {
-        await threadRealTimeController.close();
-        tableController.close();
-        return;
-      }
-
-      // Create DiscussionThreadsController
-      const discussionController = new DiscussionThreadsController(root_id, tableController, threadRealTimeController);
-
-      controllersRef.current = {
-        threadController: discussionController,
-        tableController,
-        threadRealTimeController
-      };
+      const discussionController = new DiscussionThreadsController(
+        root_id,
+        courseController.client,
+        courseController.courseId,
+        queryClient
+      );
 
       setController(discussionController);
     };
@@ -245,14 +253,12 @@ export function DiscussionThreadsControllerProvider({
 
     return () => {
       cancelled = true;
-      if (controllersRef.current) {
-        controllersRef.current.threadController.close();
-        controllersRef.current.tableController.close();
-        controllersRef.current.threadRealTimeController.close();
-        controllersRef.current = null;
+      if (threadRtcRef.current) {
+        threadRtcRef.current.close();
+        threadRtcRef.current = null;
       }
     };
-  }, [courseController, root_id]);
+  }, [courseController, root_id, queryClient]);
 
   const discussionDataValue = useMemo(() => {
     if (!controller || !courseController?.client) return null;

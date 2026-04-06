@@ -9,7 +9,7 @@ import type { LabSection } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.labSections
  */
 export function useLabSectionsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"lab_sections", LabSection>({
     queryKey: ["course", courseId, "lab_sections"],
@@ -17,7 +17,6 @@ export function useLabSectionsQuery() {
     queryFn: () => supabase.from("lab_sections").select("*").eq("class_id", courseId),
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.labSections
+    scope: "class"
   });
 }

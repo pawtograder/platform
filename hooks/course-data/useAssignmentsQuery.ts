@@ -10,7 +10,7 @@ import type { Assignment } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.assignments
  */
 export function useAssignmentsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"assignments", Assignment>({
     queryKey: ["course", courseId, "assignments"],
@@ -24,7 +24,6 @@ export function useAssignmentsQuery() {
         .order("id", { ascending: true }),
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.assignments
+    scope: "class"
   });
 }

@@ -6,7 +6,9 @@
  *   values to the new CourseDataProvider context
  * - It handles classRtc being null (during initialization)
  * - It sets isStaff correctly based on role
- * - It passes initialData through to consumers
+ *
+ * Note: initialData is no longer passed through the bridge — SSR data is now
+ * delivered via TanStack Query's HydrationBoundary.
  */
 
 import React from "react";
@@ -57,7 +59,6 @@ function ContextConsumer() {
       <span data-testid="userId">{ctx.userId}</span>
       <span data-testid="isStaff">{String(ctx.isStaff)}</span>
       <span data-testid="classRtc">{ctx.classRtc === null ? "null" : "present"}</span>
-      <span data-testid="hasInitialData">{ctx.initialData ? "yes" : "no"}</span>
     </div>
   );
 }
@@ -121,19 +122,5 @@ describe("CourseDataBridge", () => {
       </CourseDataBridge>
     );
     expect(screen.getByTestId("isStaff").textContent).toBe("false");
-  });
-
-  it("passes initialData through to context consumers", () => {
-    mockedUseCourseController.mockReturnValue(makeController());
-
-    const initialData = { profiles: [{ id: 1, name: "Alice" }] } as any;
-
-    render(
-      <CourseDataBridge initialData={initialData}>
-        <ContextConsumer />
-      </CourseDataBridge>
-    );
-
-    expect(screen.getByTestId("hasInitialData").textContent).toBe("yes");
   });
 });

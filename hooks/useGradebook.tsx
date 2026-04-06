@@ -1821,7 +1821,8 @@ export class GradebookController {
       const userProfile = courseController.profiles.getById(student.private_profile_id);
 
       // Get section names
-      const classSection = classSections.find((s) => s.id === student.class_section_id);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const classSection = classSections.find((s: any) => s.id === student.class_section_id);
       const labSection = labSections.find((s) => s.id === student.lab_section_id);
       const courseSectionName = classSection?.name ?? "";
       const labSectionName = labSection?.name ?? "";

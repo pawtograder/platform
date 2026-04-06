@@ -10,7 +10,7 @@ import { useCourseDataContext } from "./useCourseDataContext";
  * - Students: individual repos matching their profileId, plus group repos.
  */
 export function useRepositoriesQuery() {
-  const { courseId, supabase, classRtc, isStaff, profileId, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc, isStaff, profileId } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"repositories">({
     queryKey: ["course", courseId, "repositories", isStaff ? "staff" : profileId],
@@ -28,7 +28,6 @@ export function useRepositoriesQuery() {
     },
     classRtc,
     supabase,
-    scope: "class",
-    initialData: isStaff ? initialData?.repositories : undefined
+    scope: "class"
   });
 }

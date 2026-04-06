@@ -13,7 +13,7 @@ type AssignmentGroupRow = Database["public"]["Tables"]["assignment_groups"]["Row
  * Replaces: AssignmentController.assignmentGroups
  */
 export function useAssignmentScopedGroupsQuery() {
-  const { assignmentId, courseId, supabase, classRtc, initialData } = useAssignmentDataContext();
+  const { assignmentId, courseId, supabase, classRtc } = useAssignmentDataContext();
 
   return useSupabaseRealtimeQuery<"assignment_groups", AssignmentGroupRow>({
     queryKey: ["course", courseId, "assignment", assignmentId, "assignment_groups"],
@@ -22,7 +22,6 @@ export function useAssignmentScopedGroupsQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId,
-    initialData: initialData?.assignmentGroups
+    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId
   });
 }

@@ -22,7 +22,7 @@ const ASSIGNMENT_GROUPS_SELECT =
  * Replaces: CourseController.assignmentGroupsWithMembers
  */
 export function useAssignmentGroupsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"assignment_groups", AssignmentGroupWithMembers>({
     queryKey: ["course", courseId, "assignment_groups"],
@@ -31,8 +31,6 @@ export function useAssignmentGroupsQuery() {
     classRtc,
     supabase,
     selectForRefetch: ASSIGNMENT_GROUPS_SELECT,
-    scope: "class",
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    initialData: initialData?.assignmentGroupsWithMembers as any
+    scope: "class"
   });
 }

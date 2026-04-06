@@ -13,7 +13,7 @@ type AssignmentDueDateException = Database["public"]["Tables"]["assignment_due_d
  * - Student with profileId: exceptions matching their profile or group-based exceptions.
  */
 export function useAssignmentDueDateExceptionsQuery() {
-  const { courseId, supabase, classRtc, isStaff, profileId, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc, isStaff, profileId } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"assignment_due_date_exceptions", AssignmentDueDateException>({
     queryKey: ["course", courseId, "assignment_due_date_exceptions", isStaff ? "staff" : profileId],
@@ -27,7 +27,6 @@ export function useAssignmentDueDateExceptionsQuery() {
     },
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.assignmentDueDateExceptions
+    scope: "class"
   });
 }

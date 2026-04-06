@@ -154,8 +154,7 @@ describe("Phase 3 Batches 4 & 5 — remaining course-data hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useLabSectionsQuery(), {
@@ -186,8 +185,7 @@ describe("Phase 3 Batches 4 & 5 — remaining course-data hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useCalendarEventsQuery(), {
@@ -225,8 +223,7 @@ describe("Phase 3 Batches 4 & 5 — remaining course-data hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: false,
-      initialData: undefined
+      isStaff: false
     };
 
     const { result } = renderHook(() => useLivePollsQuery(), {
@@ -257,8 +254,7 @@ describe("Phase 3 Batches 4 & 5 — remaining course-data hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: true,
-      initialData: undefined
+      isStaff: true
     };
 
     const { result } = renderHook(() => useLabSectionInsert(), {
@@ -295,8 +291,7 @@ describe("Phase 3 Batches 4 & 5 — remaining course-data hooks", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       supabase: supabase as any,
       classRtc: rtc,
-      isStaff: true,
-      initialData: undefined
+      isStaff: true
     };
 
     const { result } = renderHook(() => useSurveysQuery(), {

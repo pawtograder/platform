@@ -13,7 +13,7 @@ type RubricPartRow = Database["public"]["Tables"]["rubric_parts"]["Row"];
  * Replaces: AssignmentController.rubricPartsController
  */
 export function useRubricPartsQuery() {
-  const { assignmentId, courseId, supabase, classRtc, initialData } = useAssignmentDataContext();
+  const { assignmentId, courseId, supabase, classRtc } = useAssignmentDataContext();
 
   return useSupabaseRealtimeQuery<"rubric_parts", RubricPartRow>({
     queryKey: ["course", courseId, "assignment", assignmentId, "rubric_parts"],
@@ -22,7 +22,6 @@ export function useRubricPartsQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId,
-    initialData: initialData?.rubricParts
+    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId
   });
 }

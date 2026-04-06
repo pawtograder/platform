@@ -9,8 +9,6 @@ import {
 } from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubricPart,
@@ -30,79 +28,116 @@ import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { SubmissionReviewProvider } from "./useSubmissionReview";
+import {
+  useSubmissionCommentsQuery,
+  useSubmissionFileCommentsQuery,
+  useSubmissionArtifactCommentsQuery,
+  useSubmissionReviewsQuery,
+  useSubmissionRegradeRequestCommentsQuery,
+  SubmissionDataBridge
+} from "@/hooks/submission-data";
+
+/**
+ * Lightweight adapter providing the same mutation API as the old
+ * TableController-based SubmissionController.  No realtime subscriptions;
+ * data flows through TanStack Query hooks.
+ */
+function makeTableShim<TableName extends keyof Database["public"]["Tables"]>(
+  client: SupabaseClient<Database>,
+  table: TableName,
+  queryKey: readonly unknown[]
+) {
+  type Row = Database["public"]["Tables"][TableName]["Row"];
+  type Insert = Database["public"]["Tables"][TableName]["Insert"];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = client as any;
+  let _queryClient: ReturnType<typeof useQueryClient> | null = null;
+
+  return {
+    /** Allow the provider to inject the QueryClient (set once). */
+    _setQueryClient(qc: ReturnType<typeof useQueryClient>) {
+      _queryClient = qc;
+    },
+    async create(row: Insert): Promise<Row> {
+      const { data, error } = await db.from(table).insert(row).select("*").single();
+      if (error) throw error;
+      _queryClient?.invalidateQueries({ queryKey });
+      return data as Row;
+    },
+    async update(id: number | string, values: Partial<Row>): Promise<Row> {
+      const { data, error } = await db.from(table).update(values).eq("id", id).select("*").single();
+      if (error) throw error;
+      _queryClient?.invalidateQueries({ queryKey });
+      return data as Row;
+    },
+    async delete(id: number | string): Promise<void> {
+      // Soft-delete (matches old TableController behaviour)
+      const { error } = await db.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", id);
+      if (error) throw error;
+      _queryClient?.invalidateQueries({ queryKey });
+    },
+    /** Re-fetch a single row and update the TanStack cache. */
+    async invalidate(id: number | string): Promise<void> {
+      _queryClient?.invalidateQueries({ queryKey });
+    },
+    async refetchAll(): Promise<void> {
+      _queryClient?.invalidateQueries({ queryKey });
+    },
+    readyPromise: Promise.resolve()
+  };
+}
+
+type TableShim<TableName extends keyof Database["public"]["Tables"]> = ReturnType<typeof makeTableShim<TableName>>;
 
 class SubmissionController {
   private _submission?: SubmissionWithGraderResultsAndFiles;
   private _file?: SubmissionFile;
   private _artifact?: SubmissionArtifact;
 
-  readonly submission_comments: TableController<"submission_comments">;
-  readonly submission_file_comments: TableController<"submission_file_comments">;
-  readonly submission_artifact_comments: TableController<"submission_artifact_comments">;
-  readonly submission_reviews: TableController<"submission_reviews">;
-  readonly submission_regrade_request_comments: TableController<"submission_regrade_request_comments">;
+  readonly submission_comments: TableShim<"submission_comments">;
+  readonly submission_file_comments: TableShim<"submission_file_comments">;
+  readonly submission_artifact_comments: TableShim<"submission_artifact_comments">;
+  readonly submission_reviews: TableShim<"submission_reviews">;
+  readonly submission_regrade_request_comments: TableShim<"submission_regrade_request_comments">;
 
-  readonly readyPromise: Promise<[void, void, void, void, void]>;
+  readonly readyPromise: Promise<void>;
 
-  constructor(
-    client: SupabaseClient<Database>,
-    submission_id: number,
-    class_id: number,
-    classRealTimeController: ClassRealTimeController
-  ) {
-    this.submission_comments = new TableController({
-      client,
-      table: "submission_comments",
-      query: client.from("submission_comments").select("*").eq("submission_id", submission_id),
-      classRealTimeController,
-      submissionId: submission_id
-    });
-    this.submission_file_comments = new TableController({
-      client,
-      table: "submission_file_comments",
-      query: client.from("submission_file_comments").select("*").eq("submission_id", submission_id),
-      classRealTimeController,
-      submissionId: submission_id
-    });
-    this.submission_artifact_comments = new TableController({
-      client,
-      table: "submission_artifact_comments",
-      query: client.from("submission_artifact_comments").select("*").eq("submission_id", submission_id),
-      classRealTimeController,
-      submissionId: submission_id
-    });
-    this.submission_reviews = new TableController({
-      client,
-      table: "submission_reviews",
-      query: client.from("submission_reviews").select("*").eq("submission_id", submission_id),
-      classRealTimeController,
-      submissionId: submission_id
-    });
-    this.submission_regrade_request_comments = new TableController({
-      client,
-      table: "submission_regrade_request_comments",
-      query: client.from("submission_regrade_request_comments").select("*").eq("submission_id", submission_id),
-      classRealTimeController,
-      submissionId: submission_id
-    });
-    this.readyPromise = Promise.all([
-      this.submission_comments.readyPromise,
-      this.submission_file_comments.readyPromise,
-      this.submission_artifact_comments.readyPromise,
-      this.submission_reviews.readyPromise,
-      this.submission_regrade_request_comments.readyPromise
+  constructor(client: SupabaseClient<Database>, submission_id: number) {
+    this.submission_comments = makeTableShim(client, "submission_comments", ["submission", submission_id, "comments"]);
+    this.submission_file_comments = makeTableShim(client, "submission_file_comments", [
+      "submission",
+      submission_id,
+      "file_comments"
     ]);
+    this.submission_artifact_comments = makeTableShim(client, "submission_artifact_comments", [
+      "submission",
+      submission_id,
+      "artifact_comments"
+    ]);
+    this.submission_reviews = makeTableShim(client, "submission_reviews", ["submission", submission_id, "reviews"]);
+    this.submission_regrade_request_comments = makeTableShim(client, "submission_regrade_request_comments", [
+      "submission",
+      submission_id,
+      "regrade_request_comments"
+    ]);
+    this.readyPromise = Promise.resolve();
+  }
+
+  /** Inject the QueryClient so shims can invalidate. */
+  _setQueryClient(qc: ReturnType<typeof useQueryClient>) {
+    this.submission_comments._setQueryClient(qc);
+    this.submission_file_comments._setQueryClient(qc);
+    this.submission_artifact_comments._setQueryClient(qc);
+    this.submission_reviews._setQueryClient(qc);
+    this.submission_regrade_request_comments._setQueryClient(qc);
   }
 
   close() {
-    this.submission_comments.close();
-    this.submission_file_comments.close();
-    this.submission_artifact_comments.close();
-    this.submission_reviews.close();
-    this.submission_regrade_request_comments.close();
+    // No subscriptions to tear down.
   }
 
   get isReady() {
@@ -148,39 +183,17 @@ export function SubmissionProvider({
 }) {
   const params = useParams();
   const submission_id = initial_submission_id ?? Number(params.submissions_id);
-  const class_id = Number(params.course_id);
-  const controller = useRef<SubmissionController | null>(null);
   const [ready, setReady] = useState(false);
-  const [newControllersReady, setNewControllersReady] = useState(false);
-  const [isLoadingNewController, setIsLoadingNewController] = useState(false);
-  const courseController = useCourseController();
+  const queryClient = useQueryClient();
 
-  if (controller.current === null) {
-    controller.current = new SubmissionController(
-      createClient(),
-      submission_id,
-      class_id,
-      courseController.classRealTimeController
-    );
-    setIsLoadingNewController(true);
-    setNewControllersReady(false);
+  const controllerRef = useRef<SubmissionController | null>(null);
+  if (controllerRef.current === null) {
+    controllerRef.current = new SubmissionController(createClient(), submission_id);
   }
-  useEffect(() => {
-    return () => {
-      if (controller.current) {
-        controller.current.close();
-        controller.current = null;
-      }
-    };
-  }, []);
-  useEffect(() => {
-    if (controller.current && isLoadingNewController) {
-      setIsLoadingNewController(false);
-      controller.current.readyPromise.then(() => {
-        setNewControllersReady(true);
-      });
-    }
-  }, [controller, isLoadingNewController]);
+  const controller = controllerRef.current;
+
+  // Inject QueryClient so shims can invalidate caches
+  controller._setQueryClient(queryClient);
 
   if (isNaN(submission_id)) {
     toaster.error({
@@ -191,10 +204,12 @@ export function SubmissionProvider({
   }
 
   return (
-    <SubmissionContext.Provider value={{ submissionController: controller.current }}>
-      <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
-      {(!ready || !newControllersReady) && <Spinner />}
-      {ready && newControllersReady && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
+    <SubmissionContext.Provider value={{ submissionController: controller }}>
+      <SubmissionDataBridge>
+        <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
+        {!ready && <Spinner />}
+        {ready && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
+      </SubmissionDataBridge>
     </SubmissionContext.Provider>
   );
 }
@@ -207,57 +222,21 @@ export function useSubmissionFileComments({
   onEnter?: (comment: SubmissionFileComment[]) => void;
   onLeave?: (comment: SubmissionFileComment[]) => void;
 }) {
-  const [comments, setComments] = useState<SubmissionFileComment[]>([]);
-  const ctx = useContext(SubmissionContext);
-  const submissionController = ctx?.submissionController;
+  const { data: allComments = [] } = useSubmissionFileCommentsQuery();
 
-  useEffect(() => {
-    if (!submissionController) {
-      setComments([]);
-      return;
-    }
-    const { unsubscribe, data } = submissionController.submission_file_comments.list((data, { entered, left }) => {
-      setComments(
-        data.filter(
-          (comment) =>
-            (comment.deleted_at === null || comment.deleted_at === undefined) &&
-            (file_id === undefined || comment.submission_file_id === file_id)
-        )
-      );
-      if (onEnter) {
-        onEnter(
-          entered.filter(
-            (comment) =>
-              (comment.deleted_at === null || comment.deleted_at === undefined) &&
-              (file_id === undefined || comment.submission_file_id === file_id)
-          )
-        );
-      }
-      if (onLeave) {
-        onLeave(
-          left.filter(
-            (comment) =>
-              (comment.deleted_at === null || comment.deleted_at === undefined) &&
-              (file_id === undefined || comment.submission_file_id === file_id)
-          )
-        );
-      }
-    });
-    const filteredData = data.filter(
-      (comment) =>
-        (comment.deleted_at === null || comment.deleted_at === undefined) &&
-        (file_id === undefined || comment.submission_file_id === file_id)
-    );
-    setComments(filteredData);
-    if (onEnter) {
-      onEnter(filteredData);
-    }
-    return () => unsubscribe();
-  }, [submissionController, file_id, onEnter, onLeave]);
+  const comments = useMemo(
+    () =>
+      allComments.filter(
+        (comment) =>
+          (comment.deleted_at === null || comment.deleted_at === undefined) &&
+          (file_id === undefined || comment.submission_file_id === file_id)
+      ),
+    [allComments, file_id]
+  );
 
-  if (!submissionController) {
-    return [];
-  }
+  // Note: onEnter/onLeave callbacks are not supported in the TanStack Query shim.
+  // They were used for real-time enter/leave notifications which TanStack handles differently.
+
   return comments;
 }
 
@@ -268,36 +247,15 @@ export function useSubmissionComments({
   onEnter?: (comment: SubmissionComments[]) => void;
   onLeave?: (comment: SubmissionComments[]) => void;
 }) {
-  const [comments, setComments] = useState<SubmissionComments[]>([]);
-  const ctx = useContext(SubmissionContext);
-  const submissionController = ctx?.submissionController;
+  const { data: allComments = [] } = useSubmissionCommentsQuery();
 
-  useEffect(() => {
-    if (!submissionController) {
-      setComments([]);
-      return;
-    }
-    const { unsubscribe, data } = submissionController.submission_comments.list((data, { entered, left }) => {
-      const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
-      setComments(filteredData);
-      if (onEnter) {
-        onEnter(entered.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
-      }
-      if (onLeave) {
-        onLeave(left.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
-      }
-    });
-    const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
-    setComments(filteredData);
-    if (onEnter) {
-      onEnter(filteredData);
-    }
-    return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave]);
+  const comments = useMemo(
+    () => allComments.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined),
+    [allComments]
+  );
 
-  if (!submissionController) {
-    return [];
-  }
+  // Note: onEnter/onLeave callbacks are not supported in the TanStack Query shim.
+
   return comments;
 }
 
@@ -317,35 +275,12 @@ export function useSubmissionArtifactComments({
   onEnter?: (comment: SubmissionArtifactComment[]) => void;
   onLeave?: (comment: SubmissionArtifactComment[]) => void;
 }) {
-  const [comments, setComments] = useState<SubmissionArtifactComment[]>([]);
-  const ctx = useContext(SubmissionContext);
-  const submissionController = ctx?.submissionController;
+  const { data: allComments = [] } = useSubmissionArtifactCommentsQuery();
 
-  useEffect(() => {
-    if (!submissionController) {
-      setComments([]);
-      return;
-    }
-    const { unsubscribe, data } = submissionController.submission_artifact_comments.list((data, { entered, left }) => {
-      setComments(data.filter((comment) => comment.deleted_at === null));
-      if (onEnter) {
-        onEnter(entered.filter((comment) => comment.deleted_at === null));
-      }
-      if (onLeave) {
-        onLeave(left.filter((comment) => comment.deleted_at === null));
-      }
-    });
-    const filteredData = data.filter((comment) => comment.deleted_at === null);
-    setComments(filteredData);
-    if (onEnter) {
-      onEnter(filteredData);
-    }
-    return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave]);
+  const comments = useMemo(() => allComments.filter((comment) => comment.deleted_at === null), [allComments]);
 
-  if (!submissionController) {
-    return [];
-  }
+  // Note: onEnter/onLeave callbacks are not supported in the TanStack Query shim.
+
   return comments;
 }
 /**
@@ -367,65 +302,20 @@ export function useSubmissionRegradeRequestComments({
   onEnter?: (comment: RegradeRequestComment[]) => void;
   onLeave?: (comment: RegradeRequestComment[]) => void;
 }) {
-  const [comments, setComments] = useState<RegradeRequestComment[]>([]);
-  const ctx = useContext(SubmissionContext);
-  const submissionController = ctx?.submissionController;
+  const { data: allComments = [] } = useSubmissionRegradeRequestCommentsQuery();
 
-  useEffect(() => {
-    if (!submissionController) {
-      setComments([]);
-      return;
-    }
-    const { unsubscribe, data } = submissionController.submission_regrade_request_comments.list(
-      (data, { entered, left }) => {
-        const filteredData = data.filter(
-          (comment) =>
-            submission_regrade_request_id === undefined ||
-            comment.submission_regrade_request_id === submission_regrade_request_id
-        );
-        setComments(filteredData);
-        if (onEnter) {
-          onEnter(
-            entered.filter(
-              (comment) =>
-                submission_regrade_request_id === undefined ||
-                comment.submission_regrade_request_id === submission_regrade_request_id
-            )
-          );
-        }
-        if (onLeave) {
-          onLeave(
-            left.filter(
-              (comment) =>
-                submission_regrade_request_id === undefined ||
-                comment.submission_regrade_request_id === submission_regrade_request_id
-            )
-          );
-        }
-      }
-    );
-    setComments(
-      data.filter(
+  const comments = useMemo(
+    () =>
+      allComments.filter(
         (comment) =>
           submission_regrade_request_id === undefined ||
           comment.submission_regrade_request_id === submission_regrade_request_id
-      )
-    );
-    if (onEnter) {
-      onEnter(
-        data.filter(
-          (comment) =>
-            submission_regrade_request_id === undefined ||
-            comment.submission_regrade_request_id === submission_regrade_request_id
-        )
-      );
-    }
-    return () => unsubscribe();
-  }, [submissionController, submission_regrade_request_id, onEnter, onLeave]);
+      ),
+    [allComments, submission_regrade_request_id]
+  );
 
-  if (!submissionController) {
-    return [];
-  }
+  // Note: onEnter/onLeave callbacks are not supported in the TanStack Query shim.
+
   return comments;
 }
 
@@ -436,92 +326,34 @@ export function useSubmissionRegradeRequestComments({
  * @returns The submission file comment object, or undefined if not found
  */
 export function useSubmissionFileComment(comment_id: number | undefined | null) {
-  const submissionController = useSubmissionController();
-  const [comment, setComment] = useState<SubmissionFileComment | undefined>(
-    comment_id ? submissionController.submission_file_comments.getById(comment_id).data : undefined
-  );
-  useEffect(() => {
-    if (comment_id === undefined || comment_id === null) {
-      setComment(undefined);
-      return;
-    }
-    const { unsubscribe, data } = submissionController.submission_file_comments.getById(comment_id, (data) => {
-      setComment(data);
-    });
-    setComment(data);
-    return () => unsubscribe();
-  }, [submissionController, comment_id]);
-  return comment;
+  const { data = [] } = useSubmissionFileCommentsQuery();
+  return useMemo(() => (comment_id ? data.find((c) => c.id === comment_id) : undefined), [data, comment_id]);
 }
 export function useSubmissionArtifactComment(comment_id: number | undefined | null) {
-  const submissionController = useSubmissionController();
-  const [comment, setComment] = useState<SubmissionArtifactComment | undefined>(
-    comment_id ? submissionController.submission_artifact_comments.getById(comment_id).data : undefined
-  );
-  useEffect(() => {
-    if (comment_id === undefined || comment_id === null) {
-      setComment(undefined);
-      return;
-    }
-    const { unsubscribe, data } = submissionController.submission_artifact_comments.getById(comment_id, (data) => {
-      setComment(data);
-    });
-    setComment(data);
-    return () => unsubscribe();
-  }, [submissionController, comment_id]);
-  return comment;
+  const { data = [] } = useSubmissionArtifactCommentsQuery();
+  return useMemo(() => (comment_id ? data.find((c) => c.id === comment_id) : undefined), [data, comment_id]);
 }
 export function useSubmissionComment(comment_id: number | undefined | null) {
-  const submissionController = useSubmissionController();
-  const [comment, setComment] = useState<SubmissionComments | undefined>(
-    comment_id ? submissionController.submission_comments.getById(comment_id).data : undefined
-  );
-  useEffect(() => {
-    if (comment_id === undefined || comment_id === null) {
-      setComment(undefined);
-      return;
-    }
-    const { unsubscribe, data } = submissionController.submission_comments.getById(comment_id, (data) => {
-      setComment(data);
-    });
-    setComment(data);
-    return () => unsubscribe();
-  }, [submissionController, comment_id]);
-  return comment;
+  const { data = [] } = useSubmissionCommentsQuery();
+  return useMemo(() => (comment_id ? data.find((c) => c.id === comment_id) : undefined), [data, comment_id]);
 }
 export function useSubmissionCommentByType(comment_id: number, type: "file" | "artifact" | "submission") {
-  const ctx = useContext(SubmissionContext);
-  const [comment, setComment] = useState<
-    PossiblyTentativeResult<SubmissionFileComment | SubmissionArtifactComment | SubmissionComments> | undefined
-  >(undefined);
-  if (!ctx) {
-    throw new Error("SubmissionContext not found");
-  }
-  const submissionController = ctx.submissionController;
-  useEffect(() => {
+  const { data: fileComments = [] } = useSubmissionFileCommentsQuery();
+  const { data: artifactComments = [] } = useSubmissionArtifactCommentsQuery();
+  const { data: submissionComments = [] } = useSubmissionCommentsQuery();
+
+  return useMemo<(SubmissionFileComment | SubmissionArtifactComment | SubmissionComments) | undefined>(() => {
     if (type === "file") {
-      const { unsubscribe, data } = submissionController.submission_file_comments.getById(comment_id, (data) => {
-        setComment(data);
-      });
-      setComment(data);
-      return () => unsubscribe();
+      return fileComments.find((c) => c.id === comment_id);
     }
     if (type === "artifact") {
-      const { unsubscribe, data } = submissionController.submission_artifact_comments.getById(comment_id, (data) => {
-        setComment(data);
-      });
-      setComment(data);
-      return () => unsubscribe();
+      return artifactComments.find((c) => c.id === comment_id);
     }
     if (type === "submission") {
-      const { unsubscribe, data } = submissionController.submission_comments.getById(comment_id, (data) => {
-        setComment(data);
-      });
-      setComment(data);
-      return () => unsubscribe();
+      return submissionComments.find((c) => c.id === comment_id);
     }
-  }, [submissionController, comment_id, type]);
-  return comment;
+    return undefined;
+  }, [fileComments, artifactComments, submissionComments, comment_id, type]);
 }
 function SubmissionControllerCreator({
   submission_id,
@@ -731,65 +563,17 @@ export function useRubricCriteriaInstances({
 }
 
 export function useSubmissionReview(reviewId?: number) {
-  const ctx = useContext(SubmissionContext);
-  const controller = useSubmissionController();
-  const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
-  useEffect(() => {
-    if (!ctx || !controller || !reviewId) {
-      return;
-    }
-    const { unsubscribe, data } = controller.submission_reviews.getById(reviewId, (data) => {
-      setReview(data);
-    });
-    setReview(data);
-    return () => unsubscribe();
-  }, [ctx, controller, reviewId]);
-  return review;
+  const { data = [] } = useSubmissionReviewsQuery();
+  return useMemo(() => (reviewId ? data.find((r) => r.id === reviewId) : undefined), [data, reviewId]);
 }
 export function useSubmissionReviews() {
-  const ctx = useContext(SubmissionContext);
-  const controller = ctx?.submissionController;
-  const [reviews, setReviews] = useState<SubmissionReview[] | undefined>(controller?.submission_reviews.rows);
-  useEffect(() => {
-    if (!ctx || !controller) {
-      return;
-    }
-    const { unsubscribe, data } = controller.submission_reviews.list((data) => {
-      setReviews(data);
-    });
-    setReviews(data);
-    return () => unsubscribe();
-  }, [ctx, controller, controller?.submission_reviews]);
-  return reviews;
+  const { data } = useSubmissionReviewsQuery();
+  return data;
 }
 
 export function useSubmissionReviewOrGradingReview(reviewId: number | undefined) {
-  const ctx = useContext(SubmissionContext);
-  const controller = useSubmissionController();
-  if (!ctx || !controller) {
-    throw new Error("useSubmissionReviewOrGradingReview must be used within a SubmissionContext");
-  }
-  const [review, setReview] = useState<SubmissionReview | undefined>(() => {
-    if (!reviewId) {
-      return undefined;
-    }
-    return controller.submission_reviews.getById(reviewId).data;
-  });
-  useEffect(() => {
-    if (!reviewId) {
-      setReview(undefined);
-      return;
-    }
-    const { unsubscribe, data } = controller.submission_reviews.getById(reviewId, (data) => {
-      setReview(data);
-    });
-    setReview(data);
-    return () => {
-      unsubscribe();
-    };
-  }, [ctx, controller, reviewId]);
-
-  return review;
+  const { data = [] } = useSubmissionReviewsQuery();
+  return useMemo(() => (reviewId ? data.find((r) => r.id === reviewId) : undefined), [data, reviewId]);
 }
 export function useRubricCheck(rubric_check_id: number | null) {
   const { data: allChecks = [] } = useRubricChecksQuery();
@@ -873,31 +657,15 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
 }
 
 export function useSubmissionReviewForRubric(rubricId?: number | null): SubmissionReview | undefined {
-  const ctx = useContext(SubmissionContext);
-  const controller = ctx?.submissionController;
-  const submission = controller?.submission;
+  const submission = useSubmission();
   const reviews = useSubmissionReviews();
 
-  const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
-
-  useEffect(() => {
-    if (!rubricId || !submission || !controller) {
-      setSubmissionReview(undefined);
-      return;
+  return useMemo(() => {
+    if (!rubricId || !submission) {
+      return undefined;
     }
-    const desiredReview = reviews?.find(
-      (review) => review.submission_id === submission.id && review.rubric_id === rubricId
-    );
-    if (desiredReview) {
-      setSubmissionReview(desiredReview);
-      const { unsubscribe } = controller.submission_reviews.getById(desiredReview.id, (updatedReview) => {
-        setSubmissionReview(updatedReview);
-      });
-      return () => unsubscribe();
-    }
-  }, [rubricId, submission, controller, reviews]);
-
-  return submissionReview;
+    return reviews?.find((review) => review.submission_id === submission.id && review.rubric_id === rubricId);
+  }, [rubricId, submission, reviews]);
 }
 export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {
   const referencingChecks = useReferencingRubricChecks(rubric_check_id);

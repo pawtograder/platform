@@ -9,7 +9,7 @@ import type { Tag } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.tags + useTags()
  */
 export function useTagsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"tags", Tag>({
     queryKey: ["course", courseId, "tags"],
@@ -17,7 +17,6 @@ export function useTagsQuery() {
     queryFn: () => supabase.from("tags").select("*").eq("class_id", courseId),
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.tags
+    scope: "class"
   });
 }

@@ -76,9 +76,7 @@ describe("SubmissionDataBridge", () => {
   });
 
   it("survives classRtc being null (not yet initialized)", () => {
-    mockedUseCourseController.mockReturnValue(
-      makeController({ classRtcThrows: true })
-    );
+    mockedUseCourseController.mockReturnValue(makeController({ classRtcThrows: true }));
 
     render(
       <SubmissionDataBridge>

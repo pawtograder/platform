@@ -70,9 +70,7 @@ function createWrapper(queryClient: QueryClient) {
   };
 }
 
-function makeBroadcast(
-  overrides: Partial<BroadcastMessage> & { operation: string; table: string }
-): BroadcastMessage {
+function makeBroadcast(overrides: Partial<BroadcastMessage> & { operation: string; table: string }): BroadcastMessage {
   return {
     type: "table_change",
     class_id: 1,
@@ -506,9 +504,7 @@ describe("watermark initialization (useRealtimeBridge)", () => {
 
   it("watermark advances after processing diffs", async () => {
     // Pre-seed with an old row
-    qc.setQueryData(QUERY_KEY, [
-      { id: 1, name: "Alice", updated_at: "2024-01-01T00:00:00Z" }
-    ]);
+    qc.setQueryData(QUERY_KEY, [{ id: 1, name: "Alice", updated_at: "2024-01-01T00:00:00Z" }]);
 
     // Track .gt() calls
     const gtCalls: string[] = [];

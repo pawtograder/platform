@@ -36,9 +36,7 @@ function mockSupabase() {
   };
 }
 
-function makeBroadcast(
-  overrides: Partial<BroadcastMessage> & { operation: string; table: string }
-): BroadcastMessage {
+function makeBroadcast(overrides: Partial<BroadcastMessage> & { operation: string; table: string }): BroadcastMessage {
   return {
     type: "table_change",
     class_id: 1,

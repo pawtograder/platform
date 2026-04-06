@@ -9,7 +9,7 @@ import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
  * Replaces: CourseController.profiles + useAllProfilesForClass()
  */
 export function useProfilesQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"profiles", UserProfile>({
     queryKey: ["course", courseId, "profiles"],
@@ -17,7 +17,6 @@ export function useProfilesQuery() {
     queryFn: () => supabase.from("profiles").select("*").eq("class_id", courseId),
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.profiles
+    scope: "class"
   });
 }

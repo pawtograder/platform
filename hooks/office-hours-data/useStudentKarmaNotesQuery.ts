@@ -10,7 +10,7 @@ import { useOfficeHoursDataContext } from "./useOfficeHoursDataContext";
  * Replaces: OfficeHoursController.studentKarmaNotes
  */
 export function useStudentKarmaNotesQuery() {
-  const { classId, supabase, classRtc } = useOfficeHoursDataContext();
+  const { classId, supabase, classRtc, officeHoursRtc } = useOfficeHoursDataContext();
 
   return useSupabaseRealtimeQuery<"student_karma_notes">({
     queryKey: ["office_hours", classId, "student_karma_notes"],
@@ -18,6 +18,7 @@ export function useStudentKarmaNotesQuery() {
     queryFn: () => supabase.from("student_karma_notes").select("*").eq("class_id", classId),
     classRtc,
     supabase,
-    scope: "scoped"
+    scope: "scoped",
+    additionalRealTimeControllers: officeHoursRtc ? [officeHoursRtc] : undefined
   });
 }

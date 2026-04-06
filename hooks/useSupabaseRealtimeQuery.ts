@@ -44,6 +44,10 @@ export type UseSupabaseRealtimeQueryConfig<
   staleTime?: number;
   /** Time in ms that unused data is kept in cache */
   gcTime?: number;
+  /** Submission ID for scoped channel awareness */
+  submissionId?: number;
+  /** Additional realtime controllers to subscribe to (e.g. office hours RT controller) */
+  additionalRealTimeControllers?: PawtograderRealTimeController[];
 };
 
 /**
@@ -84,7 +88,9 @@ export function useSupabaseRealtimeQuery<
     enabled = true,
     initialData,
     staleTime,
-    gcTime
+    gcTime,
+    submissionId,
+    additionalRealTimeControllers
   } = config;
 
   const { leader, diffChannel } = useLeaderContext();
@@ -123,6 +129,8 @@ export function useSupabaseRealtimeQuery<
     debounceMs,
     scope,
     enabled,
+    submissionId,
+    additionalRealTimeControllers,
     leader,
     diffChannel
   });

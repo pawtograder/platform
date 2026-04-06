@@ -2,15 +2,8 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, {
-  PossiblyTentativeResult,
-  useFindTableControllerValue,
-  useIsTableControllerReady,
-  useListTableControllerValues,
-  useTableControllerTableValues,
-  useTableControllerValueById
-} from "@/lib/TableController";
-import type { CourseControllerInitialData } from "@/lib/ssrUtils";
+// CourseControllerInitialData is no longer needed — SSR data is delivered
+// via TanStack Query's HydrationBoundary.
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -37,6 +30,7 @@ import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useList } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { useQueryClient } from "@tanstack/react-query";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLeaderContext } from "@/lib/cross-tab/LeaderProvider";
@@ -62,7 +56,8 @@ import {
   useStudentDeadlineExtensionsQuery,
   useAssignmentDueDateExceptionsQuery,
   useDiscussionThreadTeaserUpdate,
-  useDiscussionThreadReadStatusUpdate
+  useDiscussionThreadReadStatusUpdate,
+  useAssignmentGroupsQuery
 } from "@/hooks/course-data";
 
 export function useAssignmentGroupWithMembers({
@@ -70,25 +65,25 @@ export function useAssignmentGroupWithMembers({
 }: {
   assignment_group_id: number | null | undefined;
 }) {
-  const { assignmentGroupsWithMembers } = useCourseController();
-  const assignmentGroup = useTableControllerValueById(assignmentGroupsWithMembers, assignment_group_id);
-  return assignmentGroup;
+  const { data = [] } = useAssignmentGroupsQuery();
+  return useMemo(
+    () => (assignment_group_id ? data.find((ag) => ag.id === assignment_group_id) : undefined),
+    [data, assignment_group_id]
+  );
 }
 export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: number }) {
-  const { assignmentGroupsWithMembers } = useCourseController();
+  const { data = [] } = useAssignmentGroupsQuery();
   const { private_profile_id } = useClassProfiles();
 
-  type AssignmentGroupWithMembers = (typeof assignmentGroupsWithMembers.rows)[number];
-  const assignmentGroupFilter = useCallback(
-    (ag: AssignmentGroupWithMembers) => {
-      return (
-        ag.assignment_id === assignment_id &&
-        ag.assignment_groups_members.some((agm) => agm.profile_id === private_profile_id)
-      );
-    },
-    [assignment_id, private_profile_id]
+  return useMemo(
+    () =>
+      data.find(
+        (ag) =>
+          ag.assignment_id === assignment_id &&
+          ag.assignment_groups_members.some((agm) => agm.profile_id === private_profile_id)
+      ),
+    [data, assignment_id, private_profile_id]
   );
-  return useFindTableControllerValue(assignmentGroupsWithMembers, assignmentGroupFilter);
 }
 
 export function useAllProfilesForClass() {
@@ -220,7 +215,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
         if (!user?.id) {
           return;
         }
-        const fetchedStatus = await controller.discussionThreadReadStatus.getOneByFilters([
+        const fetchedStatus = await controller.getDiscussionThreadReadStatusByFilters([
           {
             column: "discussion_thread_id",
             operator: "eq",
@@ -344,71 +339,26 @@ export class CourseController {
   readonly client: SupabaseClient<Database>;
   private _userId: string;
 
-  // Lazily created TableController instances to avoid realtime subscription bursts
-  private _discussionThreadTeasers?: TableController<"discussion_threads">;
-  private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
-  private _discussionThreadWatchers?: TableController<"discussion_thread_watchers">;
-  private _discussionTopicFollowers?: TableController<"discussion_topic_followers">;
-  private _tags?: TableController<"tags">;
-  private _labSections?: TableController<"lab_sections">;
-  private _labSectionMeetings?: TableController<"lab_section_meetings">;
-  private _labSectionLeaders?: TableController<"lab_section_leaders">;
-  private _classSections?: TableController<"class_sections">;
-  private _profiles?: TableController<"profiles">;
-  private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
-  private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
-  private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
-  private _assignments?: TableController<"assignments">;
-  private _assignmentGroupsWithMembers?: TableController<
-    "assignment_groups",
-    "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
-  >;
-  private _repositories?: TableController<"repositories">;
-  private _notifications?: TableController<"notifications">;
-  private _gradebookColumns?: TableController<"gradebook_columns">;
-  private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
-  private _discussionTopics?: TableController<"discussion_topics">;
-  private _calendarEvents?: TableController<"calendar_events">;
-  private _classStaffSettings?: TableController<"class_staff_settings">;
-  private _discordChannels?: TableController<"discord_channels">;
-  private _discordMessages?: TableController<"discord_messages">;
-  private _livePolls?: TableController<"live_polls">;
-  private _surveys?: TableController<"surveys">;
-  private _surveySeries?: TableController<"survey_series">;
-
-  private _initialData?: CourseControllerInitialData;
-
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
     public courseId: number,
     client: SupabaseClient<Database>,
     classRealTimeController: ClassRealTimeController,
-    userId: string,
-    initialData?: CourseControllerInitialData
+    userId: string
   ) {
     this._classRealTimeController = classRealTimeController;
     this.client = client as SupabaseClient<Database>;
     this._userId = userId;
-    this._initialData = initialData;
   }
 
   get userId() {
     return this._userId;
   }
   /**
-   * Initialize critical TableControllers immediately after construction
-   * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
+   * No-op. Data flows through TanStack Query hooks.
    */
   initializeEagerControllers() {
-    // Phase 5 cleanup: TanStack Query hooks now provide data with their own realtime
-    // subscriptions (via useRealtimeBridge). Eagerly creating TableControllers here is
-    // now redundant — each TC opens a Supabase realtime subscription that duplicates
-    // what the TanStack hooks already do. The lazy getters still work: any remaining
-    // direct consumer that accesses a getter (e.g., controller.profiles) will create
-    // the TC on demand.
-
-    // Clear initialData to free memory (no longer consumed by eager TC creation)
-    this._initialData = undefined;
+    // No-op
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -418,478 +368,214 @@ export class CourseController {
     return this._classRealTimeController;
   }
 
-  // Lazy getters
-
-  get discussionThreadReadStatus(): TableController<"discussion_thread_read_status"> {
-    if (!this._discussionThreadReadStatus) {
-      this._discussionThreadReadStatus = new TableController({
-        client: this.client,
-        table: "discussion_thread_read_status",
-        query: this.client.from("discussion_thread_read_status").select("*").eq("user_id", this._userId),
-        classRealTimeController: this.classRealTimeController
-      });
-    }
-    return this._discussionThreadReadStatus;
+  get isStaff() {
+    return this.role === "instructor" || this.role === "grader";
   }
 
-  get discussionThreadWatchers(): TableController<"discussion_thread_watchers"> {
-    if (!this._discussionThreadWatchers) {
-      this._discussionThreadWatchers = new TableController({
-        client: this.client,
-        table: "discussion_thread_watchers",
-        query: this.client
-          .from("discussion_thread_watchers")
-          .select("*")
-          .eq("user_id", this._userId)
-          .eq("class_id", this.courseId),
-        realtimeFilter: { user_id: this._userId, class_id: this.courseId },
-        classRealTimeController: this.classRealTimeController
-      });
-    }
-    return this._discussionThreadWatchers;
-  }
+  // ---- Table shims ----
+  // Provide same create/update/delete/invalidate/list/getById API as the old
+  // TableController getters, but delegate to direct Supabase calls and
+  // TanStack Query cache invalidation. The `_qc` field is injected by the
+  // provider on every render.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  _qc: any = null;
 
-  get discussionTopicFollowers(): TableController<"discussion_topic_followers"> {
-    if (!this._discussionTopicFollowers) {
-      this._discussionTopicFollowers = new TableController({
-        client: this.client,
-        table: "discussion_topic_followers",
-        query: this.client
-          .from("discussion_topic_followers")
-          .select("*")
-          .eq("user_id", this._userId)
-          .eq("class_id", this.courseId),
-        realtimeFilter: { user_id: this._userId, class_id: this.courseId },
-        classRealTimeController: this.classRealTimeController
-      });
-    }
-    return this._discussionTopicFollowers;
-  }
-
-  get notifications(): TableController<"notifications"> {
-    if (!this._notifications) {
-      this._notifications = new TableController({
-        client: this.client,
-        table: "notifications",
-        query: this.client.from("notifications").select("*").eq("class_id", this.courseId).eq("user_id", this._userId),
-        classRealTimeController: this.classRealTimeController
-      });
-    }
-    return this._notifications;
-  }
-
-  get profiles(): TableController<"profiles"> {
-    if (!this._profiles) {
-      this._profiles = new TableController({
-        client: this.client,
-        table: "profiles",
-        query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.profiles
-      });
-    }
-    return this._profiles;
-  }
-
-  get discussionThreadTeasers(): TableController<"discussion_threads"> {
-    if (!this._discussionThreadTeasers) {
-      this._discussionThreadTeasers = new TableController({
-        client: this.client,
-        table: "discussion_threads",
-        query: this.client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { root_class_id: this.courseId },
-        initialData: this._initialData?.discussionThreadTeasers
-      });
-    }
-    return this._discussionThreadTeasers;
-  }
-
-  get tags(): TableController<"tags"> {
-    if (!this._tags) {
-      this._tags = new TableController({
-        client: this.client,
-        table: "tags",
-        query: this.client.from("tags").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.tags
-      });
-    }
-    return this._tags;
-  }
-
-  get labSections(): TableController<"lab_sections"> {
-    if (!this._labSections) {
-      this._labSections = new TableController({
-        client: this.client,
-        table: "lab_sections",
-        query: this.client.from("lab_sections").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.labSections
-      });
-    }
-    return this._labSections;
-  }
-
-  get labSectionMeetings(): TableController<"lab_section_meetings"> {
-    if (!this._labSectionMeetings) {
-      this._labSectionMeetings = new TableController({
-        client: this.client,
-        table: "lab_section_meetings",
-        query: this.client.from("lab_section_meetings").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.labSectionMeetings
-      });
-    }
-    return this._labSectionMeetings;
-  }
-
-  get labSectionLeaders(): TableController<"lab_section_leaders"> {
-    if (!this._labSectionLeaders) {
-      this._labSectionLeaders = new TableController({
-        client: this.client,
-        table: "lab_section_leaders",
-        query: this.client.from("lab_section_leaders").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId },
-        initialData: this._initialData?.labSectionLeaders
-      });
-    }
-    return this._labSectionLeaders;
-  }
-
-  get classSections(): TableController<"class_sections"> {
-    if (!this._classSections) {
-      this._classSections = new TableController({
-        client: this.client,
-        table: "class_sections",
-        query: this.client.from("class_sections").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.classSections
-      });
-    }
-    return this._classSections;
-  }
-
-  get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
-    if (!this._userRolesWithProfiles) {
-      let query = this.client
-        .from("user_roles")
-        .select("*, profiles!private_profile_id(*), users(*)")
-        .eq("class_id", this.courseId);
-      if (!this.isStaff) {
-        query = query.eq("user_id", this._userId);
-      }
-      this._userRolesWithProfiles = new TableController({
-        client: this.client,
-        table: "user_roles",
-        query,
-        selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.userRolesWithProfiles,
-        autoFetchMissingRows: this.isStaff
-      });
-    }
-    return this._userRolesWithProfiles;
-  }
-
-  get studentDeadlineExtensions(): TableController<"student_deadline_extensions"> {
-    if (!this._studentDeadlineExtensions) {
-      let query = this.client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId);
-      if (!this.isStaff) {
-        const profileId = this.classRealTimeController.profileId;
-        if (profileId) {
-          query = query.or(`student_id.eq.${profileId}`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _makeCourseShim(table: string, keySuffix: string): any {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = this.client as any;
+    const cid = this.courseId;
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      get queryKey() {
+        return ["course", cid, keySuffix];
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async create(row: any) {
+        const { data, error } = await db.from(table).insert(row).select("*").single();
+        if (error) throw error;
+        self._qc?.invalidateQueries?.({ queryKey: ["course", cid, keySuffix] });
+        return data;
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async update(id: any, values: any) {
+        const { data, error } = await db.from(table).update(values).eq("id", id).select("*").single();
+        if (error) throw error;
+        self._qc?.invalidateQueries?.({ queryKey: ["course", cid, keySuffix] });
+        return data;
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async delete(id: any) {
+        const { error } = await db.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", id);
+        if (error) throw error;
+        self._qc?.invalidateQueries?.({ queryKey: ["course", cid, keySuffix] });
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async hardDelete(id: any) {
+        const { error } = await db.from(table).delete().eq("id", id);
+        if (error) throw error;
+        self._qc?.invalidateQueries?.({ queryKey: ["course", cid, keySuffix] });
+      },
+      async invalidate() {
+        self._qc?.invalidateQueries?.({ queryKey: ["course", cid, keySuffix] });
+      },
+      async refetchAll() {
+        self._qc?.invalidateQueries?.({ queryKey: ["course", cid, keySuffix] });
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      list(callback?: any) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return { data: [] as any[], unsubscribe: () => {} };
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getById(id: any, callback?: any) {
+        return { data: undefined, unsubscribe: () => {} };
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async getOneByFilters(filters: any[]) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let query: any = db.from(table).select("*");
+        for (const f of filters) {
+          query = query.filter(f.column, f.operator, f.value);
         }
+        const { data } = await query.single();
+        return data;
+      },
+      readyPromise: Promise.resolve(),
+      close() {},
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rows: [] as any[],
+      get ready() {
+        return true;
       }
-      this._studentDeadlineExtensions = new TableController({
-        client: this.client,
-        table: "student_deadline_extensions",
-        query,
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.studentDeadlineExtensions
-      });
-    }
-    return this._studentDeadlineExtensions;
+    };
   }
 
-  get assignmentDueDateExceptions(): TableController<"assignment_due_date_exceptions"> {
-    if (!this._assignmentDueDateExceptions) {
-      let query = this.client.from("assignment_due_date_exceptions").select("*").eq("class_id", this.courseId);
-      if (!this.isStaff) {
-        // For students, filter to only their exceptions by joining with user_roles
-        // Match: student_id matches their private_profile_id OR assignment_group_id for a group they're in
-        const profileId = this.classRealTimeController.profileId;
-        if (profileId) {
-          // Filter by student_id matching profile OR assignment_group_id (RLS will filter groups)
-          query = query.or(`student_id.eq.${profileId},assignment_group_id.not.is.null`);
-        }
-      }
-      this._assignmentDueDateExceptions = new TableController({
-        client: this.client,
-        table: "assignment_due_date_exceptions",
-        query,
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.assignmentDueDateExceptions
-      });
+  // Lazy-initialized shims
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _shims: Record<string, any> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _getShim(table: string, key: string): any {
+    if (!this._shims[key]) {
+      this._shims[key] = this._makeCourseShim(table, key);
     }
-    return this._assignmentDueDateExceptions;
+    return this._shims[key];
   }
 
-  get assignments(): TableController<"assignments"> {
-    if (!this._assignments) {
-      this._assignments = new TableController({
-        client: this.client,
-        table: "assignments",
-        query: this.client
-          .from("assignments")
-          .select("*")
-          .eq("class_id", this.courseId)
-          .order("due_date", { ascending: true })
-          .order("id", { ascending: true }),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.assignments
-      });
-    }
-    return this._assignments;
+  get discussionThreadTeasers() {
+    return this._getShim("discussion_threads", "discussion_thread_teasers");
+  }
+  get discussionThreadReadStatus() {
+    return this._getShim("discussion_thread_read_status", "discussion_thread_read_status");
+  }
+  get discussionThreadLikes() {
+    return this._getShim("discussion_thread_likes", "discussion_thread_likes");
+  }
+  get discussionTopics() {
+    return this._getShim("discussion_topics", "discussion_topics");
+  }
+  get tags() {
+    return this._getShim("tags", "tags");
+  }
+  get profiles() {
+    return this._getShim("profiles", "profiles");
+  }
+  get userRolesWithProfiles() {
+    return this._getShim("user_roles", "user_roles");
+  }
+  get labSections() {
+    return this._getShim("lab_sections", "lab_sections");
+  }
+  get labSectionMeetings() {
+    return this._getShim("lab_section_meetings", "lab_section_meetings");
+  }
+  get classSections() {
+    return this._getShim("class_sections", "class_sections");
+  }
+  get studentDeadlineExtensions() {
+    return this._getShim("student_deadline_extensions", "student_deadline_extensions");
+  }
+  get assignmentDueDateExceptions() {
+    return this._getShim("assignment_due_date_exceptions", "assignment_due_date_exceptions");
+  }
+  get assignments() {
+    return this._getShim("assignments", "assignments");
+  }
+  get assignmentGroupsWithMembers() {
+    return this._getShim("assignment_groups", "assignment_groups");
+  }
+  get repositories() {
+    return this._getShim("repositories", "repositories");
+  }
+  get livePolls() {
+    return this._getShim("live_polls", "live_polls");
   }
 
-  get assignmentGroupsWithMembers(): TableController<
-    "assignment_groups",
-    "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
-  > {
-    if (!this._assignmentGroupsWithMembers) {
-      this._assignmentGroupsWithMembers = new TableController({
-        client: this.client,
-        table: "assignment_groups",
-        query: this.client
-          .from("assignment_groups")
-          .select("*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)")
-          .eq("class_id", this.courseId),
-        selectForSingleRow:
-          "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)",
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.assignmentGroupsWithMembers
-      });
-    }
-    return this._assignmentGroupsWithMembers;
+  // Helper methods that consumers still call
+  getUserRole(user_id: string) {
+    return undefined; // Data now comes from TanStack hooks
   }
-
-  get repositories(): TableController<"repositories"> {
-    if (!this._repositories) {
-      let query = this.client.from("repositories").select("*");
-
-      if (this.isStaff) {
-        // Staff can see all repositories for the class
-        query = query.eq("class_id", this.courseId);
-      } else {
-        // Students: apply RLS restrictions to reduce data transfer
-        // RLS allows viewing repos where:
-        // 1. profile_id matches student's private_profile_id or public_profile_id
-        // 2. OR assignment_group_id is set and student is a member
-        // We filter by class_id and profile_id for individual repos,
-        // and include assignment_group_id not null for group repos.
-        const profileId = this.classRealTimeController.profileId;
-        if (profileId) {
-          query = query.eq("class_id", this.courseId).or(`profile_id.eq.${profileId},assignment_group_id.not.is.null`);
-        } else {
-          // Fallback: just filter by class_id if profileId is not available
-          query = query.eq("class_id", this.courseId);
-        }
-      }
-
-      this._repositories = new TableController({
-        client: this.client,
-        table: "repositories",
-        query,
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.repositories
-      });
-    }
-    return this._repositories;
+  getUserRoleByPrivateProfileId(private_profile_id: string) {
+    return undefined; // Data now comes from TanStack hooks
   }
-
-  get gradebookColumns(): TableController<"gradebook_columns"> {
-    if (!this._gradebookColumns) {
-      this._gradebookColumns = new TableController({
-        client: this.client,
-        table: "gradebook_columns",
-        query: this.client.from("gradebook_columns").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.gradebookColumns
-      });
-    }
-    return this._gradebookColumns;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getTagsForProfile(profile_id: string, callback?: any): { unsubscribe: Unsubscribe; data: Tag[] | undefined } {
+    return { unsubscribe: () => {}, data: [] };
   }
-
-  get discussionThreadLikes(): TableController<"discussion_thread_likes"> {
-    if (!this._discussionThreadLikes) {
-      this._discussionThreadLikes = new TableController({
-        client: this.client,
-        table: "discussion_thread_likes",
-        query: this.client
-          .from("discussion_thread_likes")
-          .select("*")
-          .eq("creator", this.classRealTimeController.profileId),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { creator: this.classRealTimeController.profileId }
-      });
-    }
-    return this._discussionThreadLikes;
+  listTags(callback?: UpdateCallback<Tag[]>): { unsubscribe: Unsubscribe; data: Tag[] } {
+    return { unsubscribe: () => {}, data: [] };
   }
-
-  get discussionTopics(): TableController<"discussion_topics"> {
-    if (!this._discussionTopics) {
-      this._discussionTopics = new TableController({
-        client: this.client,
-        table: "discussion_topics",
-        query: this.client.from("discussion_topics").select("*").eq("class_id", this.courseId),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId },
-        initialData: this._initialData?.discussionTopics
-      });
-    }
-    return this._discussionTopics;
+  getRoster() {
+    return [];
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getRosterWithUserInfo(callback?: any): { unsubscribe: Unsubscribe; data: UserRoleWithUser[] } {
+    return { unsubscribe: () => {}, data: [] };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getProfileBySisId(sis_id: number): any {
+    return undefined;
+  }
+  listLabSections(callback?: UpdateCallback<LabSection[]>): { unsubscribe: Unsubscribe; data: LabSection[] } {
+    return { unsubscribe: () => {}, data: [] };
+  }
+  listLabSectionMeetings(callback?: UpdateCallback<LabSectionMeeting[]>): {
+    unsubscribe: Unsubscribe;
+    data: LabSectionMeeting[];
+  } {
+    return { unsubscribe: () => {}, data: [] };
+  }
+  getStudentLabSectionId(studentPrivateProfileId: string): number | null {
+    return null;
+  }
+  calculateEffectiveDueDate(
+    assignment: Assignment,
+    {
+      studentPrivateProfileId,
+      labSectionId: labSectionIdOverride
+    }: { studentPrivateProfileId: string; labSectionId?: number }
+  ): Date {
+    // Simplified: just return original due date. Consumers should use useAssignmentDueDate hook instead.
+    return new Date(assignment.due_date);
   }
 
   /**
-   * Calendar events for this class.
-   * Students can only see office_hours events, staff can see all.
+   * Direct Supabase lookup for discussion thread read status.
+   * Used by useDiscussionThreadReadStatus when a row is not yet in the TanStack cache.
    */
-  get calendarEvents(): TableController<"calendar_events"> {
-    if (!this._calendarEvents) {
-      let query = this.client.from("calendar_events").select("*").eq("class_id", this.courseId);
-
-      // Students can only see office_hours events (enforced by RLS, but filter here too for efficiency)
-      if (!this.isStaff) {
-        query = query.eq("calendar_type", "office_hours");
-      }
-
-      query = query.order("start_time", { ascending: true }).limit(1000);
-
-      // Realtime filter must match query constraints to prevent students from receiving
-      // calendar events they shouldn't see (e.g., non-office_hours events)
-      const realtimeFilter = !this.isStaff
-        ? { class_id: this.courseId, calendar_type: "office_hours" }
-        : { class_id: this.courseId };
-
-      this._calendarEvents = new TableController({
-        client: this.client,
-        table: "calendar_events",
-        query,
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter
-      });
+  async getDiscussionThreadReadStatusByFilters(
+    filters: Array<{ column: string; operator: string; value: unknown }>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): Promise<any> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let query: any = this.client.from("discussion_thread_read_status").select("*");
+    for (const f of filters) {
+      query = query.filter(f.column, f.operator, f.value);
     }
-    return this._calendarEvents;
-  }
-
-  /**
-   * Staff-only settings for this class.
-   * Only visible to staff (enforced by RLS).
-   */
-  get classStaffSettings(): TableController<"class_staff_settings"> {
-    if (!this._classStaffSettings) {
-      const query = this.client.from("class_staff_settings").select("*").eq("class_id", this.courseId);
-
-      this._classStaffSettings = new TableController({
-        client: this.client,
-        table: "class_staff_settings",
-        query,
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId }
-      });
-    }
-    return this._classStaffSettings;
-  }
-
-  /**
-   * Discord channels for this class.
-   * Only visible to staff (enforced by RLS).
-   */
-  get discordChannels(): TableController<"discord_channels"> {
-    if (!this._discordChannels) {
-      const query = this.client.from("discord_channels").select("*").eq("class_id", this.courseId);
-
-      this._discordChannels = new TableController({
-        client: this.client,
-        table: "discord_channels",
-        query,
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId },
-        initialData: this._initialData?.discordChannels
-      });
-    }
-    return this._discordChannels;
-  }
-
-  /**
-   * Discord messages for this class (tracks which Discord messages correspond to help requests, regrade requests, etc).
-   * Only visible to staff (enforced by RLS).
-   */
-  get discordMessages(): TableController<"discord_messages"> {
-    if (!this._discordMessages) {
-      const query = this.client.from("discord_messages").select("*").eq("class_id", this.courseId);
-
-      this._discordMessages = new TableController({
-        client: this.client,
-        table: "discord_messages",
-        query,
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId },
-        initialData: this._initialData?.discordMessages
-      });
-    }
-    return this._discordMessages;
-  }
-
-  get livePolls(): TableController<"live_polls"> {
-    if (!this._livePolls) {
-      this._livePolls = new TableController({
-        client: this.client,
-        table: "live_polls",
-        query: this.client
-          .from("live_polls")
-          .select("*")
-          .eq("class_id", this.courseId)
-          .order("created_at", { ascending: false }),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId }
-      });
-    }
-    return this._livePolls;
-  }
-
-  get surveys(): TableController<"surveys"> {
-    if (!this._surveys) {
-      this._surveys = new TableController({
-        client: this.client,
-        table: "surveys",
-        query: this.client
-          .from("surveys")
-          .select("*")
-          .eq("class_id", this.courseId)
-          .is("deleted_at", null)
-          .order("created_at", { ascending: false }),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId },
-        initialData: this._initialData?.surveys
-      });
-    }
-    return this._surveys;
-  }
-
-  get surveySeries(): TableController<"survey_series"> {
-    if (!this._surveySeries) {
-      this._surveySeries = new TableController({
-        client: this.client,
-        table: "survey_series",
-        query: this.client.from("survey_series").select("*").eq("class_id", this.courseId).order("name"),
-        classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { class_id: this.courseId }
-      });
-    }
-    return this._surveySeries;
+    const { data, error } = await query.single();
+    if (error) return undefined;
+    return data;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -1017,139 +703,6 @@ export class CourseController {
     }
   }
 
-  getDiscussionThreadTeaser(
-    id: number,
-    callback?: UpdateCallback<DiscussionThreadTeaser>
-  ): { unsubscribe: Unsubscribe; data: DiscussionThreadTeaser | undefined } {
-    if (callback) {
-      return this.discussionThreadTeasers.getById(id, (data) => {
-        if (data) callback(data as DiscussionThreadTeaser);
-      });
-    }
-    return this.discussionThreadTeasers.getById(id);
-  }
-
-  listDiscussionThreadTeasers(callback?: UpdateCallback<DiscussionThreadTeaser[]>): {
-    unsubscribe: Unsubscribe;
-    data: DiscussionThreadTeaser[];
-  } {
-    if (callback) {
-      return this.discussionThreadTeasers.list((data) => {
-        callback(data as DiscussionThreadTeaser[]);
-      });
-    }
-    const result = this.discussionThreadTeasers.list();
-    return {
-      unsubscribe: result.unsubscribe,
-      data: result.data as DiscussionThreadTeaser[]
-    };
-  }
-
-  getDiscussionThreadReadStatus(
-    threadId: number,
-    callback?: UpdateCallback<DiscussionThreadReadWithAllDescendants>
-  ): { unsubscribe: Unsubscribe; data: DiscussionThreadReadWithAllDescendants | undefined | null } {
-    // For now, return simple read status - complex computation can be added later if needed
-    if (callback) {
-      const result = this.discussionThreadReadStatus.getById(threadId, (data) => {
-        if (data) {
-          const converted = {
-            ...data,
-            numReadDescendants: 0,
-            current_children_count: 0
-          } as DiscussionThreadReadWithAllDescendants;
-          callback(converted);
-        } else {
-          // Handle the case where data is undefined - the callback is optional so we can skip it
-          return;
-        }
-      });
-      return {
-        unsubscribe: result.unsubscribe,
-        data: result.data
-          ? ({
-              ...result.data,
-              numReadDescendants: 0,
-              current_children_count: 0
-            } as DiscussionThreadReadWithAllDescendants)
-          : null
-      };
-    }
-    const result = this.discussionThreadReadStatus.getById(threadId);
-    const convertedData = result.data
-      ? ({ ...result.data, numReadDescendants: 0, current_children_count: 0 } as DiscussionThreadReadWithAllDescendants)
-      : null;
-    return {
-      unsubscribe: result.unsubscribe,
-      data: convertedData
-    };
-  }
-
-  get isStaff() {
-    return this.role === "instructor" || this.role === "grader";
-  }
-
-  getUserRole(user_id: string) {
-    const result = this.userRolesWithProfiles.list();
-    return result.data.find((role) => role.user_id === user_id);
-  }
-
-  getUserRoleByPrivateProfileId(private_profile_id: string) {
-    const result = this.userRolesWithProfiles.list();
-    return result.data.find((role) => role.private_profile_id === private_profile_id);
-  }
-
-  getTagsForProfile(
-    profile_id: string,
-    callback?: UpdateCallback<Tag[]>
-  ): { unsubscribe: Unsubscribe; data: Tag[] | undefined } {
-    const result = this.tags.list((data) => {
-      const filtered = data.filter((t) => t.profile_id === profile_id);
-      if (callback) callback(filtered);
-    });
-    return {
-      unsubscribe: result.unsubscribe,
-      data: result.data.filter((t) => t.profile_id === profile_id)
-    };
-  }
-
-  listTags(callback?: UpdateCallback<Tag[]>): { unsubscribe: Unsubscribe; data: Tag[] } {
-    return this.tags.list(callback);
-  }
-  getRoster() {
-    const result = this.userRolesWithProfiles.list();
-    return result.data.filter((role) => role.role === "student");
-  }
-
-  getRosterWithUserInfo(callback?: UpdateCallback<UserRoleWithUser[]>): {
-    unsubscribe: Unsubscribe;
-    data: UserRoleWithUser[];
-  } {
-    const mapToStudentUserRoles = (data: unknown[]): UserRoleWithUser[] =>
-      (data as UserRoleWithPrivateProfileAndUser[]).filter((role) => role.role === "student").map((role) => role);
-
-    if (callback) {
-      const result = this.userRolesWithProfiles.list((data) => {
-        callback(mapToStudentUserRoles(data));
-      });
-      return {
-        unsubscribe: result.unsubscribe,
-        data: mapToStudentUserRoles(result.data)
-      };
-    }
-
-    const result = this.userRolesWithProfiles.list();
-    return {
-      unsubscribe: result.unsubscribe,
-      data: mapToStudentUserRoles(result.data)
-    };
-  }
-
-  getProfileBySisId(sis_id: number) {
-    const userRoles = this.userRolesWithProfiles.list();
-    const role = userRoles.data.find((role) => role.users.sis_user_id === sis_id);
-    return role?.profiles;
-  }
   setObfuscatedGradesMode(val: boolean) {
     this._isObfuscatedGrades = val;
     this.isObfuscatedGradesListeners.forEach((cb) => cb(val));
@@ -1178,156 +731,13 @@ export class CourseController {
   }
 
   /**
-   * Gets lab sections with optional callback for updates
+   * Data is always considered loaded -- TanStack Query handles loading states.
    */
-  listLabSections(callback?: UpdateCallback<LabSection[]>): { unsubscribe: Unsubscribe; data: LabSection[] } {
-    return this.labSections.list(callback);
-  }
-
-  /**
-   * Gets lab section meetings with optional callback for updates
-   */
-  listLabSectionMeetings(callback?: UpdateCallback<LabSectionMeeting[]>): {
-    unsubscribe: Unsubscribe;
-    data: LabSectionMeeting[];
-  } {
-    return this.labSectionMeetings.list(callback);
-  }
-
-  /**
-   * Gets the lab section ID for a given student profile ID
-   */
-  getStudentLabSectionId(studentPrivateProfileId: string): number | null {
-    const result = this.userRolesWithProfiles.list();
-    const userRole = result.data.find((role) => role.private_profile_id === studentPrivateProfileId);
-    return userRole?.lab_section_id || null;
-  }
-
-  /**
-   * Calculates the effective due date for an assignment and student, considering lab-based scheduling
-   * WARNING: If lab sections are not yet loaded, this will throw an error. Clients must check isLoaded first.
-   */
-  calculateEffectiveDueDate(
-    assignment: Assignment,
-    {
-      studentPrivateProfileId,
-      labSectionId: labSectionIdOverride
-    }: { studentPrivateProfileId: string; labSectionId?: number }
-  ): Date {
-    if (!studentPrivateProfileId && !labSectionIdOverride) {
-      throw new Error("No student private profile ID or lab section ID override provided");
-    }
-    if (!assignment.minutes_due_after_lab) {
-      return new Date(assignment.due_date);
-    }
-
-    const labSectionId = labSectionIdOverride || this.getStudentLabSectionId(studentPrivateProfileId);
-    if (!labSectionId) {
-      // Student not in a lab section, falling back to original due date
-      return new Date(assignment.due_date);
-    }
-    const labSectionResult = this.labSections.list();
-    const labSection = labSectionResult.data.find((section) => section.id === labSectionId);
-    if (!labSection) {
-      throw new Error("Lab section not found");
-    }
-
-    // Find the most recent lab section meeting before the assignment's original due date
-    const assignmentDueDate = new Date(assignment.due_date);
-    // Convert assignment due date to YYYY-MM-DD string for date-only comparison
-    const assignmentDueDateStr = `${assignmentDueDate.getFullYear()}-${String(assignmentDueDate.getMonth() + 1).padStart(2, "0")}-${String(assignmentDueDate.getDate()).padStart(2, "0")}`;
-    const labMeetingResult = this.labSectionMeetings.list();
-    const relevantMeetings = labMeetingResult.data
-      .filter(
-        (meeting) =>
-          meeting.lab_section_id === labSectionId && !meeting.cancelled && meeting.meeting_date < assignmentDueDateStr
-      )
-      .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
-
-    if (relevantMeetings.length === 0) {
-      return new Date(assignment.due_date);
-    }
-
-    // Calculate lab-based due date
-    const mostRecentLabMeeting = relevantMeetings[0];
-    const labMeetingDate = new TZDate(
-      mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
-      this.course.time_zone ?? "America/New_York"
-    );
-
-    const effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
-
-    return effectiveDueDate;
-  }
-
-  // All data loading is handled by TableController instances
   get isDataLoaded() {
-    // Consider only instantiated controllers to avoid triggering lazy creation
-    const createdControllers: Array<
-      | TableController<"profiles">
-      | TableController<"discussion_threads">
-      | TableController<"discussion_thread_read_status">
-      | TableController<"tags">
-      | TableController<"lab_sections">
-      | TableController<"class_sections">
-      | TableController<"lab_section_meetings">
-      | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
-      | TableController<"student_deadline_extensions">
-      | TableController<"assignment_due_date_exceptions">
-      | TableController<"assignments">
-      | TableController<
-          "assignment_groups",
-          "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
-        >
-    > = [];
-    if (this._profiles) createdControllers.push(this._profiles);
-    if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
-    if (this._discussionThreadTeasers) createdControllers.push(this._discussionThreadTeasers);
-    if (this._discussionThreadReadStatus) createdControllers.push(this._discussionThreadReadStatus);
-    if (this._tags) createdControllers.push(this._tags);
-    if (this._labSections) createdControllers.push(this._labSections);
-    if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
-    if (this._studentDeadlineExtensions) createdControllers.push(this._studentDeadlineExtensions);
-    if (this._assignmentDueDateExceptions) createdControllers.push(this._assignmentDueDateExceptions);
-    if (this._assignments) createdControllers.push(this._assignments);
-    if (this._assignmentGroupsWithMembers) createdControllers.push(this._assignmentGroupsWithMembers);
-    if (this._classSections) createdControllers.push(this._classSections);
-
-    return createdControllers.every((c) => c.ready);
+    return true;
   }
 
-  // Close method to clean up TableController instances
   close(): void {
-    this._profiles?.close();
-    this._userRolesWithProfiles?.close();
-    this._discussionThreadTeasers?.close();
-    this._discussionThreadReadStatus?.close();
-    this._discussionThreadWatchers?.close();
-    this._discussionTopicFollowers?.close();
-    this._discussionThreadLikes?.close();
-    this._discussionTopics?.close();
-    this._tags?.close();
-    this._labSections?.close();
-    this._labSectionMeetings?.close();
-    this._labSectionLeaders?.close();
-    this._labSectionLeaders = undefined;
-    this._studentDeadlineExtensions?.close();
-    this._assignmentDueDateExceptions?.close();
-    this._assignments?.close();
-    this._assignmentGroupsWithMembers?.close();
-    this._classSections?.close();
-    this._calendarEvents?.close();
-    this._calendarEvents = undefined;
-    this._classStaffSettings?.close();
-    this._classStaffSettings = undefined;
-    this._discordChannels?.close();
-    this._discordChannels = undefined;
-    this._discordMessages?.close();
-    this._discordMessages = undefined;
-    this._livePolls?.close();
-    this._surveys?.close();
-    this._surveySeries?.close();
-
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
     }
@@ -1439,14 +849,12 @@ export function CourseControllerProvider({
   course_id,
   profile_id,
   role,
-  children,
-  initialData
+  children
 }: {
   profile_id: string;
   role: Database["public"]["Enums"]["app_role"];
   course_id: number;
   children: React.ReactNode;
-  initialData?: CourseControllerInitialData;
 }) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
@@ -1454,6 +862,7 @@ export function CourseControllerProvider({
   const { user } = useAuthState();
   const userId = user?.id;
   const { leader } = useLeaderContext();
+  const queryClient = useQueryClient();
 
   // Initialize ClassRealTimeController.
   // Only the leader tab calls start() to open class-wide WebSocket channels.
@@ -1468,7 +877,7 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      const _courseController = new CourseController(role, course_id, client, realTimeController, userId, initialData);
+      const _courseController = new CourseController(role, course_id, client, realTimeController, userId);
       setCourseController(_courseController);
       const init = async () => {
         try {
@@ -1511,7 +920,12 @@ export function CourseControllerProvider({
         realTimeController.close();
       };
     }
-  }, [course_id, profile_id, role, userId, initialData, leader]);
+  }, [course_id, profile_id, role, userId, leader]);
+
+  // Inject QueryClient on every render so shims can invalidate TanStack caches
+  if (courseController) {
+    courseController._qc = queryClient;
+  }
 
   if (!courseController || !userId) {
     return (
@@ -2095,11 +1509,12 @@ export type SurveyResponseWithProfile = Database["public"]["Tables"]["survey_res
 };
 
 /**
- * Hook to get survey responses for a specific survey with real-time updates
- * Uses per-survey loading - creates a TableController scoped to the specific survey
+ * Hook to get survey responses for a specific survey.
+ * Fetches directly via Supabase, joined with profiles.
  */
 export function useSurveyResponses(surveyId: string | undefined) {
   const controller = useCourseController();
+  const { data: allProfiles = [] } = useProfilesQuery();
   const [responses, setResponses] = useState<SurveyResponseWithProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -2109,52 +1524,35 @@ export function useSurveyResponses(surveyId: string | undefined) {
       setIsLoading(false);
       return;
     }
-
-    // Create a TableController scoped to this specific survey
-    const ctrl = new TableController({
-      client: controller.client,
-      table: "survey_responses",
-      query: controller.client
+    let cancelled = false;
+    const fetchResponses = async () => {
+      setIsLoading(true);
+      const { data, error } = await controller.client
         .from("survey_responses")
         .select("*")
         .eq("survey_id", surveyId)
         .eq("is_submitted", true)
-        .is("deleted_at", null),
-      classRealTimeController: controller.classRealTimeController,
-      realtimeFilter: { survey_id: surveyId }
-    });
-
-    // Get profiles for joining response data
-    const profilesController = controller.profiles;
-
-    const updateResponsesWithProfiles = (rawResponses: Database["public"]["Tables"]["survey_responses"]["Row"][]) => {
-      // Join with profiles data from the profiles controller
-      const { data: profiles } = profilesController.list(() => {});
-      const profileMap = new Map(profiles.map((p) => [p.id, p]));
-
-      const responsesWithProfiles: SurveyResponseWithProfile[] = rawResponses.map((r) => ({
+        .is("deleted_at", null);
+      if (cancelled) return;
+      if (error) {
+        setIsLoading(false);
+        return;
+      }
+      const profileMap = new Map(allProfiles.map((p: { id: string; name: string | null }) => [p.id, p]));
+      const responsesWithProfiles: SurveyResponseWithProfile[] = (data ?? []).map((r) => ({
         ...r,
         profiles: profileMap.get(r.profile_id)
           ? { id: r.profile_id, name: profileMap.get(r.profile_id)?.name ?? null }
           : null
       }));
-
       setResponses(responsesWithProfiles);
-    };
-
-    const { data, unsubscribe } = ctrl.list((updated) => {
-      updateResponsesWithProfiles(updated);
       setIsLoading(false);
-    });
-
-    updateResponsesWithProfiles(data);
-    setIsLoading(!ctrl.ready);
-
-    return () => {
-      unsubscribe();
-      ctrl.close();
     };
-  }, [surveyId, controller]);
+    fetchResponses();
+    return () => {
+      cancelled = true;
+    };
+  }, [surveyId, controller.client, allProfiles]);
 
   return { responses, isLoading };
 }

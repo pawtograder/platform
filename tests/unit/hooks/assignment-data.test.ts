@@ -167,15 +167,12 @@ describe("useRubricsQuery", () => {
     jest.clearAllMocks();
   });
 
-  it("uses initialData immediately without loading", () => {
+  it("uses pre-populated QueryClient data immediately without loading", () => {
     const qc = makeQueryClient();
     const initialRubrics = [{ id: 1, assignment_id: 10, review_round: "grading" }];
-    const ctx = createContextValue({
-      initialData: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        rubrics: initialRubrics as any
-      }
-    });
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", 1, "assignment", 10, "rubrics"], initialRubrics);
+    const ctx = createContextValue();
     const wrapper = createWrapper(qc, ctx);
 
     const { result } = renderHook(() => useRubricsQuery(), { wrapper });

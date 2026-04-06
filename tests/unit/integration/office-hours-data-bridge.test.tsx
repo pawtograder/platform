@@ -92,12 +92,8 @@ describe("OfficeHoursDataBridge", () => {
   });
 
   it("survives classRtc and officeHoursRtc being null", () => {
-    mockedUseCourseController.mockReturnValue(
-      makeCourseController({ classRtcThrows: true })
-    );
-    mockedUseOfficeHoursController.mockReturnValue(
-      makeOhController({ ohRtcThrows: true })
-    );
+    mockedUseCourseController.mockReturnValue(makeCourseController({ classRtcThrows: true }));
+    mockedUseOfficeHoursController.mockReturnValue(makeOhController({ ohRtcThrows: true }));
 
     render(
       <OfficeHoursDataBridge>

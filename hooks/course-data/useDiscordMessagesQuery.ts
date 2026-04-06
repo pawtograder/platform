@@ -12,7 +12,7 @@ type DiscordMessage = Database["public"]["Tables"]["discord_messages"]["Row"];
  * Replaces: CourseController.discordMessages
  */
 export function useDiscordMessagesQuery() {
-  const { courseId, supabase, classRtc, isStaff, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc, isStaff } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"discord_messages", DiscordMessage>({
     queryKey: ["course", courseId, "discord_messages"],
@@ -22,7 +22,6 @@ export function useDiscordMessagesQuery() {
     supabase,
     scope: "class",
     enabled: isStaff,
-    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId,
-    initialData: initialData?.discordMessages
+    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId
   });
 }

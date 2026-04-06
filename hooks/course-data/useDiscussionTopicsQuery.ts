@@ -9,7 +9,7 @@ import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
  * Receives SSR initialData when available.
  */
 export function useDiscussionTopicsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"discussion_topics", DiscussionTopic>({
     queryKey: ["course", courseId, "discussion_topics"],
@@ -18,7 +18,6 @@ export function useDiscussionTopicsQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId,
-    initialData: initialData?.discussionTopics
+    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId
   });
 }

@@ -12,7 +12,7 @@ type DiscordChannel = Database["public"]["Tables"]["discord_channels"]["Row"];
  * Replaces: CourseController.discordChannels
  */
 export function useDiscordChannelsQuery() {
-  const { courseId, supabase, classRtc, isStaff, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc, isStaff } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"discord_channels", DiscordChannel>({
     queryKey: ["course", courseId, "discord_channels"],
@@ -22,7 +22,6 @@ export function useDiscordChannelsQuery() {
     supabase,
     scope: "class",
     enabled: isStaff,
-    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId,
-    initialData: initialData?.discordChannels
+    realtimeFilter: (row) => (row as Record<string, unknown>).class_id === courseId
   });
 }

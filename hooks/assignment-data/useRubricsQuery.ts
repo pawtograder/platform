@@ -13,7 +13,7 @@ type RubricRow = Database["public"]["Tables"]["rubrics"]["Row"];
  * Replaces: AssignmentController.rubricsController
  */
 export function useRubricsQuery() {
-  const { assignmentId, courseId, supabase, classRtc, initialData } = useAssignmentDataContext();
+  const { assignmentId, courseId, supabase, classRtc } = useAssignmentDataContext();
 
   return useSupabaseRealtimeQuery<"rubrics", RubricRow>({
     queryKey: ["course", courseId, "assignment", assignmentId, "rubrics"],
@@ -22,7 +22,6 @@ export function useRubricsQuery() {
     classRtc,
     supabase,
     scope: "class",
-    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId,
-    initialData: initialData?.rubrics
+    realtimeFilter: (row) => (row as Record<string, unknown>).assignment_id === assignmentId
   });
 }

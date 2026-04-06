@@ -8,7 +8,7 @@ import { useCourseDataContext } from "./useCourseDataContext";
  * Receives SSR initialData when available.
  */
 export function useGradebookColumnsQuery() {
-  const { courseId, supabase, classRtc, initialData } = useCourseDataContext();
+  const { courseId, supabase, classRtc } = useCourseDataContext();
 
   return useSupabaseRealtimeQuery<"gradebook_columns">({
     queryKey: ["course", courseId, "gradebook_columns"],
@@ -16,7 +16,6 @@ export function useGradebookColumnsQuery() {
     queryFn: () => supabase.from("gradebook_columns").select("*").eq("class_id", courseId),
     classRtc,
     supabase,
-    scope: "class",
-    initialData: initialData?.gradebookColumns
+    scope: "class"
   });
 }

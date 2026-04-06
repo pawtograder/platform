@@ -157,15 +157,12 @@ describe("useProfilesQuery", () => {
     expect(mockSupabase.from).toHaveBeenCalledWith("profiles");
   });
 
-  it("uses initialData immediately without loading", () => {
+  it("uses pre-populated QueryClient data immediately without loading", () => {
     const qc = makeQueryClient();
     const initialProfiles = [{ id: "p1", name: "Pre-loaded", class_id: 1 }];
-    const ctx = createContextValue({
-      initialData: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        profiles: initialProfiles as any
-      }
-    });
+    // Simulate HydrationBoundary by pre-populating the QueryClient cache
+    qc.setQueryData(["course", 1, "profiles"], initialProfiles);
+    const ctx = createContextValue();
     const wrapper = createWrapper(qc, ctx);
 
     const { result } = renderHook(() => useProfilesQuery(), { wrapper });
