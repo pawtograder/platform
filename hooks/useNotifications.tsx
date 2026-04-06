@@ -1,73 +1,62 @@
 "use client";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
+import { useNotificationsQuery } from "./course-data";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
   HelpRequestMessageNotification
 } from "@/components/notifications/notification-teaser";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCourseDataContext } from "./course-data";
 
 export function useNotification(notification_id: number) {
-  const controller = useCourseController();
-  const [notification, setNotification] = useState<Notification | undefined>(undefined);
-  useEffect(() => {
-    const { unsubscribe, data } = controller.getValueWithSubscription<Notification>(
-      "notifications",
-      notification_id,
-      (data) => {
-        setNotification(data);
-      }
-    );
-    setNotification(data);
-    return unsubscribe;
-  }, [notification_id, controller]);
-  return notification;
+  const { data: allNotifications = [] } = useNotificationsQuery();
+  return useMemo(() => allNotifications.find((n) => n.id === notification_id), [allNotifications, notification_id]);
 }
 
 export function useNotifications(resource?: string, id?: number) {
   const controller = useCourseController();
+  const queryClient = useQueryClient();
+  const { courseId, userId } = useCourseDataContext();
+  const { data: allNotifications = [] } = useNotificationsQuery();
   const { mutateAsync: update_notification } = useUpdate<Notification>({
     resource: "notifications"
   });
   const { mutateAsync: delete_notification } = useDelete<Notification>();
 
-  // Always declare state hooks at the top level
-  const [resourceNotifications, setResourceNotifications] = useState<Notification[]>([]);
-  const [allNotifications, setAllNotifications] = useState<Notification[]>([]);
+  const notificationsQueryKey = useMemo(() => ["course", courseId, "notifications", userId], [courseId, userId]);
+
+  const invalidateNotifications = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: notificationsQueryKey });
+  }, [queryClient, notificationsQueryKey]);
 
   const set_read = useCallback(
     async (notification: Notification, read: boolean) => {
-      notification.viewed_at = read ? new Date().toISOString() : null;
       try {
         await update_notification({
           id: notification.id,
           values: {
-            viewed_at: notification.viewed_at
+            viewed_at: read ? new Date().toISOString() : null
           }
         });
+        invalidateNotifications();
       } catch (error) {
         // eslint-disable-next-line no-console
         console.error("error setting notification read", error);
       }
     },
-    [update_notification]
+    [update_notification, invalidateNotifications]
   );
 
   const dismiss = useCallback(
     async (notification: Notification) => {
-      controller.handleGenericDataEvent("notifications", {
-        type: "deleted",
-        payload: {
-          id: notification.id
-        },
-        channel: "resources/notifications",
-        date: new Date()
-      });
       await delete_notification({ id: notification.id, resource: "notifications" });
+      invalidateNotifications();
     },
-    [delete_notification, controller]
+    [delete_notification, invalidateNotifications]
   );
 
   const mark_all_read = useCallback(
@@ -87,72 +76,42 @@ export function useNotifications(resource?: string, id?: number) {
     [dismiss]
   );
 
-  // Handle resource-specific notifications
-  useEffect(() => {
+  const notifications = useMemo(() => {
+    const thisClassNotifications = allNotifications.filter((n) => n.class_id === controller.courseId);
+
     if (resource && id) {
-      const { unsubscribe, data } = controller.getValueWithSubscription<Notification>(
-        "notifications",
-        (notification) => {
-          const type =
-            notification.body && typeof notification.body === "object"
-              ? (notification.body as Record<string, unknown>).type
-              : undefined;
+      return thisClassNotifications.filter((notification) => {
+        const type =
+          notification.body && typeof notification.body === "object"
+            ? (notification.body as Record<string, unknown>).type
+            : undefined;
 
-          if (type === "discussion_thread") {
-            const envelope = notification.body as DiscussionThreadNotification;
-            return envelope.root_thread_id === id;
-          }
-
-          if (type === "help_request" && resource === "help_requests") {
-            const envelope = notification.body as HelpRequestNotification;
-            return envelope.help_request_id === id;
-          }
-
-          if (type === "help_request_message" && resource === "help_requests") {
-            const envelope = notification.body as HelpRequestMessageNotification;
-            return envelope.help_request_id === id;
-          }
-
-          if (type === "help_request" && resource === "help_queues") {
-            const envelope = notification.body as HelpRequestNotification;
-            return envelope.help_queue_id === id;
-          }
-
-          if (type === "help_request_message" && resource === "help_queues") {
-            const envelope = notification.body as HelpRequestMessageNotification;
-            return envelope.help_queue_id === id;
-          }
-
-          return false;
-        },
-        (data) => {
-          setResourceNotifications([data]);
+        if (type === "discussion_thread") {
+          const envelope = notification.body as DiscussionThreadNotification;
+          return envelope.root_thread_id === id;
         }
-      );
-      if (data) setResourceNotifications([data]);
-      return () => unsubscribe();
-    }
-  }, [controller, resource, id]);
-
-  // Handle all notifications for the class
-  useEffect(() => {
-    if (!resource || !id) {
-      const { unsubscribe, data } = controller.listGenericData<Notification>("notifications", (data) => {
-        const thisClassNotifications = data.filter((notification) => {
-          return notification.class_id === controller.courseId;
-        });
-        setAllNotifications(thisClassNotifications);
+        if (type === "help_request" && resource === "help_requests") {
+          const envelope = notification.body as HelpRequestNotification;
+          return envelope.help_request_id === id;
+        }
+        if (type === "help_request_message" && resource === "help_requests") {
+          const envelope = notification.body as HelpRequestMessageNotification;
+          return envelope.help_request_id === id;
+        }
+        if (type === "help_request" && resource === "help_queues") {
+          const envelope = notification.body as HelpRequestNotification;
+          return envelope.help_queue_id === id;
+        }
+        if (type === "help_request_message" && resource === "help_queues") {
+          const envelope = notification.body as HelpRequestMessageNotification;
+          return envelope.help_queue_id === id;
+        }
+        return false;
       });
-      const thisClassNotifications = data.filter((notification) => {
-        return notification.class_id === controller.courseId;
-      });
-      setAllNotifications(thisClassNotifications);
-      return () => unsubscribe();
     }
-  }, [controller, resource, id]);
 
-  // Return the appropriate notifications based on whether resource/id are provided
-  const notifications = resource && id ? resourceNotifications : allNotifications;
+    return thisClassNotifications;
+  }, [allNotifications, controller.courseId, resource, id]);
 
   return { notifications, set_read, dismiss, mark_all_read, delete_all };
 }

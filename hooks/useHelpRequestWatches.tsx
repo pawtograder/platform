@@ -2,32 +2,31 @@
 import { HelpRequestWatcher } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";
-import { useCourseController } from "./useCourseController";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCourseDataContext } from "./course-data";
 
-/**
- * Hook for managing help request watch status for the current user.
- * Allows users to watch/unwatch help requests to control notification delivery.
- *
- * @param helpRequestId - The ID of the help request to watch/unwatch
- * @returns Object containing watch status and setter function
- */
+function useHelpRequestWatchersQuery() {
+  const { courseId, userId, supabase } = useCourseDataContext();
+  return useQuery<HelpRequestWatcher[]>({
+    queryKey: ["course", courseId, "help_request_watchers", userId],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("help_request_watchers").select("*").eq("user_id", userId);
+      if (error) throw error;
+      return data ?? [];
+    },
+    staleTime: Infinity,
+    enabled: !!userId
+  });
+}
+
 export function useHelpRequestWatchStatus(helpRequestId: number) {
-  const controller = useCourseController();
-  const [curWatch, setCurWatch] = useState<HelpRequestWatcher | undefined>(undefined);
+  const { data: watchers = [] } = useHelpRequestWatchersQuery();
+  const queryClient = useQueryClient();
+  const { courseId, userId } = useCourseDataContext();
 
-  useEffect(() => {
-    const { unsubscribe, data } = controller.getValueWithSubscription<HelpRequestWatcher>(
-      "help_request_watchers",
-      helpRequestId,
-      (data) => {
-        setCurWatch(data);
-      }
-    );
-    setCurWatch(data);
-    return unsubscribe;
-  }, [controller, helpRequestId]);
+  const curWatch = useMemo(() => watchers.find((w) => w.help_request_id === helpRequestId), [watchers, helpRequestId]);
 
   const { mutateAsync: createHelpRequestWatcher } = useCreate({
     resource: "help_request_watchers"
@@ -40,12 +39,10 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
   const { user } = useAuthState();
   const { course_id } = useParams();
 
-  /**
-   * Sets the watch status for the current help request.
-   * Creates a new watcher record if none exists, or updates the existing one.
-   *
-   * @param status - Whether to enable or disable watching
-   */
+  const invalidate = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["course", courseId, "help_request_watchers", userId] });
+  }, [queryClient, courseId, userId]);
+
   const setHelpRequestWatchStatus = useCallback(
     async (status: boolean) => {
       if (curWatch) {
@@ -65,8 +62,9 @@ export function useHelpRequestWatchStatus(helpRequestId: number) {
           }
         });
       }
+      invalidate();
     },
-    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher]
+    [helpRequestId, curWatch, course_id, user?.id, updateWatch, createHelpRequestWatcher, invalidate]
   );
 
   return {

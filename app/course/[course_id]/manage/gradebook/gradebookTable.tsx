@@ -11,7 +11,6 @@ import { useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAllStudentRoles,
   useCanShowGradeFor,
-  useCourseController,
   useObfuscatedGradesMode,
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
@@ -24,7 +23,14 @@ import {
   useIsGradebookDataReady,
   useStudentDetailView
 } from "@/hooks/useGradebook";
-import { useGradebookColumnsQuery } from "@/hooks/course-data";
+import {
+  useGradebookColumnsQuery,
+  useUserRolesQuery,
+  useLabSectionsQuery,
+  useClassSectionsQuery,
+  useTagsQuery,
+  useProfilesQuery
+} from "@/hooks/course-data";
 import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -59,7 +65,7 @@ import {
   Tooltip,
   VStack
 } from "@chakra-ui/react";
-import { useList, useUpdate } from "@refinedev/core";
+import { useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import {
   Column,
@@ -75,7 +81,6 @@ import {
 import { useVirtualizer, VirtualItem } from "@tanstack/react-virtual";
 import { Select } from "chakra-react-select";
 import { LucideInfo } from "lucide-react";
-import { useParams } from "next/navigation";
 import pluralize from "pluralize";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FieldValues } from "react-hook-form";
@@ -1637,9 +1642,7 @@ function StudentDetailDialog() {
 }
 
 export default function GradebookTable() {
-  const { course_id } = useParams();
   const students = useAllStudentRoles();
-  const courseController = useCourseController();
   const gradebookController = useGradebookController();
   const { data: gradebookColumns = [] } = useGradebookColumnsQuery();
   const [gradebookDataEpoch, setGradebookDataEpoch] = useState(0);
@@ -1667,6 +1670,7 @@ export default function GradebookTable() {
       filterVal.set(sid, sFilt);
     }
     return { sortVal, filterVal };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gradebookDataEpoch bumps on subscribeToData; controller ref is stable
   }, [gradebookColumns, gradebookDataEpoch, gradebookController]);
 
   const isInstructor = useIsInstructor();
@@ -1677,21 +1681,16 @@ export default function GradebookTable() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [isAutoLayouting, setIsAutoLayouting] = useState(false);
 
-  // Fetch class sections
-  const { data: classSections } = useList<ClassSection>({
-    resource: "class_sections",
-    filters: [{ field: "class_id", operator: "eq", value: course_id as string }],
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    pagination: {
-      pageSize: 1000
-    }
-  });
+  const { data: classSectionsData = [] } = useClassSectionsQuery();
+  const classSections = useMemo(() => ({ data: classSectionsData }), [classSectionsData]);
+  const { data: labSections = [] } = useLabSectionsQuery();
 
-  // Get lab sections from course controller
-  const { data: labSections } = courseController.listLabSections();
+  // Data for gradebook export
+  const { data: exportRoster = [] } = useUserRolesQuery();
+  const { data: exportTags = [] } = useTagsQuery();
+  const { data: exportProfiles = [] } = useProfilesQuery();
+  const exportLabSections = labSections as { id: number; name: string }[];
+  const exportClassSections = classSectionsData as { id: number; name: string }[];
 
   // Map profile id to section ids and names
   const profileIdToSectionData = useMemo(() => {
@@ -2087,7 +2086,6 @@ export default function GradebookTable() {
     return cols;
   }, [
     profileIdToSectionData,
-    gradebookController,
     groupedColumns,
     collapsedGroups,
     findBestColumnToShow,
@@ -2122,7 +2120,7 @@ export default function GradebookTable() {
     const leaf = table.getVisibleLeafColumns();
     const idx = leaf.findIndex((c) => c.id.startsWith("grade_"));
     return idx === -1 ? [] : leaf.slice(idx);
-  }, [table, columns, collapsedGroups, cachedColumnsKey]);
+  }, [table]);
   const scrollableWidth = scrollableLeafColumns.length * GRADE_COL_WIDTH;
 
   // Virtualization setup
@@ -2216,6 +2214,7 @@ export default function GradebookTable() {
   // Measure the tallest leaf header cell so every header in the row matches.
   // Runs after every render because column virtualization swaps cells on scroll.
   // Uses a 2px tolerance to prevent oscillation from border/padding rounding.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional post-layout measure when virtualized headers swap (not only when leafHeaderHeight changes)
   useLayoutEffect(() => {
     if (!headerRef.current) return;
     const rows = headerRef.current.querySelectorAll("tr");
@@ -2883,7 +2882,13 @@ export default function GradebookTable() {
               variant="outline"
               size="sm"
               onClick={() => {
-                const csv = gradebookController.exportGradebook(courseController);
+                const csv = gradebookController.exportGradebook({
+                  roster: exportRoster,
+                  labSections: exportLabSections,
+                  classSections: exportClassSections,
+                  allTags: exportTags,
+                  profiles: exportProfiles
+                });
                 const blob = new Blob(
                   [
                     csv

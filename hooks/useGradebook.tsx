@@ -1809,36 +1809,34 @@ export class GradebookController {
   ): Promise<void> {
     return this.table.updateGradebookEntry(gcs_id, updates);
   }
-  exportGradebook(courseController: CourseController) {
-    const roster = courseController.getRosterWithUserInfo().data;
+  exportGradebook(deps: {
+    roster: UserRoleWithPrivateProfileAndUser[];
+    labSections: { id: number; name: string }[];
+    classSections: { id: number; name: string }[];
+    allTags: { profile_id: string; name: string }[];
+    profiles: { id: string; name: string | null }[];
+  }) {
     const columns = [...this.gradebook_columns.rows];
     columns.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
 
-    // Get class sections and lab sections for lookups
-    const classSections = courseController.classSections.list().data;
-    const labSections = courseController.listLabSections().data;
-
-    const result = [];
+    const result: (string | number | null)[][] = [];
     result.push(["Name", "Email", "SID", "Course Section", "Lab Section", "Tags", ...columns.map((col) => col.name)]);
-    roster.forEach((student) => {
-      if (student.disabled) return; //Skip dropped students
+    deps.roster.forEach((student) => {
+      if (student.disabled) return;
       const studentGradebookController = this.getStudentGradebookController(student.private_profile_id);
-      const userProfile = courseController.profiles.getById(student.private_profile_id);
+      const userProfile = deps.profiles.find((p) => p.id === student.private_profile_id);
 
-      // Get section names
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const classSection = classSections.find((s: any) => s.id === student.class_section_id);
-      const labSection = labSections.find((s) => s.id === student.lab_section_id);
+      const classSection = deps.classSections.find((s) => s.id === student.class_section_id);
+      const labSection = deps.labSections.find((s) => s.id === student.lab_section_id);
       const courseSectionName = classSection?.name ?? "";
       const labSectionName = labSection?.name ?? "";
 
-      // Get tags for this student
-      const tags = courseController.getTagsForProfile(student.private_profile_id).data || [];
+      const tags = deps.allTags.filter((t) => t.profile_id === student.private_profile_id);
       const tagNames = tags.map((tag) => tag.name).join(" ");
 
       const gradesForStudent = columns.map((col) => getScore(studentGradebookController.getGradesForStudent(col.id)));
       const row = [
-        userProfile.data.name ?? "Unknown",
+        userProfile?.name ?? "Unknown",
         student.users.email ?? "Unknown",
         student.users.sis_user_id,
         courseSectionName,

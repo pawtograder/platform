@@ -618,6 +618,46 @@ export async function prefetchCourseData(
     queryClient.setQueryData(["course", course_id, "surveys"], data.surveys);
   }
 
+  // Additional tables that weren't in the original fetchCourseControllerData but are
+  // consumed by TanStack Query hooks. Fetch them directly to avoid loading flashes.
+  const serviceClient = await createClientWithCaching({ revalidate: 60 });
+
+  const [surveySeriesResult, livePollsResult, calendarEventsResult, staffSettingsResult] = await Promise.all([
+    isStaff ? serviceClient.from("survey_series").select("*").eq("class_id", course_id) : null,
+    serviceClient.from("live_polls").select("*").eq("class_id", course_id),
+    isStaff
+      ? serviceClient
+          .from("calendar_events")
+          .select("*")
+          .eq("class_id", course_id)
+          .order("start_time", { ascending: true })
+          .limit(1000)
+      : serviceClient
+          .from("calendar_events")
+          .select("*")
+          .eq("class_id", course_id)
+          .eq("calendar_type", "office_hours")
+          .order("start_time", { ascending: true })
+          .limit(1000),
+    isStaff ? serviceClient.from("class_staff_settings").select("*").eq("class_id", course_id) : null
+  ]);
+
+  if (surveySeriesResult?.data) {
+    queryClient.setQueryData(["course", course_id, "survey_series"], surveySeriesResult.data);
+  }
+  if (livePollsResult?.data) {
+    queryClient.setQueryData(["course", course_id, "live_polls"], livePollsResult.data);
+  }
+  if (calendarEventsResult?.data) {
+    queryClient.setQueryData(
+      ["course", course_id, "calendar_events", isStaff ? "all" : "office_hours"],
+      calendarEventsResult.data
+    );
+  }
+  if (staffSettingsResult?.data) {
+    queryClient.setQueryData(["course", course_id, "class_staff_settings"], staffSettingsResult.data);
+  }
+
   return dehydrate(queryClient);
 }
 

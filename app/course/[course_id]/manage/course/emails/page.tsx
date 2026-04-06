@@ -26,7 +26,8 @@ import { addHours, addMinutes } from "date-fns";
 import HistoryPage from "./historyList";
 import { formatInTimeZone } from "date-fns-tz";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useCourse } from "@/hooks/useCourseController";
+import { useLabSectionsQuery, useLabSectionMeetingsQuery, useUserRolesQuery } from "@/hooks/course-data";
 import { LuCheck } from "react-icons/lu";
 import MdEditor from "@/components/ui/md-editor";
 /* types */
@@ -79,6 +80,10 @@ function EmailsInnerPage() {
   const { data: tags = [] } = useTagsQuery();
   const { role: enrollment } = useClassProfiles();
   const timeZoneContext = useTimeZone();
+  const course = useCourse();
+  const { data: labSectionsData = [] } = useLabSectionsQuery();
+  const { data: labSectionMeetingsData = [] } = useLabSectionMeetingsQuery();
+  const { data: userRolesForDueDate = [] } = useUserRolesQuery();
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
   const [labSectionIds, setLabSectionIds] = useState<number[]>([]);
   const [ccList, setCcList] = useState<{ email: string; user_id: string }[]>([]);
@@ -284,8 +289,6 @@ function EmailsInnerPage() {
     filters: [{ field: "assignment_id", operator: "eq", value: assignment?.id }]
   });
 
-  const courseController = useCourseController();
-
   /**
    * Adds all mail to the "preview" section based on the current values in form.
    */
@@ -384,16 +387,28 @@ function EmailsInnerPage() {
       return null;
     }
 
-    let effectiveDueDate: Date;
+    let effectiveDueDate: Date = new Date(assignment.due_date);
 
-    // Calculate the lab-aware effective due date if CourseController is loaded
-    if (courseController.labSectionMeetings.ready) {
-      effectiveDueDate = courseController.calculateEffectiveDueDate(assignment, {
-        studentPrivateProfileId: profile_id
-      });
-    } else {
-      // Fallback to original due date if CourseController not loaded
-      effectiveDueDate = new Date(assignment.due_date);
+    if (assignment.minutes_due_after_lab && labSectionsData.length > 0 && labSectionMeetingsData.length > 0) {
+      const userRole = userRolesForDueDate.find((r) => r.private_profile_id === profile_id);
+      const labSectionId = userRole?.lab_section_id;
+      if (labSectionId) {
+        const labSection = labSectionsData.find((s) => s.id === labSectionId);
+        if (labSection) {
+          const assignmentDueDate = new Date(assignment.due_date);
+          const assignmentDueDateStr = `${assignmentDueDate.getFullYear()}-${String(assignmentDueDate.getMonth() + 1).padStart(2, "0")}-${String(assignmentDueDate.getDate()).padStart(2, "0")}`;
+          const relevantMeetings = labSectionMeetingsData
+            .filter((m) => m.lab_section_id === labSectionId && !m.cancelled && m.meeting_date < assignmentDueDateStr)
+            .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
+          if (relevantMeetings.length > 0) {
+            const labMeetingDate = new TZDate(
+              relevantMeetings[0].meeting_date + "T" + labSection.end_time,
+              course?.time_zone ?? "America/New_York"
+            );
+            effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
+          }
+        }
+      }
     }
 
     // Apply due date exceptions on top of the lab-aware due date
