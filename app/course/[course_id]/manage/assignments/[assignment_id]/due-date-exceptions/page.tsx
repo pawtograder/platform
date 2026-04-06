@@ -679,14 +679,17 @@ export default function DueDateExceptions() {
           if (studentLabSectionId) {
             const labSection = labSections.find((s) => s.id === studentLabSectionId);
             if (labSection) {
+              // Match useAssignmentDueDate: compare Date instances so meeting_date (YYYY-MM-DD) isn't
+              // paired with a calendar day derived from the browser's local timezone.
               const assignmentDueDate = new Date(assignment.due_date);
-              const assignmentDueDateStr = `${assignmentDueDate.getFullYear()}-${String(assignmentDueDate.getMonth() + 1).padStart(2, "0")}-${String(assignmentDueDate.getDate()).padStart(2, "0")}`;
               const relevantMeetings = labSectionMeetings
                 .filter(
                   (m) =>
-                    m.lab_section_id === studentLabSectionId && !m.cancelled && m.meeting_date < assignmentDueDateStr
+                    m.lab_section_id === studentLabSectionId &&
+                    !m.cancelled &&
+                    new Date(m.meeting_date) < assignmentDueDate
                 )
-                .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
+                .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
               if (relevantMeetings.length > 0) {
                 const mostRecentLabMeeting = relevantMeetings[0];
                 const labMeetingDate = new TZDate(

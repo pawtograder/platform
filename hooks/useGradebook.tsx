@@ -6,7 +6,8 @@ import {
   Assignment,
   GradebookColumn,
   GradebookColumnDependencies,
-  GradebookColumnStudent
+  GradebookColumnStudent,
+  UserRoleWithPrivateProfileAndUser
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
@@ -1835,14 +1836,14 @@ export class GradebookController {
       const tagNames = tags.map((tag) => tag.name).join(" ");
 
       const gradesForStudent = columns.map((col) => getScore(studentGradebookController.getGradesForStudent(col.id)));
-      const row = [
+      const row: (string | number | null)[] = [
         userProfile?.name ?? "Unknown",
         student.users.email ?? "Unknown",
-        student.users.sis_user_id,
+        student.users.sis_user_id ?? null,
         courseSectionName,
         labSectionName,
         tagNames,
-        ...gradesForStudent
+        ...gradesForStudent.map((g) => g ?? null)
       ];
       result.push(row);
     });

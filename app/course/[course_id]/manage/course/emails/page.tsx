@@ -26,7 +26,6 @@ import { addHours, addMinutes } from "date-fns";
 import HistoryPage from "./historyList";
 import { formatInTimeZone } from "date-fns-tz";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
 import { useLabSectionsQuery, useLabSectionMeetingsQuery, useUserRolesQuery } from "@/hooks/course-data";
 import { LuCheck } from "react-icons/lu";
 import MdEditor from "@/components/ui/md-editor";
@@ -80,7 +79,6 @@ function EmailsInnerPage() {
   const { data: tags = [] } = useTagsQuery();
   const { role: enrollment } = useClassProfiles();
   const timeZoneContext = useTimeZone();
-  const course = useCourse();
   const { data: labSectionsData = [] } = useLabSectionsQuery();
   const { data: labSectionMeetingsData = [] } = useLabSectionMeetingsQuery();
   const { data: userRolesForDueDate = [] } = useUserRolesQuery();
@@ -233,14 +231,6 @@ function EmailsInnerPage() {
     }
   });
 
-  const { data: labSectionsData } = useList<LabSection>({
-    resource: "lab_sections",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    queryOptions: {
-      enabled: !!course_id
-    }
-  });
-
   // Fetch lab section leaders separately
   const { data: labSectionLeadersData } = useList({
     resource: "lab_section_leaders",
@@ -248,17 +238,17 @@ function EmailsInnerPage() {
       select: "lab_section_id, profile_id"
     },
     filters:
-      labSectionsData?.data && labSectionsData.data.length > 0
+      labSectionsData.length > 0
         ? [
             {
               operator: "in",
               field: "lab_section_id",
-              value: labSectionsData.data.map((section) => section.id)
+              value: labSectionsData.map((section) => section.id)
             }
           ]
         : [],
     queryOptions: {
-      enabled: !!labSectionsData?.data && labSectionsData.data.length > 0
+      enabled: labSectionsData.length > 0
     }
   });
 
@@ -337,7 +327,7 @@ function EmailsInnerPage() {
     const class_section = classSectionsData?.data.find(
       (section) => userRolesData?.data.find((user) => user.user_id === user_id)?.class_section_id === section.id
     );
-    const lab_section = labSectionsData?.data.find(
+    const lab_section = labSectionsData.find(
       (section) => userRolesData?.data.find((user) => user.user_id === user_id)?.lab_section_id === section.id
     );
     let inserted_text = text;
@@ -396,14 +386,18 @@ function EmailsInnerPage() {
         const labSection = labSectionsData.find((s) => s.id === labSectionId);
         if (labSection) {
           const assignmentDueDate = new Date(assignment.due_date);
-          const assignmentDueDateStr = `${assignmentDueDate.getFullYear()}-${String(assignmentDueDate.getMonth() + 1).padStart(2, "0")}-${String(assignmentDueDate.getDate()).padStart(2, "0")}`;
           const relevantMeetings = labSectionMeetingsData
-            .filter((m) => m.lab_section_id === labSectionId && !m.cancelled && m.meeting_date < assignmentDueDateStr)
-            .sort((a, b) => b.meeting_date.localeCompare(a.meeting_date));
+            .filter(
+              (m) =>
+                m.lab_section_id === labSectionId &&
+                !m.cancelled &&
+                new Date(m.meeting_date) < assignmentDueDate
+            )
+            .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
           if (relevantMeetings.length > 0) {
             const labMeetingDate = new TZDate(
               relevantMeetings[0].meeting_date + "T" + labSection.end_time,
-              course?.time_zone ?? "America/New_York"
+              course?.data.time_zone ?? "America/New_York"
             );
             effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
           }
@@ -752,7 +746,7 @@ function EmailsInnerPage() {
                         })
                       );
                     }}
-                    options={labSectionsData?.data.map((section) => {
+                    options={labSectionsData.map((section: LabSection) => {
                       // Get leaders for this section
                       const sectionLeaders =
                         labSectionLeadersData?.data
