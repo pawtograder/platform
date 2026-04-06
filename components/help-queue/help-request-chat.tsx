@@ -41,7 +41,7 @@ import VideoCallControls from "./video-call-controls";
 import WorkSessionHistory from "./work-session-history";
 
 import StudentGroupPicker from "@/components/ui/student-group-picker";
-import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import {
   useHelpRequest,
   useHelpRequestFeedback,
@@ -161,7 +161,7 @@ const HelpingTimer = ({ startTime }: { startTime: string }) => {
  */
 const HelpRequestAssignment = ({ request, compact = false }: { request: HelpRequest; compact?: boolean }) => {
   const { private_profile_id } = useClassProfiles();
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
 
   // Get student data using individual hooks
   const allHelpRequestStudents = useHelpRequestStudents();
@@ -947,7 +947,7 @@ const HelpRequestStudents = ({
 export default function HelpRequestChat({ request_id }: { request_id: number }) {
   const request = useHelpRequest(request_id);
   const { private_profile_id, role } = useClassProfiles();
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();

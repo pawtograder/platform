@@ -1,9 +1,9 @@
 "use client";
 
 import PersonName from "@/components/ui/person-name";
-import { useAllRubricChecks, useRubricCheck } from "@/hooks/useAssignment";
+import { useRubricChecksQuery } from "@/hooks/assignment-data";
 import { useCustomTable } from "@/hooks/useCustomTable";
-import { useTableControllerTableValues } from "@/lib/TableController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, HStack, Icon, Input, Table, Tag, Text, VStack } from "@chakra-ui/react";
@@ -17,7 +17,6 @@ import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import DiscordMessageLink from "@/components/discord/discord-message-link";
-import { useCourseController } from "@/hooks/useCourseController";
 
 // Status configuration
 const statusConfig: Record<
@@ -161,7 +160,11 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
     row.submission_file_comments?.[0]?.rubric_check_id ||
     row.submission_artifact_comments?.[0]?.rubric_check_id ||
     row.submission_comments?.[0]?.rubric_check_id;
-  const rubricCheck = useRubricCheck(rubricCheckId);
+  const { data: allRubricChecks = [] } = useRubricChecksQuery();
+  const rubricCheck = useMemo(
+    () => allRubricChecks.find((c) => c.id === rubricCheckId),
+    [allRubricChecks, rubricCheckId]
+  );
   return <Text>{rubricCheck?.name}</Text>;
 }
 
@@ -174,11 +177,10 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
  */
 export default function RegradeRequestsTable() {
   const { assignment_id, course_id } = useParams();
-  const courseController = useCourseController();
-  const profiles = useTableControllerTableValues(courseController.profiles);
+  const { data: profiles = [] } = useProfilesQuery();
 
   // Get all rubric checks for the assignment
-  const allRubricChecks = useAllRubricChecks();
+  const { data: allRubricChecks = [] } = useRubricChecksQuery();
 
   // Create options for status filter
   const statusOptions = useMemo(

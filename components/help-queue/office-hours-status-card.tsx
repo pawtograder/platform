@@ -1,6 +1,6 @@
 "use client";
 
-import { useHelpQueueAssignments, useHelpQueues, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueueAssignmentsQuery, useHelpQueuesQuery, useHelpRequestsQuery } from "@/hooks/office-hours-data";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import {
@@ -35,9 +35,9 @@ export function OfficeHoursStatusCard() {
   const { role } = useClassProfiles();
   const featureEnabled = useFeatureEnabled("office-hours");
   const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
-  const allHelpQueues = useHelpQueues();
-  const allHelpQueueAssignments = useHelpQueueAssignments();
-  const allHelpRequests = useHelpRequests();
+  const { data: allHelpQueues = [] } = useHelpQueuesQuery();
+  const { data: allHelpQueueAssignments = [] } = useHelpQueueAssignmentsQuery();
+  const { data: allHelpRequests = [] } = useHelpRequestsQuery();
 
   // Filter to available and active queues
   const helpQueues = allHelpQueues.filter((queue) => queue.available && queue.is_active);
@@ -248,9 +248,10 @@ export function OfficeHoursStatusCard() {
       ) : (
         <Stack spaceY={4}>
           {queuesWithActiveStaff.map((queue) => {
-            const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
+            const queueAssignments = activeAssignmentsByQueue[queue.id] || activeAssignments.slice(0, 0);
             const openRequestCount = requestCountsByQueue[queue.id] || 0;
-            const activeStaffIds = queueAssignments.map((a) => a.ta_profile_id);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const activeStaffIds = queueAssignments.map((a: any) => a.ta_profile_id as string);
 
             return (
               <CardRoot key={queue.id}>
@@ -278,7 +279,7 @@ export function OfficeHoursStatusCard() {
                             Staff working:
                           </Text>
                           <HStack gap={1}>
-                            {activeStaffIds.slice(0, 5).map((staffId, index) => (
+                            {activeStaffIds.slice(0, 5).map((staffId: string, index: number) => (
                               <PersonAvatar key={`staff-${staffId}-${index}`} uid={staffId} size="sm" />
                             ))}
                             {activeStaffIds.length > 5 && (

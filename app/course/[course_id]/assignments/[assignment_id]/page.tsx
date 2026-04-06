@@ -11,14 +11,9 @@ import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
+import { useAssignmentGroupsQuery, useRepositoriesQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
-import {
-  Repository,
-  SelfReviewSettings,
-  SubmissionWithGraderResultsAndReview,
-  UserRole
-} from "@/utils/supabase/DatabaseTypes";
+import { SelfReviewSettings, SubmissionWithGraderResultsAndReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Alert, Box, Flex, Grid, GridItem, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
@@ -34,20 +29,24 @@ export default function AssignmentPage() {
   const { private_profile_id } = useClassProfiles();
   const { role: enrollment } = useClassProfiles();
   const { assignment } = useAssignmentController();
-  const { repositories: repositoriesController, assignmentGroupsWithMembers, course } = useCourseController();
+  const { course } = useCourseController();
   const autograderData = useRef<Database["public"]["Functions"]["get_submissions_limits"]["Returns"] | null>(null);
-  type AssignmentGroup = (typeof assignmentGroupsWithMembers.rows)[number];
-  const ourAssignmentGroupPredicate = useMemo(() => {
-    return (group: AssignmentGroup) =>
-      group.assignment_groups_members.some(
-        (member) => member.profile_id === private_profile_id && member.assignment_id === Number(assignment_id)
-      );
-  }, [private_profile_id, assignment_id]);
-  const assignmentGroup = useFindTableControllerValue(assignmentGroupsWithMembers, ourAssignmentGroupPredicate);
-  const repositoriesPredicate = useMemo(() => {
-    return (repository: Repository) => repository.assignment_id === Number(assignment_id);
-  }, [assignment_id]);
-  const repositories = useListTableControllerValues(repositoriesController, repositoriesPredicate);
+  const { data: allGroups = [] } = useAssignmentGroupsQuery();
+  const { data: allRepos = [] } = useRepositoriesQuery();
+  const assignmentGroup = useMemo(
+    () =>
+      allGroups.find((group) =>
+        group.assignment_groups_members.some(
+          (member: { profile_id: string; assignment_id?: number }) =>
+            member.profile_id === private_profile_id && group.assignment_id === Number(assignment_id)
+        )
+      ),
+    [allGroups, private_profile_id, assignment_id]
+  );
+  const repositories = useMemo(
+    () => allRepos.filter((repository) => repository.assignment_id === Number(assignment_id)),
+    [allRepos, assignment_id]
+  );
   const submissionsFilters = useMemo(() => {
     const filters: CrudFilter[] = [];
     filters.push({ field: "assignment_id", operator: "eq", value: assignment_id });

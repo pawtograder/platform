@@ -7,7 +7,7 @@ import Link from "@/components/ui/link";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
 import { useIsGrader, useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAssignments, useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentsQuery, useSurveyUpdate, useCourseDataContext } from "@/hooks/course-data";
 import { useTrackEvent } from "@/hooks/useTrackEvent";
 import type { Survey, SurveyWithCounts } from "@/types/survey";
 import { Badge, Box, Icon, Table, Text } from "@chakra-ui/react";
@@ -23,11 +23,12 @@ type SurveysTableProps = {
 
 export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
   const trackEvent = useTrackEvent();
-  const controller = useCourseController();
+  const surveyUpdate = useSurveyUpdate();
+  const { supabase } = useCourseDataContext();
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
   const isInstructor = useIsInstructor();
   const isGrader = useIsGrader();
-  const assignments = useAssignments();
+  const { data: assignments = [] } = useAssignmentsQuery();
 
   // Filter options for instructor view
   const filterOptions = useMemo(
@@ -152,10 +153,13 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
           validationErrors = `Invalid JSON configuration: ${error instanceof Error ? error.message : "Unknown error"}`;
         }
 
-        // Update survey status using TableController - auto-refreshes UI via realtime
-        await controller.surveys.update(survey.id, {
-          status: validationErrors ? "draft" : "published",
-          validation_errors: validationErrors
+        // Update survey status using TanStack mutation - auto-refreshes UI via cache invalidation
+        await surveyUpdate.mutateAsync({
+          id: survey.id,
+          values: {
+            status: validationErrors ? "draft" : "published",
+            validation_errors: validationErrors
+          }
         });
 
         // Dismiss loading toast and show success
@@ -191,7 +195,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         });
       }
     },
-    [courseId, trackEvent, controller]
+    [courseId, trackEvent, surveyUpdate]
   );
 
   const handleClose = useCallback(
@@ -204,9 +208,10 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
       });
 
       try {
-        // Update survey status using TableController - auto-refreshes UI via realtime
-        await controller.surveys.update(survey.id, {
-          status: "closed"
+        // Update survey status using TanStack mutation - auto-refreshes UI via cache invalidation
+        await surveyUpdate.mutateAsync({
+          id: survey.id,
+          values: { status: "closed" }
         });
 
         // Dismiss loading toast and show success
@@ -232,7 +237,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         });
       }
     },
-    [courseId, trackEvent, controller]
+    [courseId, trackEvent, surveyUpdate]
   );
 
   const handleDelete = useCallback(
@@ -266,7 +271,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
       try {
         // Soft delete survey and responses atomically via RPC
         // The RPC sets deleted_at which triggers realtime broadcast and auto-refreshes UI
-        const { error } = await controller.client.rpc("soft_delete_survey", {
+        const { error } = await supabase.rpc("soft_delete_survey", {
           p_survey_id: survey.id,
           p_survey_logical_id: survey.survey_id
         });
@@ -301,7 +306,7 @@ export default function SurveysTable({ surveys, courseId }: SurveysTableProps) {
         });
       }
     },
-    [courseId, trackEvent, controller]
+    [courseId, trackEvent, supabase]
   );
 
   return (

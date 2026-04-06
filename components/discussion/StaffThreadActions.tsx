@@ -3,7 +3,7 @@
 import { Field } from "@/components/ui/field";
 import { SelectContent, SelectItem, SelectRoot, SelectTrigger, SelectValueText } from "@/components/ui/select";
 import { toaster } from "@/components/ui/toaster";
-import { useDiscussionTopics } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery } from "@/hooks/course-data";
 import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { createListCollection } from "@chakra-ui/react";
 import { useCallback, useMemo, useState } from "react";
@@ -15,7 +15,7 @@ interface StaffThreadActionsProps {
 }
 
 export function StaffThreadActions({ thread, onUpdateAction }: StaffThreadActionsProps) {
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
   const [isUpdatingTopic, setIsUpdatingTopic] = useState(false);
   const supabase = useMemo(() => createClient(), []);
 

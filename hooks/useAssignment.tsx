@@ -1,61 +1,56 @@
 "use client";
 import {
   AssignmentWithRubricsAndReferences,
-  RegradeRequest,
   ReviewAssignmentParts,
   ReviewAssignments,
-  Rubric,
-  RubricCheck,
-  RubricCheckReference,
-  RubricCriteria,
-  RubricPart,
   RubricReviewRound,
   Submission
 } from "@/utils/supabase/DatabaseTypes";
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import type { AssignmentControllerInitialData } from "@/lib/ssrUtils";
-import TableController, {
-  useFindTableControllerValue,
-  useListTableControllerValues,
-  useTableControllerTableValues,
-  useTableControllerValueById
-} from "@/lib/TableController";
+import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
 import { useCourseController } from "./useCourseController";
+import {
+  useSubmissionsQuery,
+  useAssignmentScopedGroupsQuery,
+  useReviewAssignmentsQuery,
+  useRegradeRequestsQuery,
+  useLeaderboardQuery,
+  useRubricsQuery,
+  useRubricPartsQuery,
+  useRubricCriteriaQuery,
+  useRubricChecksQuery,
+  useRubricCheckReferencesQuery
+} from "@/hooks/assignment-data";
 
 export function useSubmission(submission_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const [submission, setSubmission] = useState<Submission | undefined>(undefined);
-  useEffect(() => {
-    if (!submission_id) {
-      setSubmission(undefined);
-      return;
-    }
-    const { data, unsubscribe } = controller.submissions.getById(submission_id, (data) => {
-      setSubmission(data);
-    });
-    setSubmission(data);
-    return () => unsubscribe();
-  }, [controller, submission_id]);
-  return submission;
+  const { data } = useSubmissionsQuery();
+  return useMemo(
+    () => (submission_id ? (data ?? []).find((s) => s.id === submission_id) : undefined),
+    [data, submission_id]
+  ) as Submission | undefined;
 }
 
 export function useAssignmentGroups() {
-  const controller = useAssignmentController();
-  return useTableControllerTableValues(controller.assignmentGroups);
+  const { data } = useAssignmentScopedGroupsQuery();
+  return data ?? [];
 }
 
 export function useAssignmentGroup(assignment_group_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  return useTableControllerValueById(controller.assignmentGroups, assignment_group_id);
+  const { data } = useAssignmentScopedGroupsQuery();
+  return useMemo(
+    () => (assignment_group_id ? (data ?? []).find((g) => g.id === assignment_group_id) : undefined),
+    [data, assignment_group_id]
+  );
 }
 
 export function useSelfReviewSettings() {
@@ -74,24 +69,30 @@ export function useGraderPseudonymousMode() {
 }
 
 export function useRubricCheck(rubric_check_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  return useTableControllerValueById(controller.rubricChecksController, rubric_check_id);
+  const { data } = useRubricChecksQuery();
+  return useMemo(
+    () => (rubric_check_id ? (data ?? []).find((c) => c.id === rubric_check_id) : undefined),
+    [data, rubric_check_id]
+  );
 }
 
 export function useRubricCriteria(rubric_criteria_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  return useTableControllerValueById(controller.rubricCriteriaController, rubric_criteria_id);
+  const { data } = useRubricCriteriaQuery();
+  return useMemo(
+    () => (rubric_criteria_id ? (data ?? []).find((c) => c.id === rubric_criteria_id) : undefined),
+    [data, rubric_criteria_id]
+  );
 }
 export function useRubricById(rubric_id: number | undefined | null) {
-  const controller = useAssignmentController();
-  return useTableControllerValueById(controller.rubricsController, rubric_id);
+  const { data } = useRubricsQuery();
+  return useMemo(() => (rubric_id ? (data ?? []).find((r) => r.id === rubric_id) : undefined), [data, rubric_id]);
 }
 
 /**
  * Returns a rubric with its parts populated (no deeper nesting)
  */
 export function useRubricWithParts(rubric_id: number | null | undefined) {
-  const rubric = useTableControllerValueById(useAssignmentController().rubricsController, rubric_id);
+  const rubric = useRubricById(rubric_id);
   const parts = useRubricParts(rubric_id);
 
   return useMemo(() => {
@@ -104,9 +105,8 @@ export function useRubricWithParts(rubric_id: number | null | undefined) {
 }
 
 export function useRubric(review_round: RubricReviewRound) {
-  const findRubricPredicate = useCallback((rubric: Rubric) => rubric.review_round === review_round, [review_round]);
-  const controller = useAssignmentController();
-  return useFindTableControllerValue(controller.rubricsController, findRubricPredicate);
+  const { data } = useRubricsQuery();
+  return useMemo(() => (data ?? []).find((r) => r.review_round === review_round), [data, review_round]);
 }
 
 /**
@@ -126,76 +126,62 @@ export function useRubricWithPartsByReviewRound(review_round: RubricReviewRound)
 }
 
 export function useRubrics() {
-  const controller = useAssignmentController();
-  return useTableControllerTableValues(controller.rubricsController);
+  const { data } = useRubricsQuery();
+  return data ?? [];
 }
 
 /**
  * Returns all rubric parts for a specific rubric
  */
 export function useRubricParts(rubric_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findRubricPartsPredicate = useCallback(
-    (rubric_part: RubricPart) => rubric_part.rubric_id === rubric_id,
-    [rubric_id]
-  );
-  return useListTableControllerValues(controller.rubricPartsController, findRubricPartsPredicate);
+  const { data } = useRubricPartsQuery();
+  return useMemo(() => (rubric_id ? (data ?? []).filter((p) => p.rubric_id === rubric_id) : []), [data, rubric_id]);
 }
 
 /**
  * Returns all rubric criteria for a specific rubric
  */
 export function useRubricCriteriaByRubric(rubric_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findRubricCriteriaPredicate = useCallback(
-    (rubric_criteria: RubricCriteria) => rubric_criteria.rubric_id === rubric_id,
-    [rubric_id]
-  );
-  return useListTableControllerValues(controller.rubricCriteriaController, findRubricCriteriaPredicate);
+  const { data } = useRubricCriteriaQuery();
+  return useMemo(() => (rubric_id ? (data ?? []).filter((c) => c.rubric_id === rubric_id) : []), [data, rubric_id]);
 }
 
 /**
  * Returns all rubric checks for a specific rubric
  */
 export function useRubricChecksByRubric(rubric_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findRubricChecksPredicate = useCallback(
-    (rubric_check: RubricCheck) => rubric_check.rubric_id === rubric_id,
-    [rubric_id]
-  );
-  return useListTableControllerValues(controller.rubricChecksController, findRubricChecksPredicate);
+  const { data } = useRubricChecksQuery();
+  return useMemo(() => (rubric_id ? (data ?? []).filter((c) => c.rubric_id === rubric_id) : []), [data, rubric_id]);
 }
 
 /**
  * Returns all rubric criteria for a specific rubric part
  */
 export function useRubricCriteriaByPart(rubric_part_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findRubricCriteriaPredicate = useCallback(
-    (rubric_criteria: RubricCriteria) => rubric_criteria.rubric_part_id === rubric_part_id,
-    [rubric_part_id]
+  const { data } = useRubricCriteriaQuery();
+  return useMemo(
+    () => (rubric_part_id ? (data ?? []).filter((c) => c.rubric_part_id === rubric_part_id) : []),
+    [data, rubric_part_id]
   );
-  return useListTableControllerValues(controller.rubricCriteriaController, findRubricCriteriaPredicate);
 }
 
 /**
  * Returns all rubric checks for a specific rubric criteria
  */
 export function useRubricChecksByCriteria(rubric_criteria_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findRubricChecksPredicate = useCallback(
-    (rubric_check: RubricCheck) => rubric_check.rubric_criteria_id === rubric_criteria_id,
-    [rubric_criteria_id]
+  const { data } = useRubricChecksQuery();
+  return useMemo(
+    () => (rubric_criteria_id ? (data ?? []).filter((c) => c.rubric_criteria_id === rubric_criteria_id) : []),
+    [data, rubric_criteria_id]
   );
-  return useListTableControllerValues(controller.rubricChecksController, findRubricChecksPredicate);
 }
 
 /**
  * Returns all rubric checks for the assignment (not filtered by criteria)
  */
 export function useAllRubricChecks() {
-  const controller = useAssignmentController();
-  return useTableControllerTableValues(controller.rubricChecksController);
+  const { data } = useRubricChecksQuery();
+  return data ?? [];
 }
 
 export function useReviewAssignmentRubricParts(review_assignment_id: number | null | undefined) {
@@ -227,14 +213,8 @@ export function useReviewAssignmentRubricParts(review_assignment_id: number | nu
   return parts;
 }
 export function useActiveSubmissions() {
-  const controller = useAssignmentController();
-  const [submissions, setSubmissions] = useState<Submission[]>(controller.submissions.rows);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.submissions.list(setSubmissions);
-    setSubmissions(data);
-    return () => unsubscribe();
-  }, [controller]);
-  return submissions;
+  const { data } = useSubmissionsQuery();
+  return (data ?? []) as Submission[];
 }
 export function useReviewAssignment(review_assignment_id: number | null | undefined) {
   const controller = useAssignmentController();
@@ -255,18 +235,16 @@ export function useReviewAssignment(review_assignment_id: number | null | undefi
 }
 
 export function useMyReviewAssignments(submission_id?: number) {
-  const controller = useAssignmentController();
+  const { data } = useReviewAssignmentsQuery();
   const { private_profile_id } = useClassProfiles();
-  const filter = useCallback(
-    (reviewAssignment: ReviewAssignments) => {
-      return (
-        reviewAssignment.assignee_profile_id === private_profile_id &&
-        (submission_id ? reviewAssignment.submission_id === submission_id : true)
-      );
-    },
-    [private_profile_id, submission_id]
+  return useMemo(
+    () =>
+      (data ?? []).filter(
+        (ra) =>
+          ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
+      ),
+    [data, private_profile_id, submission_id]
   );
-  return useListTableControllerValues(controller.reviewAssignments, filter);
 }
 
 /**
@@ -276,46 +254,33 @@ export function useMyReviewAssignments(submission_id?: number) {
  * @returns An array of referencing rubric checks, or undefined if no ID is provided
  */
 export function useReferencingRubricChecks(rubric_check_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findReferencingRubricChecksPredicate = useCallback(
-    (rubric_check_reference: RubricCheckReference) =>
-      rubric_check_reference.referencing_rubric_check_id === rubric_check_id,
-    [rubric_check_id]
+  const { data } = useRubricCheckReferencesQuery();
+  return useMemo(
+    () => (rubric_check_id ? (data ?? []).filter((ref) => ref.referencing_rubric_check_id === rubric_check_id) : []),
+    [data, rubric_check_id]
   );
-  const referencingCheckVals = useListTableControllerValues(
-    controller.rubricCheckReferencesController,
-    findReferencingRubricChecksPredicate
-  );
-  return referencingCheckVals;
 }
 
 export function useReferenceCheckRecordsFromCheck(rubric_check_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findReferencingRubricChecksPredicate = useCallback(
-    (rubric_check_reference: RubricCheckReference) =>
-      rubric_check_reference.referencing_rubric_check_id === rubric_check_id,
-    [rubric_check_id]
+  const { data } = useRubricCheckReferencesQuery();
+  return useMemo(
+    () => (rubric_check_id ? (data ?? []).filter((ref) => ref.referencing_rubric_check_id === rubric_check_id) : []),
+    [data, rubric_check_id]
   );
-  return useListTableControllerValues(controller.rubricCheckReferencesController, findReferencingRubricChecksPredicate);
 }
 
 export function useReferencedRubricChecks(rubric_check_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findReferencedRubricChecksPredicate = useCallback(
-    (rubric_check_reference: RubricCheckReference) =>
-      rubric_check_reference.referencing_rubric_check_id === rubric_check_id,
-    [rubric_check_id]
-  );
-  const referencedCheckVals = useListTableControllerValues(
-    controller.rubricCheckReferencesController,
-    findReferencedRubricChecksPredicate
-  );
-  const findChecksPredicate = useCallback(
-    (rubric_check: RubricCheck) =>
-      referencedCheckVals?.find((ref) => ref.referenced_rubric_check_id === rubric_check.id) !== undefined,
-    [referencedCheckVals]
-  );
-  return useListTableControllerValues(controller.rubricChecksController, findChecksPredicate);
+  const { data: refs } = useRubricCheckReferencesQuery();
+  const { data: checks } = useRubricChecksQuery();
+  return useMemo(() => {
+    if (!rubric_check_id) return [];
+    const referencedIds = new Set(
+      (refs ?? [])
+        .filter((ref) => ref.referencing_rubric_check_id === rubric_check_id)
+        .map((ref) => ref.referenced_rubric_check_id)
+    );
+    return (checks ?? []).filter((c) => referencedIds.has(c.id));
+  }, [refs, checks, rubric_check_id]);
 }
 /**
  * Subscribes to and returns all regrade requests for the current assignment.
@@ -325,8 +290,8 @@ export function useReferencedRubricChecks(rubric_check_id: number | null | undef
  * @returns An array of regrade requests associated with the current assignment.
  */
 export function useRegradeRequests() {
-  const controller = useAssignmentController();
-  return useTableControllerTableValues(controller.regradeRequests);
+  const { data } = useRegradeRequestsQuery();
+  return data ?? [];
 }
 
 /**
@@ -336,8 +301,11 @@ export function useRegradeRequests() {
  * @returns The regrade request with the specified ID, or `undefined` if not found or if the ID is not provided.
  */
 export function useRegradeRequest(regrade_request_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  return useTableControllerValueById(controller.regradeRequests, regrade_request_id);
+  const { data } = useRegradeRequestsQuery();
+  return useMemo(
+    () => (regrade_request_id ? (data ?? []).find((r) => r.id === regrade_request_id) : undefined),
+    [data, regrade_request_id]
+  );
 }
 
 /**
@@ -347,12 +315,11 @@ export function useRegradeRequest(regrade_request_id: number | null | undefined)
  * @returns An array of regrade requests for the given submission ID
  */
 export function useRegradeRequestsBySubmission(submission_id: number | null | undefined) {
-  const controller = useAssignmentController();
-  const findRegradeRequestsPredicate = useCallback(
-    (regrade_request: RegradeRequest) => regrade_request.submission_id === submission_id,
-    [submission_id]
+  const { data } = useRegradeRequestsQuery();
+  return useMemo(
+    () => (submission_id ? (data ?? []).filter((r) => r.submission_id === submission_id) : []),
+    [data, submission_id]
   );
-  return useListTableControllerValues(controller.regradeRequests, findRegradeRequestsPredicate);
 }
 
 /**
@@ -360,16 +327,16 @@ export function useRegradeRequestsBySubmission(submission_id: number | null | un
  * Uses the TableController for real-time updates.
  */
 export function useLeaderboard() {
-  const controller = useAssignmentController();
-  return useTableControllerTableValues(controller.leaderboard);
+  const { data } = useLeaderboardQuery();
+  return data ?? [];
 }
 
 /**
  * Returns a single leaderboard entry by its ID.
  */
 export function useLeaderboardEntry(id: number | null | undefined) {
-  const controller = useAssignmentController();
-  return useTableControllerValueById(controller.leaderboard, id);
+  const { data } = useLeaderboardQuery();
+  return useMemo(() => (id ? (data ?? []).find((e) => e.id === id) : undefined), [data, id]);
 }
 
 export class AssignmentController {

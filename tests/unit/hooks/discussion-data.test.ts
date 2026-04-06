@@ -8,43 +8,13 @@ import type { CourseDataContextValue } from "@/hooks/course-data/useCourseDataCo
 import { DiscussionDataProvider } from "@/hooks/discussion-data/useDiscussionDataContext";
 import type { DiscussionDataContextValue } from "@/hooks/discussion-data/useDiscussionDataContext";
 import type { BroadcastMessage } from "@/lib/TableController";
+import { setupMockBroadcastChannel, resetAllChannels } from "@/tests/mocks/MockBroadcastChannel";
 
 // ---------------------------------------------------------------------------
 // BroadcastChannel mock (jsdom has no native support)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const channelRegistry = new Map<string, Set<any>>();
-
-class MockBroadcastChannel {
-  name: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onmessage: ((ev: { data: any }) => void) | null = null;
-
-  constructor(name: string) {
-    this.name = name;
-    if (!channelRegistry.has(name)) channelRegistry.set(name, new Set());
-    channelRegistry.get(name)!.add(this);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  postMessage(data: any) {
-    const peers = channelRegistry.get(this.name);
-    if (!peers) return;
-    for (const peer of peers) {
-      if (peer !== this && peer.onmessage) {
-        peer.onmessage({ data: JSON.parse(JSON.stringify(data)) });
-      }
-    }
-  }
-
-  close() {
-    channelRegistry.get(this.name)?.delete(this);
-  }
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(globalThis as any).BroadcastChannel = MockBroadcastChannel;
+setupMockBroadcastChannel();
 
 // ---------------------------------------------------------------------------
 // Mock useLeaderContext
@@ -165,7 +135,7 @@ function createDiscussionWrapper(queryClient: QueryClient, discussionCtx: Discus
 
 describe("useDiscussionThreadTeasersQuery", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 
@@ -216,7 +186,7 @@ describe("useDiscussionThreadTeasersQuery", () => {
 
 describe("useDiscussionThreadQuery", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 

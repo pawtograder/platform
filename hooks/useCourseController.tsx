@@ -42,6 +42,27 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import {
+  useProfilesQuery,
+  useUserRolesQuery,
+  useTagsQuery,
+  useDiscussionThreadTeasersQuery,
+  useDiscussionThreadReadStatusQuery,
+  useLabSectionsQuery,
+  useLabSectionMeetingsQuery,
+  useClassSectionsQuery,
+  useSurveySeriesQuery,
+  useSurveysQuery,
+  useAssignmentsQuery,
+  useDiscussionTopicsQuery,
+  useDiscordChannelsQuery,
+  useDiscordMessagesQuery,
+  useLivePollsQuery,
+  useStudentDeadlineExtensionsQuery,
+  useAssignmentDueDateExceptionsQuery,
+  useDiscussionThreadTeaserUpdate,
+  useDiscussionThreadReadStatusUpdate
+} from "@/hooks/course-data";
 
 export function useAssignmentGroupWithMembers({
   assignment_group_id
@@ -70,8 +91,8 @@ export function useAssignmentGroupForUser({ assignment_id }: { assignment_id: nu
 }
 
 export function useAllProfilesForClass() {
-  const { profiles } = useCourseController();
-  return useTableControllerTableValues(profiles);
+  const { data = [] } = useProfilesQuery();
+  return data;
 }
 
 /**
@@ -101,83 +122,55 @@ export function useAllStudentProfiles() {
 export type GraderInstructorProfile = UserProfile & { userEmail: string | null };
 
 export function useGradersAndInstructors(): GraderInstructorProfile[] {
-  const { userRolesWithProfiles: controller } = useCourseController();
-  const filter = useCallback(
-    (r: UserRoleWithPrivateProfileAndUser) => r.role === "grader" || r.role === "instructor",
-    []
-  );
-  const roles = useListTableControllerValues(controller, filter);
+  const { data: roles = [] } = useUserRolesQuery();
   return useMemo(
     () =>
-      roles.map((r) => ({
-        ...r.profiles,
-        userEmail: r.users?.email ?? null
-      })),
+      (roles as UserRoleWithPrivateProfileAndUser[])
+        .filter((r) => r.role === "grader" || r.role === "instructor")
+        .map((r) => ({
+          ...r.profiles,
+          userEmail: r.users?.email ?? null
+        })),
     [roles]
   );
 }
 
 export function useIsDroppedStudent(private_profile_id: string | undefined | null) {
-  const { userRolesWithProfiles: controller } = useCourseController();
-  const matcher = useCallback(
-    (r: UserRoleWithPrivateProfileAndUser) => r.private_profile_id === private_profile_id,
-    [private_profile_id]
+  const { data: roles = [] } = useUserRolesQuery();
+  const role = useMemo(
+    () => (roles as UserRoleWithPrivateProfileAndUser[]).find((r) => r.private_profile_id === private_profile_id),
+    [roles, private_profile_id]
   );
-  const role = useFindTableControllerValue(controller, matcher);
   return role?.disabled;
 }
 export function useAllStudentRoles() {
-  const { userRolesWithProfiles: controller } = useCourseController();
-  const [roles, setRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.list((data) => {
-      const students = data.filter((r) => r.role === "student" && !r.disabled);
-      setRoles((old) => {
-        if (old && old.length == students.length) {
-          if (old.every((r) => students.some((s) => s.id === r.id))) {
-            return old;
-          }
-        }
-        return students;
-      });
-    });
-    setRoles(data.filter((r) => r.role === "student" && !r.disabled));
-    return unsubscribe;
-  }, [controller]);
-  return roles;
+  const { data: roles = [] } = useUserRolesQuery();
+  return useMemo(
+    () => (roles as UserRoleWithPrivateProfileAndUser[]).filter((r) => r.role === "student" && !r.disabled),
+    [roles]
+  );
 }
 export function useStudentRoster() {
-  const { userRolesWithProfiles: controller } = useCourseController();
-  const predicate = useCallback((r: UserRole) => r.role === "student", []);
-  const studentRoles = useListTableControllerValues(controller, predicate);
-  const [roster, setRoster] = useState<UserProfile[] | undefined>(() => studentRoles.map((r) => r.profiles));
-  useEffect(() => {
-    setRoster(studentRoles.map((r) => r.profiles));
-  }, [studentRoles]);
-  return roster;
+  const { data: roles = [] } = useUserRolesQuery();
+  return useMemo(
+    () => (roles as UserRoleWithPrivateProfileAndUser[]).filter((r) => r.role === "student").map((r) => r.profiles),
+    [roles]
+  );
 }
 export function useProfiles() {
-  const { profiles: controller } = useCourseController();
-  const [profiles, setProfiles] = useState<UserProfile[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.list((data) => {
-      setProfiles(data);
-    });
-    setProfiles(data);
-    return unsubscribe;
-  }, [controller]);
-  return profiles;
+  const { data = [] } = useProfilesQuery();
+  return data;
 }
 /**
  * Hook to update a discussion thread using TableController
  * @returns A function to update a thread by ID
  */
 export function useUpdateThreadTeaser() {
-  const controller = useCourseController();
+  const mutation = useDiscussionThreadTeaserUpdate();
   return useCallback(
-    async ({ id, values }: { id: number; old: DiscussionThreadTeaser; values: Partial<DiscussionThreadTeaser> }) => {
+    async ({ id, values }: { id: number; old: DiscussionThreadTeaser; values: Partial<DiscussionThread> }) => {
       try {
-        await controller.discussionThreadTeasers.update(id, values);
+        await mutation.mutateAsync({ id, values });
       } catch {
         toaster.error({
           title: "Error updating thread",
@@ -185,17 +178,12 @@ export function useUpdateThreadTeaser() {
         });
       }
     },
-    [controller]
+    [mutation]
   );
 }
 export function useRootDiscussionThreadReadStatuses(threadId: number) {
-  const controller = useCourseController();
-  const rootPredicate = useMemo(
-    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) => data.discussion_thread_root_id === threadId,
-    [threadId]
-  );
-  const readStatuses = useListTableControllerValues(controller.discussionThreadReadStatus, rootPredicate);
-  return readStatuses;
+  const { data = [] } = useDiscussionThreadReadStatusQuery();
+  return useMemo(() => data.filter((s) => s.discussion_thread_root_id === threadId), [data, threadId]);
 }
 /**
  * Returns a hook that returns the read status of a thread.
@@ -205,37 +193,33 @@ export function useRootDiscussionThreadReadStatuses(threadId: number) {
  * Undefined indicates that the thread is not yet loaded
  */
 export function useDiscussionThreadReadStatus(threadId: number) {
-  const controller = useCourseController();
+  const { data: allStatuses = [] } = useDiscussionThreadReadStatusQuery();
   const { user } = useAuthState();
-  const predicate = useMemo(
-    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) =>
-      data.discussion_thread_id === threadId && data.user_id === user?.id,
-    [threadId, user?.id]
+  const readStatusMutation = useDiscussionThreadReadStatusUpdate();
+  const controller = useCourseController();
+
+  const readStatus = useMemo(
+    () => allStatuses.find((s) => s.discussion_thread_id === threadId && s.user_id === user?.id),
+    [allStatuses, threadId, user?.id]
   );
-  const readStatus = useFindTableControllerValue(controller.discussionThreadReadStatus, predicate);
 
   const setUnread = useCallback(
     async (root_threadId: number, threadId: number, isUnread: boolean) => {
       if (readStatus === undefined) {
         return;
       }
-      await controller.discussionThreadReadStatus.readyPromise;
       if (readStatus) {
         if (isUnread && readStatus.read_at) {
-          controller.discussionThreadReadStatus.update(readStatus.id, {
-            read_at: null
-          });
+          readStatusMutation.mutate({ id: readStatus.id, values: { read_at: null } });
         } else if (!isUnread && !readStatus.read_at) {
-          controller.discussionThreadReadStatus.update(readStatus.id, {
-            read_at: new Date().toISOString()
-          });
+          readStatusMutation.mutate({ id: readStatus.id, values: { read_at: new Date().toISOString() } });
         }
       } else {
         // There is a Postgres trigger that creates a read status for every user for every thread. So, if we don't have one, we just haven't fetched it yet!
         if (!user?.id) {
           return;
         }
-        const readStatus = await controller.discussionThreadReadStatus.getOneByFilters([
+        const fetchedStatus = await controller.discussionThreadReadStatus.getOneByFilters([
           {
             column: "discussion_thread_id",
             operator: "eq",
@@ -247,14 +231,15 @@ export function useDiscussionThreadReadStatus(threadId: number) {
             value: user.id
           }
         ]);
-        if (readStatus) {
-          controller.discussionThreadReadStatus.update(readStatus.id, {
-            read_at: isUnread ? null : new Date().toISOString()
+        if (fetchedStatus) {
+          readStatusMutation.mutate({
+            id: fetchedStatus.id,
+            values: { read_at: isUnread ? null : new Date().toISOString() }
           });
         }
       }
     },
-    [user?.id, controller, readStatus]
+    [user?.id, controller, readStatus, readStatusMutation]
   );
   return { readStatus, setUnread };
 }
@@ -278,98 +263,49 @@ type DiscussionThreadTeaser = Pick<
 >;
 
 export function useDiscussionThreadTeasers() {
-  const controller = useCourseController();
-  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.discussionThreadTeasers.list((data) => {
-      setTeasers(data as DiscussionThreadTeaser[]);
-    });
-    setTeasers(data as DiscussionThreadTeaser[]);
-    return unsubscribe;
-  }, [controller]);
-  return teasers;
+  const { data = [] } = useDiscussionThreadTeasersQuery();
+  return data as DiscussionThreadTeaser[];
 }
 type DiscussionThreadFields = keyof DiscussionThreadTeaser;
 export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: DiscussionThreadFields[]) {
-  const controller = useCourseController();
-  const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(() => {
+  const { data = [] } = useDiscussionThreadTeasersQuery();
+  const prevRef = useRef<DiscussionThreadTeaser | undefined>(undefined);
+
+  return useMemo(() => {
     if (id === undefined) {
+      prevRef.current = undefined;
       return undefined;
     }
-    return controller.discussionThreadTeasers.getById(id).data;
-  });
-  useEffect(() => {
-    if (id === undefined) {
-      setTeaser(undefined);
-      return;
+    const found = (data as DiscussionThreadTeaser[]).find((t) => t.id === id);
+    if (!found) {
+      return prevRef.current;
     }
-    let unmounted = false;
-    const { unsubscribe, data } = controller.discussionThreadTeasers.getById(id, (data) => {
-      if (unmounted) {
-        return;
+    if (watchFields && prevRef.current) {
+      const hasAnyChanges = watchFields.some((field) => prevRef.current![field] !== found[field]);
+      if (!hasAnyChanges) {
+        return prevRef.current;
       }
-      if (watchFields) {
-        setTeaser((oldTeaser) => {
-          if (!oldTeaser) {
-            return data as DiscussionThreadTeaser;
-          }
-          const hasAnyChanges = watchFields.some(
-            (field) => oldTeaser[field] !== (data as DiscussionThreadTeaser)?.[field]
-          );
-          if (hasAnyChanges) {
-            return data as DiscussionThreadTeaser;
-          }
-          return oldTeaser;
-        });
-      } else {
-        setTeaser(data as DiscussionThreadTeaser);
-      }
-    });
-    setTeaser(data as DiscussionThreadTeaser);
-    return () => {
-      unmounted = true;
-      unsubscribe();
-    };
-  }, [controller, id, watchFields]);
-  return teaser;
+    }
+    prevRef.current = found;
+    return found;
+  }, [data, id, watchFields]);
 }
 
 export function useLabSections() {
-  const controller = useCourseController();
-  const [labSections, setLabSections] = useState<LabSection[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.labSections.list((data) => {
-      setLabSections(data);
-    });
-    setLabSections(data);
-    return unsubscribe;
-  }, [controller]);
-  return labSections;
+  const { data = [] } = useLabSectionsQuery();
+  return data;
 }
 
 export function useClassSections() {
-  const controller = useCourseController();
-  const [classSections, setClassSections] = useState<ClassSection[]>([]);
-  useEffect(() => {
-    const { data, unsubscribe } = controller.classSections.list((data) => {
-      setClassSections(data);
-    });
-    setClassSections(data);
-    return unsubscribe;
-  }, [controller]);
-  return classSections;
+  const { data = [] } = useClassSectionsQuery();
+  return data;
 }
 
 /**
  * Hook to get all survey series for the course with real-time updates (cached on course controller)
  */
 export function useSurveySeries() {
-  const controller = useCourseController();
-  const series = useTableControllerTableValues(controller.surveySeries);
-  const isLoading = !useIsTableControllerReady(controller.surveySeries);
-  const refetch = useCallback(() => {
-    void controller.surveySeries.refetchAll();
-  }, [controller]);
+  const { data: series = [], isLoading, refetch } = useSurveySeriesQuery();
   return { series, isLoading, refetch };
 }
 
@@ -377,17 +313,14 @@ export function useSurveySeries() {
  * Hook to get surveys in a specific series (cached on course controller's surveys TableController)
  */
 export function useSurveysInSeries(seriesId: string | undefined) {
-  const controller = useCourseController();
-  const predicate = useCallback(
-    (survey: Database["public"]["Tables"]["surveys"]["Row"]) => survey.series_id === seriesId && !survey.deleted_at,
-    [seriesId]
-  );
-  const rawSurveys = useListTableControllerValues(controller.surveys, predicate);
+  const { data: allSurveys = [], isLoading } = useSurveysQuery();
   const surveys = useMemo(
-    () => [...rawSurveys].sort((a, b) => (a.series_ordinal ?? 0) - (b.series_ordinal ?? 0)),
-    [rawSurveys]
+    () =>
+      allSurveys
+        .filter((s) => s.series_id === seriesId && !s.deleted_at)
+        .sort((a, b) => (a.series_ordinal ?? 0) - (b.series_ordinal ?? 0)),
+    [allSurveys, seriesId]
   );
-  const isLoading = !useIsTableControllerReady(controller.surveys);
 
   return { surveys, isLoading };
 }
@@ -466,36 +399,14 @@ export class CourseController {
    * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
    */
   initializeEagerControllers() {
-    // Create profiles and userRolesWithProfiles immediately
-    // These are accessed frequently and should be ready
-    void this.profiles; // Triggers lazy creation
-    if (this.isStaff) {
-      void this.userRolesWithProfiles; // Triggers lazy creation
-    }
-    // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
-    void this.assignmentDueDateExceptions; // Triggers lazy creation
-    void this.studentDeadlineExtensions; // Triggers lazy creation
-    void this.assignments; // Triggers lazy creation
-    void this.assignmentGroupsWithMembers; // Triggers lazy creation
-    void this.notifications; // Triggers lazy creation
-    void this.discussionThreadTeasers; // Triggers lazy creation
-    void this.tags; // Triggers lazy creation
-    void this.labSections; // Triggers lazy creation
-    void this.labSectionMeetings; // Triggers lazy creation
-    void this.labSectionLeaders; // Triggers lazy creation
-    void this.classSections; // Triggers lazy creation
-    void this.discussionTopics; // Triggers lazy creation
-    void this.repositories; // Triggers lazy creation
-    void this.gradebookColumns; // Triggers lazy creation
-    if (this.isStaff) {
-      void this.discordChannels; // Triggers lazy creation (staff only)
-      void this.discordMessages; // Triggers lazy creation (staff only)
-    }
-    void this.livePolls; // Triggers lazy creation
-    void this.surveys; // Triggers lazy creation
-    void this.surveySeries; // Triggers lazy creation
+    // Phase 5 cleanup: TanStack Query hooks now provide data with their own realtime
+    // subscriptions (via useRealtimeBridge). Eagerly creating TableControllers here is
+    // now redundant — each TC opens a Supabase realtime subscription that duplicates
+    // what the TanStack hooks already do. The lazy getters still work: any remaining
+    // direct consumer that accesses a getter (e.g., controller.profiles) will create
+    // the TC on demand.
 
-    // Clear initialData to free memory after all eager controllers are initialized
+    // Clear initialData to free memory (no longer consumed by eager TC creation)
     this._initialData = undefined;
   }
 
@@ -1615,32 +1526,31 @@ export function useAssignmentDueDate(
   assignment: { id: number; due_date: string; minutes_due_after_lab: number | null },
   options?: { studentPrivateProfileId?: string; labSectionId?: number; assignmentGroupId?: number }
 ) {
-  const controller = useCourseController();
   const course = useCourse();
   const time_zone = course.time_zone;
 
-  const labSections = useTableControllerTableValues(controller.labSections) as LabSection[];
-  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings) as LabSectionMeeting[];
-  const labSectionsReady = useIsTableControllerReady(controller.labSections);
-  const labSectionMeetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
+  const { data: labSections = [], isLoading: labSectionsLoading } = useLabSectionsQuery();
+  const { data: labSectionMeetings = [], isLoading: labSectionMeetingsLoading } = useLabSectionMeetingsQuery();
+  const labSectionsReady = !labSectionsLoading;
+  const labSectionMeetingsReady = !labSectionMeetingsLoading;
 
-  const dueDateExceptionsFilter = useCallback(
-    (e: AssignmentDueDateException) => {
-      return Boolean(
-        (e.assignment_id === assignment.id &&
-          ((!options?.studentPrivateProfileId && !e.student_id) ||
-            (options?.studentPrivateProfileId && e.student_id === options.studentPrivateProfileId)) &&
-          !options?.assignmentGroupId &&
-          !e.assignment_group_id) ||
-          (options?.assignmentGroupId && e.assignment_group_id === options.assignmentGroupId)
-      );
-    },
-    [assignment.id, options?.studentPrivateProfileId, options?.assignmentGroupId]
+  const { data: allDueDateExceptions = [] } = useAssignmentDueDateExceptionsQuery();
+  const dueDateExceptions = useMemo(
+    () =>
+      allDueDateExceptions.filter((e) =>
+        Boolean(
+          (e.assignment_id === assignment.id &&
+            ((!options?.studentPrivateProfileId && !e.student_id) ||
+              (options?.studentPrivateProfileId && e.student_id === options.studentPrivateProfileId)) &&
+            !options?.assignmentGroupId &&
+            !e.assignment_group_id) ||
+            (options?.assignmentGroupId && e.assignment_group_id === options.assignmentGroupId)
+        )
+      ),
+    [allDueDateExceptions, assignment.id, options?.studentPrivateProfileId, options?.assignmentGroupId]
   );
-  const dueDateExceptions = useListTableControllerValues(
-    controller.assignmentDueDateExceptions,
-    dueDateExceptionsFilter
-  );
+
+  const { data: userRoles = [] } = useUserRolesQuery();
 
   const ret = useMemo(() => {
     if (!assignment.due_date) {
@@ -1666,7 +1576,10 @@ export function useAssignmentDueDate(
     if (hasLabScheduling && labSectionsReady && labSectionMeetingsReady) {
       // Get student's lab section
       if (options?.studentPrivateProfileId) {
-        labSectionId = controller.getStudentLabSectionId(options.studentPrivateProfileId);
+        const userRole = (userRoles as UserRoleWithPrivateProfileAndUser[]).find(
+          (role) => role.private_profile_id === options.studentPrivateProfileId
+        );
+        labSectionId = userRole?.lab_section_id || null;
       } else if (options?.labSectionId) {
         labSectionId = options.labSectionId;
       }
@@ -1676,7 +1589,7 @@ export function useAssignmentDueDate(
         if (labSection) {
           // Find the most recent lab section meeting before the assignment's original due date
           const assignmentDueDate = new Date(assignment.due_date);
-          const relevantMeetings = labSectionMeetings
+          const relevantMeetings = (labSectionMeetings as LabSectionMeeting[])
             .filter(
               (meeting) =>
                 meeting.lab_section_id === labSectionId &&
@@ -1731,7 +1644,7 @@ export function useAssignmentDueDate(
     labSectionsReady,
     labSectionMeetingsReady,
     assignment,
-    controller,
+    userRoles,
     options,
     time_zone
   ]);
@@ -1740,18 +1653,8 @@ export function useAssignmentDueDate(
 }
 
 export function useLateTokens() {
-  const controller = useCourseController();
-  const [lateTokens, setLateTokens] = useState<AssignmentDueDateException[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.assignmentDueDateExceptions.list((data) => {
-      setLateTokens(data);
-    });
-    setLateTokens(data);
-    return unsubscribe;
-  }, [controller]);
-
-  return lateTokens;
+  const { data = [] } = useAssignmentDueDateExceptionsQuery();
+  return data as AssignmentDueDateException[];
 }
 
 export function useCourse() {
@@ -1815,16 +1718,11 @@ export function useCanShowGradeFor(userId: string): boolean {
  * Hook to get student roster with user information including email
  */
 export function useRosterWithUserInfo() {
-  const controller = useCourseController();
-  const [roster, setRoster] = useState<UserRoleWithUser[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.getRosterWithUserInfo((updatedRoster) => setRoster(updatedRoster));
-    setRoster(data);
-    return unsubscribe;
-  }, [controller]);
-
-  return roster;
+  const { data: roles = [] } = useUserRolesQuery();
+  return useMemo(
+    () => (roles as UserRoleWithPrivateProfileAndUser[]).filter((r) => r.role === "student") as UserRoleWithUser[],
+    [roles]
+  );
 }
 
 /**
@@ -1832,18 +1730,8 @@ export function useRosterWithUserInfo() {
  * Includes disabled user roles
  */
 export function useUserRolesWithProfiles() {
-  const controller = useCourseController();
-  const [userRoles, setUserRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.userRolesWithProfiles.list((updatedUserRoles) => {
-      setUserRoles(updatedUserRoles as UserRoleWithPrivateProfileAndUser[]);
-    });
-    setUserRoles(data as UserRoleWithPrivateProfileAndUser[]);
-    return unsubscribe;
-  }, [controller]);
-
-  return userRoles;
+  const { data = [] } = useUserRolesQuery();
+  return data as UserRoleWithPrivateProfileAndUser[];
 }
 
 /**
@@ -1851,60 +1739,27 @@ export function useUserRolesWithProfiles() {
  * Only includes active user roles
  */
 export function useActiveUserRolesWithProfiles() {
-  const controller = useCourseController();
-  const [userRoles, setUserRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.userRolesWithProfiles.list((updatedUserRoles) => {
-      const activeUserRoles = updatedUserRoles.filter((r) => r.disabled === false);
-      setUserRoles(activeUserRoles as UserRoleWithPrivateProfileAndUser[]);
-    });
-    setUserRoles(data.filter((r) => r.disabled === false) as UserRoleWithPrivateProfileAndUser[]);
-    return unsubscribe;
-  }, [controller]);
-
-  return userRoles;
+  const { data = [] } = useUserRolesQuery();
+  return useMemo(() => (data as UserRoleWithPrivateProfileAndUser[]).filter((r) => r.disabled === false), [data]);
 }
 
 /**
  * Hook to get all tags for the course
  */
 export function useTags() {
-  const controller = useCourseController();
-  const [tags, setTags] = useState<Tag[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.listTags((updatedTags) => {
-      setTags(updatedTags);
-    });
-    setTags(data);
-    return unsubscribe;
-  }, [controller]);
-
-  return tags;
+  const { data = [] } = useTagsQuery();
+  return data;
 }
 
 /**
  * Hook to get tags for a specific profile
  */
 export function useProfileTags(profileId: string | undefined) {
-  const controller = useCourseController();
-  const [tags, setTags] = useState<Tag[]>([]);
-
-  useEffect(() => {
-    if (!profileId) {
-      setTags([]);
-      return;
-    }
-
-    const { data, unsubscribe } = controller.getTagsForProfile(profileId, (updatedTags) => {
-      setTags(updatedTags);
-    });
-    setTags(data || []);
-    return unsubscribe;
-  }, [controller, profileId]);
-
-  return tags;
+  const { data: allTags = [] } = useTagsQuery();
+  return useMemo(() => {
+    if (!profileId) return [];
+    return allTags.filter((t) => t.profile_id === profileId);
+  }, [allTags, profileId]);
 }
 
 /**
@@ -1941,54 +1796,24 @@ export function useProfileRole(profileId: string | undefined): "student" | "grad
  * This provides access to extensions that apply to all assignments for a student in a class
  */
 export function useStudentDeadlineExtensions() {
-  const controller = useCourseController();
-  const [extensions, setExtensions] = useState<StudentDeadlineExtension[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.studentDeadlineExtensions.list((updatedExtensions) => {
-      setExtensions(updatedExtensions as StudentDeadlineExtension[]);
-    });
-    setExtensions(data as StudentDeadlineExtension[]);
-    return unsubscribe;
-  }, [controller]);
-
-  return extensions;
+  const { data = [] } = useStudentDeadlineExtensionsQuery();
+  return data as StudentDeadlineExtension[];
 }
 
 /**
  * Hook to get all assignments for the course
  */
 export function useAssignments() {
-  const controller = useCourseController();
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.assignments.list((updatedAssignments) => {
-      setAssignments(updatedAssignments as Assignment[]);
-    });
-    setAssignments(data as Assignment[]);
-    return unsubscribe;
-  }, [controller]);
-
-  return assignments;
+  const { data = [] } = useAssignmentsQuery();
+  return data;
 }
 
 /**
  * Hook to get discussion topics for the course
  */
 export function useDiscussionTopics() {
-  const controller = useCourseController();
-  const [topics, setTopics] = useState<DiscussionTopic[]>(controller.discussionTopics.rows);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.discussionTopics.list((updatedTopics) => {
-      setTopics(updatedTopics);
-    });
-    setTopics(data);
-    return unsubscribe;
-  }, [controller]);
-
-  return topics;
+  const { data = [] } = useDiscussionTopicsQuery();
+  return data;
 }
 
 /**
@@ -2000,34 +1825,16 @@ export function useDiscordChannel(
   channelType: Database["public"]["Enums"]["discord_channel_type"],
   resourceId?: number | null
 ) {
-  const controller = useCourseController();
-  const isStaff = controller.isStaff;
+  const { data: channels = [] } = useDiscordChannelsQuery();
 
-  // Only access discordChannels controller if staff (to avoid instantiating it for non-staff)
-  // Use useMemo to conditionally access the controller property only when isStaff is true
-  // This prevents the lazy getter from being called for non-staff users
-  const discordChannelsController = useMemo(() => {
-    if (isStaff) {
-      return controller.discordChannels;
-    }
-    // When not staff, we still need to pass a controller to the hook, but we'll use
-    // a controller that exists (profiles) as a placeholder since the filter always returns false
-    // This satisfies the type requirement without instantiating the staff-only controller
-    return controller.profiles as unknown as TableController<"discord_channels">;
-  }, [controller, isStaff]);
-
-  const filter = useCallback(
-    (channel: Database["public"]["Tables"]["discord_channels"]["Row"]) =>
-      channel.channel_type === channelType &&
-      (resourceId === undefined || resourceId === null || channel.resource_id === resourceId),
-    [channelType, resourceId]
-  );
-
-  // Only search if staff (discord_channels is staff-only)
-  // When not staff, filter always returns false, so no matching will occur
-  const channel = useFindTableControllerValue(discordChannelsController, isStaff ? filter : () => false);
-
-  return channel ?? null;
+  return useMemo(() => {
+    const found = channels.find(
+      (channel) =>
+        channel.channel_type === channelType &&
+        (resourceId === undefined || resourceId === null || channel.resource_id === resourceId)
+    );
+    return found ?? null;
+  }, [channels, channelType, resourceId]);
 }
 
 /**
@@ -2039,62 +1846,29 @@ export function useDiscordMessage(
   resourceType: Database["public"]["Enums"]["discord_resource_type"],
   resourceId: number | null | undefined
 ) {
-  const controller = useCourseController();
-  const isStaff = controller.isStaff;
+  const { data: messages = [] } = useDiscordMessagesQuery();
 
-  // Only access discordMessages controller if staff (to avoid instantiating it for non-staff)
-  // Use useMemo to conditionally access the controller property only when isStaff is true
-  // This prevents the lazy getter from being called for non-staff users
-  const discordMessagesController = useMemo(() => {
-    if (isStaff) {
-      return controller.discordMessages;
-    }
-    // When not staff, we still need to pass a controller to the hook, but we'll use
-    // a controller that exists (profiles) as a placeholder since the filter always returns false
-    // This satisfies the type requirement without instantiating the staff-only controller
-    return controller.profiles as unknown as TableController<"discord_messages">;
-  }, [controller, isStaff]);
-
-  const filter = useCallback(
-    (message: Database["public"]["Tables"]["discord_messages"]["Row"]) =>
-      message.resource_type === resourceType && message.resource_id === resourceId,
-    [resourceType, resourceId]
-  );
-
-  // Only search if staff (discord_messages is staff-only) and resourceId is valid
-  // When not staff, filter always returns false, so no matching will occur
-  const shouldSearch = isStaff && resourceId !== null && resourceId !== undefined;
-  const message = useFindTableControllerValue(discordMessagesController, shouldSearch ? filter : () => false);
-
-  return message ?? null;
+  return useMemo(() => {
+    if (resourceId === null || resourceId === undefined) return null;
+    const found = messages.find((m) => m.resource_type === resourceType && m.resource_id === resourceId);
+    return found ?? null;
+  }, [messages, resourceType, resourceId]);
 }
 
 /**
  * Hook to get all live polls for the course with real-time updates
  */
 export function useLivePolls() {
-  const controller = useCourseController();
-  const [polls, setPolls] = useState<Database["public"]["Tables"]["live_polls"]["Row"][]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.livePolls.list((updatedPolls) => {
-      setPolls(updatedPolls);
-    });
-    setPolls(data);
-    return unsubscribe;
-  }, [controller]);
-
-  return polls;
+  const { data = [] } = useLivePollsQuery();
+  return data;
 }
 
 /**
  * Hook to get only live (active) polls for the course with real-time updates
  */
 export function useActiveLivePolls() {
-  const controller = useCourseController();
-  const predicate = useCallback((poll: Database["public"]["Tables"]["live_polls"]["Row"]) => poll.is_live === true, []);
-  const polls = useListTableControllerValues(controller.livePolls, predicate);
-  const isLoading = !controller.livePolls.ready;
+  const { data: allPolls = [], isLoading } = useLivePollsQuery();
+  const polls = useMemo(() => allPolls.filter((poll) => poll.is_live === true), [allPolls]);
 
   return { polls, isLoading };
 }
@@ -2103,9 +1877,8 @@ export function useActiveLivePolls() {
  * Hook to get a single poll by ID with real-time updates
  */
 export function useLivePoll(pollId: string | undefined) {
-  const { livePolls } = useCourseController();
-  const poll = useTableControllerValueById(livePolls, pollId);
-  return poll;
+  const { data = [] } = useLivePollsQuery();
+  return useMemo(() => data.find((p) => p.id === pollId), [data, pollId]);
 }
 
 /**
@@ -2275,40 +2048,24 @@ export function usePollResponseCounts(pollId: string | undefined, pollQuestion: 
  * Hook to get all surveys for the course with real-time updates (staff only)
  */
 export function useSurveys() {
-  const controller = useCourseController();
-  const [surveys, setSurveys] = useState<Database["public"]["Tables"]["surveys"]["Row"][]>([]);
-
-  useEffect(() => {
-    const { data, unsubscribe } = controller.surveys.list((updatedSurveys) => {
-      setSurveys(updatedSurveys);
-    });
-    setSurveys(data);
-    return unsubscribe;
-  }, [controller]);
-
-  return surveys;
+  const { data = [] } = useSurveysQuery();
+  return data;
 }
 
 /**
  * Hook to get a single survey by ID with real-time updates
  */
 export function useSurvey(surveyId: string | undefined) {
-  const { surveys } = useCourseController();
-  const survey = useTableControllerValueById(surveys, surveyId);
-  return survey;
+  const { data = [] } = useSurveysQuery();
+  return useMemo(() => data.find((s) => s.id === surveyId), [data, surveyId]);
 }
 
 /**
  * Hook to get only published surveys for the course (for students)
  */
 export function usePublishedSurveys() {
-  const controller = useCourseController();
-  const predicate = useCallback(
-    (survey: Database["public"]["Tables"]["surveys"]["Row"]) => survey.status === "published" && !survey.deleted_at,
-    []
-  );
-  const surveys = useListTableControllerValues(controller.surveys, predicate);
-  const isLoading = !controller.surveys.ready;
+  const { data: allSurveys = [], isLoading } = useSurveysQuery();
+  const surveys = useMemo(() => allSurveys.filter((s) => s.status === "published" && !s.deleted_at), [allSurveys]);
 
   return { surveys, isLoading };
 }

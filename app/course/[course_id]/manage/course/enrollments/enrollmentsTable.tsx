@@ -7,9 +7,8 @@ import PersonTags from "@/components/ui/person-tags";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
-import { useClassSections, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
-import useTags from "@/hooks/useTags";
+import { useTagsQuery, useLabSectionsQuery, useClassSectionsQuery, useUserRolesQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
@@ -78,8 +77,8 @@ export default function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
   const supabase = createClient();
-  const labSections = useLabSections();
-  const classSections = useClassSections();
+  const { data: labSections = [] } = useLabSectionsQuery();
+  const { data: classSections = [] } = useClassSectionsQuery();
 
   const setSisSyncOptOut = useCallback(
     async (userRoleId: number, sis_sync_opt_out: boolean) => {
@@ -103,7 +102,7 @@ export default function EnrollmentsTable() {
   // Invitations state
   const [invitations, setInvitations] = useState<InvitationRow[]>([]);
 
-  const { tags: tagData } = useTags();
+  const { data: tagData = [] } = useTagsQuery();
 
   const {
     isOpen: isEditProfileModalOpen,
@@ -860,7 +859,7 @@ export default function EnrollmentsTable() {
   );
 
   // Get user roles data from CourseController (realtime)
-  const userRolesData = useUserRolesWithProfiles();
+  const { data: userRolesData = [] } = useUserRolesQuery();
 
   // Combine enrollment and invitation data
   const combinedData = useMemo<EnrollmentTableRow[]>(() => {

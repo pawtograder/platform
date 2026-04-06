@@ -32,12 +32,16 @@ import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaCalendar, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
-import { useCourseController } from "@/hooks/useCourseController";
 import {
-  useIsTableControllerReady,
-  useTableControllerTableValues,
-  useListTableControllerValues
-} from "@/lib/TableController";
+  useLabSectionsQuery,
+  useLabSectionInsert,
+  useLabSectionUpdate,
+  useLabSectionDelete,
+  useLabSectionMeetingsQuery,
+  useLabSectionMeetingInsert,
+  useLabSectionMeetingUpdate,
+  useUserRolesQuery
+} from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { Select, MultiValue } from "chakra-react-select";
 import {
@@ -87,8 +91,9 @@ function CreateLabSectionModal({
   initialData?: EditLabSectionData;
 }) {
   const { course_id } = useParams();
-  const controller = useCourseController();
   const supabase = createClient();
+  const labSectionInsert = useLabSectionInsert();
+  const labSectionUpdate = useLabSectionUpdate();
   const [isLoading, setIsLoading] = useState(false);
   const [selectedLeaders, setSelectedLeaders] = useState<MultiValue<{ value: string; label: string }>>([]);
 
@@ -112,11 +117,14 @@ function CreateLabSectionModal({
   });
 
   // Get instructors and graders for lab leader selection
-  const staffRolesPredicate = useCallback(
-    (role: UserRoleWithPrivateProfileAndUser) => role.role === "instructor" || role.role === "grader",
-    []
+  const { data: allRoles = [] } = useUserRolesQuery();
+  const staffRoles = useMemo(
+    () =>
+      (allRoles as UserRoleWithPrivateProfileAndUser[]).filter(
+        (role) => role.role === "instructor" || role.role === "grader"
+      ),
+    [allRoles]
   );
-  const staffRoles = useListTableControllerValues(controller.userRolesWithProfiles, staffRolesPredicate);
 
   // Fetch existing lab section leaders when editing
   useEffect(() => {
@@ -201,7 +209,7 @@ function CreateLabSectionModal({
 
         if (initialData) {
           // Update lab section
-          await controller.labSections.update(initialData.id, labSectionData);
+          await labSectionUpdate.mutateAsync({ id: initialData.id, values: labSectionData });
           labSectionId = initialData.id;
 
           // Update lab section leaders: delete existing and insert new ones
@@ -228,14 +236,13 @@ function CreateLabSectionModal({
             }
           }
 
-          // Refresh lab section meetings after update to show recalculated meetings
-          await controller.labSectionMeetings.refetchAll();
+          // TanStack Query will handle revalidation via realtime bridge
           toaster.success({
             title: "Lab section updated successfully"
           });
         } else {
           // Create lab section
-          const result = await controller.labSections.create(labSectionData);
+          const result = await labSectionInsert.mutateAsync(labSectionData);
           labSectionId = result.id;
 
           // Insert lab section leaders
@@ -268,7 +275,7 @@ function CreateLabSectionModal({
         setIsLoading(false);
       }
     },
-    [initialData, controller, course_id, onSuccess, onClose, supabase]
+    [initialData, labSectionInsert, labSectionUpdate, course_id, onSuccess, onClose, supabase]
   );
 
   return (
@@ -404,8 +411,8 @@ function ManageMeetingsModal({
   labSection: LabSection | null;
   onAddMeeting: (labSection: LabSection) => void;
 }) {
-  const controller = useCourseController();
-  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
+  const { data: labSectionMeetings = [] } = useLabSectionMeetingsQuery();
+  const updateMeeting = useLabSectionMeetingUpdate();
   const [isLoading, setIsLoading] = useState(false);
 
   if (!labSection) return null;
@@ -417,8 +424,9 @@ function ManageMeetingsModal({
   const handleToggleCancelled = async (meeting: LabSectionMeeting) => {
     setIsLoading(true);
     try {
-      await controller.labSectionMeetings.update(meeting.id, {
-        cancelled: !meeting.cancelled
+      await updateMeeting.mutateAsync({
+        id: meeting.id,
+        values: { cancelled: !meeting.cancelled }
       });
       toaster.success({
         title: meeting.cancelled ? "Meeting restored" : "Meeting cancelled"
@@ -535,7 +543,7 @@ function CreateMeetingModal({
   onClose: () => void;
   labSection: LabSection | null;
 }) {
-  const controller = useCourseController();
+  const meetingInsert = useLabSectionMeetingInsert();
   const [isLoading, setIsLoading] = useState(false);
 
   const {
@@ -573,7 +581,7 @@ function CreateMeetingModal({
           notes: data.notes || null
         };
 
-        await controller.labSectionMeetings.create(meetingData);
+        await meetingInsert.mutateAsync(meetingData);
 
         toaster.success({
           title: "Meeting created successfully"
@@ -588,7 +596,7 @@ function CreateMeetingModal({
         setIsLoading(false);
       }
     },
-    [labSection, controller, onClose]
+    [labSection, meetingInsert, onClose]
   );
 
   if (!labSection) return null;
@@ -654,12 +662,15 @@ type LabSectionRow = LabSection & {
 };
 
 function LabSectionsTable() {
-  const controller = useCourseController();
   const supabase = createClient();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const sectionsReady = useIsTableControllerReady(controller.labSections);
-  const meetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
+  const { data: labSectionsData = [], isLoading: sectionsLoading } = useLabSectionsQuery();
+  const { data: labSectionMeetingsData = [], isLoading: meetingsLoading } = useLabSectionMeetingsQuery();
+  const { data: allUserRoles = [] } = useUserRolesQuery();
+  const labSectionDeleteMutation = useLabSectionDelete();
+  const sectionsReady = !sectionsLoading;
+  const meetingsReady = !meetingsLoading;
   const [isDeleting, setIsDeleting] = useState(false);
   const [labSectionLeadersMap, setLabSectionLeadersMap] = useState<Map<number, string[]>>(new Map());
   const [leadersRefreshKey, setLeadersRefreshKey] = useState(0);
@@ -687,21 +698,20 @@ function LabSectionsTable() {
   } = useModalManager<LabSection | undefined>();
 
   // Get lab sections from course controller
-  const unsortedLabSections = useTableControllerTableValues(controller.labSections);
   const labSections = useMemo(
-    () => unsortedLabSections.sort((a, b) => a.name.localeCompare(b.name)),
-    [unsortedLabSections]
+    () => [...labSectionsData].sort((a, b) => a.name.localeCompare(b.name)),
+    [labSectionsData]
   );
 
   // Get lab section meetings from course controller
-  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
+  const labSectionMeetings = labSectionMeetingsData;
 
   // Get user roles to count students per lab section
-  const activeStudentPredicate = useCallback(
-    (role: UserRoleWithPrivateProfileAndUser) => role.role === "student" && !role.disabled,
-    []
+  const activeStudentRoles = useMemo(
+    () =>
+      (allUserRoles as UserRoleWithPrivateProfileAndUser[]).filter((role) => role.role === "student" && !role.disabled),
+    [allUserRoles]
   );
-  const activeStudentRoles = useListTableControllerValues(controller.userRolesWithProfiles, activeStudentPredicate);
 
   // Calculate student count per lab section
   const studentCountByLabSection = useMemo(() => {
@@ -810,7 +820,7 @@ function LabSectionsTable() {
     async (id: number) => {
       setIsDeleting(true);
       try {
-        await controller.labSections.delete(id);
+        await labSectionDeleteMutation.mutateAsync({ id });
         toaster.success({
           title: "Lab section deleted successfully"
         });
@@ -823,7 +833,7 @@ function LabSectionsTable() {
         setIsDeleting(false);
       }
     },
-    [controller.labSections]
+    [labSectionDeleteMutation]
   );
 
   const handleModalSuccess = () => {

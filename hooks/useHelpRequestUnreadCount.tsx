@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
-import { useHelpRequestMessages, useHelpRequestReadReceipts } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestMessagesQuery } from "@/hooks/office-hours-data/useHelpRequestMessagesQuery";
+import { useHelpRequestReadReceiptsQuery } from "@/hooks/office-hours-data/useHelpRequestReadReceiptsQuery";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 /**
@@ -9,8 +10,8 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
  */
 export function useHelpRequestUnreadCount(helpRequestId: number | undefined): number {
   const { private_profile_id } = useClassProfiles();
-  const messages = useHelpRequestMessages(helpRequestId);
-  const readReceipts = useHelpRequestReadReceipts(helpRequestId);
+  const { data: messages = [] } = useHelpRequestMessagesQuery(helpRequestId ?? null);
+  const { data: readReceipts = [] } = useHelpRequestReadReceiptsQuery(helpRequestId ?? null);
 
   return useMemo(() => {
     if (!helpRequestId || !private_profile_id) return 0;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestsQuery, useHelpQueuesQuery, useHelpRequestStudentsQuery } from "@/hooks/office-hours-data";
 import { useStudentRoster } from "@/hooks/useCourseController";
 import { PopoverRoot, PopoverContent } from "@/components/ui/popover";
 import { Badge, Box, HStack, Input, Popover, Spinner, Stack, Text, Avatar, Icon } from "@chakra-ui/react";
@@ -79,9 +79,9 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Get data from hooks
-  const allHelpRequests = useHelpRequests();
-  const helpQueues = useHelpQueues();
-  const helpRequestStudents = useHelpRequestStudents();
+  const { data: allHelpRequests = [] } = useHelpRequestsQuery();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
+  const { data: helpRequestStudents = [] } = useHelpRequestStudentsQuery();
   const studentRoster = useStudentRoster();
 
   // Build mappings
@@ -159,7 +159,7 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
 
         // Search in student names
         const requestStudents = requestStudentsMap[request.id] || [];
-        const studentNameMatch = requestStudents.some((profileId) => {
+        const studentNameMatch = requestStudents.some((profileId: string) => {
           const studentName = studentNameMap?.[profileId];
           return studentName && words.every((word) => studentName.toLowerCase().includes(word));
         });

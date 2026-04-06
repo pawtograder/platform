@@ -1,4 +1,5 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
+import { AssignmentDataBridge } from "@/hooks/assignment-data";
 import { createClientWithCaching, fetchAssignmentControllerData, getUserRolesForCourse } from "@/lib/ssrUtils";
 import { TZDate } from "@date-fns/tz";
 import { isAfter } from "date-fns";
@@ -55,7 +56,9 @@ export default async function AssignmentLayout({
   );
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
-      {children}
+      <AssignmentDataBridge assignmentId={assignmentId} initialData={initialData}>
+        {children}
+      </AssignmentDataBridge>
     </AssignmentProvider>
   );
 }

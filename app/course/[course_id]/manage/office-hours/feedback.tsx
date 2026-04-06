@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useList } from "@refinedev/core";
-import { useHelpRequestFeedback } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestFeedbackQuery } from "@/hooks/office-hours-data";
 import { formatDistanceToNow } from "date-fns";
 import {
   BsHandThumbsUp,
@@ -39,7 +39,7 @@ export default function HelpRequestFeedbackComponent() {
   const [filterRating, setFilterRating] = useState<"all" | "positive" | "negative">("all");
 
   // Fetch help request feedback data using realtime hook
-  const allFeedback = useHelpRequestFeedback();
+  const { data: allFeedback = [] } = useHelpRequestFeedbackQuery();
 
   // Filter by class_id since the hook returns all feedback
   const feedbackData = useMemo(() => {

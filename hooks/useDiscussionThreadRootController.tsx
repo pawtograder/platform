@@ -1,12 +1,9 @@
-import TableController, {
-  useListTableControllerValues,
-  useTableControllerTableValues,
-  useTableControllerValueById
-} from "@/lib/TableController";
+import TableController from "@/lib/TableController";
 import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { DiscussionThreadRealTimeController } from "@/lib/DiscussionThreadRealTimeController";
+import { DiscussionDataProvider, useDiscussionThreadQuery } from "./discussion-data";
 
 export type DiscussionThreadWithChildren = DiscussionThread & {
   children: DiscussionThread[];
@@ -22,17 +19,17 @@ export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus 
  */
 export function useDiscussionThreadRoot() {
   const controller = useDiscussionThreadsController();
-  const rootThread = useTableControllerValueById(controller.tableController, controller.root_id);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === rootThread?.id, [rootThread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
-  const ret = useMemo(() => {
+  const { data } = useDiscussionThreadQuery();
+  return useMemo(() => {
+    if (!data) return undefined;
+    const rootThread = data.find((t) => t.id === controller.root_id);
     if (!rootThread) return undefined;
+    const children = data.filter((t) => t.parent === rootThread.id);
     return {
       ...rootThread,
       children
     } as DiscussionThreadWithChildren;
-  }, [rootThread, children]);
-  return ret;
+  }, [data, controller.root_id]);
 }
 
 /**
@@ -40,10 +37,10 @@ export function useDiscussionThreadRoot() {
  * Children are sorted by likes_count descending (then created_at ascending) with stable ordering
  */
 export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
-  const controller = useDiscussionThreadsController();
-  const thread = useTableControllerValueById(controller.tableController, threadId);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === thread?.id, [thread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  const { data } = useDiscussionThreadQuery();
+
+  const thread = useMemo(() => data?.find((t) => t.id === threadId), [data, threadId]);
+  const children = useMemo(() => (data ?? []).filter((t) => t.parent === thread?.id), [data, thread]);
 
   // Stable sort order: capture initial order on first render, maintain it during session
   // Reset when threadId changes (component remounts)
@@ -143,8 +140,8 @@ export default function useDiscussionThreadChildren(threadId: number): Discussio
  * Hook to get all discussion threads for the current root (flat list)
  */
 export function useAllDiscussionThreads(): DiscussionThread[] {
-  const controller = useDiscussionThreadsController();
-  return useTableControllerTableValues(controller.tableController);
+  const { data } = useDiscussionThreadQuery();
+  return data ?? [];
 }
 /**
  * Controller for managing a specific discussion thread and its realtime subscriptions.
@@ -257,13 +254,29 @@ export function DiscussionThreadsControllerProvider({
     };
   }, [courseController, root_id]);
 
-  if (!controller) {
+  const discussionDataValue = useMemo(() => {
+    if (!controller || !courseController?.client) return null;
+    let classRtc = null;
+    try {
+      classRtc = courseController.classRealTimeController;
+    } catch {
+      // Not yet initialized
+    }
+    return {
+      rootThreadId: root_id,
+      courseId: courseController.courseId,
+      supabase: courseController.client,
+      classRtc
+    };
+  }, [controller, courseController, root_id]);
+
+  if (!controller || !discussionDataValue) {
     return null;
   }
 
   return (
     <DiscussionThreadsControllerContext.Provider value={controller}>
-      {children}
+      <DiscussionDataProvider value={discussionDataValue}>{children}</DiscussionDataProvider>
     </DiscussionThreadsControllerContext.Provider>
   );
 }

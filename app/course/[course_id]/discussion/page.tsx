@@ -5,8 +5,12 @@ import { TopPostsSidebar } from "@/components/discussion/TopPostsSidebar";
 import { TopicCard } from "@/components/discussion/TopicCard";
 import { TopicFollowMultiSelect } from "@/components/discussion/TopicFollowMultiSelect";
 import { useFollowedDiscussionTopicIds, useTopicFollowActions } from "@/hooks/useDiscussionTopicFollow";
-import { useCourseController, useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
-import { useTableControllerTableValues } from "@/lib/TableController";
+import { useDiscussionThreadTeasers } from "@/hooks/useCourseController";
+import {
+  useDiscussionTopicsQuery,
+  useDiscussionThreadWatchersQuery,
+  useDiscussionThreadReadStatusQuery
+} from "@/hooks/course-data";
 import { Box, Flex, Heading, HStack, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -21,19 +25,18 @@ export default function DiscussionPage() {
   const topicParam = searchParams.get("topic");
   const topicFromUrl = topicParam ? Number.parseInt(topicParam) : null;
 
-  const controller = useCourseController();
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
   const threads = useDiscussionThreadTeasers();
 
   const followedTopicIds = useFollowedDiscussionTopicIds();
   const { setTopicFollowStatusForId } = useTopicFollowActions();
-  const watches = useTableControllerTableValues(controller.discussionThreadWatchers);
+  const { data: watches = [] } = useDiscussionThreadWatchersQuery();
   const followedThreadIds = useMemo(() => {
     const ws = watches ?? [];
     return new Set(ws.filter((w) => w.enabled).map((w) => w.discussion_thread_root_id));
   }, [watches]);
 
-  const readStatuses = useTableControllerTableValues(controller.discussionThreadReadStatus);
+  const { data: readStatuses = [] } = useDiscussionThreadReadStatusQuery();
   const readAtByThreadId = useMemo(() => {
     const map = new Map<number, string | null>();
     for (const s of readStatuses ?? []) map.set(s.discussion_thread_id, s.read_at);

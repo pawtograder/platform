@@ -7,7 +7,13 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useCourse, useCourseController, useStudentRoster } from "@/hooks/useCourseController";
-import { useListTableControllerValues, useTableControllerValueById } from "@/lib/TableController";
+import {
+  useAssignmentDueDateExceptionsQuery,
+  useAssignmentDueDateExceptionInsert,
+  useAssignmentDueDateExceptionDelete,
+  useAssignmentGroupsQuery,
+  useAssignmentsQuery
+} from "@/hooks/course-data";
 import { Assignment, AssignmentDueDateException, AssignmentGroup, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -68,19 +74,19 @@ function AdjustDueDateDialogContent({
   const { time_zone } = useCourse();
   const originalDueDate = new TZDate(assignment.due_date!);
   const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
-  const { assignmentDueDateExceptions } = useCourseController();
+  const { data: allExceptions = [] } = useAssignmentDueDateExceptionsQuery();
+  const insertException = useAssignmentDueDateExceptionInsert();
+  const deleteException = useAssignmentDueDateExceptionDelete();
 
-  const predicate = useCallback(
-    (exception: AssignmentDueDateException) => {
-      return (
-        exception.assignment_id === assignment.id &&
-        ((exception.student_id === student_id && !group) || (exception.assignment_group_id === group?.id && !!group))
-      );
-    },
-    [assignment.id, student_id, group]
+  const extensions = useMemo(
+    () =>
+      allExceptions.filter(
+        (exception: AssignmentDueDateException) =>
+          exception.assignment_id === assignment.id &&
+          ((exception.student_id === student_id && !group) || (exception.assignment_group_id === group?.id && !!group))
+      ),
+    [allExceptions, assignment.id, student_id, group]
   );
-
-  const extensions = useListTableControllerValues(assignmentDueDateExceptions, predicate);
 
   // Calculate final due date with extensions
   const hoursExtended = extensions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
@@ -152,7 +158,7 @@ function AdjustDueDateDialogContent({
         creator_id: private_profile_id!
       };
       try {
-        await assignmentDueDateExceptions.create(data);
+        await insertException.mutateAsync(data);
         toaster.create({
           title: "Due date exception added",
           description: "The due date exception has been added.",
@@ -174,7 +180,7 @@ function AdjustDueDateDialogContent({
       group,
       student_id,
       assignment.class_id,
-      assignmentDueDateExceptions,
+      insertException,
       private_profile_id,
       reset,
       setError,
@@ -535,7 +541,7 @@ function AdjustDueDateDialogContent({
                           confirmHeader="Delete extension"
                           confirmText="Are you sure you want to delete this extension?"
                           onConfirm={async () => {
-                            await assignmentDueDateExceptions.hardDelete(extension.id);
+                            await deleteException.mutateAsync({ id: extension.id });
                           }}
                         />
                       }
@@ -607,37 +613,31 @@ export function AdjustDueDateDialog({
 export default function DueDateExceptions() {
   const course = useCourse();
   const { assignment_id } = useParams();
-  const { assignments, assignmentGroupsWithMembers, assignmentDueDateExceptions } = useCourseController();
-  //Ensure all data is fresh
-  useEffect(() => {
-    assignments.refetchAll();
-  }, [assignments]);
-  useEffect(() => {
-    assignmentDueDateExceptions.refetchAll();
-  }, [assignmentDueDateExceptions]);
-  useEffect(() => {
-    assignmentGroupsWithMembers.refetchAll();
-  }, [assignmentGroupsWithMembers]);
+  const { data: allAssignments = [] } = useAssignmentsQuery();
+  const { data: allGroupsData = [] } = useAssignmentGroupsQuery();
+  const { data: allExceptionsData = [] } = useAssignmentDueDateExceptionsQuery();
   const controller = useCourseController();
 
   // Get assignment data
-  const assignment = useTableControllerValueById(assignments, Number.parseInt(assignment_id as string));
+  const assignment = useMemo(
+    () => allAssignments.find((a) => a.id === Number.parseInt(assignment_id as string)),
+    [allAssignments, assignment_id]
+  );
 
   // Get groups for this assignment
-  const groupPredicate = useMemo(() => {
-    return (group: AssignmentGroup) => {
-      return group.assignment_id === Number.parseInt(assignment_id as string);
-    };
-  }, [assignment_id]);
-  const groups = useListTableControllerValues(assignmentGroupsWithMembers, groupPredicate);
+  const groups = useMemo(
+    () => allGroupsData.filter((group) => group.assignment_id === Number.parseInt(assignment_id as string)),
+    [allGroupsData, assignment_id]
+  );
 
   // Get all extensions for this assignment
-  const extensionPredicate = useMemo(() => {
-    return (exception: AssignmentDueDateException) => {
-      return exception.assignment_id === Number.parseInt(assignment_id as string);
-    };
-  }, [assignment_id]);
-  const allExtensions = useListTableControllerValues(assignmentDueDateExceptions, extensionPredicate);
+  const allExtensions = useMemo(
+    () =>
+      allExceptionsData.filter(
+        (exception: AssignmentDueDateException) => exception.assignment_id === Number.parseInt(assignment_id as string)
+      ),
+    [allExceptionsData, assignment_id]
+  );
 
   // Get student roster
   const studentRoster = useStudentRoster();

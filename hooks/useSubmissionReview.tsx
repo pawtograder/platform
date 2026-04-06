@@ -1,13 +1,12 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { useAssignmentController, useReviewAssignment } from "./useAssignment";
 import {
-  useAssignmentController,
-  useMyReviewAssignments,
-  useReviewAssignment,
-  useRubricChecksByRubric,
-  useRubricCriteriaByRubric,
-  useRubricParts
-} from "./useAssignment";
+  useReviewAssignmentsQuery,
+  useRubricChecksQuery,
+  useRubricCriteriaQuery,
+  useRubricPartsQuery
+} from "./assignment-data";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -49,7 +48,11 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const submission = useSubmission();
-  const myAssignedReviews = useMyReviewAssignments(submission?.id);
+  const { data: allMyReviewAssignments = [] } = useReviewAssignmentsQuery();
+  const myAssignedReviews = useMemo(
+    () => allMyReviewAssignments.filter((a) => a.submission_id === submission?.id),
+    [allMyReviewAssignments, submission?.id]
+  );
   const writableReviews = useWritableSubmissionReviews();
   const assignmentController = useAssignmentController();
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
@@ -323,10 +326,22 @@ export function useMissingRubricChecksForActiveReview() {
   const submission = useSubmission();
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
 
-  const rubricChecks = useRubricChecksByRubric(activeSubmissionReview?.rubric_id);
-  const allCriteria = useRubricCriteriaByRubric(activeSubmissionReview?.rubric_id);
-  const rubricPartsRaw = useRubricParts(activeSubmissionReview?.rubric_id ?? null);
-  const rubricParts = useMemo(() => rubricPartsRaw ?? [], [rubricPartsRaw]);
+  const activeRubricId = activeSubmissionReview?.rubric_id;
+  const { data: allRubricChecks = [] } = useRubricChecksQuery();
+  const rubricChecks = useMemo(
+    () => allRubricChecks.filter((c) => c.rubric_id === activeRubricId),
+    [allRubricChecks, activeRubricId]
+  );
+  const { data: allRubricCriteria = [] } = useRubricCriteriaQuery();
+  const allCriteria = useMemo(
+    () => allRubricCriteria.filter((c) => c.rubric_id === activeRubricId),
+    [allRubricCriteria, activeRubricId]
+  );
+  const { data: allRubricParts = [] } = useRubricPartsQuery();
+  const rubricParts = useMemo(
+    () => allRubricParts.filter((p) => p.rubric_id === activeRubricId),
+    [allRubricParts, activeRubricId]
+  );
   const groupRow = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
@@ -389,7 +404,11 @@ export function useActiveSubmissionReview() {
 
   // Check if we're still loading data that could affect activeSubmissionReviewId
   const submission = useSubmission();
-  const myAssignedReviews = useMyReviewAssignments(submission?.id);
+  const { data: allMyReviews = [] } = useReviewAssignmentsQuery();
+  const myAssignedReviews = useMemo(
+    () => allMyReviews.filter((a) => a.submission_id === submission?.id),
+    [allMyReviews, submission?.id]
+  );
   const assignmentController = useAssignmentController();
 
   // Always call the hook to avoid conditional hook calls

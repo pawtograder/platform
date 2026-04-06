@@ -9,7 +9,7 @@ import { createClient } from "@/utils/supabase/client";
 import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useCreate } from "@refinedev/core";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestStudentsQuery } from "@/hooks/office-hours-data";
 
 type MeetingWindow = {
   window: Window;
@@ -21,7 +21,7 @@ export function useMeetingWindows() {
   const meetingWindows = useRef<Map<string, MeetingWindow>>(new Map());
   const supabase = createClient();
   const { private_profile_id } = useClassProfiles();
-  const allHelpRequestStudents = useHelpRequestStudents();
+  const { data: allHelpRequestStudents = [] } = useHelpRequestStudentsQuery();
 
   // Hook for logging student activity
   const { mutateAsync: createStudentActivity } = useCreate({

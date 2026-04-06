@@ -7,15 +7,16 @@ import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
 import { useActiveSubmissions, useAssignmentController, useRubricParts, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController, useGradersAndInstructors } from "@/hooks/useCourseController";
 import {
-  useAssignments,
-  useClassSections,
-  useCourseController,
-  useGradersAndInstructors,
-  useLabSections,
-  useUserRolesWithProfiles
-} from "@/hooks/useCourseController";
-import useTags from "@/hooks/useTags";
+  useAssignmentsQuery,
+  useTagsQuery,
+  useLabSectionsQuery,
+  useLabSectionLeadersQuery,
+  useClassSectionsQuery,
+  useUserRolesQuery,
+  useAssignmentGroupsQuery
+} from "@/hooks/course-data";
 import TableController, {
   PossiblyTentativeResult,
   useListTableControllerValues,
@@ -94,7 +95,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const assignmentController = useAssignmentController();
   const assignment = assignmentController.assignment;
   const rubrics = useRubrics();
-  const labSections = useLabSections();
+  const { data: labSections = [] } = useLabSectionsQuery();
   const { course_id, assignment_id } = useParams();
   const [selectedRubric, setSelectedRubric] = useState<Rubric>();
   const rubricParts = useRubricParts(selectedRubric?.id);
@@ -152,66 +153,43 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const [isGeneratingReviews, setIsGeneratingReviews] = useState(false);
   const { role: classRole } = useClassProfiles();
   const course = classRole.classes;
-  const { tags } = useTags();
+  const { data: tags = [] } = useTagsQuery();
   const supabase = useMemo(() => createClient(), []);
 
-  const classSections = useClassSections();
-  const allAssignments = useAssignments();
+  const { data: classSections = [] } = useClassSectionsQuery();
+  const { data: allAssignments = [] } = useAssignmentsQuery();
 
   const gradingRubric = rubrics.find((rubric) => rubric.review_round === "grading-review");
   const allActiveSubmissions = useActiveSubmissions();
 
-  const userRoles = useUserRolesWithProfiles();
+  const { data: userRoles = [] } = useUserRolesQuery();
 
   const courseController = useCourseController();
 
   // Map of assignment_group_id -> member profile ids
-  const [groupMembersByGroupId, setGroupMembersByGroupId] = useState<Map<number, string[]>>(new Map());
+  const { data: assignmentGroupsData = [] } = useAssignmentGroupsQuery();
+  const groupMembersByGroupId = useMemo(() => {
+    const map = new Map<number, string[]>();
+    for (const row of assignmentGroupsData) {
+      const members =
+        (row as { assignment_groups_members?: { profile_id: string }[] }).assignment_groups_members?.map(
+          (m) => m.profile_id
+        ) ?? [];
+      map.set(row.id, members);
+    }
+    return map;
+  }, [assignmentGroupsData]);
   // Map of assignment_group_id -> mentor_profile_id (for grading by group mentors)
-  const [groupMentorByGroupId, setGroupMentorByGroupId] = useState<Map<number, string>>(new Map());
-  useEffect(() => {
-    const buildMap = (
-      rows: Array<{
-        id: number;
-        mentor_profile_id?: string | null;
-        assignment_groups_members?: { profile_id: string }[];
-      }>
-    ) => {
-      const memberMap = new Map<number, string[]>();
-      const mentorMap = new Map<number, string>();
-      for (const row of rows) {
-        const members = row.assignment_groups_members?.map((m) => m.profile_id) ?? [];
-        memberMap.set(row.id, members);
-        if (row.mentor_profile_id) {
-          mentorMap.set(row.id, row.mentor_profile_id);
-        }
+  const groupMentorByGroupId = useMemo(() => {
+    const mentorMap = new Map<number, string>();
+    for (const row of assignmentGroupsData) {
+      const r = row as { id: number; mentor_profile_id?: string | null };
+      if (r.mentor_profile_id) {
+        mentorMap.set(r.id, r.mentor_profile_id);
       }
-      return { memberMap, mentorMap };
-    };
-    const { data, unsubscribe } = courseController.assignmentGroupsWithMembers.list(
-      (
-        rows: Array<{
-          id: number;
-          mentor_profile_id?: string | null;
-          assignment_groups_members?: { profile_id: string }[];
-        }>
-      ) => {
-        const { memberMap, mentorMap } = buildMap(rows);
-        setGroupMembersByGroupId(memberMap);
-        setGroupMentorByGroupId(mentorMap);
-      }
-    );
-    const { memberMap, mentorMap } = buildMap(
-      data as Array<{
-        id: number;
-        mentor_profile_id?: string | null;
-        assignment_groups_members?: { profile_id: string }[];
-      }>
-    );
-    setGroupMembersByGroupId(memberMap);
-    setGroupMentorByGroupId(mentorMap);
-    return unsubscribe;
-  }, [courseController]);
+    }
+    return mentorMap;
+  }, [assignmentGroupsData]);
 
   // Use a separate TableController from the one in useAssignment, since it is scoped to the current user as assignee
   const [reviewAssignmentsController, setReviewAssignmentsController] = useState<
@@ -322,7 +300,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const gradersAndInstructors = useGradersAndInstructors();
 
   // Lab section leaders data
-  const labSectionLeaders = useTableControllerTableValues(courseController.labSectionLeaders);
+  const { data: labSectionLeaders = [] } = useLabSectionLeadersQuery();
 
   // Map of lab_section_id -> array of leader UserRoleWithConflictsAndName
   const labSectionLeadersMap = useMemo(() => {

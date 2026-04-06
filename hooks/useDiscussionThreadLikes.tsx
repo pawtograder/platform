@@ -1,17 +1,13 @@
-import { useFindTableControllerValue } from "@/lib/TableController";
-import { DiscussionThreadLike } from "@/utils/supabase/DatabaseTypes";
-import { useCourseController } from "./useCourseController";
+import { useDiscussionThreadLikesQuery } from "@/hooks/course-data";
 import { useMemo } from "react";
 
 /**
  * Hook to get the like status for a discussion thread by the current user
  */
 export function useDiscussionThreadLikes(thread_id: number) {
-  const controller = useCourseController();
+  const { data: likes = [] } = useDiscussionThreadLikesQuery();
 
-  const predicate = useMemo(() => (like: DiscussionThreadLike) => like.discussion_thread === thread_id, [thread_id]);
-
-  const like = useFindTableControllerValue(controller.discussionThreadLikes, predicate);
+  const like = useMemo(() => likes?.find((l) => l.discussion_thread === thread_id) ?? null, [likes, thread_id]);
 
   return like;
 }

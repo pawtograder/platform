@@ -7,7 +7,8 @@ import { Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea
 import { Controller, useForm } from "react-hook-form";
 import { useEffect } from "react";
 import { BsX, BsDiscord } from "react-icons/bs";
-import { useCourseController, useCourse, useAssignments } from "@/hooks/useCourseController";
+import { useCourse } from "@/hooks/useCourseController";
+import { useAssignmentsQuery, useDiscussionTopicUpdate } from "@/hooks/course-data";
 import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 
@@ -77,9 +78,9 @@ type EditTopicModalProps = {
  * @returns The rendered modal component, or null if no topic is provided
  */
 export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: EditTopicModalProps) {
-  const controller = useCourseController();
   const course = useCourse();
-  const assignments = useAssignments();
+  const updateTopic = useDiscussionTopicUpdate();
+  const { data: assignments = [] } = useAssignmentsQuery();
 
   // Check if Discord is configured for this class
   const isDiscordConfigured = !!course?.discord_server_id;
@@ -126,15 +127,18 @@ export default function EditTopicModal({ isOpen, onClose, onSuccess, topic }: Ed
     if (!topic) return;
 
     try {
-      await controller.discussionTopics.update(topic.id, {
-        topic: data.topic,
-        description: data.description,
-        color: data.color,
-        assignment_id: data.assignment_id ? Number(data.assignment_id) : null,
-        icon: data.icon ? data.icon : null,
-        default_follow: data.default_follow,
-        discord_channel_id: data.discord_channel_id?.trim() || null,
-        show_in_office_hours: data.show_in_office_hours || false
+      await updateTopic.mutateAsync({
+        id: topic.id,
+        values: {
+          topic: data.topic,
+          description: data.description,
+          color: data.color,
+          assignment_id: data.assignment_id ? Number(data.assignment_id) : null,
+          icon: data.icon ? data.icon : null,
+          default_follow: data.default_follow,
+          discord_channel_id: data.discord_channel_id?.trim() || null,
+          show_in_office_hours: data.show_in_office_hours || false
+        }
       });
 
       toaster.success({

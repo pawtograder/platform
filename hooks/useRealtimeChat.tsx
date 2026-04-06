@@ -5,7 +5,11 @@ import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTyp
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { useHelpRequestMessages, useHelpRequestReadReceipts, useOfficeHoursController } from "./useOfficeHoursRealtime";
+import { useOfficeHoursController } from "./useOfficeHoursRealtime";
+import { useHelpRequestMessagesQuery } from "./office-hours-data/useHelpRequestMessagesQuery";
+import { useHelpRequestReadReceiptsQuery } from "./office-hours-data/useHelpRequestReadReceiptsQuery";
+import { useHelpRequestMessageInsert } from "./office-hours-data/useHelpRequestMessageMutations";
+import { useHelpRequestReadReceiptInsert } from "./office-hours-data/useHelpRequestReadReceiptMutations";
 
 export interface UseRealtimeChatOptions {
   helpRequestId: number;
@@ -35,7 +39,18 @@ export interface UseRealtimeChatReturn {
  * Hook for real-time chat functionality in help requests.
  * Provides message sending, read receipt management, and connection status.
  *
- * This hook replaces the chat-specific functionality from useOfficeHoursRealtime.
+ * Data reads (messages, read receipts) use TanStack Query via
+ * `useHelpRequestMessagesQuery` / `useHelpRequestReadReceiptsQuery` which
+ * have `gcTime: 5 * 60 * 1000` -- this replaces the old unbounded
+ * `_helpRequestMessageControllers` Map on OfficeHoursController (P0 memory leak).
+ *
+ * Mutations use `useHelpRequestMessageInsert` / `useHelpRequestReadReceiptInsert`
+ * which go through `useSupabaseRealtimeMutation` with optimistic updates.
+ *
+ * The OfficeHoursController is still used for:
+ * - `markMessageAsRead()` dedup tracking (in-memory Set)
+ * - Realtime channel management (ensureHelpRequestChannelReady, subscribeToHelpRequest)
+ * - Connection status
  */
 export function useRealtimeChat({
   helpRequestId,
@@ -46,9 +61,13 @@ export function useRealtimeChat({
   const { user } = useAuthState();
   const { private_profile_id } = useClassProfiles();
 
-  // Get messages and read receipts using individual hooks
-  const messages = useHelpRequestMessages(helpRequestId);
-  const allReadReceipts = useHelpRequestReadReceipts(helpRequestId);
+  // --- Data reads via TanStack Query (auto-eviction fixes the leak) ---
+  const { data: messages = [], isLoading: messagesLoading } = useHelpRequestMessagesQuery(helpRequestId);
+  const { data: allReadReceipts = [], isLoading: receiptsLoading } = useHelpRequestReadReceiptsQuery(helpRequestId);
+
+  // --- Mutations via TanStack Query ---
+  const insertMessage = useHelpRequestMessageInsert(helpRequestId);
+  const insertReadReceipt = useHelpRequestReadReceiptInsert(helpRequestId);
 
   // Filter read receipts for this help request and exclude current user
   const readReceipts = useMemo(() => {
@@ -78,27 +97,6 @@ export function useRealtimeChat({
 
         // Step 2: Now subscribe to the channel (channel is already created)
         unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, () => {});
-
-        // Step 3: Load messages for this help request
-        const helpRequestController = controller.loadMessagesForHelpRequest(helpRequestId);
-
-        // Step 4: Initial refetch to get current messages
-        // Now that the channel is subscribed, we won't miss any new messages
-        await helpRequestController.refetchAll();
-
-        if (cleanedUpRef.current) return;
-
-        // Step 5: Secondary refetch after a short delay to catch any messages
-        // that might have arrived during the subscription setup window
-        // This handles edge cases where a message was sent right as we were connecting
-        setTimeout(async () => {
-          if (cleanedUpRef.current) return;
-          try {
-            await helpRequestController.refetchAll();
-          } catch {
-            // Silently ignore errors on secondary refetch - not critical
-          }
-        }, 500);
       } catch (error) {
         // Log but don't throw - chat should degrade gracefully
         console.error("Error initializing chat subscription:", error);
@@ -136,11 +134,8 @@ export function useRealtimeChat({
         throw new Error("Message content cannot be empty");
       }
 
-      // Get the help request specific controller for message creation
-      const helpRequestController = controller.loadMessagesForHelpRequest(helpRequestId);
-
       try {
-        await helpRequestController.create({
+        await insertMessage.mutateAsync({
           message: content,
           help_request_id: helpRequestId,
           author: private_profile_id,
@@ -157,7 +152,7 @@ export function useRealtimeChat({
         throw error;
       }
     },
-    [enableChat, user, private_profile_id, helpRequestId, classId, controller]
+    [enableChat, user, private_profile_id, helpRequestId, classId, insertMessage]
   );
 
   const markMessageAsRead = useCallback(
@@ -186,13 +181,12 @@ export function useRealtimeChat({
       }
 
       try {
-        const readReceiptsController = controller.loadReadReceiptsForHelpRequest(helpRequestId);
-        await readReceiptsController.create({
+        await insertReadReceipt.mutateAsync({
           message_id: messageId,
           viewer_id: private_profile_id,
           class_id: classId,
           help_request_id: helpRequestId
-        } as unknown as HelpRequestMessageReadReceipt);
+        } as unknown as Parameters<typeof insertReadReceipt.mutateAsync>[0]);
       } catch (error) {
         // Remove from marked set on failure to allow retry
         controller.clearMarkedAsReadState();
@@ -200,7 +194,7 @@ export function useRealtimeChat({
         throw error;
       }
     },
-    [enableChat, user, private_profile_id, classId, allReadReceipts, controller, helpRequestId]
+    [enableChat, user, private_profile_id, classId, allReadReceipts, controller, helpRequestId, insertReadReceipt]
   );
 
   return {
@@ -215,6 +209,6 @@ export function useRealtimeChat({
     isAuthorized,
     connectionError,
     readReceipts,
-    isLoading: !controller.isReady
+    isLoading: messagesLoading || receiptsLoading
   };
 }

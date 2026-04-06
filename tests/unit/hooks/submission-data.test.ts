@@ -12,43 +12,13 @@ import { useSubmissionFullQuery } from "@/hooks/submission-data/useSubmissionFul
 import { useSubmissionCommentInsert } from "@/hooks/submission-data/useSubmissionCommentMutations";
 import { SubmissionDataProvider } from "@/hooks/submission-data/useSubmissionDataContext";
 import type { SubmissionDataContextValue } from "@/hooks/submission-data/useSubmissionDataContext";
+import { setupMockBroadcastChannel, resetAllChannels } from "@/tests/mocks/MockBroadcastChannel";
 
 // ---------------------------------------------------------------------------
 // BroadcastChannel mock (jsdom has no native support)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const channelRegistry = new Map<string, Set<any>>();
-
-class MockBroadcastChannel {
-  name: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onmessage: ((ev: { data: any }) => void) | null = null;
-
-  constructor(name: string) {
-    this.name = name;
-    if (!channelRegistry.has(name)) channelRegistry.set(name, new Set());
-    channelRegistry.get(name)!.add(this);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  postMessage(data: any) {
-    const peers = channelRegistry.get(this.name);
-    if (!peers) return;
-    for (const peer of peers) {
-      if (peer !== this && peer.onmessage) {
-        peer.onmessage({ data: JSON.parse(JSON.stringify(data)) });
-      }
-    }
-  }
-
-  close() {
-    channelRegistry.get(this.name)?.delete(this);
-  }
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(globalThis as any).BroadcastChannel = MockBroadcastChannel;
+setupMockBroadcastChannel();
 
 // ---------------------------------------------------------------------------
 // Mock useLeaderContext
@@ -172,7 +142,7 @@ function createWrapper(queryClient: QueryClient, ctxValue: SubmissionDataContext
 
 describe("useSubmissionCommentsQuery", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 
@@ -202,7 +172,7 @@ describe("useSubmissionCommentsQuery", () => {
 
 describe("useSubmissionFileCommentsQuery", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 
@@ -229,7 +199,7 @@ describe("useSubmissionFileCommentsQuery", () => {
 
 describe("useSubmissionReviewsQuery", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 
@@ -256,7 +226,7 @@ describe("useSubmissionReviewsQuery", () => {
 
 describe("useSubmissionFullQuery", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 
@@ -289,7 +259,7 @@ describe("useSubmissionFullQuery", () => {
 
 describe("all hooks use scoped scope", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 
@@ -333,7 +303,7 @@ describe("all hooks use scoped scope", () => {
 
 describe("useSubmissionCommentInsert", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
     jest.clearAllMocks();
   });
 

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
-import { useHelpRequests, useHelpRequestStudents, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestsQuery, useHelpRequestStudentsQuery, useHelpQueuesQuery } from "@/hooks/office-hours-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 
@@ -19,9 +19,9 @@ export interface ActiveHelpRequestInfo {
 export function useActiveHelpRequest() {
   const { private_profile_id } = useClassProfiles();
   const pathname = usePathname();
-  const allHelpRequests = useHelpRequests();
-  const allHelpRequestStudents = useHelpRequestStudents();
-  const allHelpQueues = useHelpQueues();
+  const { data: allHelpRequests = [] } = useHelpRequestsQuery();
+  const { data: allHelpRequestStudents = [] } = useHelpRequestStudentsQuery();
+  const { data: allHelpQueues = [] } = useHelpQueuesQuery();
 
   // Check if we're currently on a help request detail page
   // Pattern: /course/[course_id]/office-hours/[queue_id]/[request_id]

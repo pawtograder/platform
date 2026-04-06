@@ -33,7 +33,8 @@ import {
   DialogCloseTrigger
 } from "@/components/ui/dialog";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
-import { useAssignments, useSurveySeries } from "@/hooks/useCourseController";
+import { useSurveySeries } from "@/hooks/useCourseController";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import { AnalyticsConfigEditor } from "@/components/survey/AnalyticsConfigEditor";
 import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 
@@ -115,7 +116,7 @@ export default function SurveyForm({
   // Student selector modal state
   const [isStudentSelectorOpen, setIsStudentSelectorOpen] = useState(false);
 
-  const assignments = useAssignments();
+  const { data: assignments = [] } = useAssignmentsQuery();
   const { series: surveySeries } = useSurveySeries();
   const currentJson = watch("json");
   const watchSeriesId = watch("series_id");

@@ -3,7 +3,7 @@
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import { useConnectionStatus, useHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpQueue, HelpQueueAssignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
@@ -32,7 +32,7 @@ export default function HelpQueueAssignmentManagement() {
   const realtimeLoading = !helpQueues || !helpQueueAssignments;
 
   // Get class profiles
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
 
   // Mutations for assignment management - only use Refine for database operations
   const { mutateAsync: updateAssignment } = useUpdate();

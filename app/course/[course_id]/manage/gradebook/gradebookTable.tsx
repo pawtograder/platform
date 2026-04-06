@@ -19,12 +19,12 @@ import {
   useAreAllDependenciesReleased,
   useGradebookColumn,
   useGradebookColumnGrades,
-  useGradebookColumns,
   useGradebookController,
   useGradebookRefetchStatus,
   useIsGradebookDataReady,
   useStudentDetailView
 } from "@/hooks/useGradebook";
+import { useGradebookColumnsQuery } from "@/hooks/course-data";
 import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -683,7 +683,7 @@ function ConvertMissingToZeroDialog({ columnId, onClose }: { columnId: number; o
 function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: () => void }) {
   const supabase = createClient();
   const [isDeleting, setIsDeleting] = useState(false);
-  const columns = useGradebookColumns();
+  const { data: columns = [] } = useGradebookColumnsQuery();
   const gradebookController = useGradebookController();
   const dependentColumns = useMemo(() => {
     return columns.filter(
@@ -1640,7 +1640,7 @@ export default function GradebookTable() {
   const students = useAllStudentRoles();
   const courseController = useCourseController();
   const gradebookController = useGradebookController();
-  const gradebookColumns = useGradebookColumns();
+  const { data: gradebookColumns = [] } = useGradebookColumnsQuery();
   const [gradebookDataEpoch, setGradebookDataEpoch] = useState(0);
   useEffect(() => {
     return gradebookController.table.subscribeToData(() => {

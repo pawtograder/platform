@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/drawer";
 import { useActiveHelpRequest } from "@/hooks/useActiveHelpRequest";
 import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
-import { useCourseController, useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useCourseController, useDiscussionThreadTeasers } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery } from "@/hooks/course-data";
 import {
   useHelpQueueAssignments,
   useHelpQueues,
@@ -46,7 +47,7 @@ function HelpDrawer({ isOpen, onClose }: HelpDrawerProps) {
   const allHelpRequests = useHelpRequests();
   const helpRequestStudents = useHelpRequestStudents();
   const threads = useDiscussionThreadTeasers();
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
   const officeHoursEvents = useOfficeHoursSchedule();
   const courseController = useCourseController();
 

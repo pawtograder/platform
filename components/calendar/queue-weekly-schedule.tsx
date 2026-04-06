@@ -7,7 +7,7 @@ import { useMemo, useState, useEffect } from "react";
 import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
 import { isUrl, CalendarColorPalette, isEventCurrentlyHappening } from "./calendar-utils";
 import { useCalendarColorsFromEvents, getResolvedQueueName } from "./CalendarColorContext";
-import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueuesQuery } from "@/hooks/office-hours-data";
 
 interface EventsByDay {
   [dateKey: string]: CalendarEvent[];
@@ -37,7 +37,7 @@ function DayColumn({ date, events, isToday, getOfficeHoursColor }: DayColumnProp
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
   const monthName = format(date, "MMM");
-  const helpQueues = useHelpQueues();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
   const [now, setNow] = useState(new Date());
 
   // Update current time every minute to check if event is active

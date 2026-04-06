@@ -3,7 +3,8 @@
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController, useStudentRoster } from "@/hooks/useCourseController";
-import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
+import { getScore, useGradebookController } from "@/hooks/useGradebook";
+import { useGradebookColumnsQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { GradebookColumn, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
@@ -61,7 +62,7 @@ export default function ImportGradebookColumns() {
   const [importJob, setImportJob] = useState<ImportJob>();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const gradebookController = useGradebookController();
-  const existingColumns = useGradebookColumns();
+  const { data: existingColumns = [] } = useGradebookColumnsQuery();
   // State for mapping
   const [studentIdentifierCol, setStudentIdentifierCol] = useState<number | null>(null);
   const [studentIdentifierType, setStudentIdentifierType] = useState<"email" | "sid">("email");

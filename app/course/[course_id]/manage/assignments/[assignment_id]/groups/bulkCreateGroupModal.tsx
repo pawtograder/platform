@@ -21,7 +21,7 @@ import { useAllStudentRoles } from "@/hooks/useCourseController";
 import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
 import { MultiValue, Select } from "chakra-react-select";
-import useTags from "@/hooks/useTags";
+import { useTagsQuery } from "@/hooks/course-data";
 import { useList } from "@refinedev/core";
 import TagDisplay from "@/components/ui/tag";
 
@@ -177,7 +177,7 @@ export default function BulkCreateGroup({
     return size > (assignment.max_group_size ?? ungroupedProfiles.length) || size < (assignment.min_group_size ?? 1);
   };
 
-  const { tags } = useTags();
+  const { data: tags = [] } = useTagsQuery();
 
   const uniqueTags: Tag[] = Array.from(
     tags

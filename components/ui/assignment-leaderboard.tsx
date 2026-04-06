@@ -1,6 +1,6 @@
 "use client";
 import PersonName from "@/components/ui/person-name";
-import { useLeaderboard } from "@/hooks/useAssignment";
+import { useLeaderboardQuery } from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { AssignmentLeaderboardEntry } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Heading, HStack, Table, Text, VStack } from "@chakra-ui/react";
@@ -13,8 +13,8 @@ interface AssignmentLeaderboardProps {
 export default function AssignmentLeaderboard({ maxEntries = 10 }: AssignmentLeaderboardProps) {
   const { public_profile_id } = useClassProfiles();
 
-  // Use the TableController-based hook for real-time leaderboard data
-  const leaderboardData = useLeaderboard();
+  // Use TanStack Query for real-time leaderboard data
+  const { data: leaderboardData = [] } = useLeaderboardQuery();
 
   // Sort by autograder_score descending and limit to maxEntries
   const leaderboardEntries = useMemo(() => {

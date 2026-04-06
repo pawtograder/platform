@@ -1,5 +1,4 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -7,10 +6,15 @@ import { ClassRealTimeController } from "./ClassRealTimeController";
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 import * as Sentry from "@sentry/nextjs";
 
+// Re-export broadcast message types from the extracted module so existing consumers don't break
+export type {
+  BroadcastMessage,
+  GradebookRowRecalcStateBroadcastMessage,
+  TablesThatHaveAnIDField
+} from "./BroadcastMessageTypes";
+import type { BroadcastMessage, TablesThatHaveAnIDField } from "./BroadcastMessageTypes";
+
 type DatabaseTableTypes = Database["public"]["Tables"];
-export type TablesThatHaveAnIDField = {
-  [K in keyof DatabaseTableTypes]: DatabaseTableTypes[K]["Row"] extends { id: number | string } ? K : never;
-}[keyof DatabaseTableTypes];
 
 type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["Row"]["id"];
 
@@ -556,44 +560,8 @@ export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };
 
-//TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
-export type GradebookRowRecalcStateBroadcastMessage = {
-  type: "gradebook_row_recalc_state";
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  table: "gradebook_row_recalc_state";
-  class_id: number;
-  row_id: null;
-  data: null;
-  timestamp: string;
-  affected_count: number;
-  affected_rows: Array<{
-    student_id: string;
-    dirty: boolean;
-    is_recalculating: boolean;
-  }>; // Array of affected rows with their state (only private rows included)
-  requires_refetch: false; // Always false since we include the data
-};
-
-export type BroadcastMessage =
-  | {
-      type: "table_change" | "channel_created" | "system" | "staff_data_change";
-      operation?: "INSERT" | "UPDATE" | "DELETE" | "BULK_UPDATE";
-      table?: TablesThatHaveAnIDField | "gradebook_row_recalc_state"; // Include gradebook_row_recalc_state which doesn't have an id field
-      row_id?: number | string;
-      row_ids?: (number | string)[]; // Array of IDs for bulk operations
-      data?: Record<string, unknown>;
-      submission_id?: number;
-      help_request_id?: number;
-      help_queue_id?: number;
-      class_id: number;
-      student_profile_id?: number;
-      target_audience?: "user" | "staff";
-      timestamp: string;
-      affected_count?: number; // Number of rows affected in bulk operation
-      requires_refetch?: boolean; // If true, trigger full refetch instead of refetching by IDs
-    }
-  | GradebookRowRecalcStateBroadcastMessage
-  | OfficeHoursBroadcastMessage;
+// BroadcastMessage and GradebookRowRecalcStateBroadcastMessage are now defined in
+// ./BroadcastMessageTypes.ts and re-exported above.
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
   Query extends string = "*",

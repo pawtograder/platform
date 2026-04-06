@@ -3,7 +3,7 @@
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAssignments } from "@/hooks/useCourseController";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Heading, HStack, Input, Skeleton, Text, VStack } from "@chakra-ui/react";
@@ -32,7 +32,7 @@ export default function ClassLateTokenSettings() {
     mode: "onSubmit"
   });
 
-  const assignments = useAssignments();
+  const { data: assignments = [] } = useAssignmentsQuery();
 
   const onSubmitTokens = handleSubmit(async (data) => {
     try {

@@ -1,26 +1,23 @@
 "use client";
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import {
-  useAllStudentProfiles,
-  useCourseController,
-  useIsDroppedStudent,
-  useLabSections,
-  useUserRolesWithProfiles
-} from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController, useIsDroppedStudent } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
-  useListTableControllerValues,
-  useTableControllerTableValues,
-  useTableControllerValueById
-} from "@/lib/TableController";
+  useLabSectionsQuery,
+  useLabSectionLeadersQuery,
+  useProfilesQuery,
+  useUserRolesQuery,
+  useGradebookColumnsQuery
+} from "@/hooks/course-data";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import type { Assignment, LabSection } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Card, HStack, Heading, Separator, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FaChalkboardTeacher, FaUsers } from "react-icons/fa";
 import { MdOutlineScience } from "react-icons/md";
 
@@ -87,8 +84,11 @@ type StudentSummary = {
 };
 
 function AdjustDueDateCell({ assignmentId, studentId }: { assignmentId: number; studentId: string }) {
-  const { assignments } = useCourseController();
-  const assignment = useTableControllerValueById(assignments, assignmentId) as Assignment | undefined;
+  const { data: assignments = [] } = useAssignmentsQuery();
+  const assignment = useMemo(
+    () => assignments.find((a) => a.id === assignmentId) as Assignment | undefined,
+    [assignments, assignmentId]
+  );
   if (!assignment) return null;
   return <AdjustDueDateDialog student_id={studentId} assignment={assignment} />;
 }
@@ -97,18 +97,19 @@ export default function StudentPage() {
   const { course_id, student_id } = useParams();
   const router = useRouter();
   const controller = useCourseController();
-  const { client, gradebookColumns } = controller;
+  const { client } = controller;
   const [studentSummary, setStudentSummary] = useState<StudentSummary | null>(null);
-  const columns = useTableControllerTableValues(gradebookColumns);
+  const { data: columns = [] } = useGradebookColumnsQuery();
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const studentProfile = useUserProfile(
     typeof student_id === "string" ? student_id : Array.isArray(student_id) ? student_id[0] : ""
   );
   const isDroppedStudent = useIsDroppedStudent(student_id as string);
   const allStudents = useAllStudentProfiles();
-  const labSections = useLabSections();
-  const userRoles = useUserRolesWithProfiles();
-  const profiles = useTableControllerTableValues(controller.profiles);
+  const { data: labSections = [] } = useLabSectionsQuery();
+  const { data: userRoles = [] } = useUserRolesQuery();
+  const { data: profiles = [] } = useProfilesQuery();
+  const { data: allLabSectionLeaders = [] } = useLabSectionLeadersQuery();
 
   // Get student's lab section
   const studentLabSection = useMemo(() => {
@@ -120,11 +121,10 @@ export default function StudentPage() {
   }, [userRoles, labSections, student_id]);
 
   // Get lab section leaders
-  const labSectionLeadersFilter = useCallback(
-    (leader: { lab_section_id: number }) => leader.lab_section_id === studentLabSection?.id,
-    [studentLabSection?.id]
+  const sectionLeaders = useMemo(
+    () => allLabSectionLeaders.filter((leader) => leader.lab_section_id === studentLabSection?.id),
+    [allLabSectionLeaders, studentLabSection?.id]
   );
-  const sectionLeaders = useListTableControllerValues(controller.labSectionLeaders, labSectionLeadersFilter);
 
   // Create a map from profile_id to profile name
   const profileIdToName = useMemo(() => {

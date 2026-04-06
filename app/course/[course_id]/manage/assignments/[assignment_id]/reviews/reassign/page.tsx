@@ -4,15 +4,12 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
-import { useActiveSubmissions, useAssignmentController } from "@/hooks/useAssignment";
+import { useActiveSubmissions } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController, useUserRolesWithProfiles } from "@/hooks/useCourseController";
-import useTags from "@/hooks/useTags";
-import TableController, {
-  useListTableControllerValues,
-  useTableControllerTableValues,
-  PossiblyTentativeResult
-} from "@/lib/TableController";
+import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
+import { useTagsQuery, useAssignmentGroupsQuery } from "@/hooks/course-data";
+import { useAllReviewAssignmentsQuery } from "@/hooks/assignment-data";
+import TableController, { PossiblyTentativeResult, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -68,10 +65,8 @@ export default function ReassignGradingPage() {
 
 function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAssignmentChange: () => void }) {
   const { course_id, assignment_id } = useParams();
-  const assignmentController = useAssignmentController();
   const allActiveSubmissions = useActiveSubmissions();
-  const courseController = useCourseController();
-  const currentReviewAssignments = useTableControllerTableValues(assignmentController.allReviewAssignments);
+  const { data: currentReviewAssignments = [] } = useAllReviewAssignmentsQuery();
   const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
   const [role, setRole] = useState<string>("Graders");
@@ -153,30 +148,19 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
   }, [currentReviewAssignments, reviewAssignmentParts]);
 
   // Map of assignment_group_id -> member profile ids
-  const [groupMembersByGroupId, setGroupMembersByGroupId] = useState<Map<number, string[]>>(new Map());
-  useEffect(() => {
-    const buildMap = (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
-      const map = new Map<number, string[]>();
-      for (const row of rows) {
-        const members = row.assignment_groups_members?.map((m) => m.profile_id) ?? [];
-        map.set(row.id, members);
-      }
-      return map;
-    };
-    const { data, unsubscribe } = courseController.assignmentGroupsWithMembers.list(
-      (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
-        setGroupMembersByGroupId(buildMap(rows));
-      }
-    );
-    setGroupMembersByGroupId(
-      buildMap(data as Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>)
-    );
-    return unsubscribe;
-  }, [courseController]);
+  const { data: assignmentGroupsData = [] } = useAssignmentGroupsQuery();
+  const groupMembersByGroupId = useMemo(() => {
+    const map = new Map<number, string[]>();
+    for (const row of assignmentGroupsData) {
+      const members = row.assignment_groups_members?.map((m: { profile_id: string }) => m.profile_id) ?? [];
+      map.set(row.id, members);
+    }
+    return map;
+  }, [assignmentGroupsData]);
 
   const { role: classRole } = useClassProfiles();
   const course = classRole.classes;
-  const { tags } = useTags();
+  const { data: tags = [] } = useTagsQuery();
 
   const [gradingRubrics, setGradingRubrics] = useState<RubricWithParts[]>([]);
   useEffect(() => {

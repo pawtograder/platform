@@ -8,7 +8,7 @@
 
 import { QueryClient } from "@tanstack/react-query";
 import type { CacheDiff, DiffOperation } from "./RealtimeDiffChannel";
-import type { BroadcastMessage } from "@/lib/TableController";
+import type { BroadcastMessage } from "@/lib/BroadcastMessageTypes";
 
 export type BatchHandlerConfig = {
   table: string;
@@ -46,17 +46,26 @@ export async function processRealtimeBatch(
   const idsToRefetchInsert: (number | string)[] = [];
   const idsToRefetchUpdate: (number | string)[] = [];
   const idsToDelete: (number | string)[] = [];
+  let needsFullRefetch = false;
 
   for (const msg of messages) {
     // Skip non-table-change messages and messages for other tables
     if (msg.type !== "table_change" && msg.type !== "staff_data_change") continue;
     if (msg.table && msg.table !== table) continue;
-    if (!msg.operation || msg.operation === "BULK_UPDATE") continue;
+    if (!msg.operation) continue;
+
+    // BULK_UPDATE: refetch the entire query (too many rows to enumerate)
+    if (msg.operation === "BULK_UPDATE") {
+      needsFullRefetch = true;
+      continue;
+    }
 
     switch (msg.operation) {
       case "DELETE":
         if (msg.data && (msg.data as Record<string, unknown>).id != null) {
           idsToDelete.push((msg.data as Record<string, unknown>).id as number | string);
+        } else if ("row_ids" in msg && msg.row_ids && (msg.row_ids as (number | string)[]).length > 0) {
+          idsToDelete.push(...(msg.row_ids as (number | string)[]));
         } else if (msg.row_id != null) {
           idsToDelete.push(msg.row_id);
         }
@@ -65,6 +74,8 @@ export async function processRealtimeBatch(
       case "INSERT":
         if (msg.data) {
           inlineInserts.push(msg.data as Record<string, unknown>);
+        } else if ("row_ids" in msg && msg.row_ids && (msg.row_ids as (number | string)[]).length > 0) {
+          idsToRefetchInsert.push(...(msg.row_ids as (number | string)[]));
         } else if (msg.row_id != null) {
           idsToRefetchInsert.push(msg.row_id);
         }
@@ -73,11 +84,22 @@ export async function processRealtimeBatch(
       case "UPDATE":
         if (msg.data) {
           inlineUpdates.push(msg.data as Record<string, unknown>);
+        } else if ("row_ids" in msg && msg.row_ids && (msg.row_ids as (number | string)[]).length > 0) {
+          idsToRefetchUpdate.push(...(msg.row_ids as (number | string)[]));
         } else if (msg.row_id != null) {
           idsToRefetchUpdate.push(msg.row_id);
         }
         break;
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // 1b. Handle BULK_UPDATE by invalidating the entire query
+  // -----------------------------------------------------------------------
+
+  if (needsFullRefetch) {
+    queryClient.invalidateQueries({ queryKey });
+    // Still process any individual operations that came in the same batch
   }
 
   // -----------------------------------------------------------------------

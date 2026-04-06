@@ -1,25 +1,33 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useFindTableControllerValue, useTableControllerTableValues } from "@/lib/TableController";
 import type { DiscussionTopicFollower } from "@/utils/supabase/DatabaseTypes";
 import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";
-import { useCourseController, useDiscussionTopics } from "./useCourseController";
+import { useCourseController } from "./useCourseController";
+import {
+  useDiscussionTopicsQuery,
+  useDiscussionTopicFollowersQuery,
+  useDiscussionTopicFollowerInsert,
+  useDiscussionTopicFollowerUpdate,
+  useDiscussionTopicFollowerDelete
+} from "./course-data";
 
 export function useDiscussionTopicFollowStatus(topicId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
+  const { data: followers = [] } = useDiscussionTopicFollowersQuery();
+  const insertFollower = useDiscussionTopicFollowerInsert();
+  const updateFollower = useDiscussionTopicFollowerUpdate();
+  const deleteFollower = useDiscussionTopicFollowerDelete();
 
   const topic = useMemo(() => topics?.find((t) => t.id === topicId), [topics, topicId]);
 
-  const predicate = useMemo(
-    () => (row: DiscussionTopicFollower) => row.topic_id === topicId && row.user_id === user?.id,
-    [topicId, user?.id]
+  const cur = useMemo(
+    () => followers.find((row) => row.topic_id === topicId && row.user_id === user?.id),
+    [followers, topicId, user?.id]
   );
-
-  const cur = useFindTableControllerValue(controller.discussionTopicFollowers, predicate);
 
   const status = useMemo(() => {
     if (cur) return !!cur.following;
@@ -45,16 +53,16 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
         // If the requested state equals the default, store no override row.
         if (next === defaultState) {
           if (cur) {
-            await controller.discussionTopicFollowers.hardDelete(cur.id);
+            await deleteFollower.mutateAsync({ id: cur.id });
           }
           return;
         }
 
         // Otherwise, store/update an explicit override.
         if (cur) {
-          await controller.discussionTopicFollowers.update(cur.id, { following: next });
+          await updateFollower.mutateAsync({ id: cur.id, values: { following: next } });
         } else {
-          await controller.discussionTopicFollowers.create({
+          await insertFollower.mutateAsync({
             user_id: user.id,
             class_id: controller.courseId,
             topic_id: topicId,
@@ -70,7 +78,7 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
         console.error("Failed to update topic follow:", error);
       }
     },
-    [controller.courseId, controller.discussionTopicFollowers, cur, topic, topicId, user?.id]
+    [controller.courseId, insertFollower, updateFollower, deleteFollower, cur, topic, topicId, user?.id]
   );
 
   return { topic, status, setTopicFollowStatus, override: cur ?? null };
@@ -84,9 +92,8 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
  * - If default_follow=false, the user follows only if they have an override row with following=true.
  */
 export function useFollowedDiscussionTopicIds() {
-  const controller = useCourseController();
-  const topics = useDiscussionTopics();
-  const rows = useTableControllerTableValues(controller.discussionTopicFollowers) ?? [];
+  const { data: topics = [] } = useDiscussionTopicsQuery();
+  const { data: rows = [] } = useDiscussionTopicFollowersQuery();
 
   return useMemo(() => {
     const set = new Set<number>();
@@ -110,8 +117,11 @@ export function useFollowedDiscussionTopicIds() {
 export function useTopicFollowActions() {
   const controller = useCourseController();
   const { user } = useAuthState();
-  const topics = useDiscussionTopics();
-  const rows = useTableControllerTableValues(controller.discussionTopicFollowers);
+  const { data: topics = [] } = useDiscussionTopicsQuery();
+  const { data: rows = [] } = useDiscussionTopicFollowersQuery();
+  const insertFollower = useDiscussionTopicFollowerInsert();
+  const updateFollower = useDiscussionTopicFollowerUpdate();
+  const deleteFollower = useDiscussionTopicFollowerDelete();
 
   const topicById = useMemo(() => {
     const map = new Map<number, (typeof topics)[number]>();
@@ -120,7 +130,6 @@ export function useTopicFollowActions() {
   }, [topics]);
 
   const overrideByTopicId = useMemo(() => {
-    if (!rows) return new Map<number, DiscussionTopicFollower>();
     const map = new Map<number, DiscussionTopicFollower>();
     for (const r of rows) map.set(r.topic_id, r);
     return map;
@@ -146,15 +155,15 @@ export function useTopicFollowActions() {
 
         // If the requested state equals the default, store no override row.
         if (next === defaultState) {
-          if (cur) await controller.discussionTopicFollowers.hardDelete(cur.id);
+          if (cur) await deleteFollower.mutateAsync({ id: cur.id });
           return;
         }
 
         // Otherwise, store/update an explicit override.
         if (cur) {
-          await controller.discussionTopicFollowers.update(cur.id, { following: next });
+          await updateFollower.mutateAsync({ id: cur.id, values: { following: next } });
         } else {
-          await controller.discussionTopicFollowers.create({
+          await insertFollower.mutateAsync({
             user_id: user.id,
             class_id: controller.courseId,
             topic_id: topicId,
@@ -170,7 +179,7 @@ export function useTopicFollowActions() {
         console.error("Failed to update topic follow:", error);
       }
     },
-    [controller.courseId, controller.discussionTopicFollowers, overrideByTopicId, topicById, user?.id]
+    [controller.courseId, insertFollower, updateFollower, deleteFollower, overrideByTopicId, topicById, user?.id]
   );
 
   return { setTopicFollowStatusForId };

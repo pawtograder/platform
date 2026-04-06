@@ -6,7 +6,11 @@ import { useParams } from "next/navigation";
 import { Select } from "chakra-react-select";
 import { BsStar, BsStarFill, BsPerson, BsClock, BsShield, BsExclamationTriangle } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
-import { useStudentKarmaNotes, useStudentHelpActivity, useHelpRequestModeration } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useStudentKarmaNotesQuery,
+  useStudentHelpActivityQuery,
+  useHelpRequestModerationQuery
+} from "@/hooks/office-hours-data";
 import { useStudentRoster } from "@/hooks/useCourseController";
 
 type StudentActivitySummaryProps = {
@@ -30,9 +34,9 @@ export default function StudentActivitySummary({
   const [selectedStudentId, setSelectedStudentId] = useState<string>("");
 
   // Get all realtime data for the class
-  const allKarmaNotes = useStudentKarmaNotes();
-  const allHelpActivity = useStudentHelpActivity();
-  const allModerationActions = useHelpRequestModeration();
+  const { data: allKarmaNotes = [] } = useStudentKarmaNotesQuery();
+  const { data: allHelpActivity = [] } = useStudentHelpActivityQuery();
+  const { data: allModerationActions = [] } = useHelpRequestModerationQuery();
   const studentRoster = useStudentRoster();
 
   // Prepare options for react-select

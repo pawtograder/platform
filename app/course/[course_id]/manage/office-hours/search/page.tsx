@@ -1,6 +1,6 @@
 "use client";
 
-import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestsQuery, useHelpQueuesQuery, useHelpRequestStudentsQuery } from "@/hooks/office-hours-data";
 import { useStudentRoster } from "@/hooks/useCourseController";
 import { Box, Heading, HStack, Input, Stack, Text, Badge, Spinner, Flex } from "@chakra-ui/react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -32,9 +32,9 @@ export default function ManageOfficeHoursSearchPage() {
   const [queueFilter, setQueueFilter] = useState<number | null>(null);
 
   // Get data from hooks
-  const allHelpRequests = useHelpRequests();
-  const helpQueues = useHelpQueues();
-  const helpRequestStudents = useHelpRequestStudents();
+  const { data: allHelpRequests = [] } = useHelpRequestsQuery();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
+  const { data: helpRequestStudents = [] } = useHelpRequestStudentsQuery();
   const studentRoster = useStudentRoster();
 
   // Build mappings
@@ -116,7 +116,7 @@ export default function ManageOfficeHoursSearchPage() {
 
         // Search in student names
         const requestStudents = requestStudentsMap[request.id] || [];
-        const studentNameMatch = requestStudents.some((profileId) => {
+        const studentNameMatch = requestStudents.some((profileId: string) => {
           const studentName = studentNameMap?.[profileId];
           return studentName && words.every((word) => studentName.toLowerCase().includes(word));
         });

@@ -1,5 +1,6 @@
 export { CourseDataProvider, useCourseDataContext } from "./useCourseDataContext";
 export type { CourseDataContextValue } from "./useCourseDataContext";
+export { CourseDataBridge } from "./CourseDataBridge";
 export { useProfilesQuery } from "./useProfilesQuery";
 export { useTagsQuery } from "./useTagsQuery";
 export { useAssignmentsQuery } from "./useAssignmentsQuery";
@@ -37,6 +38,33 @@ export {
 
 // Phase 3 Batch 6 — discussion thread teasers
 export { useDiscussionThreadTeasersQuery } from "./useDiscussionThreadTeasersQuery";
+
+// Phase 3 — discussion mutation hooks
+export {
+  useDiscussionTopicFollowerInsert,
+  useDiscussionTopicFollowerUpdate,
+  useDiscussionTopicFollowerDelete
+} from "./useDiscussionTopicFollowersMutation";
+export {
+  useDiscussionThreadWatcherInsert,
+  useDiscussionThreadWatcherUpdate
+} from "./useDiscussionThreadWatchersMutation";
+export {
+  useDiscussionTopicInsert,
+  useDiscussionTopicUpdate,
+  useDiscussionTopicDelete
+} from "./useDiscussionTopicsMutation";
+export { useDiscussionThreadTeaserUpdate } from "./useDiscussionThreadTeasersMutation";
+export { useDiscussionThreadReadStatusUpdate } from "./useDiscussionThreadReadStatusMutation";
+
+// Phase 3 — assignment due date exception mutation hooks
+export {
+  useAssignmentDueDateExceptionInsert,
+  useAssignmentDueDateExceptionDelete
+} from "./useAssignmentDueDateExceptionsMutation";
+
+// Phase 3 — survey mutation hooks
+export { useSurveyUpdate } from "./useSurveysMutation";
 
 // Phase 3 Batch 5 — calendar, staff settings, discord, polls, surveys
 export { useCalendarEventsQuery } from "./useCalendarEventsQuery";

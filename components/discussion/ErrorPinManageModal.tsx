@@ -1,7 +1,7 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useAssignments } from "@/hooks/useCourseController";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { Box, Button as ChakraButton, Dialog, HStack, Icon, Stack, Text, Badge } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
@@ -31,7 +31,7 @@ export function ErrorPinManageModal({
   defaultAssignmentId
 }: ErrorPinManageModalProps) {
   const { course_id } = useParams();
-  const assignments = useAssignments();
+  const { data: assignments = [] } = useAssignmentsQuery();
   const [pins, setPins] = useState<ErrorPinWithRules[]>([]);
   const [loading, setLoading] = useState(false);
   const [deletingPinId, setDeletingPinId] = useState<number | null>(null);

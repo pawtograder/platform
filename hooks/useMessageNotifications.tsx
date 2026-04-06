@@ -2,9 +2,9 @@
 
 import { getNotificationManager } from "@/lib/notifications";
 import { useEffect, useRef, useCallback, useState } from "react";
-import { useHelpRequestMessages } from "./useOfficeHoursRealtime";
+import { useHelpRequestMessagesQuery } from "./office-hours-data/useHelpRequestMessagesQuery";
 import { useClassProfiles } from "./useClassProfiles";
-import { useAllProfilesForClass } from "./useCourseController";
+import { useProfilesQuery } from "./course-data";
 import type { HelpRequestMessage } from "@/utils/supabase/DatabaseTypes";
 
 export interface UseMessageNotificationsOptions {
@@ -34,9 +34,9 @@ export function useMessageNotifications({
   enabled = true,
   titlePrefix = "New message"
 }: UseMessageNotificationsOptions): UseMessageNotificationsReturn {
-  const messages = useHelpRequestMessages(helpRequestId);
+  const { data: messages = [] } = useHelpRequestMessagesQuery(helpRequestId);
   const { private_profile_id } = useClassProfiles();
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
 
   // Track previous message count and IDs to detect truly new messages
   const prevMessageIdsRef = useRef<Set<number>>(new Set());
@@ -142,7 +142,7 @@ export function useStaffQueueNotifications({
   enabled?: boolean;
 }): void {
   const { private_profile_id } = useClassProfiles();
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
 
   // Import the controller dynamically to avoid circular dependencies
   // We'll use a ref to track message counts per request

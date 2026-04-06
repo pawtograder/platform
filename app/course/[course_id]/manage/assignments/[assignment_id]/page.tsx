@@ -3,7 +3,7 @@
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useAssignmentController, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useCourseController } from "@/hooks/useCourseController";
-import TableController from "@/lib/TableController";
+import TableController, { useTableControllerTableValues, useIsTableControllerReady } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
@@ -14,6 +14,12 @@ import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 
 const VALID_TABS = ["assigned-grading", "all-submissions", "dashboard"] as const;
+
+function AssignmentDashboardWrapper({ tableController }: { tableController: TableController<"submissions"> | null }) {
+  const rows = useTableControllerTableValues(tableController ?? undefined);
+  const isReady = useIsTableControllerReady(tableController ?? undefined);
+  return <AssignmentDashboard data={rows} isLoading={!isReady} />;
+}
 
 function AssignmentHomeTabs({
   hasReviewAssignments,
@@ -57,7 +63,7 @@ function AssignmentHomeTabs({
         <AssignmentsTable tableController={tableController} />
       </Tabs.Content>
       <Tabs.Content value="dashboard">
-        <AssignmentDashboard tableController={tableController} />
+        <AssignmentDashboardWrapper tableController={tableController} />
       </Tabs.Content>
     </Tabs.Root>
   );

@@ -5,7 +5,8 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAllStudentRoles, useCourse, useCourseController, useProfiles } from "@/hooks/useCourseController";
+import { useAllStudentRoles, useCourse, useCourseController } from "@/hooks/useCourseController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -287,7 +288,7 @@ function InviteButton({
 }
 
 function GroupMemberList({ group }: { group: AssignmentGroupWithMembersInvitationsAndJoinRequests }) {
-  const profiles = useProfiles();
+  const { data: profiles = [] } = useProfilesQuery();
   return (
     <HStack>
       {group.assignment_groups_members.map((m) => (

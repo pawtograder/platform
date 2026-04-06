@@ -6,7 +6,8 @@ import MessageInput from "@/components/ui/message-input";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAssignments, useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentsQuery, useDiscussionTopicsQuery } from "@/hooks/course-data";
 import { Box, Fieldset, Flex, Heading, Icon, Input, Text, Separator } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useMemo } from "react";
@@ -43,8 +44,8 @@ export default function NewDiscussionThread() {
     }
   });
 
-  const topics = useDiscussionTopics();
-  const assignments = useAssignments();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
+  const { data: assignments = [] } = useAssignmentsQuery();
   const topicId = watch("topic_id");
 
   /**

@@ -12,12 +12,11 @@ import {
   Tooltip,
   ResponsiveContainer
 } from "@/components/ui/recharts-wrapper";
-import { useTableControllerTableValues } from "@/lib/TableController";
-import { useIsTableControllerReady } from "@/lib/TableController";
-import TableController from "@/lib/TableController";
 
 type AssignmentDashboardProps = {
-  tableController: TableController<"submissions"> | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any[];
+  isLoading: boolean;
 };
 
 type ChartDataItem = {
@@ -25,18 +24,13 @@ type ChartDataItem = {
   value: number;
 };
 
-export default function AssignmentDashboard({ tableController }: AssignmentDashboardProps) {
+export default function AssignmentDashboard({ data: rows, isLoading }: AssignmentDashboardProps) {
   const tickColor = useColorModeValue("black", "white");
   const tooltipBg = useColorModeValue("white", "#1A1A1A");
 
-  // Get all rows directly from the table controller
-  const rows = useTableControllerTableValues(tableController ?? undefined);
-  const isReady = useIsTableControllerReady(tableController ?? undefined);
-  const isLoading = !isReady;
-
   // Compute submission count distribution
   const submissionCountData = useMemo(() => {
-    if (!tableController || isLoading) {
+    if (isLoading) {
       return [];
     }
 
@@ -71,11 +65,11 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
       console.error("Error computing submission count data:", error);
       return [];
     }
-  }, [rows, tableController, isLoading]);
+  }, [rows, isLoading]);
 
   // Compute autograder score distribution
   const scoreDistributionData = useMemo(() => {
-    if (!tableController || isLoading) {
+    if (isLoading) {
       return [];
     }
 
@@ -111,7 +105,7 @@ export default function AssignmentDashboard({ tableController }: AssignmentDashb
       console.error("Error computing score distribution data:", error);
       return [];
     }
-  }, [rows, tableController, isLoading]);
+  }, [rows, isLoading]);
 
   if (isLoading) {
     return <Spinner />;

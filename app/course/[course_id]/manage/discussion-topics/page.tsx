@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useDiscussionThreadTeasers } from "@/hooks/useCourseController";
 import {
-  useAssignments,
-  useCourseController,
-  useDiscussionThreadTeasers,
-  useDiscussionTopics
-} from "@/hooks/useCourseController";
+  useAssignmentsQuery,
+  useDiscussionTopicsQuery,
+  useDiscussionTopicUpdate,
+  useDiscussionTopicDelete
+} from "@/hooks/course-data";
 import useModalManager from "@/hooks/useModalManager";
 import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Container, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
@@ -207,11 +208,12 @@ export default function DiscussionTopicsPage() {
   const createModal = useModalManager();
   const editModal = useModalManager<DiscussionTopic>();
 
-  // Get topics, assignments, threads, and course from the course controller
-  const controller = useCourseController();
+  // Get topics, assignments, threads, and course from hooks
   const course = useCourse();
-  const topics = useDiscussionTopics();
-  const assignments = useAssignments();
+  const updateTopic = useDiscussionTopicUpdate();
+  const deleteTopic = useDiscussionTopicDelete();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
+  const { data: assignments = [] } = useAssignmentsQuery();
   const threads = useDiscussionThreadTeasers();
 
   /**
@@ -278,7 +280,7 @@ export default function DiscussionTopicsPage() {
     }
 
     try {
-      await controller.discussionTopics.hardDelete(topicId);
+      await deleteTopic.mutateAsync({ id: topicId });
       toaster.success({
         title: "Success",
         description: "Discussion topic deleted successfully"
@@ -366,8 +368,9 @@ export default function DiscussionTopicsPage() {
     try {
       await Promise.all(
         topicsToUpdate.map((update) =>
-          controller.discussionTopics.update(update.id, {
-            ordinal: update.newOrdinal
+          updateTopic.mutateAsync({
+            id: update.id,
+            values: { ordinal: update.newOrdinal }
           })
         )
       );

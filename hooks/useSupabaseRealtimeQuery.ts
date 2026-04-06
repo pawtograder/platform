@@ -103,7 +103,9 @@ export function useSupabaseRealtimeQuery<
     enabled,
     initialData,
     select,
-    staleTime,
+    // Default Infinity: the realtime bridge manages freshness, so TanStack
+    // should never trigger background refetches on mount/focus.
+    staleTime: staleTime ?? Infinity,
     gcTime
   });
 

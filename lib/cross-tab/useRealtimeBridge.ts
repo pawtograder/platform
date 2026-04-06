@@ -15,7 +15,7 @@ import type { TabLeaderElection } from "./TabLeaderElection";
 import { RealtimeDiffChannel, CacheDiff } from "./RealtimeDiffChannel";
 import { processRealtimeBatch, BatchHandlerConfig } from "./createRealtimeBatchHandler";
 import type { PawtograderRealTimeController } from "@/lib/PawtograderRealTimeController";
-import type { BroadcastMessage } from "@/lib/TableController";
+import type { BroadcastMessage } from "@/lib/BroadcastMessageTypes";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -33,7 +33,6 @@ export type RealtimeBridgeConfig = {
   scope: "class" | "scoped";
   enabled?: boolean; // default true
 
-  // Until Phase 1d wires up the LeaderProvider context, accept these directly.
   leader: TabLeaderElection | null;
   diffChannel: RealtimeDiffChannel | null;
 };
@@ -46,34 +45,28 @@ const MAX_BUFFER_SIZE = 50;
 // ---------------------------------------------------------------------------
 
 export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
-  const {
-    table,
-    queryKey,
-    classRtc,
-    supabase,
-    realtimeFilter,
-    selectForRefetch,
-    scope,
-    enabled = true,
-    leader,
-    diffChannel
-  } = config;
+  const { table, classRtc, scope, enabled = true, leader, diffChannel } = config;
 
   const queryClient = useQueryClient();
 
   // -----------------------------------------------------------------------
-  // Refs — mutable state that persists across renders without causing them
+  // Refs — mutable state that persists across renders without causing them.
+  // configRef holds the latest config so callbacks never close over stale
+  // references (queryKey, realtimeFilter, etc. may be new every render).
   // -----------------------------------------------------------------------
 
   const bufferRef = useRef<BroadcastMessage[]>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const maxUpdatedAtRef = useRef<number | null>(null);
-  // Track whether we're currently processing to prevent overlapping flushes
   const processingRef = useRef(false);
 
-  // Stable reference to the latest config for use inside callbacks
   const configRef = useRef(config);
   configRef.current = config;
+
+  // Stable serialized queryKey for the main effect dep array — avoids
+  // tearing down subscriptions when the caller passes a new array reference
+  // with the same content.
+  const queryKeyJson = JSON.stringify(config.queryKey);
 
   // -----------------------------------------------------------------------
   // Flush: process buffered messages and broadcast diff
@@ -88,14 +81,15 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
     bufferRef.current = [];
 
     try {
+      const cfg = configRef.current;
       const batchConfig: BatchHandlerConfig = {
-        table: configRef.current.table,
-        queryKey: configRef.current.queryKey,
+        table: cfg.table,
+        queryKey: cfg.queryKey,
         queryClient,
-        supabase: configRef.current.supabase,
-        selectForRefetch: configRef.current.selectForRefetch,
-        realtimeFilter: configRef.current.realtimeFilter,
-        tabId: configRef.current.leader?.tabId ?? "unknown"
+        supabase: cfg.supabase,
+        selectForRefetch: cfg.selectForRefetch,
+        realtimeFilter: cfg.realtimeFilter,
+        tabId: cfg.leader?.tabId ?? "unknown"
       };
 
       const result = await processRealtimeBatch(messages, batchConfig);
@@ -145,7 +139,6 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
     (message: BroadcastMessage) => {
       bufferRef.current.push(message);
 
-      // Flush immediately if buffer is large to prevent unbounded growth
       if (bufferRef.current.length >= MAX_BUFFER_SIZE) {
         if (debounceTimerRef.current != null) {
           clearTimeout(debounceTimerRef.current);
@@ -160,13 +153,14 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
   );
 
   // -----------------------------------------------------------------------
-  // Apply incoming diff from leader tab (follower path)
+  // Apply incoming diff from leader tab (follower path).
+  // Reads queryKey from configRef to avoid dep-array instability.
   // -----------------------------------------------------------------------
 
   const applyDiff = useCallback(
     (diff: CacheDiff) => {
-      // Only apply diffs that match our queryKey
-      if (JSON.stringify(diff.queryKey) !== JSON.stringify(queryKey)) return;
+      const currentKey = configRef.current.queryKey;
+      if (JSON.stringify(diff.queryKey) !== JSON.stringify(currentKey)) return;
       RealtimeDiffChannel.applyDiff(queryClient, diff);
 
       // Advance our watermark so catch-up on promotion starts from here
@@ -181,34 +175,37 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
         }
       }
     },
-    [queryClient, queryKey]
+    [queryClient]
   );
 
   // -----------------------------------------------------------------------
-  // Incremental catch-up: refetch rows newer than watermark
+  // Incremental catch-up: refetch rows newer than watermark.
+  // Reads all config from configRef — zero unstable deps.
   // -----------------------------------------------------------------------
 
   const catchUp = useCallback(async () => {
     if (maxUpdatedAtRef.current == null) return;
-    if (!supabase || !table) return;
+
+    const cfg = configRef.current;
+    if (!cfg.supabase || !cfg.table) return;
 
     try {
       const sinceIso = new Date(maxUpdatedAtRef.current).toISOString();
-      const { data, error } = await supabase
-        .from(table)
-        .select(selectForRefetch ?? "*")
+      const { data, error } = await cfg.supabase
+        .from(cfg.table)
+        .select(cfg.selectForRefetch ?? "*")
         .gt("updated_at", sinceIso)
         .order("updated_at", { ascending: true });
 
       if (error || !data || (data as unknown[]).length === 0) return;
 
       const rows = data as Record<string, unknown>[];
-      const accepted = realtimeFilter ? rows.filter((r) => realtimeFilter(r)) : rows;
+      const accepted = cfg.realtimeFilter ? rows.filter((r: Record<string, unknown>) => cfg.realtimeFilter!(r)) : rows;
 
       if (accepted.length === 0) return;
 
       // Apply to cache
-      queryClient.setQueryData<unknown>(queryKey, (existing: unknown) => {
+      queryClient.setQueryData<unknown>(cfg.queryKey, (existing: unknown) => {
         const current: Record<string, unknown>[] = Array.isArray(existing) ? [...existing] : [];
         const incoming = new Map<unknown, Record<string, unknown>>(accepted.map((r) => [r.id, r]));
 
@@ -237,21 +234,23 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
       }
 
       // Broadcast diff so followers get the catch-up data
-      if (diffChannel) {
-        diffChannel.broadcastDiff({
-          queryKey,
+      if (cfg.diffChannel) {
+        cfg.diffChannel.broadcastDiff({
+          queryKey: cfg.queryKey,
           operations: [{ type: "upsert", rows: accepted }],
-          source: leader?.tabId ?? "unknown",
+          source: cfg.leader?.tabId ?? "unknown",
           timestamp: Date.now()
         });
       }
     } catch {
       // Catch-up failure is non-fatal; next realtime event will trigger another attempt
     }
-  }, [supabase, table, selectForRefetch, realtimeFilter, queryClient, queryKey, diffChannel, leader]);
+  }, [queryClient]);
 
   // -----------------------------------------------------------------------
-  // Main effect: wire up subscriptions based on role and scope
+  // Main effect: wire up subscriptions based on role and scope.
+  // Uses queryKeyJson (serialized) instead of queryKey (array ref) to
+  // prevent teardown/re-subscribe on every render.
   // -----------------------------------------------------------------------
 
   useEffect(() => {
@@ -259,42 +258,49 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
 
     const cleanups: (() => void)[] = [];
 
+    // Seed watermark from existing cached data so that a newly promoted
+    // follower can do an incremental catch-up instead of returning early.
+    if (maxUpdatedAtRef.current == null) {
+      const currentKey = configRef.current.queryKey;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cached = queryClient.getQueryData<any[]>(currentKey);
+      if (Array.isArray(cached)) {
+        for (const row of cached) {
+          const ts = extractUpdatedAtMs(row as Record<string, unknown>);
+          if (ts != null) {
+            maxUpdatedAtRef.current = maxUpdatedAtRef.current == null ? ts : Math.max(maxUpdatedAtRef.current, ts);
+          }
+        }
+      }
+    }
+
     const isLeader = leader?.isLeader ?? false;
     const shouldSubscribeRtc = scope === "scoped" || isLeader;
 
-    // Subscribe to classRtc if we should
     if (shouldSubscribeRtc) {
       const unsub = classRtc.subscribeToTable(table, enqueue);
       cleanups.push(unsub);
     }
 
-    // Follower for class-scope: listen to diff channel instead
     if (scope === "class" && !isLeader && diffChannel) {
       const unsub = diffChannel.onDiff(applyDiff);
       cleanups.push(unsub);
     }
 
-    // For scoped mode, non-leaders also broadcast diffs for sibling tabs
-    // (handled automatically — processRealtimeBatch always produces a diff)
-
-    // Leader change handler
     if (leader && scope === "class") {
       let rtcUnsub: (() => void) | null = null;
       let diffUnsub: (() => void) | null = null;
 
       const unsub = leader.onLeaderChange((nowLeader: boolean) => {
-        // Clean up previous subscriptions for this change handler
         rtcUnsub?.();
         rtcUnsub = null;
         diffUnsub?.();
         diffUnsub = null;
 
         if (nowLeader && classRtc) {
-          // Promoted to leader: subscribe to classRtc, catch up
           rtcUnsub = classRtc.subscribeToTable(table, enqueue);
           catchUp();
         } else if (!nowLeader && diffChannel) {
-          // Demoted: listen to diff channel
           diffUnsub = diffChannel.onDiff(applyDiff);
         }
       });
@@ -307,27 +313,26 @@ export function useRealtimeBridge(config: RealtimeBridgeConfig): void {
     }
 
     return () => {
-      // Clear pending debounce
       if (debounceTimerRef.current != null) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
       }
-      // Flush any remaining buffered messages synchronously isn't possible
-      // (processRealtimeBatch is async), so we just discard.
       bufferRef.current = [];
 
       for (const cleanup of cleanups) {
         cleanup();
       }
     };
-  }, [enabled, classRtc, leader, diffChannel, scope, table, enqueue, applyDiff, catchUp]);
+    // queryKeyJson is a stable serialization of queryKey — avoids effect
+    // churn from new array references with identical content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, classRtc, leader, diffChannel, scope, table, enqueue, applyDiff, catchUp, queryKeyJson]);
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Extract updated_at from a row-like object as epoch ms; returns null if absent/unparsable. */
 function extractUpdatedAtMs(row: Record<string, unknown>): number | null {
   const value = row.updated_at;
   if (!value) return null;

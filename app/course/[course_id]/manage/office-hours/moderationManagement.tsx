@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import useModalManager from "@/hooks/useModalManager";
 import { useHelpRequestModeration, useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import type {
@@ -38,7 +38,7 @@ export default function ModerationManagement() {
   const { course_id } = useParams();
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "expired">("all");
   const isInstructor = useIsInstructor();
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
 
   // Modal management
   const createModal = useModalManager();

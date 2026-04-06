@@ -4,10 +4,10 @@ import { toaster } from "@/components/ui/toaster";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
-  useDiscussionTopics,
   useRootDiscussionThreadReadStatuses,
   useCourseController
 } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery } from "@/hooks/course-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
@@ -45,7 +45,7 @@ export function PostRow({
   variant?: "default" | "compact";
 }) {
   const thread = useDiscussionThreadTeaser(threadId);
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
   const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
   const userProfile = useUserProfile(thread?.author);
   const { private_profile_id } = useClassProfiles();

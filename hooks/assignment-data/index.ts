@@ -1,5 +1,6 @@
 export { AssignmentDataProvider, useAssignmentDataContext } from "./useAssignmentDataContext";
 export type { AssignmentDataContextValue } from "./useAssignmentDataContext";
+export { AssignmentDataBridge } from "./AssignmentDataBridge";
 
 export { useSubmissionsQuery } from "./useSubmissionsQuery";
 export { useAssignmentScopedGroupsQuery } from "./useAssignmentGroupsQuery";

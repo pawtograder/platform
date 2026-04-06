@@ -3,7 +3,8 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useAssignments, useCourseController } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, HStack, Input, Portal, Textarea, VStack } from "@chakra-ui/react";
@@ -33,7 +34,7 @@ export default function GiftTokenModal({
   const supabase = createClient();
 
   const students = useAllStudentProfiles();
-  const assignments = useAssignments();
+  const { data: assignments = [] } = useAssignmentsQuery();
 
   const assignmentOptions = useMemo(
     () =>

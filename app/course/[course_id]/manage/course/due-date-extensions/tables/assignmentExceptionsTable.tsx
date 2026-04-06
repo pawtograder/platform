@@ -5,10 +5,14 @@ import { Button } from "@/components/ui/button";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
+import { useAllStudentProfiles } from "@/hooks/useCourseController";
+import {
+  useAssignmentDueDateExceptionsQuery,
+  useAssignmentDueDateExceptionDelete,
+  useAssignmentGroupsQuery
+} from "@/hooks/course-data";
 import useModalManager from "@/hooks/useModalManager";
-import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
-import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentDueDateException } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Icon, Table, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
 import { FaPlus, FaTrash } from "react-icons/fa";
@@ -21,11 +25,9 @@ interface AssignmentExceptionsTableProps {
   tokenFilter?: "any" | "has" | "none";
 }
 
-/** LEGACY HOOK, THIS IS A BAD PATTERN, DO NOT CONTINUE TO EXTEND OR USE THIS. FUTURE WORK SHOULD OPTIMIZE THE PERFORMANCE OF THIS PAGE. */
 function useAssignmentGroupsWithMembers(assignment_id: number) {
-  const { assignmentGroupsWithMembers } = useCourseController();
-  const predicate = useMemo(() => (g: AssignmentGroup) => g.assignment_id === assignment_id, [assignment_id]);
-  return useListTableControllerValues(assignmentGroupsWithMembers, predicate);
+  const { data: allGroups = [] } = useAssignmentGroupsQuery();
+  return useMemo(() => allGroups.filter((g) => g.assignment_id === assignment_id), [allGroups, assignment_id]);
 }
 
 /**
@@ -37,8 +39,8 @@ export default function AssignmentExceptionsTable({
   studentFilter,
   tokenFilter
 }: AssignmentExceptionsTableProps) {
-  const { assignmentDueDateExceptions } = useCourseController();
-  // // Load assignment groups with their members for this assignment
+  const { data: allExceptions = [], isLoading: exceptionsLoading } = useAssignmentDueDateExceptionsQuery();
+  const deleteException = useAssignmentDueDateExceptionDelete();
   const assignmentGroups = useAssignmentGroupsWithMembers(assignment.id);
   const groupIdToMemberIds = useMemo(() => {
     const map = new Map<number, string[]>();
@@ -67,8 +69,8 @@ export default function AssignmentExceptionsTable({
     }
     return map;
   }, [assignmentGroups]);
-  const predicate = useMemo(() => {
-    return (e: AssignmentDueDateException) => {
+  const exceptions = useMemo(() => {
+    return allExceptions.filter((e: AssignmentDueDateException) => {
       // Must be for this assignment
       if (e.assignment_id !== assignment.id) return false;
 
@@ -87,10 +89,9 @@ export default function AssignmentExceptionsTable({
       const tPass =
         tokenFilter === "has" ? e.tokens_consumed > 0 : tokenFilter === "none" ? e.tokens_consumed === 0 : true;
       return aPass && sPass && tPass;
-    };
-  }, [assignment.id, assignmentFilter, studentFilter, tokenFilter, groupIdToMemberIds]);
-  const exceptions = useListTableControllerValues(assignmentDueDateExceptions, predicate);
-  const isReady = useIsTableControllerReady(assignmentDueDateExceptions);
+    });
+  }, [allExceptions, assignment.id, assignmentFilter, studentFilter, tokenFilter, groupIdToMemberIds]);
+  const isReady = !exceptionsLoading;
   const students = useAllStudentProfiles();
 
   const addOpen = useModalManager<AddExtensionDefaults>();
@@ -204,7 +205,7 @@ export default function AssignmentExceptionsTable({
                       confirmText="Are you sure you want to delete this exception?"
                       onConfirm={async () => {
                         try {
-                          await assignmentDueDateExceptions.hardDelete(r.id);
+                          await deleteException.mutateAsync({ id: r.id });
                         } catch (err) {
                           toaster.error({
                             title: "Delete failed",

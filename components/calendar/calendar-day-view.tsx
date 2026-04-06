@@ -1,7 +1,7 @@
 "use client";
 
 import { CalendarEvent, useAllCalendarEvents, useDaySchedule } from "@/hooks/useCalendarEvents";
-import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueuesQuery } from "@/hooks/office-hours-data";
 import { Box, Button, Card, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
 import { format, isSameDay } from "date-fns";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -24,7 +24,7 @@ interface EventBlockProps {
 
 function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
   const { top, height, left, width } = layout;
-  const helpQueues = useHelpQueues();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
   const resolvedQueueName = getResolvedQueueName(event, helpQueues);
   const colors = getOfficeHoursColor(resolvedQueueName);
   const [now, setNow] = useState(new Date());
@@ -398,7 +398,7 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
   }, [events, containerWidth]);
 
   // Get unique queues for legend with event counts for the selected day
-  const helpQueues = useHelpQueues();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
   const queueCounts = useMemo(() => {
     const counts = new Map<string, number>();
     events.forEach((event) => {

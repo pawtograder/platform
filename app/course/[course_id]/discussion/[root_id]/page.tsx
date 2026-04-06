@@ -14,20 +14,36 @@ import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useCourseController, useDiscussionThreadReadStatus, useUpdateThreadTeaser } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery, useDiscussionThreadTeasersQuery } from "@/hooks/course-data";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import useModalManager from "@/hooks/useModalManager";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { useTableControllerValueById } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, RadioGroup, Text, VStack } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+/** Returns a full DiscussionThread by id from the teasers query (which fetches `*`). */
+function useDiscussionThreadById(id: number | undefined) {
+  const { data = [] } = useDiscussionThreadTeasersQuery();
+  const prevRef = useRef<DiscussionThreadType | undefined>(undefined);
+  return useMemo(() => {
+    if (id === undefined) {
+      prevRef.current = undefined;
+      return undefined;
+    }
+    const found = (data as DiscussionThreadType[]).find((t) => t.id === id);
+    if (found) prevRef.current = found;
+    return found ?? prevRef.current;
+  }, [data, id]);
+}
 import { FaExclamationCircle, FaPencilAlt, FaRegStar, FaReply, FaStar, FaThumbtack } from "react-icons/fa";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 
@@ -105,7 +121,7 @@ function ThreadActions({
   const [replyVisible, setReplyVisible] = useState(false);
   const errorPinModal = useModalManager<number>();
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
-  const { discussionThreadTeasers } = useCourseController();
+  const updateThread = useUpdateThreadTeaser();
   const canEdit =
     thread.author === public_profile_id ||
     thread.author === private_profile_id ||
@@ -116,10 +132,8 @@ function ThreadActions({
   const handleTogglePin = useCallback(async () => {
     const newPinnedStatus = !thread.pinned;
 
-    await discussionThreadTeasers.update(thread.id, {
-      pinned: newPinnedStatus
-    });
-  }, [thread.id, thread.pinned, discussionThreadTeasers]);
+    await updateThread({ id: thread.id, old: thread, values: { pinned: newPinnedStatus } });
+  }, [thread.id, thread.pinned, updateThread, thread]);
 
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">
@@ -215,9 +229,11 @@ function ThreadFollowButton({ thread }: { thread: DiscussionThreadType }) {
 }
 
 function DiscussionPost({ root_id }: { root_id: number }) {
-  const discussion_topics = useDiscussionTopics();
-  const { discussionThreadTeasers } = useCourseController();
-  const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
+  const { course_id } = useParams();
+  const queryClient = useQueryClient();
+  const { data: discussion_topics = [] } = useDiscussionTopicsQuery();
+  const updateThread = useUpdateThreadTeaser();
+  const rootThread = useDiscussionThreadById(root_id);
   const [editing, setEditing] = useState(false);
   const [visibility, setVisibility] = useState(rootThread?.instructors_only ? "instructors_only" : "all");
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -278,14 +294,20 @@ function DiscussionPost({ root_id }: { root_id: number }) {
       }
 
       // Update body and edited_at (and visibility if it didn't change, to ensure consistency)
-      await discussionThreadTeasers.update(root_id, {
-        body: message,
-        edited_at: new Date().toISOString(),
-        instructors_only: newInstructorsOnly
-      });
+      if (rootThread) {
+        await updateThread({
+          id: root_id,
+          old: rootThread,
+          values: {
+            body: message,
+            edited_at: new Date().toISOString(),
+            instructors_only: newInstructorsOnly
+          }
+        });
+      }
       setEditing(false);
     },
-    [root_id, rootThread, discussionThreadTeasers, visibility, supabase]
+    [root_id, rootThread, updateThread, visibility, supabase]
   );
 
   const onClose = useCallback(() => {
@@ -319,7 +341,9 @@ function DiscussionPost({ root_id }: { root_id: number }) {
           title: "Success",
           description: `Post ${makeAnonymous ? "made anonymous" : "revealed identity"} successfully`
         });
-        discussionThreadTeasers.refetchByIds([root_id]);
+        queryClient.invalidateQueries({
+          queryKey: ["course", Number(course_id), "discussion_thread_teasers"]
+        });
       } catch (error) {
         toaster.error({
           title: "Error",
@@ -331,13 +355,15 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         setIsTogglingAnonymity(false);
       }
     },
-    [rootThread, anonymity, isCurrentlyAnonymous, isTogglingAnonymity, supabase, discussionThreadTeasers, root_id]
+    [rootThread, anonymity, isCurrentlyAnonymous, isTogglingAnonymity, supabase, queryClient, course_id]
   );
 
   const handleStaffActionUpdate = useCallback(() => {
     // Refetch the thread data after staff actions
-    discussionThreadTeasers.refetchByIds([root_id]);
-  }, [discussionThreadTeasers, root_id]);
+    queryClient.invalidateQueries({
+      queryKey: ["course", Number(course_id), "discussion_thread_teasers"]
+    });
+  }, [queryClient, course_id]);
 
   if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;

@@ -2,7 +2,8 @@
 
 import { PostRow } from "@/components/discussion/PostRow";
 import { Button } from "@/components/ui/button";
-import { useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useDiscussionThreadTeasers } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery } from "@/hooks/course-data";
 import { Box, Button as ChakraButton, Flex, Heading, Icon, Stack, Text } from "@chakra-ui/react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -13,7 +14,7 @@ export function OfficeHoursDiscussionBrowser() {
   const { course_id } = useParams();
   const courseId = Number(course_id);
   const threads = useDiscussionThreadTeasers();
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
 
   // Get topics marked for office hours
   const officeHoursTopics = useMemo(() => {

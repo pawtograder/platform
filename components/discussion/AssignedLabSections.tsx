@@ -1,7 +1,7 @@
 "use client";
 
-import { useCourseController } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useLabSectionsQuery, useLabSectionLeadersQuery, useProfilesQuery } from "@/hooks/course-data";
 import {
   Box,
   CardBody,
@@ -18,7 +18,6 @@ import {
 import { format } from "date-fns";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo } from "react";
-import { useTableControllerTableValues, useIsTableControllerReady } from "@/lib/TableController";
 
 const DAYS_OF_WEEK: { value: string; label: string }[] = [
   { value: "monday", label: "Monday" },
@@ -69,27 +68,26 @@ const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof
 );
 
 export function AssignedLabSections() {
-  const controller = useCourseController();
   const { private_profile_id } = useClassProfiles();
   const { course_id } = useParams();
   const router = useRouter();
 
-  const sectionsReady = useIsTableControllerReady(controller.labSections);
-  const leadersReady = useIsTableControllerReady(controller.labSectionLeaders);
-  const profilesReady = useIsTableControllerReady(controller.profiles);
-
   // Get all lab sections
-  const labSections = useTableControllerTableValues(controller.labSections);
+  const { data: labSections = [], isLoading: sectionsLoading } = useLabSectionsQuery();
 
   // Get all lab section leaders
-  const labSectionLeaders = useTableControllerTableValues(controller.labSectionLeaders);
+  const { data: labSectionLeaders = [], isLoading: leadersLoading } = useLabSectionLeadersQuery();
 
   // Get all profiles for leader names
-  const profiles = useTableControllerTableValues(controller.profiles);
+  const { data: profiles = [], isLoading: profilesLoading } = useProfilesQuery();
+
+  const sectionsReady = !sectionsLoading;
+  const leadersReady = !leadersLoading;
+  const profilesReady = !profilesLoading;
 
   // Filter lab sections where the current user is a leader
   const myLabSections = useMemo(() => {
-    if (!private_profile_id || !labSectionLeaders || labSectionLeaders.length === 0) {
+    if (!private_profile_id || labSectionLeaders.length === 0) {
       return [];
     }
 
@@ -105,7 +103,7 @@ export function AssignedLabSections() {
   // Create a map of section ID to leader names
   const sectionLeadersMap = useMemo(() => {
     const map = new Map<number, string[]>();
-    if (!profiles || profiles.length === 0) return map;
+    if (profiles.length === 0) return map;
 
     const profileMap = new Map(profiles.map((p) => [p.id, p.name || "Unknown"]));
 

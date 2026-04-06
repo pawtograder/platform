@@ -7,13 +7,12 @@ import { MenuContent, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
-  useAssignments,
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
   useDiscussionThreadTeasers,
-  useDiscussionTopics,
   useRootDiscussionThreadReadStatuses
 } from "@/hooks/useCourseController";
+import { useAssignmentsQuery, useDiscussionTopicsQuery } from "@/hooks/course-data";
 import {
   Badge,
   Box,
@@ -46,7 +45,7 @@ interface Props {
 
 export const DiscussionThreadTeaser = (props: Props) => {
   const thread = useDiscussionThreadTeaser(props.thread_id);
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
   const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
   const { root_id } = useParams();
   const selected = root_id ? props.thread_id === Number.parseInt(root_id as string) : false;
@@ -154,8 +153,8 @@ export default function DiscussionThreadList() {
   const { course_id } = useParams();
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const list = useDiscussionThreadTeasers();
-  const topics = useDiscussionTopics();
-  const assignments = useAssignments();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
+  const { data: assignments = [] } = useAssignmentsQuery();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOption, setFilterOption] = useState("all");

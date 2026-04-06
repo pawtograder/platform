@@ -7,7 +7,7 @@ import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useActiveSubmissions, useRubricParts, useRubrics } from "@/hooks/useAssignment";
+import { useRubricPartsQuery, useRubricsQuery, useSubmissionsQuery } from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
@@ -65,15 +65,19 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   const { role: course } = useClassProfiles();
   const { classRealTimeController, userRolesWithProfiles, assignmentDueDateExceptions, assignmentGroupsWithMembers } =
     useCourseController();
-  const rubrics = useRubrics();
-  const activeSubmissions = useActiveSubmissions();
+  const { data: rubrics = [] } = useRubricsQuery();
+  const { data: activeSubmissions = [] } = useSubmissionsQuery();
   const gradingRubric = useMemo(
     () =>
       rubrics?.find((r) => r.review_round === "grading-review") ??
       rubrics?.find((r) => r.review_round !== "self-review"),
     [rubrics]
   );
-  const gradingRubricParts = useRubricParts(gradingRubric?.id);
+  const { data: allRubricParts = [] } = useRubricPartsQuery();
+  const gradingRubricParts = useMemo(
+    () => allRubricParts.filter((p) => p.rubric_id === gradingRubric?.id),
+    [allRubricParts, gradingRubric?.id]
+  );
   const selfReviewRubric = rubrics?.find((r) => r.review_round === "self-review");
   const supabase = createClient();
   const [isExporting, setIsExporting] = useState(false);

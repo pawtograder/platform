@@ -2,7 +2,8 @@
 
 import { TagColor } from "@/app/course/[course_id]/manage/course/enrollments/TagColors";
 import TagDisplay from "@/components/ui/tag";
-import useTags, { useTagsForProfile } from "@/hooks/useTags";
+import { useTagsForProfile } from "@/hooks/useTags";
+import { useTagsQuery } from "@/hooks/course-data";
 import { Tag } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Grid, Heading, Icon, SegmentGroup } from "@chakra-ui/react";
 import { useCreate, useInvalidate } from "@refinedev/core";
@@ -65,7 +66,7 @@ export function TagAddForm({
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [selectedColor, setSelectedColor] = useState<string>("gray");
   const inputRef = useRef<HTMLInputElement>(null);
-  const { tags } = useTags();
+  const { data: tags = [] } = useTagsQuery();
 
   const uniqueTags: TagOption[] = Array.from(
     tags

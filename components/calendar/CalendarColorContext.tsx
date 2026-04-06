@@ -3,7 +3,7 @@
 import { createContext, useContext, useMemo, ReactNode } from "react";
 import { CalendarEvent } from "@/hooks/useCalendarEvents";
 import { CalendarColorPalette, OFFICE_HOURS_COLORS, EVENTS_COLORS } from "./calendar-utils";
-import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueuesQuery } from "@/hooks/office-hours-data";
 
 interface CalendarColorContextValue {
   /** Get the color for an event based on its queue name and type */
@@ -79,7 +79,7 @@ function buildColorMap(
  * No hashing - colors are assigned based on order of first appearance.
  */
 export function CalendarColorProvider({ children, events }: CalendarColorProviderProps) {
-  const helpQueues = useHelpQueues();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
 
   // Build color maps for both calendar types
   const officeHoursColorMap = useMemo(
@@ -143,7 +143,7 @@ export function useCalendarColors() {
  * Use this to wrap calendar components that need color support.
  */
 export function useCalendarColorsFromEvents(events: CalendarEvent[]) {
-  const helpQueues = useHelpQueues();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
 
   // Build color maps for both calendar types
   const officeHoursColorMap = useMemo(

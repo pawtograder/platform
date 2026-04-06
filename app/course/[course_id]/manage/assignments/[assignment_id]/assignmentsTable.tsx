@@ -4,15 +4,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
-import { useAssignmentController, useAssignmentGroups } from "@/hooks/useAssignment";
+import { useAssignmentController } from "@/hooks/useAssignment";
+import { useAssignmentScopedGroupsQuery } from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
-  useClassSections,
   useCourseController,
   useObfuscatedGradesMode,
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
+import { useClassSectionsQuery } from "@/hooks/course-data";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
@@ -286,7 +287,7 @@ export default function AssignmentsTable({
   const router = useRouter();
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
-  const assignmentGroups = useAssignmentGroups();
+  const { data: assignmentGroups = [] } = useAssignmentScopedGroupsQuery();
 
   const { classRealTimeController } = useCourseController();
   const { timeZone } = useTimeZone();
@@ -296,7 +297,7 @@ export default function AssignmentsTable({
   const [isMarkingAllComplete, setIsMarkingAllComplete] = useState(false);
 
   // Get sections and assignment data for default visibility logic
-  const classSections = useClassSections();
+  const { data: classSections = [] } = useClassSectionsQuery();
   const hasGroups = useMemo(() => assignmentGroups.length > 0, [assignmentGroups]);
 
   // Column visibility state with dynamic defaults

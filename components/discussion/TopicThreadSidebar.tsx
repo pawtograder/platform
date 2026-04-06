@@ -3,8 +3,8 @@
 import { PostRow } from "@/components/discussion/PostRow";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
-import { useTableControllerValueById } from "@/lib/TableController";
+import { useDiscussionThreadTeaser, useDiscussionThreadTeasers } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery } from "@/hooks/course-data";
 import { Box, HStack, Text } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
@@ -20,11 +20,10 @@ export function TopicThreadSidebar({
   onToggle: () => void;
 }) {
   const { course_id } = useParams();
-  const controller = useCourseController();
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
 
-  const allThreads = controller.discussionThreadTeasers.rows;
-  const rootThread = useTableControllerValueById(controller.discussionThreadTeasers, rootId);
+  const allThreads = useDiscussionThreadTeasers();
+  const rootThread = useDiscussionThreadTeaser(rootId);
 
   const topic = useMemo(() => topics?.find((t) => t.id === rootThread?.topic_id), [topics, rootThread?.topic_id]);
 

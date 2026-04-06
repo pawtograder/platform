@@ -10,7 +10,7 @@ import useModalManager from "@/hooks/useModalManager";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import CreateHelpRequestTemplateModal from "./modals/createHelpRequestTemplateModal";
 import EditHelpRequestTemplateModal from "./modals/editHelpRequestTemplateModal";
-import { useHelpRequestTemplates } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestTemplatesQuery } from "@/hooks/office-hours-data";
 import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
 import { useMemo } from "react";
 
@@ -27,7 +27,7 @@ export default function HelpRequestTemplateManagement() {
   const editModal = useModalManager<HelpRequestTemplate>();
 
   // Get all templates from realtime data and filter by class_id
-  const allTemplates = useHelpRequestTemplates();
+  const { data: allTemplates = [] } = useHelpRequestTemplatesQuery();
   const templates = useMemo(() => {
     return allTemplates.filter((template) => template.class_id === parseInt(course_id as string));
   }, [allTemplates, course_id]);
@@ -226,7 +226,7 @@ export default function HelpRequestTemplateManagement() {
               </Box>
             ) : (
               <Stack spaceY={3}>
-                {Object.entries(templatesByCategory)
+                {(Object.entries(templatesByCategory) as [string, HelpRequestTemplate[]][])
                   .filter(([, templates]) => templates.some((t) => t.is_active))
                   .map(([category, categoryTemplates]) => (
                     <Box key={category}>

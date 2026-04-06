@@ -1,13 +1,11 @@
 "use client";
 
-import { useCourseController } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { LabSection } from "@/utils/supabase/DatabaseTypes";
+import { useLabSectionsQuery, useLabSectionLeadersQuery, useProfilesQuery } from "@/hooks/course-data";
 import { Box, Card, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { format } from "date-fns";
 import { Calendar, Clock, User } from "lucide-react";
-import { useListTableControllerValues, useTableControllerTableValues } from "@/lib/TableController";
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 
 const DAYS_OF_WEEK: Record<string, string> = {
   monday: "Monday",
@@ -20,28 +18,30 @@ const DAYS_OF_WEEK: Record<string, string> = {
 };
 
 export default function StudentLabSection() {
-  const controller = useCourseController();
   const { role } = useClassProfiles();
 
   // Get lab sections data
-  const { data: labSections } = controller.listLabSections();
+  const { data: labSections = [] } = useLabSectionsQuery();
 
   // Find the student's lab section
-  const studentLabSection = labSections?.find((labSection: LabSection) => labSection.id === role?.lab_section_id);
-
-  // Get lab section leaders for this section using TableController
-  const labSectionLeadersFilter = useCallback(
-    (leader: { lab_section_id: number }) => leader.lab_section_id === studentLabSection?.id,
-    [studentLabSection?.id]
+  const studentLabSection = useMemo(
+    () => labSections.find((labSection) => labSection.id === role?.lab_section_id),
+    [labSections, role?.lab_section_id]
   );
-  const labSectionLeaders = useListTableControllerValues(controller.labSectionLeaders, labSectionLeadersFilter);
+
+  // Get lab section leaders for this section
+  const { data: allLabSectionLeaders = [] } = useLabSectionLeadersQuery();
+  const labSectionLeaders = useMemo(
+    () => allLabSectionLeaders.filter((leader) => leader.lab_section_id === studentLabSection?.id),
+    [allLabSectionLeaders, studentLabSection?.id]
+  );
 
   // Get all profiles to create a lookup map
-  const allProfiles = useTableControllerTableValues(controller.profiles);
+  const { data: allProfiles = [] } = useProfilesQuery();
 
   // Get profile names for the leaders
   const labLeaders = useMemo(() => {
-    if (!labSectionLeaders || labSectionLeaders.length === 0 || !allProfiles) {
+    if (labSectionLeaders.length === 0 || allProfiles.length === 0) {
       return [];
     }
     const profileMap = new Map(allProfiles.map((p) => [p.id, p]));

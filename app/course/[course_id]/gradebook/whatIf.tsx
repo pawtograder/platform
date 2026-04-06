@@ -3,12 +3,12 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useGradebookColumn,
-  useGradebookColumns,
   useGradebookColumnStudent,
   useGradebookController,
   useLinkToAssignment,
   useSubmissionIDForColumn
 } from "@/hooks/useGradebook";
+import { useGradebookColumnsQuery } from "@/hooks/course-data";
 import {
   GradebookWhatIfProvider,
   IncompleteValuesAdvice,
@@ -452,7 +452,7 @@ function CollapsedGroupColumn({
 }
 
 export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
-  const columns = useGradebookColumns();
+  const { data: columns = [] } = useGradebookColumnsQuery();
 
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());

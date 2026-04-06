@@ -1,14 +1,11 @@
 import { Tooltip } from "@/components/ui/tooltip";
+import { useGraderPseudonymousMode, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
 import {
-  useGraderPseudonymousMode,
-  useReviewAssignmentRubricParts,
-  useRubricCheck,
-  useRubricChecksByRubric,
-  useRubricCriteria,
-  useRubricCriteriaByRubric,
-  useRubricParts,
-  useRubricWithParts
-} from "@/hooks/useAssignment";
+  useRubricChecksQuery,
+  useRubricCriteriaQuery,
+  useRubricPartsQuery,
+  useRubricsQuery
+} from "@/hooks/assignment-data";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
@@ -484,8 +481,16 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 
   const isGraderOrInstructor = useIsGraderOrInstructor();
 
-  const rubricCheck = useRubricCheck(comment?.rubric_check_id);
-  const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
+  const { data: allChecks = [] } = useRubricChecksQuery();
+  const { data: allCriteriaList = [] } = useRubricCriteriaQuery();
+  const rubricCheck = useMemo(
+    () => allChecks.find((c) => c.id === comment?.rubric_check_id),
+    [allChecks, comment?.rubric_check_id]
+  );
+  const rubricCriteria = useMemo(
+    () => allCriteriaList.find((c) => c.id === rubricCheck?.rubric_criteria_id),
+    [allCriteriaList, rubricCheck?.rubric_criteria_id]
+  );
 
   if (!rubricCheck || !rubricCriteria || !comment) {
     return <Skeleton height="100px" width="100%" />;
@@ -741,7 +746,13 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
   const submissionController = useSubmissionController();
   const submission = useSubmission();
   const review = useActiveSubmissionReview();
-  const rubric = useRubricWithParts(review?.rubric_id);
+  const { data: allRubrics = [] } = useRubricsQuery();
+  const { data: allRubricParts = [] } = useRubricPartsQuery();
+  const rubric = useMemo(() => {
+    const base = allRubrics.find((r) => r.id === review?.rubric_id);
+    if (!base) return undefined;
+    return { ...base, rubric_parts: allRubricParts.filter((p) => p.rubric_id === base.id) };
+  }, [allRubrics, allRubricParts, review?.rubric_id]);
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const assignedPartIds = useMemo(
@@ -769,9 +780,17 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
 
   // Get existing comments for this file to check max_annotations
   const existingComments = useSubmissionFileComments({ file_id: file.id });
-  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
-  const rubricChecks = useRubricChecksByRubric(rubric?.id);
-  const rubricParts = useRubricParts(rubric?.id ?? null);
+  const { data: allCriteria = [] } = useRubricCriteriaQuery();
+  const rubricCriteria = useMemo(
+    () => allCriteria.filter((c) => c.rubric_id === rubric?.id),
+    [allCriteria, rubric?.id]
+  );
+  const { data: allChecks2 = [] } = useRubricChecksQuery();
+  const rubricChecks = useMemo(() => allChecks2.filter((c) => c.rubric_id === rubric?.id), [allChecks2, rubric?.id]);
+  const rubricParts = useMemo(
+    () => allRubricParts.filter((p) => p.rubric_id === (rubric?.id ?? null)),
+    [allRubricParts, rubric?.id]
+  );
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });

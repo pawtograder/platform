@@ -1,43 +1,17 @@
 import { QueryClient } from "@tanstack/react-query";
 import { RealtimeDiffChannel, CacheDiff } from "@/lib/cross-tab/RealtimeDiffChannel";
+import { setupMockBroadcastChannel, resetAllChannels } from "@/tests/mocks/MockBroadcastChannel";
 
 // ---------------------------------------------------------------------------
-// Minimal BroadcastChannel mock for jsdom
+// BroadcastChannel mock (jsdom has no native support)
 // ---------------------------------------------------------------------------
-
-const channelRegistry = new Map<string, Set<any>>();
-
-class MockBroadcastChannel {
-  name: string;
-  onmessage: ((ev: { data: any }) => void) | null = null;
-
-  constructor(name: string) {
-    this.name = name;
-    if (!channelRegistry.has(name)) channelRegistry.set(name, new Set());
-    channelRegistry.get(name)!.add(this);
-  }
-
-  postMessage(data: any) {
-    const peers = channelRegistry.get(this.name);
-    if (!peers) return;
-    for (const peer of peers) {
-      if (peer !== this && peer.onmessage) {
-        peer.onmessage({ data: JSON.parse(JSON.stringify(data)) });
-      }
-    }
-  }
-
-  close() {
-    channelRegistry.get(this.name)?.delete(this);
-  }
-}
 
 beforeAll(() => {
-  (globalThis as any).BroadcastChannel = MockBroadcastChannel;
+  setupMockBroadcastChannel();
 });
 
 afterEach(() => {
-  channelRegistry.clear();
+  resetAllChannels();
 });
 
 // ---------------------------------------------------------------------------

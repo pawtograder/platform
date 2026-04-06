@@ -30,9 +30,8 @@ import { useCallback, useEffect, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useLabSectionsQuery, useLabSectionMeetingsQuery } from "@/hooks/course-data";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
-import { useTableControllerTableValues } from "@/lib/TableController";
 
 // Helper function to calculate effective due date for a lab section
 function calculateLabSectionDueDate(
@@ -76,9 +75,8 @@ function calculateLabSectionDueDate(
 function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
   const dueDate = form.watch("due_date");
   const minutesDueAfterLab = form.watch("minutes_due_after_lab");
-  const controller = useCourseController();
-  const labSections = useTableControllerTableValues(controller.labSections);
-  const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
+  const { data: labSections = [] } = useLabSectionsQuery();
+  const { data: labSectionMeetings = [] } = useLabSectionMeetingsQuery();
 
   if (
     !dueDate ||

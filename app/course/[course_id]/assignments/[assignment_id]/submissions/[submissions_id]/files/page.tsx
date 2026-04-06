@@ -39,7 +39,7 @@ import {
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMetaFromParts,
   effectiveAnnotationTargetStudentProfileId
@@ -57,7 +57,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { useFindTableControllerValue } from "@/lib/TableController";
+import { useAssignmentGroupsQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubricCriteria,
@@ -325,12 +325,15 @@ function ArtifactComment({
 }) {
   const authorProfile = useUserProfile(comment.author);
   const { assignment } = useAssignmentController();
-  const { assignmentGroupsWithMembers: assignmentGroupsWithMembersController } = useCourseController();
-  const assignmentGroupWithMembers = useFindTableControllerValue(
-    assignmentGroupsWithMembersController,
-    (group) =>
-      group.assignment_id === assignment.id &&
-      group.assignment_groups_members.some((member) => member.profile_id === comment.author)
+  const { data: allGroups = [] } = useAssignmentGroupsQuery();
+  const assignmentGroupWithMembers = useMemo(
+    () =>
+      allGroups.find(
+        (group) =>
+          group.assignment_id === assignment.id &&
+          group.assignment_groups_members.some((member: { profile_id: string }) => member.profile_id === comment.author)
+      ),
+    [allGroups, assignment.id, comment.author]
   );
   const isAuthor = submission.profile_id === comment.author || !!assignmentGroupWithMembers;
   const [isEditing, setIsEditing] = useState(false);

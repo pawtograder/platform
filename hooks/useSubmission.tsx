@@ -1,13 +1,12 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
+import { useReferencingRubricChecks } from "@/hooks/useAssignment";
 import {
-  useAllRubricChecks,
-  useRubricCheck as useAssignmentUseRubricCheck,
-  useRubricCriteria as useAssignmentUseRubricCriteria,
-  useMyReviewAssignments,
-  useReferencingRubricChecks,
-  useRubrics
-} from "@/hooks/useAssignment";
+  useRubricChecksQuery,
+  useRubricCriteriaQuery,
+  useReviewAssignmentsQuery,
+  useRubricsQuery
+} from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
@@ -683,7 +682,7 @@ export function useRubricCriteriaInstances({
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
   const artifactComments = useSubmissionArtifactComments({});
-  const allChecks = useAllRubricChecks();
+  const { data: allChecks = [] } = useRubricChecksQuery();
 
   const filteredComments = useMemo(() => {
     if (!review_id) {
@@ -793,8 +792,13 @@ export function useSubmissionReviewOrGradingReview(reviewId: number | undefined)
   return review;
 }
 export function useRubricCheck(rubric_check_id: number | null) {
-  const check = useAssignmentUseRubricCheck(rubric_check_id);
-  const criteria = useAssignmentUseRubricCriteria(check?.rubric_criteria_id);
+  const { data: allChecks = [] } = useRubricChecksQuery();
+  const { data: allCriteria = [] } = useRubricCriteriaQuery();
+  const check = useMemo(() => allChecks.find((c) => c.id === rubric_check_id), [allChecks, rubric_check_id]);
+  const criteria = useMemo(
+    () => allCriteria.find((c) => c.id === check?.rubric_criteria_id),
+    [allCriteria, check?.rubric_criteria_id]
+  );
   return {
     rubricCheck: check,
     rubricCriteria: criteria
@@ -910,8 +914,12 @@ export function useWritableReferencingRubricChecks(rubric_check_id: number | nul
 export function useWritableSubmissionReviews(rubric_id?: number) {
   const id = useSubmissionController().submission.id;
   const submissionReviews = useSubmissionReviews();
-  const rubrics = useRubrics();
-  const assignments = useMyReviewAssignments(id);
+  const { data: rubrics = [] } = useRubricsQuery();
+  const { data: allMyReviewAssignments = [] } = useReviewAssignmentsQuery();
+  const assignments = useMemo(
+    () => allMyReviewAssignments.filter((a) => a.submission_id === id),
+    [allMyReviewAssignments, id]
+  );
 
   const { role } = useClassProfiles();
   const memoizedReviews = useMemo(() => {

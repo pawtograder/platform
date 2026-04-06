@@ -13,12 +13,8 @@ import Markdown from "@/components/ui/markdown";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
-import {
-  useActiveUserRolesWithProfiles,
-  useClassSections,
-  useCourseController,
-  useLabSections
-} from "@/hooks/useCourseController";
+import { useActiveUserRolesWithProfiles, useCourseController } from "@/hooks/useCourseController";
+import { useClassSectionsQuery, useLabSectionsQuery } from "@/hooks/course-data";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -286,8 +282,8 @@ export default function SecurityAuditPage() {
 
   // Use existing hooks for user data
   const userRolesWithProfiles = useActiveUserRolesWithProfiles();
-  const classSections = useClassSections();
-  const labSections = useLabSections();
+  const { data: classSections = [] } = useClassSectionsQuery();
+  const { data: labSections = [] } = useLabSectionsQuery();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [activeSearchTerm, setActiveSearchTerm] = useState("");

@@ -1,7 +1,6 @@
-import { useFindTableControllerValue, useTableControllerValueById } from "@/lib/TableController";
-import { UserProfile, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
-import { useCallback, useMemo } from "react";
-import { useCourseController } from "./useCourseController";
+import { useProfilesQuery, useUserRolesQuery } from "@/hooks/course-data";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { useMemo } from "react";
 
 export function getUserProfile(
   allProfiles: UserProfile[],
@@ -32,17 +31,15 @@ export function useUserProfile(id: string | null | undefined):
       discussion_karma?: number;
     }
   | undefined {
-  const controller = useCourseController();
-  const findFunction = useCallback(
-    (row: UserRoleWithPrivateProfileAndUser) => {
-      return row.private_profile_id === id || row.public_profile_id === id;
-    },
-    [id]
-  );
-  const userRole = useFindTableControllerValue(controller.userRolesWithProfiles, findFunction);
-  const profile = useTableControllerValueById(controller.profiles, id);
+  const { data: userRoles = [] } = useUserRolesQuery();
+  const { data: profiles = [] } = useProfilesQuery();
 
   const ret = useMemo(() => {
+    if (!id || !profiles) return undefined;
+
+    const userRole = userRoles?.find((r) => r.private_profile_id === id || r.public_profile_id === id);
+    const profile = profiles.find((p) => p.id === id);
+
     if (!profile) {
       return undefined;
     }
@@ -56,6 +53,6 @@ export function useUserProfile(id: string | null | undefined):
       private_profile_id: userRole?.private_profile_id,
       discussion_karma: profile.discussion_karma
     };
-  }, [profile, userRole]);
+  }, [id, profiles, userRoles]);
   return ret;
 }

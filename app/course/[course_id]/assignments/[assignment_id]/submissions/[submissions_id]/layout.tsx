@@ -50,6 +50,7 @@ import {
   useSubmissionReview,
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
+import { SubmissionDataBridge } from "@/hooks/submission-data/SubmissionDataBridge";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
@@ -1708,7 +1709,9 @@ export default function SubmissionsLayoutWrapper({ children }: { children: React
   const { submissions_id } = useParams();
   return (
     <SubmissionProvider submission_id={Number(submissions_id)}>
-      <SubmissionsLayout>{children}</SubmissionsLayout>
+      <SubmissionDataBridge>
+        <SubmissionsLayout>{children}</SubmissionsLayout>
+      </SubmissionDataBridge>
     </SubmissionProvider>
   );
 }

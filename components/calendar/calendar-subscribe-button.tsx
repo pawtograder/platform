@@ -8,8 +8,7 @@ import { SelectRoot, SelectTrigger, SelectValueText, SelectContent, SelectItem }
 import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverHeader, PopoverBody } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
-import { useTableControllerTableValues } from "@/lib/TableController";
+import { useClassSectionsQuery, useLabSectionsQuery } from "@/hooks/course-data";
 import { useParams } from "next/navigation";
 import { BsCalendar, BsLink45Deg, BsCheck } from "react-icons/bs";
 import { toaster } from "@/components/ui/toaster";
@@ -19,11 +18,10 @@ import { createClient } from "@/utils/supabase/client";
 export default function CalendarSubscribeButton({ iconOnly = false }: { iconOnly?: boolean }) {
   const { course_id } = useParams();
   const { role } = useClassProfiles();
-  const controller = useCourseController();
 
   // Get available sections
-  const classSections = useTableControllerTableValues(controller.classSections);
-  const labSections = useTableControllerTableValues(controller.labSections);
+  const { data: classSections = [] } = useClassSectionsQuery();
+  const { data: labSections = [] } = useLabSectionsQuery();
   const supabase = createClient();
 
   // Get user's enrolled sections

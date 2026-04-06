@@ -32,7 +32,7 @@ import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
 import { GroupCreateData, GroupManagementProvider, useGroupManagement } from "./GroupManagementContext";
-import useTags from "@/hooks/useTags";
+import { useTagsQuery } from "@/hooks/course-data";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
 
@@ -127,7 +127,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     removeMoveToFulfill
   } = useGroupManagement();
   const invalidate = useInvalidate();
-  const { tags } = useTags();
+  const { data: tags = [] } = useTagsQuery();
   const supabase = createClient();
 
   /**

@@ -15,48 +15,13 @@ import { RealtimeDiffChannel, CacheDiff } from "@/lib/cross-tab/RealtimeDiffChan
 import { processRealtimeBatch, BatchHandlerConfig } from "@/lib/cross-tab/createRealtimeBatchHandler";
 import { useSupabaseRealtimeMutation } from "@/hooks/useSupabaseRealtimeMutation";
 import type { BroadcastMessage } from "@/lib/TableController";
+import { setupMockBroadcastChannel, resetAllChannels } from "@/tests/mocks/MockBroadcastChannel";
 
 // ---------------------------------------------------------------------------
-// BroadcastChannel mock for jsdom
+// BroadcastChannel mock (jsdom has no native support)
 // ---------------------------------------------------------------------------
 
-const channelRegistry = new Map<string, Set<any>>();
-
-class MockBroadcastChannel {
-  name: string;
-  onmessage: ((ev: { data: any }) => void) | null = null;
-  private _closed = false;
-
-  constructor(name: string) {
-    this.name = name;
-    if (!channelRegistry.has(name)) channelRegistry.set(name, new Set());
-    channelRegistry.get(name)!.add(this);
-  }
-
-  postMessage(data: any) {
-    if (this._closed) return;
-    const peers = channelRegistry.get(this.name);
-    if (!peers) return;
-    for (const peer of peers) {
-      if (peer !== this && !peer._closed && peer.onmessage) {
-        peer.onmessage({ data: JSON.parse(JSON.stringify(data)) });
-      }
-    }
-  }
-
-  close() {
-    this._closed = true;
-    channelRegistry.get(this.name)?.delete(this);
-  }
-
-  addEventListener() {}
-  removeEventListener() {}
-  dispatchEvent(): boolean {
-    return false;
-  }
-}
-
-(globalThis as any).BroadcastChannel = MockBroadcastChannel;
+setupMockBroadcastChannel();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -137,7 +102,7 @@ describe("Leader Election Integration", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     instances = [];
-    channelRegistry.clear();
+    resetAllChannels();
   });
 
   afterEach(() => {
@@ -210,11 +175,11 @@ describe("Leader Election Integration", () => {
 
 describe("Cross-Tab Cache Sync", () => {
   beforeEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
   });
 
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
   });
 
   it("leader processes RT event and follower gets cache update via diff broadcast", async () => {
@@ -434,7 +399,7 @@ describe("Cross-Tab Cache Sync", () => {
 
 describe("Batch Processing", () => {
   afterEach(() => {
-    channelRegistry.clear();
+    resetAllChannels();
   });
 
   it("ID-only messages trigger supabase refetch", async () => {

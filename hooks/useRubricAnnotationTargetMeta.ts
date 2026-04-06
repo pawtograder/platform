@@ -1,5 +1,6 @@
-import { useRubricParts } from "@/hooks/useAssignment";
-import { useAllProfilesForClass, useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import { useRubricPartsQuery } from "@/hooks/assignment-data";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import { useSubmission } from "@/hooks/useSubmission";
 import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useMemo } from "react";
@@ -60,12 +61,14 @@ export function computeRubricAnnotationTargetMeta(input: {
 export function useRubricAnnotationTargetMeta(criteria: RubricCriteria | null | undefined): RubricAnnotationTargetMeta {
   const submission = useSubmission();
   const review = useActiveSubmissionReview();
-  const parts = useRubricParts(review?.rubric_id ?? null);
+  const { data: allParts = [] } = useRubricPartsQuery();
+  const rubricId = review?.rubric_id ?? null;
+  const parts = useMemo(() => allParts.filter((p) => p.rubric_id === rubricId), [allParts, rubricId]);
   const groupRow = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });
   const rawMembers = groupRow?.assignment_groups_members ?? [];
-  const allProfiles = useAllProfilesForClass();
+  const { data: allProfiles = [] } = useProfilesQuery();
   const members = useMemo(
     () =>
       rawMembers.map((m) => ({

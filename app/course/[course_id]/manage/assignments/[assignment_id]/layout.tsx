@@ -1,4 +1,5 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
+import { AssignmentDataBridge } from "@/hooks/assignment-data";
 import { createClientWithCaching, fetchAssignmentControllerData, getUserRolesForCourse } from "@/lib/ssrUtils";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -67,7 +68,9 @@ export default async function ManageAssignmentLayout({
 
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
-      <ManageAssignmentNav assignmentTitle={assignment.title}>{children}</ManageAssignmentNav>
+      <AssignmentDataBridge assignmentId={assignmentId} initialData={initialData}>
+        <ManageAssignmentNav assignmentTitle={assignment.title}>{children}</ManageAssignmentNav>
+      </AssignmentDataBridge>
     </AssignmentProvider>
   );
 }

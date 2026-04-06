@@ -3,8 +3,8 @@
 import { Box, Card, HStack, Icon, Stack, Text, VStack } from "@chakra-ui/react";
 import React, { useMemo, useState } from "react";
 import { BsExclamationTriangle } from "react-icons/bs";
-import { useHelpRequestWorkSessions, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
-import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import { useHelpRequestWorkSessionsQuery, useHelpRequestStudentsQuery } from "@/hooks/office-hours-data";
+import { useProfilesQuery } from "@/hooks/course-data";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import { useColorModeValue } from "@/components/ui/color-mode";
 import { Input } from "@/components/ui/input";
@@ -19,9 +19,9 @@ interface TimeTrackingDashboardProps {
 }
 
 export default function TimeTrackingDashboard({ courseId }: TimeTrackingDashboardProps) {
-  const allSessions = useHelpRequestWorkSessions();
-  const profiles = useAllProfilesForClass();
-  const helpRequestStudents = useHelpRequestStudents();
+  const { data: allSessions = [] } = useHelpRequestWorkSessionsQuery();
+  const { data: profiles = [] } = useProfilesQuery();
+  const { data: helpRequestStudents = [] } = useHelpRequestStudentsQuery();
   const [dateFilter, setDateFilter] = useState<{ start?: string; end?: string }>({});
   const tickColor = useColorModeValue("#000000", "#FFFFFF");
   const tooltipBg = useColorModeValue("#FFFFFF", "#1A1A1A");

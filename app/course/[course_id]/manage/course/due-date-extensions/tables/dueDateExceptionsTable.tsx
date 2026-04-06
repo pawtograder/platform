@@ -2,7 +2,8 @@
 
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/toaster";
-import { useAllStudentProfiles, useAssignments } from "@/hooks/useCourseController";
+import { useAllStudentProfiles } from "@/hooks/useCourseController";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import useModalManager from "@/hooks/useModalManager";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Icon, NativeSelect, Text, VStack } from "@chakra-ui/react";
@@ -18,7 +19,7 @@ import AssignmentExceptionsTable from "./assignmentExceptionsTable";
  * and actions to add new exceptions or gift tokens.
  */
 export default function DueDateExceptionsTable() {
-  const unsortedAssignments = useAssignments();
+  const { data: unsortedAssignments = [] } = useAssignmentsQuery();
   const students = useAllStudentProfiles();
 
   // Filters

@@ -2,8 +2,13 @@
 
 import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/submission-author-names";
 import Link from "@/components/ui/link";
-import { useActiveSubmissions, useAssignmentGroups, useMyReviewAssignments } from "@/hooks/useAssignment";
-import { useAllProfilesForClass, useGradersAndInstructors } from "@/hooks/useCourseController";
+import {
+  useAssignmentScopedGroupsQuery,
+  useReviewAssignmentsQuery,
+  useSubmissionsQuery
+} from "@/hooks/assignment-data";
+import { useGradersAndInstructors } from "@/hooks/useCourseController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import { Box, HStack, Text } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -56,9 +61,9 @@ interface GroupedSubmissionData {
 
 // Hook that returns grouped submission data for the selector
 function useGroupedSubmissionData(): GroupedSubmissionData {
-  const submissions = useActiveSubmissions();
-  const classProfiles = useAllProfilesForClass();
-  const assignmentGroups = useAssignmentGroups();
+  const { data: submissions = [] } = useSubmissionsQuery();
+  const { data: classProfiles = [] } = useProfilesQuery();
+  const { data: assignmentGroups = [] } = useAssignmentScopedGroupsQuery();
   const staffProfiles = useGradersAndInstructors();
   const { submissions_id } = useParams();
 
@@ -207,7 +212,7 @@ export default function AssignmentGradingToolbar() {
   const { course_id, assignment_id, submissions_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const myReviewAssignments = useMyReviewAssignments();
+  const { data: myReviewAssignments = [] } = useReviewAssignmentsQuery();
   const isInReviewMode = myReviewAssignments.length > 0;
   const { startNavigation } = useNavigationProgress();
 

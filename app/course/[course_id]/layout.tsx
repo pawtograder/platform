@@ -5,7 +5,9 @@ import React from "react";
 import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
+import { CourseDataBridge } from "@/hooks/course-data/CourseDataBridge";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
+import { OfficeHoursDataBridge } from "@/hooks/office-hours-data";
 import { fetchCourseControllerData, getCourse, getUserRolesForCourse } from "@/lib/ssrUtils";
 import { TimeZoneProvider } from "@/lib/TimeZoneProvider";
 import { headers } from "next/headers";
@@ -56,21 +58,25 @@ const ProtectedLayout = async ({
             role={user_role.role}
             initialData={initialData}
           >
-            <OfficeHoursControllerProvider
-              classId={Number.parseInt(course_id)}
-              profileId={user_role.private_profile_id}
-              role={user_role.role}
-            >
-              <HelpDrawerProvider>
-                <DynamicCourseNav />
-                {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
-                {/* mobilenav */}
-                <Box pt="0" ml="0" mr="0" pb="80px">
-                  {children}
-                </Box>
-                <FloatingHelpRequestWidget />
-              </HelpDrawerProvider>
-            </OfficeHoursControllerProvider>
+            <CourseDataBridge initialData={initialData}>
+              <OfficeHoursControllerProvider
+                classId={Number.parseInt(course_id)}
+                profileId={user_role.private_profile_id}
+                role={user_role.role}
+              >
+                <OfficeHoursDataBridge>
+                  <HelpDrawerProvider>
+                    <DynamicCourseNav />
+                    {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
+                    {/* mobilenav */}
+                    <Box pt="0" ml="0" mr="0" pb="80px">
+                      {children}
+                    </Box>
+                    <FloatingHelpRequestWidget />
+                  </HelpDrawerProvider>
+                </OfficeHoursDataBridge>
+              </OfficeHoursControllerProvider>
+            </CourseDataBridge>
           </CourseControllerProvider>
         </TimeZoneProvider>
       </NavigationProgressProvider>

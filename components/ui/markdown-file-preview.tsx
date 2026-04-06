@@ -1,13 +1,12 @@
 "use client";
 
+import { useGraderPseudonymousMode, useReviewAssignmentRubricParts } from "@/hooks/useAssignment";
 import {
-  useGraderPseudonymousMode,
-  useReviewAssignmentRubricParts,
-  useRubricChecksByRubric,
-  useRubricCriteriaByRubric,
-  useRubricParts,
-  useRubricWithParts
-} from "@/hooks/useAssignment";
+  useRubricChecksQuery,
+  useRubricCriteriaQuery,
+  useRubricPartsQuery,
+  useRubricsQuery
+} from "@/hooks/assignment-data";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
@@ -302,7 +301,13 @@ function MarkdownLineActionPopup({
   const submissionController = useSubmissionController();
   const submission = useSubmission();
   const review = useActiveSubmissionReview();
-  const rubric = useRubricWithParts(review?.rubric_id);
+  const { data: allRubrics = [] } = useRubricsQuery();
+  const { data: allRubricParts = [] } = useRubricPartsQuery();
+  const rubric = useMemo(() => {
+    const base = allRubrics.find((r) => r.id === review?.rubric_id);
+    if (!base) return undefined;
+    return { ...base, rubric_parts: allRubricParts.filter((p) => p.rubric_id === base.id) };
+  }, [allRubrics, allRubricParts, review?.rubric_id]);
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const assignedPartIds = useMemo(
@@ -322,9 +327,17 @@ function MarkdownLineActionPopup({
   const popupRef = useRef<HTMLDivElement>(null);
 
   const existingComments = useSubmissionFileComments({ file_id: file.id });
-  const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
-  const rubricChecks = useRubricChecksByRubric(rubric?.id);
-  const rubricParts = useRubricParts(rubric?.id ?? null);
+  const { data: allCriteria = [] } = useRubricCriteriaQuery();
+  const rubricCriteria = useMemo(
+    () => allCriteria.filter((c) => c.rubric_id === rubric?.id),
+    [allCriteria, rubric?.id]
+  );
+  const { data: allChecks = [] } = useRubricChecksQuery();
+  const rubricChecks = useMemo(() => allChecks.filter((c) => c.rubric_id === rubric?.id), [allChecks, rubric?.id]);
+  const rubricParts = useMemo(
+    () => allRubricParts.filter((p) => p.rubric_id === (rubric?.id ?? null)),
+    [allRubricParts, rubric?.id]
+  );
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id ?? undefined
   });

@@ -4,7 +4,7 @@ import { RequestRow } from "@/components/help-queue/request-row";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useHelpQueues, useHelpRequests, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueuesQuery, useHelpRequestsQuery, useHelpRequestStudentsQuery } from "@/hooks/office-hours-data";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
 import { Box, HStack, Text, Badge, Separator } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
@@ -43,9 +43,9 @@ export function HelpRequestSidebar({
 }: HelpRequestSidebarProps) {
   const { course_id } = useParams();
   const { private_profile_id } = useClassProfiles();
-  const allHelpRequests = useHelpRequests();
-  const helpQueues = useHelpQueues();
-  const helpRequestStudents = useHelpRequestStudents();
+  const { data: allHelpRequests = [] } = useHelpRequestsQuery();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
+  const { data: helpRequestStudents = [] } = useHelpRequestStudentsQuery();
 
   // Get current request and queue
   const currentRequest = useMemo(() => {

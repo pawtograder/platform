@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useAllStudentProfiles, useAssignments, useCourseController } from "@/hooks/useCourseController";
+import { useAllStudentProfiles, useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Dialog, HStack, Input, Portal, Textarea, VStack } from "@chakra-ui/react";
@@ -35,7 +36,7 @@ export default function AddExceptionModal({
   const course_id = role.class_id;
 
   const students = useAllStudentProfiles();
-  const assignments = useAssignments();
+  const { data: assignments = [] } = useAssignmentsQuery();
   const { assignmentDueDateExceptions } = useCourseController();
 
   const assignmentOptions = useMemo(

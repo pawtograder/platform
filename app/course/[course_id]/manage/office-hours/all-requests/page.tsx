@@ -95,7 +95,7 @@ export default function AllRequestsPage() {
       requests = requests.filter((request) => {
         const requestStudents = requestStudentsMap[request.id] || [];
         const requestTextMatch = request.request.toLowerCase().includes(searchLower);
-        const studentNameMatch = requestStudents.some((profileId) => {
+        const studentNameMatch = requestStudents.some((profileId: string) => {
           const studentName = studentNameMap?.[profileId];
           return studentName && studentName.toLowerCase().includes(searchLower);
         });

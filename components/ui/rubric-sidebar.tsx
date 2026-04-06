@@ -56,7 +56,7 @@ import {
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
-import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
@@ -70,7 +70,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { useIsTableControllerReady } from "@/lib/TableController";
+import { useAssignmentGroupsQuery } from "@/hooks/course-data";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { formatRelative } from "date-fns";
@@ -2057,8 +2057,8 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
   const rubricParts = useRubricParts(rubricId);
   const submission = useSubmissionMaybe();
   const isGroupSubmission = Boolean(submission?.assignment_group_id);
-  const { assignmentGroupsWithMembers } = useCourseController();
-  const assignmentGroupsTableReady = useIsTableControllerReady(assignmentGroupsWithMembers);
+  const { isLoading: assignmentGroupsLoading } = useAssignmentGroupsQuery();
+  const assignmentGroupsTableReady = !assignmentGroupsLoading;
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission?.assignment_group_id
   });

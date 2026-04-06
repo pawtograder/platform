@@ -1,24 +1,18 @@
 "use client";
 
-import { useClassSections, useCourseController, useLabSections } from "@/hooks/useCourseController";
-import type { UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
-import { useFindTableControllerValue } from "@/lib/TableController";
+import { useUserRolesQuery, useClassSectionsQuery, useLabSectionsQuery } from "@/hooks/course-data";
 import { Icon } from "@chakra-ui/react";
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { BsPerson } from "react-icons/bs";
 import { Tooltip } from "./tooltip";
 import Link from "./link";
 
 export default function StudentSummaryTrigger({ student_id, course_id }: { student_id: string; course_id: number }) {
-  const controller = useCourseController();
-  const classSections = useClassSections();
-  const labSections = useLabSections();
+  const { data: userRoles = [] } = useUserRolesQuery();
+  const { data: classSections = [] } = useClassSectionsQuery();
+  const { data: labSections = [] } = useLabSectionsQuery();
 
-  const matcher = useCallback(
-    (r: UserRoleWithPrivateProfileAndUser) => r.private_profile_id === student_id,
-    [student_id]
-  );
-  const userRole = useFindTableControllerValue(controller.userRolesWithProfiles, matcher);
+  const userRole = useMemo(() => userRoles?.find((r) => r.private_profile_id === student_id), [userRoles, student_id]);
 
   const tooltipContent = useMemo(() => {
     const parts: string[] = [];

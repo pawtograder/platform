@@ -1,23 +1,27 @@
 "use client";
 
 import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
-import TableController, {
-  useTableControllerTableValues,
-  useTableControllerValueById,
-  useListTableControllerValues
-} from "@/lib/TableController";
+import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import {
-  HelpRequestMessage,
-  HelpRequestMessageReadReceipt,
-  HelpRequestMessageWithoutId
-} from "@/utils/supabase/DatabaseTypes";
+import { HelpRequestMessageReadReceipt, HelpRequestMessageWithoutId } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import {
+  useHelpRequestsQuery,
+  useHelpQueuesQuery,
+  useHelpRequestStudentsQuery,
+  useHelpQueueAssignmentsQuery,
+  useStudentKarmaNotesQuery,
+  useHelpRequestTemplatesQuery,
+  useHelpRequestModerationQuery,
+  useStudentHelpActivityQuery,
+  useHelpRequestFeedbackQuery,
+  useHelpRequestWorkSessionsQuery
+} from "./office-hours-data";
 
 // Type for broadcast messages from the database trigger
 type DatabaseBroadcastMessage = {
@@ -51,14 +55,7 @@ export class OfficeHoursController {
   // Track read receipts that have been marked to prevent duplicates across component mounts
   private _markedAsReadSet: Set<number> = new Set();
 
-  // Track which help request IDs have had their messages loaded
-  private _loadedHelpRequestIds: Set<number> = new Set();
-
-  // Map of help request ID to their dedicated message TableController
-  private _helpRequestMessageControllers: Map<number, TableController<"help_request_messages">> = new Map();
-  // Map of help request ID to their dedicated read receipts TableController
-  private _helpRequestReadReceiptControllers: Map<number, TableController<"help_request_message_read_receipts">> =
-    new Map();
+  // Per-request Maps removed — TanStack Query hooks with gcTime handle lifecycle automatically.
 
   // Lazily created TableController instances to avoid realtime subscription bursts
   private _helpRequests?: TableController<"help_requests">;
@@ -96,14 +93,12 @@ export class OfficeHoursController {
   }
 
   /**
-   * Initialize critical TableControllers immediately after construction
-   * This creates them eagerly but in a controlled manner after realtime controllers are stable
+   * No-op. TableControllers are no longer needed -- data flows through TanStack Query hooks.
+   * Lazy getters are retained for backward compatibility but are no longer eagerly triggered.
    */
   initializeEagerControllers() {
-    // You could do this, but it should be more targetted than for every page load.
-    // void this.helpRequests; // Triggers lazy creation
-    // void this.helpQueues; // Triggers lazy creation
-    // void this.helpRequestTemplates; // Triggers lazy creation
+    // TableControllers are no longer needed — data flows through TanStack Query hooks.
+    // Lazy getters are retained for backward compatibility but are no longer eagerly triggered.
   }
 
   // Lazy getters for TableControllers
@@ -342,77 +337,9 @@ export class OfficeHoursController {
     return this._officeHoursRealTimeController?.isReady ?? false;
   }
 
-  /**
-   * Load messages for a specific help request if not already loaded
-   */
-  loadMessagesForHelpRequest(helpRequestId: number): TableController<"help_request_messages"> {
-    // Return existing controller if already loaded
-    if (this._helpRequestMessageControllers.has(helpRequestId)) {
-      return this._helpRequestMessageControllers.get(helpRequestId)!;
-    }
+  // loadMessagesForHelpRequest removed — replaced by useHelpRequestMessagesQuery() from office-hours-data
 
-    // Create new TableController for this specific help request
-    // Use minimal debounce settings for chat messages to ensure real-time responsiveness
-    const controller = new TableController({
-      client: this._client,
-      table: "help_request_messages",
-      query: this._client
-        .from("help_request_messages")
-        .select("*")
-        .eq("class_id", this.classId)
-        .eq("help_request_id", helpRequestId),
-      additionalRealTimeControllers: this._officeHoursRealTimeController ? [this._officeHoursRealTimeController] : [],
-      realtimeFilter: {
-        class_id: this.classId,
-        help_request_id: helpRequestId
-      },
-      // Chat messages need real-time responsiveness - use minimal debounce and no jitter
-      debounceInterval: 50, // Small debounce to batch rapid messages
-      debounceJitter: 0 // No jitter - messages should appear immediately
-    });
-
-    this._helpRequestMessageControllers.set(helpRequestId, controller);
-    this._loadedHelpRequestIds.add(helpRequestId);
-
-    return controller;
-  }
-
-  /**
-   * Load read receipts for a specific help request if not already loaded
-   */
-  loadReadReceiptsForHelpRequest(helpRequestId: number): TableController<"help_request_message_read_receipts"> {
-    if (this._helpRequestReadReceiptControllers.has(helpRequestId)) {
-      return this._helpRequestReadReceiptControllers.get(helpRequestId)!;
-    }
-
-    const controller = new TableController({
-      client: this._client,
-      table: "help_request_message_read_receipts",
-      query: this._client
-        .from("help_request_message_read_receipts")
-        .select("*")
-        .eq("class_id", this.classId)
-        .eq("help_request_id", helpRequestId),
-      additionalRealTimeControllers: this._officeHoursRealTimeController ? [this._officeHoursRealTimeController] : []
-    });
-
-    this._helpRequestReadReceiptControllers.set(helpRequestId, controller);
-    return controller;
-  }
-
-  /**
-   * Get the TableController for a specific help request's messages
-   */
-  getHelpRequestMessagesController(helpRequestId: number): TableController<"help_request_messages"> | undefined {
-    return this._helpRequestMessageControllers.get(helpRequestId);
-  }
-
-  /**
-   * Check if messages for a help request have been loaded
-   */
-  isHelpRequestLoaded(helpRequestId: number): boolean {
-    return this._loadedHelpRequestIds.has(helpRequestId);
-  }
+  // loadReadReceiptsForHelpRequest removed — replaced by useHelpRequestReadReceiptsQuery() from office-hours-data
 
   /**
    * Close the controller and clean up resources
@@ -442,20 +369,7 @@ export class OfficeHoursController {
     this._videoMeetingSessions?.close();
     this._helpRequestWorkSessions?.close();
 
-    // Close per-help-request message controllers
-    for (const controller of this._helpRequestMessageControllers.values()) {
-      controller.close();
-    }
-    this._helpRequestMessageControllers.clear();
-
-    // Close per-help-request read receipt controllers
-    for (const controller of this._helpRequestReadReceiptControllers.values()) {
-      controller.close();
-    }
-    this._helpRequestReadReceiptControllers.clear();
-
     this._markedAsReadSet.clear();
-    this._loadedHelpRequestIds.clear();
   }
 
   get isLoaded() {
@@ -551,122 +465,74 @@ export function useOfficeHoursController() {
   return controller;
 }
 
-// Hook functions following the pattern from useCourseController
-export function useHelpRequestMessages(help_request_id: number | undefined) {
-  const controller = useOfficeHoursController();
-  const [messages, setMessages] = useState<HelpRequestMessage[]>([]);
-
-  useEffect(() => {
-    if (!help_request_id) {
-      setMessages([]);
-      return;
-    }
-
-    // Load messages for this help request if not already loaded
-    const helpRequestController = controller.loadMessagesForHelpRequest(help_request_id);
-
-    // Subscribe to updates for this specific help request
-    const { data, unsubscribe } = helpRequestController.list((data) => {
-      setMessages(data);
-    });
-
-    // Set initial data
-    setMessages(data);
-
-    return unsubscribe;
-  }, [controller, help_request_id]);
-
-  return messages;
-}
-
-export function useHelpRequestReadReceipts(help_request_id: number | undefined) {
-  const controller = useOfficeHoursController();
-  const [receipts, setReceipts] = useState<HelpRequestMessageReadReceipt[]>([]);
-  useEffect(() => {
-    if (!help_request_id) {
-      setReceipts([]);
-      return;
-    }
-
-    const readReceiptsController = controller.loadReadReceiptsForHelpRequest(help_request_id);
-    const { data, unsubscribe } = readReceiptsController.list((data) => {
-      setReceipts(data);
-    });
-    setReceipts(data);
-    return unsubscribe;
-  }, [controller, help_request_id]);
-  return receipts;
-}
+// useHelpRequestMessages and useHelpRequestReadReceipts removed —
+// replaced by useHelpRequestMessagesQuery / useHelpRequestReadReceiptsQuery from office-hours-data
 
 export function useHelpRequests() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpRequests);
+  const { data } = useHelpRequestsQuery();
+  return data ?? [];
 }
 
 export function useHelpRequest(id: number | undefined) {
-  const controller = useOfficeHoursController();
-  return useTableControllerValueById(controller.helpRequests, id);
+  const { data } = useHelpRequestsQuery();
+  return useMemo(() => data?.find((r) => r.id === id), [data, id]);
 }
 
 export function useHelpQueue(id: number | undefined) {
-  const controller = useOfficeHoursController();
-  return useTableControllerValueById(controller.helpQueues, id);
+  const { data } = useHelpQueuesQuery();
+  return useMemo(() => data?.find((q) => q.id === id), [data, id]);
 }
 export function useHelpQueues() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpQueues);
+  const { data } = useHelpQueuesQuery();
+  return data ?? [];
 }
 
 export function useHelpRequestStudents() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpRequestStudents);
+  const { data } = useHelpRequestStudentsQuery();
+  return data ?? [];
 }
 
 export function useHelpQueueAssignments() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpQueueAssignments);
+  const { data } = useHelpQueueAssignmentsQuery();
+  return data ?? [];
 }
 
 /**
  * Returns only active help queue assignments (is_active === true).
- * Uses useListTableControllerValues which subscribes to individual item changes,
- * ensuring the data stays fresh when assignments are activated/deactivated.
  */
 export function useActiveHelpQueueAssignments() {
-  const controller = useOfficeHoursController();
-  // Memoize predicate to avoid re-subscribing on every render
-  const isActivePredicate = useCallback((assignment: { is_active: boolean }) => assignment.is_active === true, []);
-  return useListTableControllerValues(controller.helpQueueAssignments, isActivePredicate);
+  const { data } = useHelpQueueAssignmentsQuery();
+  return useMemo(() => (data ?? []).filter((a) => a.is_active === true), [data]);
 }
 
 export function useStudentKarmaNotes() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.studentKarmaNotes);
+  const { data } = useStudentKarmaNotesQuery();
+  return data ?? [];
 }
 
 export function useHelpRequestTemplates() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpRequestTemplates);
+  const { data } = useHelpRequestTemplatesQuery();
+  return data ?? [];
 }
 
 export function useHelpRequestModeration() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpRequestModeration);
+  const { data } = useHelpRequestModerationQuery();
+  return data ?? [];
 }
 
 export function useStudentHelpActivity() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.studentHelpActivity);
+  const { data } = useStudentHelpActivityQuery();
+  return data ?? [];
 }
 
 export function useHelpRequestFeedback() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpRequestFeedback);
+  const { data } = useHelpRequestFeedbackQuery();
+  return data ?? [];
 }
 
 export function useHelpRequestWorkSessions() {
-  const controller = useOfficeHoursController();
-  return useTableControllerTableValues(controller.helpRequestWorkSessions);
+  const { data } = useHelpRequestWorkSessionsQuery();
+  return data ?? [];
 }
 
 export function useWorkSessionsForRequest(help_request_id: number | undefined) {

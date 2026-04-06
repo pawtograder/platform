@@ -2,8 +2,8 @@
 
 import { DiscussionHeader, type DiscussionViewMode } from "@/components/discussion/DiscussionHeader";
 import { TopicThreadSidebar } from "@/components/discussion/TopicThreadSidebar";
-import { useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
-import { useTableControllerValueById } from "@/lib/TableController";
+import { useCourseController, useDiscussionThreadTeaser } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery } from "@/hooks/course-data";
 import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -18,9 +18,9 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
   const discussionBaseHref = `/course/${course_id}/discussion`;
 
   // Get the current thread if we're viewing a single discussion
-  const threadId = root_id ? Number.parseInt(root_id as string) : null;
-  const currentThreadData = useTableControllerValueById(courseController.discussionThreadTeasers, threadId ?? -1);
-  const topics = useDiscussionTopics();
+  const threadId = root_id ? Number.parseInt(root_id as string) : undefined;
+  const currentThreadData = useDiscussionThreadTeaser(threadId);
+  const { data: topics = [] } = useDiscussionTopicsQuery();
 
   const currentThread = useMemo(() => {
     if (!threadId || !currentThreadData || currentThreadData.ordinal === null) return undefined;

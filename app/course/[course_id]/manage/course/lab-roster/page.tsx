@@ -4,12 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
-  useAssignments,
-  useCourseController,
-  useLabSections,
-  useUserRolesWithProfiles
-} from "@/hooks/useCourseController";
-import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
+  useAssignmentsQuery,
+  useLabSectionsQuery,
+  useLabSectionLeadersQuery,
+  useProfilesQuery,
+  useUserRolesQuery
+} from "@/hooks/course-data";
 import { Assignment, LabSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -101,15 +101,13 @@ export default function LabRosterPage() {
   const { course_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const controller = useCourseController();
   const { private_profile_id } = useClassProfiles();
   const isInstructor = useIsInstructor();
-  const labSections = useLabSections();
-  const userRoles = useUserRolesWithProfiles();
-  const labSectionLeaders = useTableControllerTableValues(controller.labSectionLeaders);
-  const profiles = useTableControllerTableValues(controller.profiles);
-  const labSectionLeadersReady = useIsTableControllerReady(controller.labSectionLeaders);
-  const allAssignments = useAssignments();
+  const { data: labSections = [] } = useLabSectionsQuery();
+  const { data: userRoles = [] } = useUserRolesQuery();
+  const { data: labSectionLeaders = [], isSuccess: labSectionLeadersReady } = useLabSectionLeadersQuery();
+  const { data: profiles = [] } = useProfilesQuery();
+  const { data: allAssignments = [] } = useAssignmentsQuery();
 
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [isOtherSectionsOpen, setIsOtherSectionsOpen] = useState(false);
@@ -164,7 +162,7 @@ export default function LabRosterPage() {
   // Initialize selection to first section in list, and accordion state
   useEffect(() => {
     // Wait for lab sections to be loaded, leader data to be ready, and controller to exist
-    if (!isInitialized && labSections.length > 0 && labSectionLeadersReady && controller.labSectionLeaders != null) {
+    if (!isInitialized && labSections.length > 0 && labSectionLeadersReady) {
       // If user has no sections, expand other sections accordion by default
       if (mySections.length === 0) {
         setIsOtherSectionsOpen(true);
@@ -179,7 +177,7 @@ export default function LabRosterPage() {
 
       setIsInitialized(true);
     }
-  }, [labSections, labSectionLeadersReady, controller.labSectionLeaders, mySections, otherSections, isInitialized]);
+  }, [labSections, labSectionLeadersReady, mySections, otherSections, isInitialized]);
 
   // Create a map from section ID to section name
   const sectionIdToName = useMemo(() => {

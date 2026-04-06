@@ -1,7 +1,7 @@
 "use client";
 import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
-import { useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
+import { useReviewAssignmentsQuery, useRubricsQuery } from "@/hooks/assignment-data";
 import { useAssignmentDueDate, useAssignmentGroupForUser } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, Skeleton, Text, VStack } from "@chakra-ui/react";
@@ -9,7 +9,7 @@ import { useList } from "@refinedev/core";
 import { addHours, differenceInMinutes } from "date-fns";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { FaExclamationTriangle } from "react-icons/fa";
 
 function CompleteReviewButton({
@@ -30,8 +30,9 @@ function CompleteReviewButton({
       { field: "submission_id", operator: "eq", value: activeSubmission?.id }
     ]
   });
-  const reviewAssignments = useMyReviewAssignments();
-  const selfReviewRubric = useRubric("self-review");
+  const { data: reviewAssignments = [] } = useReviewAssignmentsQuery();
+  const { data: allRubrics = [] } = useRubricsQuery();
+  const selfReviewRubric = useMemo(() => allRubrics.find((r) => r.review_round === "self-review"), [allRubrics]);
   const selfReviewAssignment = reviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
 
   return (
@@ -67,8 +68,9 @@ function SelfReviewNoticeInner({
     studentPrivateProfileId: enrollment.private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id
   });
-  const myReviewAssignments = useMyReviewAssignments();
-  const selfReviewRubric = useRubric("self-review");
+  const { data: myReviewAssignments = [] } = useReviewAssignmentsQuery();
+  const { data: rubrics = [] } = useRubricsQuery();
+  const selfReviewRubric = useMemo(() => rubrics.find((r) => r.review_round === "self-review"), [rubrics]);
   const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
   const [isLoading, setIsLoading] = useState(false);
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useAssignments } from "@/hooks/useCourseController";
+import { useAssignmentsQuery } from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import { Json } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -91,7 +91,7 @@ export function ErrorPinModal({
   defaultAssignmentId
 }: ErrorPinModalProps) {
   const { course_id } = useParams();
-  const assignments = useAssignments();
+  const { data: assignments = [] } = useAssignmentsQuery();
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [previewSubmissions, setPreviewSubmissions] = useState<

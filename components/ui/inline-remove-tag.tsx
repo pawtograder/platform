@@ -1,4 +1,4 @@
-import useTags from "@/hooks/useTags";
+import { useTagsQuery } from "@/hooks/course-data";
 import { Tag } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
@@ -19,7 +19,7 @@ export default function InlineRemoveTag({
   tagOptions: Tag[];
 }) {
   const [selectedTag, setSelectedTag] = useState<Tag | null>(null);
-  const tags = useTags();
+  const { data: tags = [] } = useTagsQuery();
 
   /**
    * - tag options contains the shared tags between selected profiles
@@ -33,7 +33,7 @@ export default function InlineRemoveTag({
         value={selectedTag ? { label: selectedTag.name, value: selectedTag.id, tag: selectedTag } : null}
         onChange={(option) => {
           if (option) {
-            const tag = option.tag ?? tags.tags.find((t) => t.id == option.value);
+            const tag = option.tag ?? tags.find((t) => t.id == option.value);
             if (tag) {
               setSelectedTag(tag);
             }

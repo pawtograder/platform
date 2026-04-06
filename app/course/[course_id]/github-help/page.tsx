@@ -3,8 +3,8 @@
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
+import { useRepositoriesQuery } from "@/hooks/course-data";
 import { syncGitHubAccount } from "@/lib/edgeFunctions";
-import { useTableControllerTableValues } from "@/lib/TableController";
 import { Box, Button, Heading, Link, List, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { useCallback, useMemo, useState } from "react";
@@ -12,7 +12,7 @@ import { useCallback, useMemo, useState } from "react";
 export default function GitHubHelpPage() {
   const courseController = useCourseController();
   const { role: enrollment } = useClassProfiles();
-  const repositories = useTableControllerTableValues(courseController.repositories);
+  const { data: repositories = [] } = useRepositoriesQuery();
   const githubUsername = enrollment.users.github_username;
   const githubUserId = enrollment.users.github_user_id;
   const [syncing, setSyncing] = useState(false);

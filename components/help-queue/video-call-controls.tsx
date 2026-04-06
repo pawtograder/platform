@@ -14,7 +14,7 @@ import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 import { useMeetingWindows } from "@/hooks/useMeetingWindows";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestStudentsQuery } from "@/hooks/office-hours-data";
 type VideoCallControlsProps = {
   request: HelpRequest;
   /** Whether the current user can start video calls (TAs/instructors) */
@@ -40,7 +40,7 @@ export default function VideoCallControls({
   const [isEndingCall, setIsEndingCall] = useState(false);
   const { openMeetingWindow } = useMeetingWindows();
   const { private_profile_id } = useClassProfiles();
-  const allHelpRequestStudents = useHelpRequestStudents();
+  const { data: allHelpRequestStudents = [] } = useHelpRequestStudentsQuery();
 
   const { mutateAsync: updateRequest } = useUpdate<HelpRequest>({
     resource: "help_requests",

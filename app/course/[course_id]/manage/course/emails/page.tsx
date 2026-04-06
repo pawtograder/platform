@@ -14,7 +14,7 @@ import { Button, Field, Fieldset, Heading, Input, Box, Flex, Text, Checkbox } fr
 import { useList, useOne } from "@refinedev/core";
 import { CreatableSelect, Select } from "chakra-react-select";
 import { useEffect, useRef, useState } from "react";
-import useTags from "@/hooks/useTags";
+import { useTagsQuery } from "@/hooks/course-data";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
 import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
@@ -76,7 +76,7 @@ function EmailsInnerPage() {
   const [tag, setTag] = useState<Tag>();
   const [subjectLine, setSubjectLine] = useState<string>("");
   const [body, setBody] = useState<string>("");
-  const tags = useTags();
+  const { data: tags = [] } = useTagsQuery();
   const { role: enrollment } = useClassProfiles();
   const timeZoneContext = useTimeZone();
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
@@ -86,7 +86,7 @@ function EmailsInnerPage() {
   const [ccSelf, setCcSelf] = useState<boolean>(false);
   /* Tags unique by color and name */
   const uniqueTags: Tag[] = Array.from(
-    tags.tags
+    tags
       .reduce((map, tag) => {
         if (!map.has(tag.name + tag.color + tag.visible)) {
           map.set(tag.name + tag.color + tag.visible, tag);
@@ -552,7 +552,7 @@ function EmailsInnerPage() {
    * @returns `{user_id:string, email:string}[]`
    */
   const getTagIdentities = (chosenTag: Tag) => {
-    const profile_ids = tags.tags
+    const profile_ids = tags
       .filter((tag) => {
         return tag.color == chosenTag.color && tag.name == chosenTag.name && tag.visible === chosenTag.visible;
       })

@@ -15,15 +15,14 @@ export function useDiscussionThreadQuery() {
   return useSupabaseRealtimeQuery<"discussion_threads", DiscussionThread>({
     queryKey: ["course", courseId, "discussion_thread", rootThreadId],
     table: "discussion_threads",
-    queryFn: () =>
-      supabase.from("discussion_threads").select("*").or(`id.eq.${rootThreadId},root_id.eq.${rootThreadId}`),
+    queryFn: () => supabase.from("discussion_threads").select("*").or(`id.eq.${rootThreadId},root.eq.${rootThreadId}`),
     classRtc,
     supabase,
     scope: "scoped",
     realtimeFilter: (row) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const r = row as any;
-      return r.id === rootThreadId || r.root_id === rootThreadId;
+      return r.id === rootThreadId || r.root === rootThreadId;
     }
   });
 }

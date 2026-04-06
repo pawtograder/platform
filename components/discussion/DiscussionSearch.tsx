@@ -1,6 +1,7 @@
 "use client";
 
-import { useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useDiscussionThreadTeasers } from "@/hooks/useCourseController";
+import { useDiscussionTopicsQuery } from "@/hooks/course-data";
 import { TopicIcon } from "@/components/discussion/TopicIcon";
 import { PopoverRoot, PopoverContent } from "@/components/ui/popover";
 import { Badge, Box, HStack, Input, Popover, Spinner, Stack, Text } from "@chakra-ui/react";
@@ -29,7 +30,7 @@ export function DiscussionSearch({ onChangeAction }: DiscussionSearchProps) {
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const teasers = useDiscussionThreadTeasers();
-  const topics = useDiscussionTopics();
+  const { data: topics = [] } = useDiscussionTopicsQuery();
 
   // Cleanup blur timeout on unmount
   useEffect(() => {

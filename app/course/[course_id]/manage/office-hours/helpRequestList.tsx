@@ -10,7 +10,7 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useMemo } from "react";
 import { BsClipboardCheckFill, BsCheckCircle, BsXCircle, BsChatText } from "react-icons/bs";
-import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestsQuery, useHelpQueuesQuery, useHelpRequestStudentsQuery } from "@/hooks/office-hours-data";
 
 /**
  * Enhanced help request with queue information and multiple students
@@ -28,11 +28,11 @@ export default function HelpRequestList() {
   const [searchTerm, setSearchTerm] = useState("");
 
   // Get ALL help requests directly from the controller
-  const allHelpRequestsFromController = useHelpRequests();
+  const { data: allHelpRequestsFromController = [] } = useHelpRequestsQuery();
 
   // Use individual hooks for additional data
-  const helpQueues = useHelpQueues();
-  const realtimeHelpRequestStudents = useHelpRequestStudents();
+  const { data: helpQueues = [] } = useHelpQueuesQuery();
+  const { data: realtimeHelpRequestStudents = [] } = useHelpRequestStudentsQuery();
   const officeHoursLoading = false; // Individual hooks don't expose loading state
 
   // Create a mapping of help request ID to student profile IDs
@@ -79,7 +79,7 @@ export default function HelpRequestList() {
       return allHelpRequestsFromController.filter((request) => {
         const requestStudents = requestStudentsMap[request.id] || [];
         const requestTextMatch = request.request.toLowerCase().includes(searchLower);
-        const studentNameMatch = requestStudents.some((profileId) => {
+        const studentNameMatch = requestStudents.some((profileId: string) => {
           const studentName = studentNameMap?.[profileId];
           return studentName && studentName.toLowerCase().includes(searchLower);
         });

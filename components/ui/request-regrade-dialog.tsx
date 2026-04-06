@@ -8,7 +8,8 @@ import {
   DialogTitle,
   DialogTrigger
 } from "@/components/ui/dialog";
-import { useAssignmentData, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import { useAssignmentData } from "@/hooks/useAssignment";
+import { useRubricChecksQuery, useRubricCriteriaQuery } from "@/hooks/assignment-data";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController } from "@/hooks/useSubmission";
 import { SubmissionArtifactComment, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
@@ -32,8 +33,16 @@ export default function RequestRegradeDialog({
   const assignment = useAssignmentData();
 
   const isGroupSubmission = submission.assignment_group_id !== null;
-  const rubricCheck = useRubricCheck(comment?.rubric_check_id);
-  const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
+  const { data: allChecks = [] } = useRubricChecksQuery();
+  const rubricCheck = useMemo(
+    () => allChecks.find((c) => c.id === comment?.rubric_check_id),
+    [allChecks, comment?.rubric_check_id]
+  );
+  const { data: allCriteria = [] } = useRubricCriteriaQuery();
+  const rubricCriteria = useMemo(
+    () => allCriteria.find((c) => c.id === rubricCheck?.rubric_criteria_id),
+    [allCriteria, rubricCheck?.rubric_criteria_id]
+  );
   const { mutateAsync: createRegradeRequest } = useCreate({
     resource: "rpc/create_regrade_request"
   });

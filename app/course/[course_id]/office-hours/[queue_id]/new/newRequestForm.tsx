@@ -17,13 +17,13 @@ import {
   useActiveHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
+import { useOfficeHoursDataContext } from "@/hooks/office-hours-data";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import {
   Assignment,
   HelpRequest,
   HelpRequestLocationType,
-  HelpRequestMessage,
   HelpRequestTemplate,
   HelpRequestWithStudentCount,
   Submission,
@@ -110,6 +110,7 @@ export default function HelpRequestForm() {
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
   const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity } = controller;
+  const { supabase: ohSupabase } = useOfficeHoursDataContext();
 
   // Get available help queues using individual hook
   const allHelpQueues = useHelpQueues();
@@ -491,7 +492,6 @@ export default function HelpRequestForm() {
 
           try {
             const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
-            const helpRequestMessages = controller.loadMessagesForHelpRequest(createdHelpRequest.id);
             // Get current selected students from ref to avoid closure issues
             const currentSelectedStudents = selectedStudentsRef.current;
 
@@ -544,16 +544,8 @@ export default function HelpRequestForm() {
             try {
               const requestText = (getValues("request") as string) || "";
               if (requestText.trim().length > 0 && private_profile_id) {
-                const trimmedText = requestText.trim();
-                // Check existing cached messages and local ref to prevent duplicates on retry
-                const existingLocal = (helpRequestMessages.rows || []).some(
-                  (m: HelpRequestMessage) =>
-                    Number(m.help_request_id) === Number(createdHelpRequest.id) &&
-                    String(m.author) === String(private_profile_id) &&
-                    ((m.message as string) || "").trim() === trimmedText
-                );
-                if (!createdInitialMessageRef.current && !existingLocal) {
-                  await helpRequestMessages.create({
+                if (!createdInitialMessageRef.current) {
+                  const { error: msgError } = await ohSupabase.from("help_request_messages").insert({
                     message: requestText,
                     help_request_id: createdHelpRequest.id,
                     author: private_profile_id,
@@ -561,6 +553,7 @@ export default function HelpRequestForm() {
                     instructors_only: false,
                     reply_to_message_id: null
                   });
+                  if (msgError) throw msgError;
                   createdInitialMessageRef.current = true;
                 }
               }

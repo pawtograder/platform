@@ -1,22 +1,26 @@
 "use client";
-import { DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
-import { useFindTableControllerValue } from "@/lib/TableController";
 import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";
 import { useCourseController } from "./useCourseController";
+import {
+  useDiscussionThreadWatchersQuery,
+  useDiscussionThreadWatcherInsert,
+  useDiscussionThreadWatcherUpdate
+} from "./course-data";
 import { toaster } from "@/components/ui/toaster";
 
 export function useDiscussionThreadFollowStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
+  const { data: watchers = [] } = useDiscussionThreadWatchersQuery();
+  const insertWatcher = useDiscussionThreadWatcherInsert();
+  const updateWatcher = useDiscussionThreadWatcherUpdate();
 
   // Find the current follow status for this user and thread
-  const predicate = useMemo(
-    () => (data: DiscussionThreadWatcher) => data.discussion_thread_root_id === threadId && data.user_id === user?.id,
-    [threadId, user?.id]
+  const curWatch = useMemo(
+    () => watchers.find((data) => data.discussion_thread_root_id === threadId && data.user_id === user?.id),
+    [watchers, threadId, user?.id]
   );
-
-  const curWatch = useFindTableControllerValue(controller.discussionThreadWatchers, predicate);
 
   const setThreadWatchStatus = useCallback(
     async (status: boolean) => {
@@ -31,12 +35,13 @@ export function useDiscussionThreadFollowStatus(threadId: number) {
       try {
         if (curWatch) {
           // Update existing follow status
-          await controller.discussionThreadWatchers.update(curWatch.id, {
-            enabled: status
+          await updateWatcher.mutateAsync({
+            id: curWatch.id,
+            values: { enabled: status }
           });
         } else {
           // Create new follow record
-          await controller.discussionThreadWatchers.create({
+          await insertWatcher.mutateAsync({
             user_id: user.id,
             class_id: controller.courseId,
             discussion_thread_root_id: threadId,
@@ -52,7 +57,7 @@ export function useDiscussionThreadFollowStatus(threadId: number) {
         console.error("Failed to update thread follow status:", error);
       }
     },
-    [threadId, curWatch, controller, user?.id]
+    [threadId, curWatch, controller, user?.id, insertWatcher, updateWatcher]
   );
 
   return {

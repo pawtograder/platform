@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Controller, useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX, BsDiscord } from "react-icons/bs";
-import { useCourseController, useCourse, useAssignments, useDiscussionTopics } from "@/hooks/useCourseController";
+import { useCourse } from "@/hooks/useCourseController";
+import { useAssignmentsQuery, useDiscussionTopicsQuery, useDiscussionTopicInsert } from "@/hooks/course-data";
 import { toaster } from "@/components/ui/toaster";
 import { useMemo } from "react";
 
@@ -75,10 +76,10 @@ type CreateTopicModalProps = {
  */
 export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateTopicModalProps) {
   const { course_id } = useParams();
-  const controller = useCourseController();
   const course = useCourse();
-  const assignments = useAssignments();
-  const existingTopics = useDiscussionTopics();
+  const insertTopic = useDiscussionTopicInsert();
+  const { data: assignments = [] } = useAssignmentsQuery();
+  const { data: existingTopics = [] } = useDiscussionTopicsQuery();
 
   // Check if Discord is configured for this class
   const isDiscordConfigured = !!course?.discord_server_id;
@@ -126,7 +127,7 @@ export default function CreateTopicModal({ isOpen, onClose, onSuccess }: CreateT
    */
   const onSubmit = async (data: TopicFormData) => {
     try {
-      await controller.discussionTopics.create({
+      await insertTopic.mutateAsync({
         class_id: Number(course_id),
         topic: data.topic,
         description: data.description,

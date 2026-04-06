@@ -10,14 +10,14 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useMessageNotifications } from "@/hooks/useMessageNotifications";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
 import {
-  useHelpRequestMessages,
   useOfficeHoursController,
   useRealtimeChat,
   useHelpRequest,
   type ChatMessage
 } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestMessagesQuery } from "@/hooks/office-hours-data/useHelpRequestMessagesQuery";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
-import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import { useProfilesQuery } from "@/hooks/course-data";
 import { useMeetingWindows } from "@/hooks/useMeetingWindows";
 import { BsCameraVideo, BsPersonVideo2 } from "react-icons/bs";
 import { useCreate } from "@refinedev/core";
@@ -118,9 +118,9 @@ export const RealtimeChat = ({
   const { containerRef, scrollToBottom } = useChatScroll();
   const { course_id } = useParams();
   const moderationStatus = useModerationStatus(Number(course_id));
-  const messages = useHelpRequestMessages(request_id);
+  const { data: messages = [] } = useHelpRequestMessagesQuery(request_id);
   const request = useHelpRequest(request_id);
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
   const { openMeetingWindow } = useMeetingWindows();
 
   // Get authenticated user and their profile

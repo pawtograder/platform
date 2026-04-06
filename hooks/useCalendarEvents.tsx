@@ -2,9 +2,14 @@
 
 import { useMemo, useEffect, useState } from "react";
 import { TZDate } from "@date-fns/tz";
-import { useCourseController } from "./useCourseController";
 import { useCourse } from "./useCourseController";
-import { useTableControllerTableValues } from "@/lib/TableController";
+import {
+  useAssignmentsQuery,
+  useLabSectionsQuery,
+  useLabSectionMeetingsQuery,
+  useCalendarEventsQuery,
+  useClassStaffSettingsQuery
+} from "@/hooks/course-data";
 import { createClient } from "@/utils/supabase/client";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
@@ -21,8 +26,7 @@ export type LabSectionMeeting = Database["public"]["Tables"]["lab_section_meetin
  * Creates events for both release dates and due dates
  */
 function useAssignmentsAsEvents(): CalendarEvent[] {
-  const controller = useCourseController();
-  const assignments = useTableControllerTableValues(controller.assignments) as Assignment[];
+  const { data: assignments = [] } = useAssignmentsQuery();
 
   return useMemo(() => {
     const events: CalendarEvent[] = [];
@@ -100,10 +104,9 @@ function useAssignmentsAsEvents(): CalendarEvent[] {
  * Includes lab leader names and location
  */
 function useLabSectionMeetingsAsEvents(): CalendarEvent[] {
-  const controller = useCourseController();
   const course = useCourse();
-  const labSections = useTableControllerTableValues(controller.labSections) as LabSection[];
-  const labMeetings = useTableControllerTableValues(controller.labSectionMeetings) as LabSectionMeeting[];
+  const { data: labSections = [] } = useLabSectionsQuery();
+  const { data: labMeetings = [] } = useLabSectionMeetingsQuery();
   const supabase = createClient();
   const [labLeadersMap, setLabLeadersMap] = useState<Map<number, string[]>>(new Map());
 
@@ -238,8 +241,7 @@ function useLabSectionMeetingsAsEvents(): CalendarEvent[] {
  * Now includes assignments and lab section meetings
  */
 export function useCalendarEvents() {
-  const controller = useCourseController();
-  const calendarEvents = useTableControllerTableValues(controller.calendarEvents) as CalendarEvent[];
+  const { data: calendarEvents = [] } = useCalendarEventsQuery();
   const assignmentEvents = useAssignmentsAsEvents();
   const labMeetingEvents = useLabSectionMeetingsAsEvents();
 
@@ -341,7 +343,6 @@ export function useDaySchedule(date: Date) {
  * Hook to get class staff settings using TableController
  */
 export function useClassStaffSettings() {
-  const controller = useCourseController();
-  const settings = useTableControllerTableValues(controller.classStaffSettings) as ClassStaffSetting[];
-  return settings;
+  const { data: settings = [] } = useClassStaffSettingsQuery();
+  return settings as ClassStaffSetting[];
 }

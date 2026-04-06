@@ -3,53 +3,18 @@ import { render, renderHook, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LeaderProvider, useLeaderContext } from "@/lib/cross-tab/LeaderProvider";
 import { TabLeaderElection } from "@/lib/cross-tab/TabLeaderElection";
+import { setupMockBroadcastChannel, resetAllChannels } from "@/tests/mocks/MockBroadcastChannel";
 
 // ---------------------------------------------------------------------------
-// BroadcastChannel mock for jsdom
+// BroadcastChannel mock (jsdom has no native support)
 // ---------------------------------------------------------------------------
-
-const channelRegistry = new Map<string, Set<MockBroadcastChannel>>();
-
-class MockBroadcastChannel {
-  name: string;
-  onmessage: ((ev: { data: any }) => void) | null = null;
-  private _closed = false;
-
-  constructor(name: string) {
-    this.name = name;
-    if (!channelRegistry.has(name)) channelRegistry.set(name, new Set());
-    channelRegistry.get(name)!.add(this);
-  }
-
-  postMessage(data: any) {
-    if (this._closed) return;
-    const peers = channelRegistry.get(this.name);
-    if (!peers) return;
-    for (const peer of peers) {
-      if (peer !== this && !peer._closed && peer.onmessage) {
-        peer.onmessage({ data: structuredClone(data) });
-      }
-    }
-  }
-
-  close() {
-    this._closed = true;
-    channelRegistry.get(this.name)?.delete(this);
-  }
-
-  addEventListener() {}
-  removeEventListener() {}
-  dispatchEvent(): boolean {
-    return false;
-  }
-}
 
 beforeAll(() => {
-  (globalThis as any).BroadcastChannel = MockBroadcastChannel;
+  setupMockBroadcastChannel();
 });
 
 afterEach(() => {
-  channelRegistry.clear();
+  resetAllChannels();
 });
 
 // ---------------------------------------------------------------------------

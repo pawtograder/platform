@@ -1,64 +1,11 @@
 import { TabLeaderElection } from "@/lib/cross-tab/TabLeaderElection";
+import { setupMockBroadcastChannel, resetAllChannels, MockBroadcastChannel } from "@/tests/mocks/MockBroadcastChannel";
 
 // ---------------------------------------------------------------------------
-// Minimal BroadcastChannel mock for jsdom (which has no native support).
-//
-// Static registry keyed by channel name. postMessage delivers asynchronously
-// (via setTimeout(0)) to every *other* instance sharing the same name.
+// BroadcastChannel mock (jsdom has no native support)
 // ---------------------------------------------------------------------------
 
-type MockHandler = ((event: MessageEvent) => void) | null;
-
-class MockBroadcastChannel {
-  static _registry: Map<string, Set<MockBroadcastChannel>> = new Map();
-
-  readonly name: string;
-  onmessage: MockHandler = null;
-  private _closed = false;
-
-  constructor(name: string) {
-    this.name = name;
-    let set = MockBroadcastChannel._registry.get(name);
-    if (!set) {
-      set = new Set();
-      MockBroadcastChannel._registry.set(name, set);
-    }
-    set.add(this);
-  }
-
-  postMessage(data: unknown): void {
-    if (this._closed) return;
-    const peers = MockBroadcastChannel._registry.get(this.name);
-    if (!peers) return;
-    for (const peer of peers) {
-      if (peer !== this && !peer._closed && peer.onmessage) {
-        // Deliver synchronously so fake timers can control ordering.
-        peer.onmessage(new MessageEvent("message", { data }));
-      }
-    }
-  }
-
-  close(): void {
-    this._closed = true;
-    const set = MockBroadcastChannel._registry.get(this.name);
-    if (set) {
-      set.delete(this);
-      if (set.size === 0) {
-        MockBroadcastChannel._registry.delete(this.name);
-      }
-    }
-  }
-
-  // Stubs for spec completeness.
-  addEventListener() {}
-  removeEventListener() {}
-  dispatchEvent(): boolean {
-    return false;
-  }
-}
-
-// Install the mock globally before any test code runs.
-(globalThis as any).BroadcastChannel = MockBroadcastChannel;
+setupMockBroadcastChannel();
 
 // ---------------------------------------------------------------------------
 // Test suite
@@ -70,7 +17,7 @@ describe("TabLeaderElection", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     instances = [];
-    MockBroadcastChannel._registry.clear();
+    resetAllChannels();
   });
 
   afterEach(() => {

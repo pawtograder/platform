@@ -1,5 +1,6 @@
 export { SubmissionDataProvider, useSubmissionDataContext } from "./useSubmissionDataContext";
 export type { SubmissionDataContextValue } from "./useSubmissionDataContext";
+export { SubmissionDataBridge } from "./SubmissionDataBridge";
 
 // Query hooks
 export { useSubmissionCommentsQuery } from "./useSubmissionCommentsQuery";

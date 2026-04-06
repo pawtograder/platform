@@ -4,8 +4,9 @@ import PersonAvatar from "@/components/ui/person-avatar";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
-import { useAllProfilesForClass } from "@/hooks/useCourseController";
-import { useOfficeHoursController, useWorkSessionsForRequest } from "@/hooks/useOfficeHoursRealtime";
+import { useProfilesQuery } from "@/hooks/course-data";
+import { useWorkSessionsForRequest } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestWorkSessionDelete } from "@/hooks/office-hours-data";
 import { Box, Collapsible, HStack, Icon, IconButton, Separator, Stack, Text } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { BsClock, BsPencil, BsPeople, BsTrash } from "react-icons/bs";
@@ -18,9 +19,9 @@ interface WorkSessionHistoryProps {
 
 export default function WorkSessionHistory({ help_request_id }: WorkSessionHistoryProps) {
   const sessions = useWorkSessionsForRequest(help_request_id);
-  const profiles = useAllProfilesForClass();
+  const { data: profiles = [] } = useProfilesQuery();
   const isInstructor = useIsInstructor();
-  const controller = useOfficeHoursController();
+  const deleteSession = useHelpRequestWorkSessionDelete();
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
 
   // Sort sessions by start time (newest first)
@@ -49,7 +50,7 @@ export default function WorkSessionHistory({ help_request_id }: WorkSessionHisto
   const handleDelete = async (sessionId: number) => {
     setDeletingSessionId(sessionId);
     try {
-      await controller.helpRequestWorkSessions.delete(sessionId);
+      await deleteSession.mutateAsync({ id: sessionId });
       toaster.success({
         title: "Session deleted",
         description: "Work session has been deleted successfully"
