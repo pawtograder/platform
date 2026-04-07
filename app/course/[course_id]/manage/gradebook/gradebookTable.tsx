@@ -1518,7 +1518,7 @@ function GradebookColumnHeader({
   const headerRef = useRef<HTMLDivElement>(null);
 
   const moveLeft = useCallback(async () => {
-    if (column.sort_order == null || column.sort_order === 0) return;
+    if (column.sort_order == null) return;
 
     setIsMovingLeft(true);
     try {
