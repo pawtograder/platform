@@ -11970,6 +11970,10 @@ export type Database = {
         Args: { p_gradebook_id: number };
         Returns: undefined;
       };
+      gradebook_columns_reorder: {
+        Args: { p_ordered_column_ids: number[] };
+        Returns: undefined;
+      };
       gradebook_column_move_left: {
         Args: { p_column_id: number };
         Returns: {

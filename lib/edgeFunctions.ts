@@ -5,10 +5,17 @@ import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sd
 import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
 import * as Sentry from "@sentry/nextjs";
-export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>, assignmentId?: number) {
+
+/** Invokes autograder-create-repos-for-student. Use `opts.forTestAssignment` only from the instructor Test Assignment UI. */
+export async function autograderCreateReposForStudent(
+  supabase: SupabaseClient<Database>,
+  assignmentId?: number,
+  opts?: { forTestAssignment?: boolean }
+) {
   const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
     body: {
-      assignment_id: assignmentId
+      assignment_id: assignmentId,
+      ...(opts?.forTestAssignment && assignmentId !== undefined ? { for_test_assignment: true } : {})
     }
   });
   const { error } = data as FunctionTypes.GenericResponse;

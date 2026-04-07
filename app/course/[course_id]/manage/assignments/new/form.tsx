@@ -28,11 +28,11 @@ import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LuCheck } from "react-icons/lu";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useTableControllerTableValues } from "@/lib/TableController";
-import { formatInTimeZone } from "date-fns-tz";
 
 // Helper function to calculate effective due date for a lab section
 function calculateLabSectionDueDate(
@@ -149,9 +149,11 @@ function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignm
                     color={effectiveDueDate ? "fg.default" : "fg.error"}
                     fontWeight={effectiveDueDate ? "normal" : "semibold"}
                   >
-                    {effectiveDueDate
-                      ? formatInTimeZone(effectiveDueDate, timezone, "MMM d, yyyy 'at' h:mm a")
-                      : "No lab meeting before due date"}
+                    {effectiveDueDate ? (
+                      <TimeZoneAwareDate date={effectiveDueDate} format="full" />
+                    ) : (
+                      "No lab meeting before due date"
+                    )}
                   </Table.Cell>
                 </Table.Row>
               );
@@ -190,6 +192,9 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
     control,
     formState: { errors }
   } = form;
+
+  const { onChange: onGroupConfigChange, ...groupConfigRegisterRest } = register("group_config", { required: true });
+
   return (
     <CardRoot>
       <CardHeader>
@@ -204,11 +209,11 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
             invalid={errors.group_config ? true : false}
             required={true}
           >
-            <NativeSelectRoot {...register("group_config", { required: true })}>
+            <NativeSelectRoot>
               <NativeSelectField
-                name="group_config"
-                defaultValue="individual"
+                {...groupConfigRegisterRest}
                 onChange={(e) => {
+                  onGroupConfigChange(e);
                   setWithGroups(e.target.value !== "individual");
                 }}
               >
@@ -269,25 +274,40 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
                 invalid={errors.allow_student_formed_groups ? true : false}
                 required={withGroups}
               >
-                <NativeSelectRoot
-                  {...register("allow_student_formed_groups", {
-                    required:
-                      getValues("group_config") === "groups" || getValues("group_config") === "both"
-                        ? "This is required for group assignments"
-                        : false
-                  })}
-                >
-                  <NativeSelectField name="allow_student_formed_groups">
-                    <option value="true">Students can form groups</option>
-                    <option value="false">Instructor only</option>
-                  </NativeSelectField>
-                </NativeSelectRoot>
+                <Controller
+                  name="allow_student_formed_groups"
+                  control={control}
+                  rules={{
+                    validate: (v) => {
+                      const gc = getValues("group_config");
+                      if (gc !== "groups" && gc !== "both") return true;
+                      return v === true || v === false ? true : "This is required for group assignments";
+                    }
+                  }}
+                  render={({ field }) => (
+                    <NativeSelectRoot>
+                      <NativeSelectField
+                        name={field.name}
+                        ref={field.ref}
+                        value={field.value === true ? "true" : field.value === false ? "false" : ""}
+                        onBlur={field.onBlur}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          field.onChange(raw === "true" ? true : raw === "false" ? false : null);
+                        }}
+                      >
+                        <option value="true">Students can form groups</option>
+                        <option value="false">Instructor only</option>
+                      </NativeSelectField>
+                    </NativeSelectRoot>
+                  )}
+                />
               </Field>
             </Fieldset.Content>
             <Fieldset.Content>
               <Field label="Copy groups from assignment" helperText="Copy groups from another assignment">
-                <NativeSelectRoot {...register("copy_groups_from_assignment", { required: false })}>
-                  <NativeSelectField name="copy_groups_from_assignment">
+                <NativeSelectRoot>
+                  <NativeSelectField {...register("copy_groups_from_assignment", { required: false })}>
                     <option value="">None</option>
                     {otherAssignments?.data?.map((assignment) => (
                       <option key={assignment.id} value={assignment.id}>

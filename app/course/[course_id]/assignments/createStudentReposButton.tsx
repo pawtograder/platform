@@ -8,10 +8,13 @@ import { useState } from "react";
 import { useInvalidate } from "@refinedev/core";
 export default function CreateStudentReposButton({
   syncAllPermissions,
-  assignmentId
+  assignmentId,
+  forTestAssignment
 }: {
   syncAllPermissions?: boolean;
   assignmentId?: number;
+  /** When true with assignmentId, allows instructor Test Assignment repo for groups-only assignments. */
+  forTestAssignment?: boolean;
 }) {
   const [loading, setLoading] = useState(false);
   const invalidate = useInvalidate();
@@ -26,7 +29,11 @@ export default function CreateStudentReposButton({
             if (syncAllPermissions) {
               await autograderSyncAllPermissionsForStudent(supabase);
             } else {
-              await autograderCreateReposForStudent(supabase, assignmentId);
+              await autograderCreateReposForStudent(
+                supabase,
+                assignmentId,
+                forTestAssignment ? { forTestAssignment: true } : undefined
+              );
             }
             toaster.success({
               title: "Repositories created",
