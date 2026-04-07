@@ -6,6 +6,8 @@ import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { promises as fs } from "node:fs";
 import Papa from "papaparse";
+import { createClient } from "@supabase/supabase-js";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   createClass,
   createUsersInClass,
@@ -488,6 +490,154 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(publicRecord?.is_droppable).toBe(privateRecord?.is_droppable);
       expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
     }).toPass();
+
+    // Issue #520: instructor-only manual column — RLS hides until released; public row is a snapshot after release.
+    const { data: gbRow } = await supabase.from("gradebooks").select("id").eq("class_id", course.id).single();
+    if (!gbRow) {
+      throw new Error("Failed to resolve gradebook id for instructor-only column test");
+    }
+    const ioSlug = "e2e-instructor-only-participation-mirror";
+    const { data: ioCol, error: ioColErr } = await supabase
+      .from("gradebook_columns")
+      .insert({
+        class_id: course.id,
+        gradebook_id: gbRow.id,
+        name: "E2E Instructor Only",
+        slug: ioSlug,
+        max_score: 100,
+        score_expression: null,
+        dependencies: null,
+        released: false,
+        instructor_only: true,
+        sort_order: 9999
+      })
+      .select("id")
+      .single();
+    if (ioColErr || !ioCol) {
+      throw new Error(`Failed to create instructor-only column: ${ioColErr?.message}`);
+    }
+    const ioColumnId = ioCol.id;
+
+    await expect(async () => {
+      const { data: priv, error } = await supabase
+        .from("gradebook_column_students")
+        .select("score, score_override")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", true)
+        .single();
+      if (error) throw new Error(error.message);
+      expect(priv?.score).toBe(50);
+    }).toPass();
+
+    const { data: pubBefore } = await supabase
+      .from("gradebook_column_students")
+      .select("score")
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", false)
+      .single();
+    expect(pubBefore?.score).toBeNull();
+
+    const studentClient = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+    await studentClient.auth.signInWithPassword({
+      email: students[0].email,
+      password: students[0].password
+    });
+    const { data: studCol, error: studColErr } = await studentClient
+      .from("gradebook_columns")
+      .select("id")
+      .eq("id", ioColumnId)
+      .maybeSingle();
+    expect(studColErr).toBeNull();
+    expect(studCol).toBeNull();
+
+    const { data: studCell, error: studCellErr } = await studentClient
+      .from("gradebook_column_students")
+      .select("id")
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .maybeSingle();
+    expect(studCellErr).toBeNull();
+    expect(studCell).toBeNull();
+
+    const { error: releaseIoErr } = await supabase
+      .from("gradebook_columns")
+      .update({ released: true })
+      .eq("id", ioColumnId);
+    if (releaseIoErr) {
+      throw new Error(releaseIoErr.message);
+    }
+
+    await expect(async () => {
+      const { data: priv, error: pErr } = await supabase
+        .from("gradebook_column_students")
+        .select("score")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", true)
+        .single();
+      if (pErr) throw new Error(pErr.message);
+      const { data: pub, error: pubErr } = await supabase
+        .from("gradebook_column_students")
+        .select("score")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", false)
+        .single();
+      if (pubErr) throw new Error(pubErr.message);
+      expect(priv?.score).toBe(50);
+      expect(pub?.score).toBe(50);
+    }).toPass();
+
+    const snapshotPublicScore = 50;
+    const { error: bumpErr } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 61 })
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", true);
+    if (bumpErr) {
+      throw new Error(bumpErr.message);
+    }
+
+    await expect(async () => {
+      const { data: priv, error } = await supabase
+        .from("gradebook_column_students")
+        .select("score")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", true)
+        .single();
+      if (error) throw new Error(error.message);
+      expect(priv?.score).toBe(61);
+    }).toPass();
+
+    const { data: pubAfterBump } = await supabase
+      .from("gradebook_column_students")
+      .select("score")
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", false)
+      .single();
+    expect(pubAfterBump?.score).toBe(snapshotPublicScore);
+
+    const { data: studColAfter } = await studentClient
+      .from("gradebook_columns")
+      .select("id")
+      .eq("id", ioColumnId)
+      .maybeSingle();
+    expect(studColAfter?.id).toBe(ioColumnId);
+    const { data: studScoreAfter } = await studentClient
+      .from("gradebook_column_students")
+      .select("score")
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", false)
+      .maybeSingle();
+    expect(studScoreAfter?.score).toBe(snapshotPublicScore);
+
+    await studentClient.auth.signOut();
   });
 
   test.beforeEach(async ({ page }) => {

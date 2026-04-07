@@ -3351,6 +3351,7 @@ export type Database = {
           external_data: Json | null;
           gradebook_id: number;
           id: number;
+          instructor_only: boolean;
           max_score: number | null;
           name: string;
           released: boolean;
@@ -3370,6 +3371,7 @@ export type Database = {
           external_data?: Json | null;
           gradebook_id: number;
           id?: number;
+          instructor_only?: boolean;
           max_score?: number | null;
           name: string;
           released?: boolean;
@@ -3389,6 +3391,7 @@ export type Database = {
           external_data?: Json | null;
           gradebook_id?: number;
           id?: number;
+          instructor_only?: boolean;
           max_score?: number | null;
           name?: string;
           released?: boolean;

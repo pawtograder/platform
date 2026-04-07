@@ -35,6 +35,10 @@ function nearlyEqual(a: number | null, b: number | null, eps = 1e-9): boolean {
   return Math.abs(a - b) <= eps;
 }
 
+function isInstructorOnlyColumn(column: ColumnWithPrefix): boolean {
+  return Boolean(column.instructor_only);
+}
+
 type GradebookCellRequest = {
   gradebook_column_id: number;
   gradebook_column_student_id: number;
@@ -719,6 +723,34 @@ export async function processGradebookRowsCalculation(
       let nextIncomplete: unknown | null = null;
       let nextReleased = false;
 
+      if (isInstructorOnlyColumn(column) && !is_private) {
+        const maxScoreIo = (column as { max_score: number | null }).max_score ?? 0;
+        const valueForSlugIo = {
+          class_id,
+          created_at: new Date().toISOString(),
+          gradebook_column_id: columnId,
+          gradebook_id,
+          id: (gcsByColumnId.get(columnId)?.id as number) ?? 0,
+          incomplete_values: current?.incomplete_values ?? null,
+          is_droppable: (current?.is_droppable as boolean) ?? false,
+          is_excused: (current?.is_excused as boolean) ?? false,
+          is_missing: (current?.is_missing as boolean) ?? false,
+          is_private,
+          released: (current?.released as boolean) ?? false,
+          score:
+            current?.score_override !== null && current?.score_override !== undefined
+              ? current?.score_override
+              : ((current?.score as number | null) ?? null),
+          score_override: (current?.score_override as number | null) ?? null,
+          score_override_note: (current?.score_override_note as string | null) ?? null,
+          student_id,
+          column_slug: slug,
+          max_score: maxScoreIo
+        };
+        studentOverrideMap.set(slug, valueForSlugIo);
+        continue;
+      }
+
       if (column.score_expression) {
         try {
           const compiled = compiledById.get(columnId)!;
@@ -971,6 +1003,17 @@ async function processCellBatch(
       scope.setTag("student_id", cell.student_id);
       scope.setTag("gradebook_column_student_id", cell.gradebook_column_student_id);
       scope.setTag("is_private", cell.is_private);
+      if (isInstructorOnlyColumn(column) && !cell.is_private) {
+        const { error: clearErr } = await adminSupabase
+          .from("gradebook_column_students")
+          .update({ is_recalculating: false })
+          .eq("id", cell.gradebook_column_student_id);
+        if (clearErr) {
+          Sentry.captureException(clearErr, scope);
+        }
+        await cell.onComplete();
+        continue;
+      }
       if ((column.score_expression ?? "").startsWith("importCSV")) {
         await cell.onComplete();
         continue;

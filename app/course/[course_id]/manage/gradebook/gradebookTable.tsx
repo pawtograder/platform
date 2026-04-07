@@ -390,12 +390,14 @@ function AddColumnDialog() {
     slug: string;
     scoreExpression?: string;
     renderExpression?: string;
+    instructorOnly: boolean;
   };
 
   const {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors }
   } = useForm<FormValues>({
     defaultValues: {
@@ -404,9 +406,11 @@ function AddColumnDialog() {
       maxScore: 0,
       slug: "",
       scoreExpression: "",
-      renderExpression: ""
+      renderExpression: "",
+      instructorOnly: false
     }
   });
+  const addColumnScoreExpr = watch("scoreExpression");
 
   // Reset form when dialog opens/closes
   useEffect(() => {
@@ -426,6 +430,7 @@ function AddColumnDialog() {
         slug: data.slug,
         score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
         render_expression: data.renderExpression?.length ? data.renderExpression : null,
+        instructor_only: Boolean(data.instructorOnly),
         dependencies,
         class_id: gradebookController.class_id,
         gradebook_id: gradebookController.gradebook_id,
@@ -558,6 +563,14 @@ function AddColumnDialog() {
                   )}
                   <RenderExprDocs />
                 </Box>
+                {addColumnScoreExpr && (
+                  <Box>
+                    <Checkbox {...register("instructorOnly")}>
+                      Staff-only column (hidden from students until you release the column; then they see a snapshot of
+                      the staff view, not a live recalculation)
+                    </Checkbox>
+                  </Box>
+                )}
                 <HStack justifyContent="flex-end">
                   <Button type="submit" colorPalette="green" loading={isLoading}>
                     Save
@@ -591,6 +604,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     scoreExpression?: string;
     renderExpression?: string;
     showCalculatedRanges?: boolean;
+    instructorOnly: boolean;
   };
 
   const {
@@ -608,7 +622,8 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       slug: column?.slug ?? "",
       scoreExpression: column?.score_expression ?? "",
       renderExpression: column?.render_expression ?? "",
-      showCalculatedRanges: column?.show_calculated_ranges ?? false
+      showCalculatedRanges: column?.show_calculated_ranges ?? false,
+      instructorOnly: column?.instructor_only ?? false
     }
   });
 
@@ -621,7 +636,8 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         slug: column.slug ?? "",
         scoreExpression: column.score_expression ?? "",
         renderExpression: column.render_expression ?? "",
-        showCalculatedRanges: column.show_calculated_ranges ?? false
+        showCalculatedRanges: column.show_calculated_ranges ?? false,
+        instructorOnly: column.instructor_only ?? false
       });
     }
   }, [columnId, column, reset]);
@@ -652,6 +668,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       if ((column.render_expression ?? "") !== (data.renderExpression ?? "")) settingsChanged.push("render_expression");
       if ((column.show_calculated_ranges ?? false) !== (data.showCalculatedRanges ?? false))
         settingsChanged.push("show_calculated_ranges");
+      if ((column.instructor_only ?? false) !== (data.instructorOnly ?? false)) settingsChanged.push("instructor_only");
 
       await updateColumn({
         resource: "gradebook_columns",
@@ -664,6 +681,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
           score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
           render_expression: data.renderExpression?.length ? data.renderExpression : null,
           show_calculated_ranges: data.showCalculatedRanges ?? false,
+          instructor_only: data.instructorOnly ?? false,
           dependencies
         }
       });
@@ -785,6 +803,14 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                         {errors.showCalculatedRanges.message as string}
                       </Text>
                     )}
+                  </Box>
+                )}
+                {scoreExpression && (
+                  <Box>
+                    <Checkbox {...register("instructorOnly")} checked={watch("instructorOnly") ?? false}>
+                      Staff-only column (hidden from students until you release the column; then they see a snapshot of
+                      the staff view)
+                    </Checkbox>
                   </Box>
                 )}
                 <Box>
@@ -1765,7 +1791,7 @@ function GradebookColumnHeader({
                 {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
                 Move Right
               </MenuItem>
-              {!column.score_expression && (
+              {(!column.score_expression || column.instructor_only) && (
                 <>
                   <MenuSeparator />
                   <MenuItem
@@ -1868,8 +1894,14 @@ function GradebookColumnHeader({
               )}
               {column.score_expression ? (
                 <Box position="relative" zIndex={10000}>
-                  <WrappedTooltip content="Visibility: Students see this value calculated based on released dependencies">
-                    <Icon as={LucideInfo} size="sm" color="blue.500" />
+                  <WrappedTooltip
+                    content={
+                      column.instructor_only
+                        ? "Staff-only: students do not see this column until it is released; then they see a frozen copy of the staff calculation"
+                        : "Visibility: Students see this value calculated based on released dependencies"
+                    }
+                  >
+                    <Icon as={LucideInfo} size="sm" color={column.instructor_only ? "purple.500" : "blue.500"} />
                   </WrappedTooltip>
                 </Box>
               ) : hasMixedReleaseStatus ? (
