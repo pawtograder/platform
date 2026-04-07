@@ -13,13 +13,23 @@ import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
-async function fetchAllPages<T>(
-  queryBuilder: {
-    range: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown | null }>;
-    order: (column: string, options?: { ascending?: boolean }) => typeof queryBuilder;
-  },
-  pageSize: number = 1000
-): Promise<T[]> {
+/** Result shape for one `.range(from, to)` page from Supabase PostgREST. */
+export type SupabasePageResult<T> = PromiseLike<{ data: T[] | null; error: unknown | null }>;
+
+/**
+ * Minimal builder after `.from().select()...`: we call `.order()` then paginate with `.range()`.
+ * Structural match for Supabase query chains without referencing the parameter type.
+ */
+export type SupabasePaginatedQueryBuilder<T> = {
+  order: (
+    column: string,
+    options?: { ascending?: boolean }
+  ) => {
+    range: (from: number, to: number) => SupabasePageResult<T>;
+  };
+};
+
+async function fetchAllPages<T>(queryBuilder: SupabasePaginatedQueryBuilder<T>, pageSize: number = 1000): Promise<T[]> {
   const results: T[] = [];
   let page = 0;
   const orderedQuery = queryBuilder.order("id", { ascending: true });
