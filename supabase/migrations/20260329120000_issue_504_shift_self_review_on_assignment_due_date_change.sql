@@ -41,6 +41,9 @@ COMMENT ON FUNCTION public.shift_self_review_assignments_on_assignment_due_date_
 -- per-student exceptions, and self-review deadline_offset (same building blocks as
 -- check_assignment_deadlines_passed). Uses a CTE so the UPDATE target can correlate
 -- inside the scalar subquery (LATERAL in UPDATE FROM cannot reference the updated row).
+-- Ignore due-date exceptions that shorten the window (negative hours/minutes net) when
+-- they were created after the review_assignment: those could not have affected the
+-- original self-review due_date at creation time.
 WITH recomputed AS (
     SELECT
         ra.id AS review_assignment_id,
@@ -67,6 +70,10 @@ WITH recomputed AS (
                               AND agm.assignment_group_id = adde.assignment_group_id
                         )
                     )
+                )
+                AND (
+                    (COALESCE(adde.hours, 0) * 60 + COALESCE(adde.minutes, 0)) >= 0
+                    OR adde.created_at <= ra.created_at
                 )
             WHERE a.id = ra.assignment_id
             GROUP BY a.due_date, ars.deadline_offset
