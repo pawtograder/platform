@@ -94,6 +94,9 @@ export default function HelpQueuesDashboard() {
     });
   }, [queues]);
 
+  // TA Dashboard: only show queues marked active (course setting). Full list remains in Queue Management.
+  const activeCourseQueues = useMemo(() => sortedQueues.filter((queue) => queue.is_active), [sortedQueues]);
+
   // Calculate staffing information for each queue
   const queueStaffingInfo = useMemo(() => {
     const now = new Date();
@@ -107,7 +110,7 @@ export default function HelpQueuesDashboard() {
       }
     > = {};
 
-    sortedQueues.forEach((queue) => {
+    activeCourseQueues.forEach((queue) => {
       const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
 
       // Find calendar events for this queue
@@ -183,7 +186,7 @@ export default function HelpQueuesDashboard() {
     });
 
     return info;
-  }, [sortedQueues, activeAssignmentsByQueue, officeHoursEvents]);
+  }, [activeCourseQueues, activeAssignmentsByQueue, officeHoursEvents]);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -255,8 +258,11 @@ export default function HelpQueuesDashboard() {
       <Heading size="sm" mt={hasCalendar ? 4 : 0}>
         Help Queues
       </Heading>
+      <Text fontSize="sm" color="fg.muted">
+        Only active queues are listed here. Open Queue Management to view or edit inactive queues.
+      </Text>
 
-      {sortedQueues.map((queue) => {
+      {activeCourseQueues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
         const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
         const staffingInfo = queueStaffingInfo[queue.id] || {
@@ -285,11 +291,6 @@ export default function HelpQueuesDashboard() {
                 <Text fontSize="sm">
                   · Open Requests: {unresolvedRequests.filter((r) => r.help_queue === queue.id).length}
                 </Text>
-                {!queue.is_active && (
-                  <Text fontSize="sm" color="red.500">
-                    · Inactive
-                  </Text>
-                )}
               </HStack>
 
               {/* Staffing information */}
@@ -371,6 +372,11 @@ export default function HelpQueuesDashboard() {
         );
       })}
       {queues.length === 0 && <Text>No help queues configured for this course.</Text>}
+      {queues.length > 0 && activeCourseQueues.length === 0 && (
+        <Text color="fg.muted" fontSize="sm">
+          There are no active help queues right now. Activate a queue in Queue Management or ask an instructor to do so.
+        </Text>
+      )}
     </Stack>
   );
 }
