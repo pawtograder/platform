@@ -1846,9 +1846,7 @@ export class GradebookController {
 
   // Removed get gradebook() method - use new GradebookCellController data directly instead
   get isReady() {
-    return (
-      this.gradebook_row.ready && this.gradebook_columns.ready && this.table.ready && this.assignments_table.ready
-    );
+    return this.gradebook_row.ready && this.gradebook_columns.ready && this.table.ready && this.assignments_table.ready;
   }
 
   get isAnyTableRefetching() {
