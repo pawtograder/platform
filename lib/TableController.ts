@@ -172,7 +172,9 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   survey_assignments: ["staff"], // Assignment data only to staff
 
   // Leaderboard table - broadcasts to all class members
-  assignment_leaderboard: ["staff", "students"]
+  assignment_leaderboard: ["staff", "students"],
+  // No unified realtime broadcast today; load via TableController like other static course metadata.
+  gradebooks: []
 };
 
 /**

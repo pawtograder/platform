@@ -1024,11 +1024,8 @@ test.describe("Gradebook Page - CSV Render Export", () => {
 
     await page.getByRole("button", { name: "Download Gradebook" }).click();
     const renderExpressionCheckbox = page.getByRole("checkbox", { name: "Use render expressions in CSV" });
-    const renderExpressionToggle = page.getByText("Use render expressions in CSV");
     await expect(renderExpressionCheckbox).toBeVisible();
-    if (await renderExpressionCheckbox.isChecked()) {
-      await renderExpressionToggle.click();
-    }
+    await expect(renderExpressionCheckbox).not.toBeChecked();
     const defaultCsv = await downloadCsvFromGradebookPopover(page);
     const defaultCsvRows = parseCsv(defaultCsv);
     const defaultValue = getCsvCellValue(defaultCsvRows, student.email, RENDER_EXPORT_COLUMN_NAME);
@@ -1037,6 +1034,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Download Gradebook" }).click();
     await expect(renderExpressionCheckbox).toBeVisible();
+    const renderExpressionToggle = page.getByText("Use render expressions in CSV");
     if (!(await renderExpressionCheckbox.isChecked())) {
       await renderExpressionToggle.click();
     }

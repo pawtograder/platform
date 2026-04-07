@@ -1,6 +1,6 @@
 "use client";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, { type BroadcastMessage } from "@/lib/TableController";
+import TableController, { type BroadcastMessage, type PossiblyTentativeResult } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -1045,18 +1045,21 @@ export class GradebookController {
   private _tableRefetchUnsubscribes: (() => void)[] = [];
 
   // --- TableController instances ---
+  /** Single-row controller for this gradebook (hydrates expression_prefix, etc.). */
+  readonly gradebook_row: TableController<"gradebooks">;
   readonly gradebook_columns: TableController<"gradebook_columns">;
   readonly table: GradebookCellController;
   readonly assignments_table: TableController<"assignments">;
 
-  readonly readyPromise: Promise<[void, void, void]>;
+  readonly readyPromise: Promise<[void, void, void, void]>;
 
   public studentSubmissions: Map<string, Database["public"]["Views"]["active_submissions_for_class"]["Row"][]> =
     new Map();
 
   private _assignments?: Assignment[];
   private _isInstructorOrGrader: boolean;
-  private _expression_prefix?: string;
+  /** Full prefix string prepended to every column render expression (from gradebooks.expression_prefix). */
+  private _expression_prefix: string = "";
   readonly gradebook_id: number;
   readonly class_id: number;
 
@@ -1073,12 +1076,24 @@ export class GradebookController {
     this.gradebook_id = gradebook_id;
     this.class_id = class_id;
     this._classRealTimeController = classRealTimeController;
+    this.gradebook_row = new TableController({
+      client,
+      table: "gradebooks",
+      query: client.from("gradebooks").select("*").eq("id", gradebook_id),
+      classRealTimeController
+    });
     this.gradebook_columns = new TableController({
       client,
       table: "gradebook_columns",
       query: client.from("gradebook_columns").select("*").eq("gradebook_id", gradebook_id),
       classRealTimeController
     });
+    const { unsubscribe: gradebookRowUnsubscribe } = this.gradebook_row.list(() => {
+      // Prefix lives on gradebooks.expression_prefix; recompute renderers when the row updates.
+      this.syncCellRenderersFromColumns(this.gradebook_columns.rows);
+    });
+    this._unsubscribes.push(gradebookRowUnsubscribe);
+
     const { unsubscribe: updateRendererUnsubscribe, data: gradebookColumns } = this.gradebook_columns.list((data) => {
       this.syncCellRenderersFromColumns(data);
     });
@@ -1095,6 +1110,7 @@ export class GradebookController {
     });
 
     this.readyPromise = Promise.all([
+      this.gradebook_row.readyPromise,
       this.gradebook_columns.readyPromise,
       this.table.readyPromise,
       this.assignments_table.readyPromise
@@ -1105,10 +1121,18 @@ export class GradebookController {
   }
 
   private fullRenderExpressionForColumn(column: GradebookColumn): string {
-    return (this._expression_prefix || "") + "\n" + (column.render_expression ?? "round(score, 2)");
+    return this._expression_prefix + "\n" + (column.render_expression ?? "round(score, 2)");
+  }
+
+  private _hydrateExpressionPrefixFromGradebookRows(
+    rows: PossiblyTentativeResult<Database["public"]["Tables"]["gradebooks"]["Row"]>[]
+  ) {
+    const row = rows.find((r) => r.id === this.gradebook_id) ?? rows[0];
+    this._expression_prefix = row?.expression_prefix ?? "";
   }
 
   private syncCellRenderersFromColumns(columns: GradebookColumn[]) {
+    this._hydrateExpressionPrefixFromGradebookRows(this.gradebook_row.rows);
     const idSet = new Set(columns.map((c) => c.id));
     for (const id of this.cellRenderersByColumnId.keys()) {
       if (!idSet.has(id)) {
@@ -1127,7 +1151,7 @@ export class GradebookController {
 
   private _setupRefetchTracking() {
     // Track refetch status for tables (GradebookCellController doesn't expose refetch status)
-    const tables = [this.gradebook_columns, this.assignments_table];
+    const tables = [this.gradebook_row, this.gradebook_columns, this.assignments_table];
 
     tables.forEach((table) => {
       const unsubscribe = table.subscribeToRefetchStatus(() => {
@@ -1139,7 +1163,8 @@ export class GradebookController {
 
   private _updateRefetchStatus() {
     // Check if any table is currently refetching
-    const isAnyRefetching = this.gradebook_columns.isRefetching || this.assignments_table.isRefetching;
+    const isAnyRefetching =
+      this.gradebook_row.isRefetching || this.gradebook_columns.isRefetching || this.assignments_table.isRefetching;
 
     if (this._isAnyTableRefetching !== isAnyRefetching) {
       this._isAnyTableRefetching = isAnyRefetching;
@@ -1148,6 +1173,7 @@ export class GradebookController {
   }
 
   close() {
+    this.gradebook_row.close();
     this.gradebook_columns.close();
     this.table.close();
     this.assignments_table.close();
@@ -1564,7 +1590,9 @@ export class GradebookController {
 
   // Removed get gradebook() method - use new GradebookCellController data directly instead
   get isReady() {
-    return this.gradebook_columns.ready && this.table.ready && this.assignments_table.ready;
+    return (
+      this.gradebook_row.ready && this.gradebook_columns.ready && this.table.ready && this.assignments_table.ready
+    );
   }
 
   get isAnyTableRefetching() {
