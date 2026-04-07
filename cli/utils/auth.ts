@@ -7,7 +7,8 @@
 
 import * as fs from "fs";
 import * as readline from "readline";
-import { readCredentials, writeCredentials, apiCall, DEFAULT_API_URL } from "./api";
+import { Writable } from "stream";
+import { readCredentials, writeCredentials, apiCall, DEFAULT_API_URL, type Credentials } from "./api";
 import { getCredentialsPath } from "./credentials";
 import { logger, CLIError } from "./logger";
 
@@ -23,18 +24,51 @@ export interface CurrentUser {
 }
 
 /**
- * Prompt for a line of input from stdin
+ * Prompt for a line of input from stdin without echoing (for API tokens).
  */
 function promptForInput(prompt: string): Promise<string> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
+  const mutedOut = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    }
   });
 
-  return new Promise((resolve) => {
-    rl.question(prompt, (answer) => {
-      rl.close();
-      resolve(answer);
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: mutedOut
+  });
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const finish = (action: "ok" | "cancel", answer?: string) => {
+      if (settled) return;
+      settled = true;
+      process.removeListener("SIGINT", onSigInt);
+      try {
+        rl.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        mutedOut.destroy();
+      } catch {
+        /* ignore */
+      }
+      process.stdout.write("\n");
+      if (action === "ok") resolve(answer ?? "");
+      else reject(new CLIError("Login cancelled."));
+    };
+
+    const onSigInt = () => {
+      finish("cancel");
+    };
+
+    process.on("SIGINT", onSigInt);
+
+    process.stdout.write(prompt);
+    rl.question("", (answer) => {
+      finish("ok", answer);
     });
   });
 }
@@ -67,22 +101,25 @@ export async function startLoginFlow(options: LoginOptions): Promise<void> {
 
   const apiUrl = options.url || DEFAULT_API_URL;
 
-  // Save credentials
+  const previousCreds: Credentials | null = readCredentials();
+
   writeCredentials({ token, api_url: apiUrl });
 
-  // Verify the token works
   logger.info("Verifying token...");
   try {
-    await apiCall("classes.list");
+    await apiCall("token.info");
     logger.success("Authentication successful!");
     logger.info(`Credentials stored at: ${getCredentialsPath()}`);
   } catch (error) {
-    // Remove invalid credentials
     const credPath = getCredentialsPath();
     try {
-      if (fs.existsSync(credPath)) fs.unlinkSync(credPath);
+      if (previousCreds) {
+        writeCredentials(previousCreds);
+      } else if (fs.existsSync(credPath)) {
+        fs.unlinkSync(credPath);
+      }
     } catch {
-      // ignore cleanup errors
+      // ignore restore/cleanup errors
     }
     throw error;
   }

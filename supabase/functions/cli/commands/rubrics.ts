@@ -6,7 +6,7 @@ import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
 import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
-import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
+import { fetchRubricWithHierarchy, requireRubricTableDeleteOk } from "../utils/rubric.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
@@ -204,10 +204,26 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
     };
   }
 
-  await supabase.from("rubric_check_references").delete().eq("rubric_id", targetRubricId);
-  await supabase.from("rubric_checks").delete().eq("rubric_id", targetRubricId);
-  await supabase.from("rubric_criteria").delete().eq("rubric_id", targetRubricId);
-  await supabase.from("rubric_parts").delete().eq("rubric_id", targetRubricId);
+  requireRubricTableDeleteOk(
+    "rubric_check_references",
+    targetRubricId,
+    await supabase.from("rubric_check_references").delete().eq("rubric_id", targetRubricId)
+  );
+  requireRubricTableDeleteOk(
+    "rubric_checks",
+    targetRubricId,
+    await supabase.from("rubric_checks").delete().eq("rubric_id", targetRubricId)
+  );
+  requireRubricTableDeleteOk(
+    "rubric_criteria",
+    targetRubricId,
+    await supabase.from("rubric_criteria").delete().eq("rubric_id", targetRubricId)
+  );
+  requireRubricTableDeleteOk(
+    "rubric_parts",
+    targetRubricId,
+    await supabase.from("rubric_parts").delete().eq("rubric_id", targetRubricId)
+  );
 
   const { error: updateError } = await supabase
     .from("rubrics")

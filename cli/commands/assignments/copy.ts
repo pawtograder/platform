@@ -58,7 +58,8 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
         assignment_slug: row.assignment_slug,
         assignment_title: row.assignment_title,
         release_date: normalizeDate(row.release_date, `Row ${i + 2} release_date`),
-        due_date: normalizeDate(row.due_date, `Row ${i + 2} due_date`)
+        due_date: normalizeDate(row.due_date, `Row ${i + 2} due_date`),
+        latest_due_date: normalizeDate(row.latest_due_date, `Row ${i + 2} latest_due_date`)
       }));
       params.schedule = schedule;
     }

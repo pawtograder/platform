@@ -21,14 +21,24 @@ export async function resolveClass(supabase: SupabaseClient<Database>, identifie
   const { data: bySlug } = await supabase.from("classes").select("*").eq("slug", String(identifier)).single();
   if (bySlug) return bySlug as ClassRow;
 
-  // Try by name (partial match)
+  // Try by exact name
+  const { data: byExactName } = await supabase.from("classes").select("*").eq("name", String(identifier)).maybeSingle();
+  if (byExactName) return byExactName as ClassRow;
+
+  // Try by name (partial match); multiple hits are ambiguous
   const { data: byName } = await supabase
     .from("classes")
     .select("*")
     .ilike("name", `%${String(identifier)}%`)
-    .limit(1)
-    .single();
-  if (byName) return byName as ClassRow;
+    .limit(2);
+  const nameMatches = (byName ?? []) as ClassRow[];
+  if (nameMatches.length > 1) {
+    throw new CLICommandError(
+      `Ambiguous class "${String(identifier)}": multiple classes match that name pattern; use a class id, slug, or a more specific name.`,
+      400
+    );
+  }
+  if (nameMatches.length === 1) return nameMatches[0]!;
 
   throw new CLICommandError(`Class not found: ${identifier}`, 404);
 }

@@ -62,6 +62,16 @@ function createAssignmentCopyDebugLog(context: Record<string, unknown>): {
   };
 }
 
+function formatEdgeFunctionBodyForError(data: unknown): string {
+  if (data === undefined) return "undefined";
+  if (data === null) return "null";
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return String(data);
+  }
+}
+
 async function handleAssignmentsList(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const { class: classIdentifier } = params as unknown as AssignmentsListParams;
   if (!classIdentifier) throw new CLICommandError("class is required");
@@ -166,6 +176,22 @@ async function handleAssignmentsDelete(ctx: MCPAuthContext, params: Record<strin
   };
 }
 
+/**
+ * Schedule CSV may include legacy `latest_due_date`. Assignments store a single `due_date` (there is no separate latest_due_date column).
+ */
+function mergeScheduleDueDateOverrides(
+  dueDate: string | undefined,
+  latestDueDate: string | undefined,
+  rowDescription: string
+): string | undefined {
+  if (dueDate !== undefined && latestDueDate !== undefined && dueDate !== latestDueDate) {
+    throw new CLICommandError(
+      `${rowDescription}: due_date (${dueDate}) and latest_due_date (${latestDueDate}) differ, but only one due date is stored per assignment. Use the same value in both columns or supply only one.`
+    );
+  }
+  return dueDate ?? latestDueDate;
+}
+
 async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
   const p = params as unknown as AssignmentsCopyParams;
   const sourceClassId = p.source_class;
@@ -253,10 +279,13 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
       } else {
         throw new CLICommandError("Each schedule item must have assignment_slug or assignment_title");
       }
+      const rowDescription = row.assignment_slug
+        ? `Schedule row for slug "${row.assignment_slug}"`
+        : `Schedule row for title "${row.assignment_title}"`;
       assignmentsToCopy.push({
         assignment,
         releaseDateOverride: row.release_date,
-        dueDateOverride: row.due_date
+        dueDateOverride: mergeScheduleDueDateOverrides(row.due_date, row.latest_due_date, rowDescription)
       });
     }
   }
@@ -558,22 +587,86 @@ async function copySingleAssignment(
     });
     try {
       if (sourceAssignment.grading_rubric_id) {
-        await copyRubricTree(
+        const newGradingRubricId = await copyRubricTree(
           supabase,
           sourceAssignment.grading_rubric_id,
           newAssignment.id,
           targetClass.id,
           newAssignment.grading_rubric_id ?? undefined
         );
+        if (!newAssignment.grading_rubric_id && newGradingRubricId) {
+          const {
+            data: gradingRubricAssignmentRows,
+            error: gradingRubricAssignmentUpdateError,
+            status: gradingRubricAssignmentUpdateStatus
+          } = await supabase
+            .from("assignments")
+            .update({ grading_rubric_id: newGradingRubricId })
+            .eq("id", newAssignment.id)
+            .select("id");
+
+          if (gradingRubricAssignmentUpdateError) {
+            const e = gradingRubricAssignmentUpdateError;
+            const detail =
+              [e.code && `code=${e.code}`, e.details && `details=${e.details}`, e.hint && `hint=${e.hint}`]
+                .filter(Boolean)
+                .join("; ") || undefined;
+            throw new CLICommandError(
+              `Failed to set grading_rubric_id on assignment (assignment_id=${newAssignment.id}, grading_rubric_id=${newGradingRubricId}): ${e.message}${detail ? ` (${detail})` : ""}`
+            );
+          }
+          if (gradingRubricAssignmentUpdateStatus < 200 || gradingRubricAssignmentUpdateStatus >= 300) {
+            throw new CLICommandError(
+              `Failed to set grading_rubric_id on assignment (assignment_id=${newAssignment.id}, grading_rubric_id=${newGradingRubricId}): unexpected HTTP status ${gradingRubricAssignmentUpdateStatus}`
+            );
+          }
+          if (!gradingRubricAssignmentRows?.length) {
+            throw new CLICommandError(
+              `Failed to set grading_rubric_id on assignment (assignment_id=${newAssignment.id}, grading_rubric_id=${newGradingRubricId}): update matched no rows`
+            );
+          }
+        }
       }
       if (sourceAssignment.self_review_rubric_id) {
-        await copyRubricTree(
+        const newSelfReviewRubricId = await copyRubricTree(
           supabase,
           sourceAssignment.self_review_rubric_id,
           newAssignment.id,
           targetClass.id,
           newAssignment.self_review_rubric_id ?? undefined
         );
+        if (!newAssignment.self_review_rubric_id && newSelfReviewRubricId) {
+          const {
+            data: selfReviewRubricAssignmentRows,
+            error: selfReviewRubricAssignmentUpdateError,
+            status: selfReviewRubricAssignmentUpdateStatus
+          } = await supabase
+            .from("assignments")
+            .update({ self_review_rubric_id: newSelfReviewRubricId })
+            .eq("id", newAssignment.id)
+            .select("id");
+
+          if (selfReviewRubricAssignmentUpdateError) {
+            const e = selfReviewRubricAssignmentUpdateError;
+            const detail =
+              [e.code && `code=${e.code}`, e.details && `details=${e.details}`, e.hint && `hint=${e.hint}`]
+                .filter(Boolean)
+                .join("; ") || undefined;
+            throw new CLICommandError(
+              `Failed to set self_review_rubric_id on assignment (assignment_id=${newAssignment.id}, self_review_rubric_id=${newSelfReviewRubricId}): ${e.message}${detail ? ` (${detail})` : ""}`
+            );
+          }
+          if (selfReviewRubricAssignmentUpdateStatus < 200 || selfReviewRubricAssignmentUpdateStatus >= 300) {
+            throw new CLICommandError(
+              `Failed to set self_review_rubric_id on assignment (assignment_id=${newAssignment.id}, self_review_rubric_id=${newSelfReviewRubricId}): unexpected HTTP status ${selfReviewRubricAssignmentUpdateStatus}`
+            );
+          }
+          if (!selfReviewRubricAssignmentRows?.length) {
+            throw new CLICommandError(
+              `Failed to set self_review_rubric_id on assignment (assignment_id=${newAssignment.id}, self_review_rubric_id=${newSelfReviewRubricId}): update matched no rows`
+            );
+          }
+        }
       }
       if (sourceAssignment.meta_grading_rubric_id) {
         const newMetaRubricId = await copyRubricTree(
@@ -584,34 +677,75 @@ async function copySingleAssignment(
           newAssignment.meta_grading_rubric_id ?? undefined
         );
         if (!newAssignment.meta_grading_rubric_id && newMetaRubricId) {
-          await supabase
+          const {
+            data: metaRubricAssignmentRows,
+            error: metaRubricAssignmentUpdateError,
+            status: metaRubricAssignmentUpdateStatus
+          } = await supabase
             .from("assignments")
             .update({ meta_grading_rubric_id: newMetaRubricId })
-            .eq("id", newAssignment.id);
+            .eq("id", newAssignment.id)
+            .select("id");
+
+          if (metaRubricAssignmentUpdateError) {
+            const e = metaRubricAssignmentUpdateError;
+            const detail =
+              [e.code && `code=${e.code}`, e.details && `details=${e.details}`, e.hint && `hint=${e.hint}`]
+                .filter(Boolean)
+                .join("; ") || undefined;
+            throw new CLICommandError(
+              `Failed to set meta_grading_rubric_id on assignment (assignment_id=${newAssignment.id}, meta_grading_rubric_id=${newMetaRubricId}): ${e.message}${detail ? ` (${detail})` : ""}`
+            );
+          }
+          if (metaRubricAssignmentUpdateStatus < 200 || metaRubricAssignmentUpdateStatus >= 300) {
+            throw new CLICommandError(
+              `Failed to set meta_grading_rubric_id on assignment (assignment_id=${newAssignment.id}, meta_grading_rubric_id=${newMetaRubricId}): unexpected HTTP status ${metaRubricAssignmentUpdateStatus}`
+            );
+          }
+          if (!metaRubricAssignmentRows?.length) {
+            throw new CLICommandError(
+              `Failed to set meta_grading_rubric_id on assignment (assignment_id=${newAssignment.id}, meta_grading_rubric_id=${newMetaRubricId}): update matched no rows`
+            );
+          }
         }
       }
       status.rubricsCopied = true;
     } catch (err) {
       addError("rubrics", err);
     }
-    mark("rubrics_done", { rubrics_copied: status.rubricsCopied, rubric_errors: status.errors.filter((e) => e.step === "rubrics").length });
+    mark("rubrics_done", {
+      rubrics_copied: status.rubricsCopied,
+      rubric_errors: status.errors.filter((e) => e.step === "rubrics").length
+    });
   }
 
   if (sourceAssignment.has_autograder) {
     mark("autograder_config_start", {});
     try {
-      const { data: sourceConfig } = await supabase
+      const { data: sourceConfig, error: sourceConfigError } = await supabase
         .from("autograder")
         .select("*")
         .eq("id", sourceAssignment.id)
         .single();
 
+      if (sourceConfigError && sourceConfigError.code !== "PGRST116") {
+        throw new CLICommandError(
+          `Failed to fetch source autograder config (assignment_id=${sourceAssignment.id}): ${sourceConfigError.message}`
+        );
+      }
+
       if (sourceConfig) {
-        const { data: existing } = await supabase
+        const { data: existing, error: existingRowError } = await supabase
           .from("autograder")
           .select("id, grader_repo")
           .eq("id", newAssignment.id)
           .single();
+
+        if (existingRowError && existingRowError.code !== "PGRST116") {
+          throw new CLICommandError(
+            `Failed to look up target autograder row (assignment_id=${newAssignment.id}): ${existingRowError.message}`
+          );
+        }
 
         if (existing) {
           await supabase
@@ -662,20 +796,33 @@ async function copySingleAssignment(
           const hd = handoutData as { error?: unknown; org_name?: string; repo_name?: string } | null;
           if (hd?.error) {
             addError("handout_repo_create", hd.error);
-          } else if (hd?.org_name && hd?.repo_name) {
-            status.handoutRepoCreated = true;
-            const targetRepoFullName = `${hd.org_name}/${hd.repo_name}`;
-            mark("handout_repo_copy_contents_start", {
-              from: sourceAssignment.template_repo,
-              to: targetRepoFullName
-            });
-            try {
-              await copyRepoContentsViaGitHub(sourceAssignment.template_repo, targetRepoFullName);
-              status.handoutRepoContentsCopied = true;
-            } catch (err) {
-              addError("handout_repo_contents", err);
+          } else {
+            const org = hd?.org_name;
+            const repo = hd?.repo_name;
+            if (
+              typeof org === "string" &&
+              org.trim().length > 0 &&
+              typeof repo === "string" &&
+              repo.trim().length > 0
+            ) {
+              status.handoutRepoCreated = true;
+              const targetRepoFullName = `${org.trim()}/${repo.trim()}`;
+              mark("handout_repo_copy_contents_start", {
+                from: sourceAssignment.template_repo,
+                to: targetRepoFullName
+              });
+              try {
+                await copyRepoContentsViaGitHub(sourceAssignment.template_repo, targetRepoFullName);
+                status.handoutRepoContentsCopied = true;
+              } catch (err) {
+                addError("handout_repo_contents", err);
+              }
+              mark("handout_repo_copy_contents_done", { copied: status.handoutRepoContentsCopied });
+            } else {
+              throw new CLICommandError(
+                `assignment-create-handout-repo returned an unexpected response (expected org_name and repo_name). Raw: ${formatEdgeFunctionBodyForError(handoutData)}`
+              );
             }
-            mark("handout_repo_copy_contents_done", { copied: status.handoutRepoContentsCopied });
           }
         } catch (err) {
           addError("handout_repo_create", err);
@@ -737,31 +884,47 @@ async function copySingleAssignment(
           const sd = solutionData as { error?: unknown; org_name?: string; repo_name?: string } | null;
           if (sd?.error) {
             addError("solution_repo_create", sd.error);
-          } else if (sd?.org_name && sd?.repo_name) {
-            const targetRepoFullName = `${sd.org_name}/${sd.repo_name}`;
+          } else {
+            const org = sd?.org_name;
+            const repo = sd?.repo_name;
+            if (
+              typeof org === "string" &&
+              org.trim().length > 0 &&
+              typeof repo === "string" &&
+              repo.trim().length > 0
+            ) {
+              const targetRepoFullName = `${org.trim()}/${repo.trim()}`;
 
-            const { data: afterCreate } = await supabase
-              .from("autograder")
-              .select("grader_repo")
-              .eq("id", newAssignment.id)
-              .single();
+              const { data: afterCreate } = await supabase
+                .from("autograder")
+                .select("grader_repo")
+                .eq("id", newAssignment.id)
+                .single();
 
-            if (!afterCreate?.grader_repo) {
-              await supabase.from("autograder").update({ grader_repo: targetRepoFullName }).eq("id", newAssignment.id);
+              if (!afterCreate?.grader_repo) {
+                await supabase
+                  .from("autograder")
+                  .update({ grader_repo: targetRepoFullName })
+                  .eq("id", newAssignment.id);
+              }
+              status.solutionRepoCreated = true;
+
+              mark("solution_repo_copy_contents_start", {
+                from: sourceAutograder.grader_repo,
+                to: targetRepoFullName
+              });
+              try {
+                await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetRepoFullName);
+                status.solutionRepoContentsCopied = true;
+              } catch (err) {
+                addError("solution_repo_contents", err);
+              }
+              mark("solution_repo_copy_contents_done", { copied: status.solutionRepoContentsCopied });
+            } else {
+              throw new CLICommandError(
+                `assignment-create-solution-repo returned an unexpected response (expected org_name and repo_name). Raw: ${formatEdgeFunctionBodyForError(solutionData)}`
+              );
             }
-            status.solutionRepoCreated = true;
-
-            mark("solution_repo_copy_contents_start", {
-              from: sourceAutograder.grader_repo,
-              to: targetRepoFullName
-            });
-            try {
-              await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetRepoFullName);
-              status.solutionRepoContentsCopied = true;
-            } catch (err) {
-              addError("solution_repo_contents", err);
-            }
-            mark("solution_repo_copy_contents_done", { copied: status.solutionRepoContentsCopied });
           }
         } catch (err) {
           addError("solution_repo_create", err);

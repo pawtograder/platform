@@ -124,7 +124,6 @@ export function normalizeDate(dateStr: string | undefined, fieldName: string): s
       year = year < 50 ? 2000 + year : 1900 + year;
     }
 
-    // Validate month and day ranges
     if (month < 1 || month > 12) {
       throw new CLIError(`Invalid month in ${fieldName}: ${dateStr}`);
     }
@@ -132,15 +131,12 @@ export function normalizeDate(dateStr: string | undefined, fieldName: string): s
       throw new CLIError(`Invalid day in ${fieldName}: ${dateStr}`);
     }
 
-    // Format as ISO
-    const isoDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-
-    // Validate the resulting date
-    const parsed = new Date(isoDate);
-    if (isNaN(parsed.getTime())) {
+    const parsed = new Date(year, month - 1, day);
+    if (parsed.getFullYear() !== year || parsed.getMonth() + 1 !== month || parsed.getDate() !== day) {
       throw new CLIError(`Invalid date for ${fieldName}: ${dateStr}`);
     }
 
+    const isoDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     return isoDate;
   }
 

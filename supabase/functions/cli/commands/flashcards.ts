@@ -25,11 +25,15 @@ async function handleFlashcardsList(ctx: MCPAuthContext, params: Record<string, 
 
   if (error) throw new CLICommandError(`Failed to fetch flashcard decks: ${error.message}`);
 
-  const { data: cardCounts } = await supabase
+  const { data: cardCounts, error: countError } = await supabase
     .from("flashcards")
     .select("deck_id")
     .eq("class_id", classData.id)
     .is("deleted_at", null);
+
+  if (countError) {
+    throw new CLICommandError(`Error fetching flashcard counts: ${countError.message}`);
+  }
 
   const countMap = new Map<number, number>();
   if (cardCounts) {
@@ -102,7 +106,7 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
     };
   }
 
-  const creatorId = sourceDecks[0].creator_id;
+  const resolvedCreatorId = ctx.userId || sourceDecks[0].creator_id;
   const results: Array<{
     deck: string;
     success: boolean;
@@ -117,7 +121,7 @@ async function handleFlashcardsCopy(ctx: MCPAuthContext, params: Record<string, 
         .from("flashcard_decks")
         .insert({
           class_id: targetClass.id,
-          creator_id: creatorId,
+          creator_id: resolvedCreatorId,
           name: sourceDeck.name,
           description: sourceDeck.description
         })

@@ -14,11 +14,11 @@
  *   npm run cli -- assignments copy --source-class cs3500-fall-2025 --target-class cs3500-spring-2026 --all
  */
 
+import "./load-env";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
 // Import command modules
-import * as authCommand from "./commands/auth";
 import * as classesCommand from "./commands/classes";
 import * as assignmentsCommand from "./commands/assignments";
 import * as surveysCommand from "./commands/surveys";
@@ -35,8 +35,6 @@ import { logger, handleError } from "./utils/logger";
 yargs(hideBin(process.argv))
   .scriptName("pawtograder")
   .usage("$0 <command> [options]")
-  // Auth commands
-  .command(authCommand)
   .command(
     "login",
     "Authenticate with a Pawtograder API token",

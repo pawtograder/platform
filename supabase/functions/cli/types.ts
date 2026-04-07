@@ -118,6 +118,8 @@ export interface ScheduleItem {
   assignment_title?: string;
   release_date?: string;
   due_date?: string;
+  /** Legacy CSV column; assignments no longer store a separate latest due — see copy merge rules in assignments copy handler */
+  latest_due_date?: string;
 }
 
 export interface CopyStatus {

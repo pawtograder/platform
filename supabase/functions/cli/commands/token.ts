@@ -30,5 +30,6 @@ async function handleTokenInfo(ctx: MCPAuthContext, _params: Record<string, unkn
 
 registerCommand({
   name: "token.info",
+  requiredScope: "public",
   handler: handleTokenInfo
 });

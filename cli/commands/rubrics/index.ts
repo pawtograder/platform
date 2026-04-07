@@ -231,7 +231,11 @@ export const builder = (yargs: Argv) => {
           }
 
           const yamlContent = fs.readFileSync(filePath, "utf8");
-          const rubricYml = YAML.parse(yamlContent) as RubricYml;
+          const parsedDoc = YAML.parse(yamlContent);
+          if (parsedDoc === null || typeof parsedDoc !== "object" || Array.isArray(parsedDoc)) {
+            throw new CLIError("Invalid YML: empty or invalid document");
+          }
+          const rubricYml = parsedDoc as RubricYml;
 
           // Validate structure
           if (!rubricYml.name) {

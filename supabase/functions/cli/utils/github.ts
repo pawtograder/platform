@@ -76,6 +76,19 @@ async function withRateLimitRetries<T>(fn: () => Promise<T>): Promise<T> {
   throw new Error("unreachable");
 }
 
+async function getRepoDefaultBranch(
+  octokit: NonNullable<Awaited<ReturnType<typeof getOctoKit>>>,
+  owner: string,
+  repo: string
+): Promise<string> {
+  const { data } = await withRateLimitRetries(() => octokit.request("GET /repos/{owner}/{repo}", { owner, repo }));
+  const branch = data.default_branch;
+  if (typeof branch !== "string" || branch.length === 0) {
+    throw new Error(`GitHub repository ${owner}/${repo} returned no default_branch`);
+  }
+  return branch;
+}
+
 /**
  * List all blob objects under a tree. Uses recursive tree API when possible;
  * falls back to walking subtrees if the response is truncated (large repos).
@@ -86,7 +99,7 @@ async function listSourceBlobRefs(
   sourceRepo: string,
   sourceTreeSha: string
 ): Promise<SourceBlobRef[]> {
-  const { data } = await withRateLimitRetries(() =>
+  const sourceTree = await withRateLimitRetries(() =>
     sourceOctokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
       owner: sourceOrg,
       repo: sourceRepo,
@@ -95,18 +108,18 @@ async function listSourceBlobRefs(
     })
   );
 
-  const tree = data.tree as Array<{ type?: string; path?: string; mode?: string; sha?: string }>;
-  if (!data.truncated) {
-    return tree
-      .filter((item) => item.type === "blob" && item.sha && item.path)
-      .map((item) => ({
-        path: item.path!,
-        mode: item.mode ?? "100644",
-        sha: item.sha!
-      }));
+  if (sourceTree.data.truncated) {
+    return walkTreeForBlobs(sourceOctokit, sourceOrg, sourceRepo, sourceTreeSha, "");
   }
 
-  return walkTreeForBlobs(sourceOctokit, sourceOrg, sourceRepo, sourceTreeSha, "");
+  const tree = sourceTree.data.tree as Array<{ type?: string; path?: string; mode?: string; sha?: string }>;
+  return tree
+    .filter((item) => item.type === "blob" && item.sha && item.path)
+    .map((item) => ({
+      path: item.path!,
+      mode: item.mode ?? "100644",
+      sha: item.sha!
+    }));
 }
 
 async function walkTreeForBlobs(
@@ -116,13 +129,25 @@ async function walkTreeForBlobs(
   treeSha: string,
   pathPrefix: string
 ): Promise<SourceBlobRef[]> {
-  const { data } = await withRateLimitRetries(() =>
+  const subtreeResponse = await withRateLimitRetries(() =>
     sourceOctokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
       owner,
       repo,
       tree_sha: treeSha
     })
   );
+
+  const { data } = subtreeResponse;
+  if (data.truncated) {
+    const where =
+      pathPrefix !== ""
+        ? `${owner}/${repo} under "${pathPrefix}" (tree ${treeSha})`
+        : `${owner}/${repo} at root tree ${treeSha}`;
+    throw new Error(
+      `GitHub git tree listing was truncated for ${where}. The listing is incomplete, so copying would miss files. ` +
+        `Use a smaller tree, raise GitHub limits where possible, or copy with git externally (e.g. mirror push) and use --skip-repos.`
+    );
+  }
 
   const out: SourceBlobRef[] = [];
   for (const item of data.tree as Array<{ type?: string; path?: string; mode?: string; sha?: string }>) {
@@ -189,18 +214,16 @@ export async function copyRepoContentsViaGitHub(sourceRepoFullName: string, targ
   // Brief pause so a freshly created target repo accepts writes
   await new Promise((resolve) => setTimeout(resolve, 500));
 
-  let sourceRef: { data: { object: { sha: string }; url?: string } };
-  try {
-    sourceRef = await sourceOctokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
+  const sourceDefaultBranch = await getRepoDefaultBranch(sourceOctokit, sourceOrg, sourceRepo);
+  const targetDefaultBranch = await getRepoDefaultBranch(targetOctokit, targetOrg, targetRepo);
+
+  const sourceRef = await withRateLimitRetries(() =>
+    sourceOctokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
       owner: sourceOrg,
-      repo: sourceRepo
-    });
-  } catch {
-    sourceRef = await sourceOctokit.request("GET /repos/{owner}/{repo}/git/ref/heads/master", {
-      owner: sourceOrg,
-      repo: sourceRepo
-    });
-  }
+      repo: sourceRepo,
+      ref: `heads/${sourceDefaultBranch}`
+    })
+  );
 
   const sourceCommitSha = sourceRef.data.object.sha;
 
@@ -267,18 +290,13 @@ export async function copyRepoContentsViaGitHub(sourceRepoFullName: string, targ
     })
   );
 
-  let targetRef: { data: { object: { sha: string }; ref: string } };
-  try {
-    targetRef = await targetOctokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
+  const targetRef = await withRateLimitRetries(() =>
+    targetOctokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
       owner: targetOrg,
-      repo: targetRepo
-    });
-  } catch {
-    targetRef = await targetOctokit.request("GET /repos/{owner}/{repo}/git/ref/heads/master", {
-      owner: targetOrg,
-      repo: targetRepo
-    });
-  }
+      repo: targetRepo,
+      ref: `heads/${targetDefaultBranch}`
+    })
+  );
 
   const newCommit = await withRateLimitRetries(() =>
     targetOctokit.request("POST /repos/{owner}/{repo}/git/commits", {
@@ -290,7 +308,7 @@ export async function copyRepoContentsViaGitHub(sourceRepoFullName: string, targ
     })
   );
 
-  const refName = (targetRef.data as { ref?: string }).ref?.replace("refs/", "") ?? "heads/main";
+  const refName = targetRef.data.ref.replace(/^refs\//, "");
   await withRateLimitRetries(() =>
     targetOctokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
       owner: targetOrg,

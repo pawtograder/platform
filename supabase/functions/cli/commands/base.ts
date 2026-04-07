@@ -8,9 +8,11 @@ import type { CLIResponse } from "../types.ts";
 
 export type CommandHandler = (ctx: MCPAuthContext, params: Record<string, unknown>) => Promise<CLIResponse>;
 
+/** Every CLI command must declare authorization: OAuth scopes or explicitly public (no scope check). */
+export type CLICommandRequiredScope = "cli:read" | "cli:write" | "public";
+
 export interface CommandDefinition<TParams = Record<string, unknown>> {
   name: string;
-  /** When undefined, no scope check is performed (e.g. token.info) */
-  requiredScope?: "cli:read" | "cli:write";
+  requiredScope: CLICommandRequiredScope;
   handler: CommandHandler;
 }

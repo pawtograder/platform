@@ -23,7 +23,7 @@ export async function dispatch(ctx: MCPAuthContext, request: CLIRequest): Promis
     throw new UnknownCommandError(request.command, getRegisteredCommands());
   }
 
-  if (command.requiredScope) {
+  if (command.requiredScope !== "public") {
     requireScope(ctx, command.requiredScope);
   }
 
