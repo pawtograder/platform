@@ -1,4 +1,4 @@
-import { test, expect } from "../global-setup";
+import { expect, test } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
@@ -109,6 +109,14 @@ test.describe("Polls", () => {
 
     const emptyHeading = page.getByRole("heading", { name: "No Live Polls Available" });
     await expect(emptyHeading).toBeVisible();
+
+    // Wait for realtime connection to be established before updating database
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible({ timeout: 10000 });
+
+    // Give subscription a moment to fully register
+    await page.waitForTimeout(1000);
 
     const { error } = await supabase.from("live_polls").update({ is_live: true }).eq("id", poll.id);
     if (error) {

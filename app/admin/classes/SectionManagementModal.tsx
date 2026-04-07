@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import { DialogBody, DialogContent, DialogHeader, DialogRoot, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -9,9 +10,9 @@ import { useCallback, useEffect, useState } from "react";
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
+import { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, HStack, Table, Text, VStack } from "@chakra-ui/react";
 import { MoreHorizontal, Pencil, Plus, Trash2, Users } from "lucide-react";
-import { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
 
 type Class = AdminGetClassesResponse[0];
 
@@ -210,14 +211,6 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
     setEditName("");
   };
 
-  const formatDate = useCallback((dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric"
-    });
-  }, []);
-
   return (
     <DialogRoot open={open} onOpenChange={(e) => onOpenChange(e.open)}>
       <DialogContent maxW="700px">
@@ -349,7 +342,9 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
                             <Text>{section.member_count}</Text>
                           </HStack>
                         </Table.Cell>
-                        <Table.Cell>{formatDate(section.created_at)}</Table.Cell>
+                        <Table.Cell>
+                          <TimeZoneAwareDate date={section.created_at} format="dateOnly" />
+                        </Table.Cell>
                         <Table.Cell>
                           {editingSection?.section_id !== section.section_id && (
                             <MenuRoot>

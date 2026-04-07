@@ -20,9 +20,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   let githubUsername: string | null;
   let classId: number | undefined;
   let assignmentId: number | undefined;
+  let forTestAssignment = false;
+  let usedEdgeSecretAuth = false;
   const syncAllPermissions = true;
 
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
+    usedEdgeSecretAuth = true;
     // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
     const url = new URL(req.url);
     const class_id = Number.parseInt(url.searchParams.get("class_id")!);
@@ -31,6 +34,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     console.log("user_id", user_id);
     const assignment_id_param = url.searchParams.get("assignment_id");
     assignmentId = assignment_id_param ? Number.parseInt(assignment_id_param) : undefined;
+    forTestAssignment = url.searchParams.get("for_test_assignment") === "true";
     console.log("assignment_id", assignmentId);
     // syncAllPermissions = url.searchParams.get("sync_all_permissions") === "true";
     console.log("sync_all_permissions", syncAllPermissions);
@@ -72,6 +76,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     // syncAllPermissions = requestBody.sync_all_permissions || false;
     classId = requestBody.class_id;
     assignmentId = requestBody.assignment_id;
+    forTestAssignment = requestBody.for_test_assignment === true;
     console.log("sync_all_permissions", syncAllPermissions);
     console.log("assignment_id", assignmentId);
 
@@ -109,6 +114,41 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("github_username", githubUsername);
   if (!githubUsername) {
     throw new UserVisibleError(`User ${userId} has no Github username linked`, 400);
+  }
+
+  if (forTestAssignment) {
+    if (assignmentId === undefined) {
+      throw new UserVisibleError("for_test_assignment requires assignment_id", 400);
+    }
+    // Do not trust the flag from the browser unless the caller is course staff (or platform admin).
+    if (!usedEdgeSecretAuth) {
+      const { data: assignmentRow, error: assignmentLookupError } = await adminSupabase
+        .from("assignments")
+        .select("class_id")
+        .eq("id", assignmentId)
+        .maybeSingle();
+      if (assignmentLookupError || !assignmentRow) {
+        throw new UserVisibleError("Assignment not found", 404);
+      }
+      const { data: staffRow } = await adminSupabase
+        .from("user_roles")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("class_id", assignmentRow.class_id)
+        .eq("disabled", false)
+        .in("role", ["instructor", "grader"])
+        .maybeSingle();
+      const { data: adminRows } = await adminSupabase
+        .from("user_roles")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("role", "admin")
+        .eq("disabled", false)
+        .limit(1);
+      if (!staffRow && (!adminRows || adminRows.length === 0)) {
+        throw new UserVisibleError("Only instructors and graders can create test assignment repositories", 403);
+      }
+    }
   }
 
   //Must use adminSupabase because students can't see each others' github usernames
@@ -365,12 +405,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     )
   );
 
+  // Instructor Test Assignment sends for_test_assignment (after server-side staff check) so we
+  // allow an individual repo even for groups-only assignments. Otherwise instructors not in a
+  // student group—common after the group-formation deadline—get no repo.
+  const allowIndividualRepoDespiteGroupOnly = forTestAssignment && assignmentId !== undefined;
+
   const requests = assignments!
     .filter(
       (assignment) =>
         !existingRepos.find((repo) => repo.assignment_id === assignment.id) &&
         !createdAsGroupRepos.find((_assignment) => _assignment?.id === assignment.id) &&
-        assignment.group_config !== "groups"
+        (allowIndividualRepoDespiteGroupOnly || assignment.group_config !== "groups")
     )
     .map(async (assignment) => {
       const userProfileID = classes.find((c) => c && c.class_id === assignment.class_id)?.profiles.id;

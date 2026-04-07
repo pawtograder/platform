@@ -22,7 +22,7 @@ const NUM_ASSIGNMENTS_TO_USE_TOKENS = 4;
 const TOKENS_TO_GIFT = 1;
 
 function getDueDateString(date: Date) {
-  return formatInTimeZone(date, "America/New_York", "MMM d h:mm aaa");
+  return formatInTimeZone(date, "America/New_York", "MMM d, h:mm a zzz");
 }
 
 test.beforeEach(async () => {

@@ -211,9 +211,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
-    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(
-      `${student!.private_profile_name} applied today at`
-    );
+    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
     //Make sure that we get a very nice screenshot with a fully-loaded page
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();

@@ -4503,7 +4503,9 @@ final;`,
               .insert({
                 assignment_id,
                 class_id,
-                name: `Group ${String.fromCharCode(65 + i)}`,
+                // Numeric suffix avoids unique(lower(name), assignment_id) collisions from
+                // String.fromCharCode(65 + i) repeating letters for large group counts (e.g. Group A vs Group a).
+                name: `Group ${i + 1}`,
                 mentor_profile_id: mentorProfileId
               })
               .select("id, name")
@@ -4575,7 +4577,7 @@ final;`,
               .insert({
                 assignment_id: assignment_id,
                 class_id: class_id,
-                name: `Group ${String.fromCharCode(65 + i)}`, // A, B, C, etc.
+                name: `Group ${i + 1}`,
                 mentor_profile_id: mentorProfileId
               })
               .select("id, name")
