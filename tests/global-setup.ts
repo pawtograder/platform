@@ -1,5 +1,5 @@
 import { test as base, Page } from "@playwright/test";
-import { logMagicLink, TestingUser } from "./e2e/TestingUtils";
+import { logMagicLink, TestingUser } from "@/tests/e2e/TestingUtils";
 
 // Function to inject visual test setup
 const injectVisualTestSetup = async (page: Page) => {
