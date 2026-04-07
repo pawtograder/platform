@@ -2,6 +2,7 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading } from "@chakra-ui/react";
@@ -88,6 +89,7 @@ export default function EditAssignment() {
         values.allow_early = undefined;
         values.deadline_offset = undefined;
         await form.refineCore.onFinish(values);
+        await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {
           await githubRepoConfigureWebhook(
             {
