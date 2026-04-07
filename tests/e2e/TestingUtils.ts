@@ -1282,7 +1282,12 @@ export async function insertAssignment({
   regrade_deadline,
   release_date,
   grader_pseudonymous_mode,
-  show_leaderboard
+  show_leaderboard,
+  group_config,
+  min_group_size,
+  max_group_size,
+  group_formation_deadline,
+  assignment_slug
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -1295,6 +1300,12 @@ export async function insertAssignment({
   release_date?: string;
   grader_pseudonymous_mode?: boolean;
   show_leaderboard?: boolean;
+  group_config?: "individual" | "groups" | "both";
+  min_group_size?: number | null;
+  max_group_size?: number | null;
+  group_formation_deadline?: string | null;
+  /** When set, used as assignments.slug instead of the global assignment index (avoids parallel E2E collisions). */
+  assignment_slug?: string;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -1317,6 +1328,7 @@ export async function insertAssignment({
   }
   const selfReviewSettingData = selfReviewSettingDataList[0];
   const self_review_setting_id = selfReviewSettingData.id;
+  const slug = assignment_slug ?? `assignment-${currentAssignmentIdx}`;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
     .insert({
@@ -1330,8 +1342,11 @@ export async function insertAssignment({
       max_late_tokens: 10,
       release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: `assignment-${currentAssignmentIdx}`,
-      group_config: "individual",
+      slug,
+      group_config: group_config ?? "individual",
+      min_group_size: min_group_size ?? null,
+      max_group_size: max_group_size ?? null,
+      group_formation_deadline: group_formation_deadline ?? null,
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       permit_empty_submissions: permit_empty_submissions ?? true,
       self_review_setting_id: self_review_setting_id,
