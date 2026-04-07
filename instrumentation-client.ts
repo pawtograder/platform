@@ -54,10 +54,7 @@ Sentry.init({
 
       // Filter specific "Bad Request" errors that are expected noise
       // Avoid filtering tunnel endpoint errors (invalid envelope format/header)
-      if (
-        serializedMessage.includes("Bad Request") &&
-        !serializedMessage.includes("invalid envelope")
-      ) {
+      if (serializedMessage.includes("Bad Request") && !serializedMessage.includes("invalid envelope")) {
         return null;
       }
 
