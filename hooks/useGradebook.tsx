@@ -76,6 +76,8 @@ export type GradebookRecordsForStudent = {
     score_override_note: string | null;
     is_recalculating: boolean;
     incomplete_values: Json; // JSONB type
+    /** Present when returned from get_gradebook_records_for_all_students (SSR/client fetch); used for incremental watermark. */
+    updated_at?: string | null;
   }[];
 };
 export function useIsGradebookDataReady() {
@@ -615,6 +617,36 @@ export class GradebookCellController {
     }
   }
 
+  /** Max entry updated_at across the staff grid payload (SSR seed or full RPC fetch). */
+  private _maxUpdatedAtFromStaffRecords(records: GradebookRecordsForStudent[]): string | null {
+    let maxAt: string | null = null;
+    for (const student of records) {
+      for (const entry of student.entries) {
+        const u = entry.updated_at;
+        if (u && (!maxAt || u > maxAt)) {
+          maxAt = u;
+        }
+      }
+    }
+    return maxAt;
+  }
+
+  /**
+   * After hydrating from SSR seed (or a full fetch), pull rows newer than the snapshot watermark
+   * so writes between snapshot and realtime subscription are not skipped. If the payload has no
+   * updated_at fields (pre-migration RPC), fall back to a full reload.
+   */
+  private async _catchUpAfterStaffSeed(): Promise<void> {
+    if (this._closed || !this._classRealTimeController.isStaff) return;
+    if (!this._maxUpdatedAt) {
+      const now = Date.now();
+      this._trackReload(now);
+      this._data = await this._fetchEntireGradebookForAllStudents();
+      return;
+    }
+    await this._refetchSinceWatermarkAfterBulk();
+  }
+
   private async _initialize(initialStaffRecords?: GradebookRecordsForStudent[] | null): Promise<void> {
     try {
       if (this._classRealTimeController.isStaff) {
@@ -625,7 +657,12 @@ export class GradebookCellController {
           this._trackReload(now);
           this._data = await this._fetchEntireGradebookForAllStudents();
         }
-        await this._syncMaxUpdatedAtWatermark();
+        this._maxUpdatedAt = this._maxUpdatedAtFromStaffRecords(this._data);
+        // Client full fetch without per-entry updated_at (pre-migration RPC): align watermark once before subscribe.
+        // Do not do this for SSR seed — live DB max can skip rows newer than the snapshot but <= that max.
+        if (!this._maxUpdatedAt && !(initialStaffRecords && initialStaffRecords.length > 0)) {
+          await this._syncMaxUpdatedAtWatermark();
+        }
       } else {
         this._data = await this._fetchGradebookForThisStudent();
       }
@@ -634,8 +671,13 @@ export class GradebookCellController {
         return;
       }
 
-      // Set up real-time subscriptions for gradebook updates
+      // Subscribe before aligning staff watermark to live DB so broadcasts during catch-up are handled.
       this._setupRealTimeSubscriptions();
+
+      if (this._classRealTimeController.isStaff) {
+        await this._catchUpAfterStaffSeed();
+        await this._syncMaxUpdatedAtWatermark();
+      }
 
       this._ready = true;
 

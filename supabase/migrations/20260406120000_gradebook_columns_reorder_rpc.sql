@@ -93,3 +93,53 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.gradebook_columns_reorder(bigint[]) TO "anon", "authenticated", "service_role";
+
+-- Extend get_gradebook_records_for_all_students payload with per-entry updated_at so the client
+-- can set an incremental-fetch watermark consistent with the SSR seed (see GradebookCellController).
+
+CREATE OR REPLACE FUNCTION "public"."get_gradebook_records_for_all_students"("p_class_id" bigint)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+PARALLEL SAFE
+SECURITY DEFINER
+SET search_path TO pg_catalog,public
+AS $$
+BEGIN
+    IF NOT public.authorizeforclassgrader(p_class_id) THEN
+        RETURN '[]'::jsonb;
+    END IF;
+
+    RETURN (
+        SELECT COALESCE(jsonb_agg(student_data ORDER BY student_id), '[]'::jsonb)
+        FROM (
+            SELECT 
+                gcs.student_id,
+                jsonb_build_object(
+                    'private_profile_id', gcs.student_id::text,
+                    'entries', jsonb_agg(
+                        jsonb_build_object(
+                            'gcs_id', gcs.id,
+                            'gc_id', gcs.gradebook_column_id,
+                            'is_private', gcs.is_private,
+                            'score', gcs.score,
+                            'score_override', gcs.score_override,
+                            'is_missing', gcs.is_missing,
+                            'is_excused', gcs.is_excused,
+                            'is_droppable', gcs.is_droppable,
+                            'released', gcs.released,
+                            'score_override_note', gcs.score_override_note,
+                            'is_recalculating', gcs.is_recalculating,
+                            'incomplete_values', gcs.incomplete_values,
+                            'updated_at', to_jsonb(gcs.updated_at)
+                        ) ORDER BY gc.sort_order ASC NULLS LAST, gc.id ASC
+                    )
+                ) as student_data
+            FROM public.gradebook_column_students gcs
+            INNER JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
+            WHERE gcs.class_id = p_class_id
+            GROUP BY gcs.student_id
+        ) grouped_data
+    );
+END;
+$$;

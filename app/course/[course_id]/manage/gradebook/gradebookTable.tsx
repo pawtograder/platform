@@ -177,6 +177,47 @@ function measureMaxGradeHeaderHeight(columnNames: string[], colWidth: number, ma
 
 const GRADEBOOK_GAP_PREFIX = "gradebook-gap-";
 
+/** Joins raw score strings when a bucketed renderer maps multiple scores to one filter label. */
+const GRADEBOOK_SCORE_FILTER_GROUP_SEP = ",";
+
+function parseGradebookEntryScore(
+  scoreOverride: number | null | undefined,
+  score: number | null | undefined
+): number | null {
+  const raw = scoreOverride ?? score;
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Aligns map values with filter tokens built from `String(score ?? "")` in the column filter UI. */
+function gradebookScoreToFilterRawString(value: number | null): string {
+  return value === null ? "" : String(value);
+}
+
+function compareGradeColumnSortValues(a: unknown, b: unknown): number {
+  const na = typeof a === "number" && Number.isFinite(a) ? a : null;
+  const nb = typeof b === "number" && Number.isFinite(b) ? b : null;
+  if (na === null && nb === null) return 0;
+  if (na === null) return 1;
+  if (nb === null) return -1;
+  if (na === nb) return 0;
+  return na < nb ? -1 : 1;
+}
+
+function gradebookScoreFilterMatches(filterValue: unknown, cellRaw: string): boolean {
+  if (!filterValue) return true;
+  const selected = Array.isArray(filterValue) ? filterValue : [filterValue];
+  for (const token of selected) {
+    if (typeof token !== "string") continue;
+    const raws = token.includes(GRADEBOOK_SCORE_FILTER_GROUP_SEP)
+      ? token.split(GRADEBOOK_SCORE_FILTER_GROUP_SEP)
+      : [token];
+    if (raws.includes(cellRaw)) return true;
+  }
+  return false;
+}
+
 /** Shape of `groupedColumns[*].columns` (matches `columnsForGrouping` entries). */
 type GradebookGroupedColumnRef = {
   id: number;
@@ -974,7 +1015,7 @@ function GradebookColumnFilter({
   const renderer = useMemo(() => gradebookController.getRendererForColumn(column_id), [gradebookController, column_id]);
 
   const uniqueValues = useMemo(() => {
-    return [...new Set(values.map((grade) => grade.score_override ?? grade.score))] as number[];
+    return [...new Set(values.map((grade) => String(grade.score_override ?? grade.score ?? "")))];
   }, [values]);
 
   const formatFilterLabel = useCallback(
@@ -998,20 +1039,59 @@ function GradebookColumnFilter({
     [renderer, column.max_score]
   );
 
-  const selectOptions = useMemo(
-    () =>
-      uniqueValues.map((value) => ({
-        label: formatFilterLabel(String(value)),
-        value: String(value)
-      })),
-    [uniqueValues, formatFilterLabel]
-  );
+  const selectOptions = useMemo(() => {
+    const labelToRaws = new Map<string, string[]>();
+    for (const raw of uniqueValues) {
+      const label = formatFilterLabel(raw);
+      const list = labelToRaws.get(label);
+      if (list) {
+        if (!list.includes(raw)) list.push(raw);
+      } else {
+        labelToRaws.set(label, [raw]);
+      }
+    }
+    return [...labelToRaws.entries()]
+      .map(([label, raws]) => {
+        raws.sort((a, b) => {
+          const na = Number(a);
+          const nb = Number(b);
+          if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+          return a.localeCompare(b);
+        });
+        return {
+          label,
+          value: raws.join(GRADEBOOK_SCORE_FILTER_GROUP_SEP)
+        };
+      })
+      .sort((a, b) => {
+        const aFirst = a.value.split(GRADEBOOK_SCORE_FILTER_GROUP_SEP)[0] ?? "";
+        const bFirst = b.value.split(GRADEBOOK_SCORE_FILTER_GROUP_SEP)[0] ?? "";
+        const na = Number(aFirst);
+        const nb = Number(bFirst);
+        if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+        return a.label.localeCompare(b.label);
+      });
+  }, [uniqueValues, formatFilterLabel]);
 
   const currentValue = columnModel.getFilterValue() as string | string[];
   const selectedOptions = Array.isArray(currentValue)
-    ? currentValue.map((val) => ({ label: formatFilterLabel(val), value: val }))
+    ? currentValue.map((val) => {
+        const firstRaw = val.includes(GRADEBOOK_SCORE_FILTER_GROUP_SEP)
+          ? val.split(GRADEBOOK_SCORE_FILTER_GROUP_SEP)[0]
+          : val;
+        return { label: formatFilterLabel(firstRaw ?? val), value: val };
+      })
     : currentValue
-      ? [{ label: formatFilterLabel(currentValue), value: currentValue }]
+      ? [
+          {
+            label: formatFilterLabel(
+              currentValue.includes(GRADEBOOK_SCORE_FILTER_GROUP_SEP)
+                ? currentValue.split(GRADEBOOK_SCORE_FILTER_GROUP_SEP)[0]!
+                : currentValue
+            ),
+            value: currentValue
+          }
+        ]
       : [];
 
   return (
@@ -2131,18 +2211,19 @@ export default function GradebookTable() {
   }, [gradebookController]);
 
   const scoreMaps = useMemo(() => {
-    const sortVal = new Map<string, Map<number, string>>();
-    const filterVal = new Map<string, Map<number, string>>();
+    const sortVal = new Map<string, Map<number, number | null>>();
+    const filterVal = new Map<string, Map<number, number | null>>();
     const preferPrivate = true;
     for (const student of gradebookController.table.data) {
       const sid = student.private_profile_id;
-      const sSort = new Map<number, string>();
-      const sFilt = new Map<number, string>();
+      const sSort = new Map<number, number | null>();
+      const sFilt = new Map<number, number | null>();
       for (const col of gradebookColumns) {
         let entry = student.entries.find((e) => e.gc_id === col.id && e.is_private === preferPrivate);
         if (!entry) entry = student.entries.find((e) => e.gc_id === col.id && e.is_private === !preferPrivate);
-        sSort.set(col.id, String(entry?.score_override ?? entry?.score ?? "missing"));
-        sFilt.set(col.id, String(entry?.score_override ?? entry?.score ?? ""));
+        const num = parseGradebookEntryScore(entry?.score_override, entry?.score);
+        sSort.set(col.id, num);
+        sFilt.set(col.id, num);
       }
       sortVal.set(sid, sSort);
       filterVal.set(sid, sFilt);
@@ -2530,18 +2611,16 @@ export default function GradebookTable() {
         cols.push({
           id: `grade_${col.id}`,
           header: col.name,
-          accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? "missing",
+          accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? null,
+          sortingFn: (rowA, rowB, columnId) =>
+            compareGradeColumnSortValues(rowA.getValue(columnId), rowB.getValue(columnId)),
           cell: ({ row }) => {
             return <MemoizedGradebookCell columnId={col.id} studentId={row.original.id} />;
           },
           enableColumnFilter: true,
           filterFn: (row, columnId, filterValue) => {
-            const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? "";
-            if (!filterValue) return true;
-            if (Array.isArray(filterValue)) {
-              return filterValue.includes(fv);
-            }
-            return fv === filterValue;
+            const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? null;
+            return gradebookScoreFilterMatches(filterValue, gradebookScoreToFilterRawString(fv));
           },
           enableSorting: true
         });
@@ -2554,18 +2633,16 @@ export default function GradebookTable() {
           cols.push({
             id: `grade_${col.id}`,
             header: col.name,
-            accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? "missing",
+            accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? null,
+            sortingFn: (rowA, rowB, columnId) =>
+              compareGradeColumnSortValues(rowA.getValue(columnId), rowB.getValue(columnId)),
             cell: ({ row }) => {
               return <MemoizedGradebookCell columnId={col.id} studentId={row.original.id} />;
             },
             enableColumnFilter: true,
             filterFn: (row, columnId, filterValue) => {
-              const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? "";
-              if (!filterValue) return true;
-              if (Array.isArray(filterValue)) {
-                return filterValue.includes(fv);
-              }
-              return fv === filterValue;
+              const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? null;
+              return gradebookScoreFilterMatches(filterValue, gradebookScoreToFilterRawString(fv));
             },
             enableSorting: true,
             meta: {

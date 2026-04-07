@@ -24,12 +24,16 @@ export async function ManageSurveysBody({ course_id }: { course_id: string }) {
     return <EmptySurveysState courseId={course_id} />;
   }
 
-  const { count: totalStudents } = await supabase
+  const { count: totalStudents, error: totalStudentsErr } = await supabase
     .from("user_roles")
     .select("*", { count: "exact", head: true })
     .eq("class_id", classId)
     .eq("role", "student")
     .eq("disabled", false);
+
+  if (totalStudentsErr) {
+    Sentry.captureException(totalStudentsErr);
+  }
 
   const surveyIds = list.map((s) => s.id);
 
