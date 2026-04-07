@@ -98,15 +98,23 @@ export function useAllStudentProfiles() {
     return ret;
   }, [allProfiles, allTags]);
 }
-export function useGradersAndInstructors() {
+export type GraderInstructorProfile = UserProfile & { userEmail: string | null };
+
+export function useGradersAndInstructors(): GraderInstructorProfile[] {
   const { userRolesWithProfiles: controller } = useCourseController();
   const filter = useCallback(
     (r: UserRoleWithPrivateProfileAndUser) => r.role === "grader" || r.role === "instructor",
     []
   );
   const roles = useListTableControllerValues(controller, filter);
-  const profiles = useMemo(() => roles.map((r) => r.profiles), [roles]);
-  return profiles;
+  return useMemo(
+    () =>
+      roles.map((r) => ({
+        ...r.profiles,
+        userEmail: r.users?.email ?? null
+      })),
+    [roles]
+  );
 }
 
 export function useIsDroppedStudent(private_profile_id: string | undefined | null) {

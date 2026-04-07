@@ -14,6 +14,7 @@ import { Box, Heading, HStack, NativeSelect, Text, VStack } from "@chakra-ui/rea
 import { useEffect, useMemo, useState } from "react";
 import { GroupDetailPanel } from "./GroupDetailPanel";
 import { GroupSummaryCards } from "./GroupSummaryCards";
+import { ScaleGroupCharts } from "./ScaleGroupCharts";
 import { SeriesComparisonBlock } from "./SeriesComparisonBlock";
 
 type SurveyInSeries = { id: string; title?: string | null; json?: Json; due_date?: string | null };
@@ -205,6 +206,15 @@ export function GroupViewContent({
           dataBySurveyId={dataBySurveyId}
           sectionFilter={sectionFilter}
           selectedGroupId={selectedGroupId}
+          obfuscateStats={obfuscateStats}
+        />
+      )}
+      {!isComparing && questionsByScaleGroup.length > 0 && (
+        <ScaleGroupCharts
+          mode="single"
+          questionsByScaleGroup={questionsByScaleGroup}
+          statsForCharts={courseStats}
+          valueLabelsByQuestion={valueLabelsByQuestion}
           obfuscateStats={obfuscateStats}
         />
       )}

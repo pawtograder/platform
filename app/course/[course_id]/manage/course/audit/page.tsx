@@ -1,7 +1,8 @@
 "use client";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Tooltip } from "@/components/ui/tooltip";
-import { AuditEvent, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { useCustomTable } from "@/hooks/useCustomTable";
+import { AuditEvent, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Button,
@@ -21,7 +22,7 @@ import { useList } from "@refinedev/core";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
-import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
+import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
 type JsonPrimitive = string | number | boolean | null;
 
@@ -163,7 +164,11 @@ function AuditTable() {
         enableColumnFilter: true,
         enableHiding: true,
         cell: (props) => {
-          return <Text>{new Date(props.getValue() as string).toLocaleString()}</Text>;
+          return (
+            <Text>
+              <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
+            </Text>
+          );
         },
         filterFn: (row, id, filterValue) => {
           const date = new Date(row.original.created_at);

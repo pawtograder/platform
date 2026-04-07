@@ -1,6 +1,15 @@
+import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
+import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
+import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { getUserRolesForCourse } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
-import * as Sentry from "@sentry/nextjs";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { TZDate } from "@date-fns/tz";
 import {
+  Badge,
   Box,
   CardBody,
   CardHeader,
@@ -9,27 +18,19 @@ import {
   DataListItemLabel,
   DataListItemValue,
   DataListRoot,
-  Heading,
-  Stack,
-  VStack,
-  Badge,
   Flex,
-  Text,
+  Heading,
   HStack,
+  Stack,
+  Text,
+  VStack,
   Table
 } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
+import * as Sentry from "@sentry/nextjs";
 import { formatInTimeZone } from "date-fns-tz";
-import Link from "next/link";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import { getUserRolesForCourse } from "@/lib/ssrUtils";
-import LinkAccount from "@/components/github/link-account";
-import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
-import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
-import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
+import Link from "next/link";
+import { redirect } from "next/navigation";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -760,7 +761,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CardHeader>
                 <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
               </CardHeader>
-              <CardBody>Requested: {new Date(request.created_at).toLocaleString()}</CardBody>
+              <CardBody>
+                Requested: <TimeZoneAwareDate date={request.created_at} format="compact" />
+              </CardBody>
             </CardRoot>
           ))}
         </Stack>
@@ -906,7 +909,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       const studentName =
                         submission?.profiles?.name || submission?.assignment_groups?.name || "Unknown";
                       const assignmentTitle = submission?.assignments?.title || "Unknown Assignment";
-                      const timeAgo = new Date(error.created_at).toLocaleString();
 
                       return (
                         <Box key={error.id} p={2} border="1px solid" borderColor="border.subtle" borderRadius="md">
@@ -915,7 +917,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                               {error.name}
                             </Text>
                             <Text fontSize="xs" color="fg.muted">
-                              {timeAgo}
+                              <TimeZoneAwareDate date={error.created_at} format="compact" />
                             </Text>
                           </Flex>
                           <Text fontSize="sm" color="fg.muted">

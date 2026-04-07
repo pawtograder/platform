@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
@@ -20,10 +21,10 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaDownload, FaEdit, FaTrash } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
-import { useParams } from "next/navigation";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -480,7 +481,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         accessorKey: "due_date",
         cell: function render({ getValue }) {
           const dueDate = getValue<string>();
-          return dueDate ? format(new TZDate(dueDate, course.classes.time_zone ?? "America/New_York"), "P p") : "N/A"; // Added time with 'p'
+          return dueDate ? <TimeZoneAwareDate date={dueDate} format="Pp" /> : "N/A";
         }
       },
       {

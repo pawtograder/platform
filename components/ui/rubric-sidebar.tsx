@@ -32,6 +32,7 @@ import {
 } from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { createClient } from "@/utils/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -43,6 +44,7 @@ import { toaster } from "@/components/ui/toaster";
 import {
   useAllRubricChecks,
   useAssignmentController,
+  useAssignmentData,
   useGraderPseudonymousMode,
   useReferenceCheckRecordsFromCheck,
   useReviewAssignment,
@@ -72,7 +74,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
-import { format, formatRelative } from "date-fns";
+import { formatRelative } from "date-fns";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -524,6 +526,8 @@ export function RubricCheckComment({
     check?.artifact && submission
       ? submission.submission_artifacts.find((a) => a.name === check.artifact)?.id
       : undefined;
+  const assignment = useAssignmentData();
+
   if (!comment) {
     return <Skeleton w="100%" h="100px" />;
   }
@@ -545,8 +549,11 @@ export function RubricCheckComment({
     }
   }
   const hasPoints = comment.points !== null;
+  const isSelfReviewComment =
+    criteria?.rubric_id !== undefined && criteria.rubric_id === assignment.self_review_rubric_id;
   // Check if student can create a regrade request
-  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
+  const canCreateRegradeRequest =
+    !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released && !isSelfReviewComment;
 
   return (
     <Box
@@ -2119,11 +2126,13 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
         {activeAssignmentReview && (
           <Box fontSize="sm" color="text.muted" mb={2}>
             {activeAssignmentReview.due_date && (
-              <Text>Due: {format(new Date(activeAssignmentReview.due_date), "MMM d, yyyy 'at' h:mm a")}</Text>
+              <Text>
+                Due: <TimeZoneAwareDate date={activeAssignmentReview.due_date} format="full" />
+              </Text>
             )}
             {activeAssignmentReview.release_date && (
               <Text>
-                Grades Release: {format(new Date(activeAssignmentReview.release_date), "MMM d, yyyy 'at' h:mm a")}
+                Grades Release: <TimeZoneAwareDate date={activeAssignmentReview.release_date} format="full" />
               </Text>
             )}
           </Box>
