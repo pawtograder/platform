@@ -2470,7 +2470,10 @@ export default function GradebookTable() {
       .map((row) =>
         row
           .map((cell) => {
-            const stringCell = cell === null || cell === undefined ? "" : String(cell);
+            let stringCell = cell === null || cell === undefined ? "" : String(cell);
+            if (/^[=+@-]/.test(stringCell)) {
+              stringCell = `'${stringCell}`;
+            }
             return `"${stringCell.replace(/"/g, '""')}"`;
           })
           .join(",")
@@ -2483,8 +2486,12 @@ export default function GradebookTable() {
     const a = document.createElement("a");
     a.href = url;
     a.download = "gradebook.csv";
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      a.remove();
+    }, 0);
   }, [courseController, exportWithRenderExpressions, gradebookController]);
 
   // Expand all groups
