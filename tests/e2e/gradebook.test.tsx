@@ -77,6 +77,22 @@ async function waitForVirtualizerIdle(page: Page) {
   );
 }
 
+async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
+  const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
+  await region.evaluate((el) => {
+    el.scrollLeft = 0;
+  });
+  const dataRow = region.locator("thead tr").filter({ has: page.getByRole("columnheader", { name: "Student Name" }) });
+  await dataRow.first().waitFor({ state: "visible" });
+  const cells = dataRow.locator("th");
+  const n = await cells.count();
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push((await cells.nth(i).innerText()).split("\n")[0].trim());
+  }
+  return out;
+}
+
 async function waitForStableLocator(page: Page, getLocator: () => Promise<Locator> | Locator, timeoutMs = 3000) {
   const start = Date.now();
   while (Date.now() - start <= timeoutMs) {
@@ -811,5 +827,99 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
     await expect(unreleasedCard).toBeVisible();
     await expect(unreleasedCard).toContainText(/In Progress/i);
+  });
+});
+
+/**
+ * Issue #531: column reorder UI + RPC. Kept separate from "Comprehensive" so CI does not inherit
+ * that suite's beforeAll (submissions, code walk, waits on background gradebook recalculation),
+ * which can exceed timeouts on webkit when the pipeline is slow.
+ */
+test.describe("Gradebook column reorder (issue #531)", () => {
+  test.describe.configure({ mode: "serial" });
+  test.setTimeout(120_000);
+
+  let reorderCourse: Course;
+  let reorderInstructor: TestingUser;
+
+  test.beforeAll(async () => {
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    reorderCourse = await createClass({
+      name: `Gradebook Reorder E2E ${id}`
+    });
+
+    const users = await createUsersInClass([
+      {
+        name: "Reorder Student",
+        email: `reorder-student-${id}@pawtograder.net`,
+        role: "student",
+        class_id: reorderCourse.id,
+        useMagicLink: true
+      },
+      {
+        name: "Reorder Instructor",
+        email: `reorder-instructor-${id}@pawtograder.net`,
+        role: "instructor",
+        class_id: reorderCourse.id,
+        useMagicLink: true
+      }
+    ]);
+
+    reorderInstructor = users[1];
+
+    await createAssignmentsAndGradebookColumns({
+      class_id: reorderCourse.id,
+      numAssignments: 4,
+      numManualGradedColumns: 0,
+      manualGradedColumnSlugs: ["participation"],
+      groupConfig: "both"
+    });
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await loginAsUser(page, reorderInstructor, reorderCourse);
+    const navRegion = page.locator("#course-nav");
+    await navRegion
+      .getByRole("link")
+      .filter({ hasText: /^Gradebook$/ })
+      .click();
+    await page.waitForLoadState("networkidle");
+    await waitForVirtualizerIdle(page);
+  });
+
+  test("Move Left / Move Right reorder assignment columns in the instructor gradebook", async ({ page }) => {
+    const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await waitForVirtualizerIdle(page);
+
+    await region.getByRole("button", { name: "Expand all groups" }).click();
+    await waitForVirtualizerIdle(page);
+
+    const colName = "Test Assignment 4 (Group)";
+    const titlesBefore = await getGradebookDataHeaderTitles(page);
+    const idxBefore = titlesBefore.indexOf(colName);
+    expect(idxBefore, `expected column ${colName} in header row, got: ${titlesBefore.join(" | ")}`).toBeGreaterThan(0);
+
+    const headerCell = region
+      .locator("thead tr")
+      .filter({ has: page.getByRole("columnheader", { name: "Student Name" }) })
+      .locator("th")
+      .filter({ hasText: colName });
+    await headerCell.getByRole("button", { name: "Column options" }).click();
+    await page.getByRole("menuitem", { name: "Move Left", exact: true }).click();
+    await expect(page.getByText("Column moved left")).toBeVisible();
+
+    await waitForVirtualizerIdle(page);
+    const titlesAfterLeft = await getGradebookDataHeaderTitles(page);
+    const idxAfterLeft = titlesAfterLeft.indexOf(colName);
+    expect(idxAfterLeft).toBe(idxBefore - 1);
+    expect(titlesAfterLeft[idxBefore]).toBe(titlesBefore[idxBefore - 1]);
+
+    await headerCell.getByRole("button", { name: "Column options" }).click();
+    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click();
+    await expect(page.getByText("Column moved right")).toBeVisible();
+
+    await waitForVirtualizerIdle(page);
+    const titlesRestored = await getGradebookDataHeaderTitles(page);
+    expect(titlesRestored).toEqual(titlesBefore);
   });
 });
