@@ -2,9 +2,13 @@
 import { toaster } from "@/components/ui/toaster";
 
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { useGradersAndInstructors } from "@/hooks/useCourseController";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import {
+  Assignment,
+  AssignmentGroupWithMembersAndMentor,
+  UserRoleWithPrivateProfileGroupMembershipsAndUser
+} from "@/utils/supabase/DatabaseTypes";
+import { useCourseController, useGradersAndInstructors } from "@/hooks/useCourseController";
+import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
 import {
   Box,
   Button,
@@ -23,14 +27,14 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useInvalidate, useList, useShow } from "@refinedev/core";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { FaArrowRight, FaEdit, FaRegTimesCircle, FaDownload } from "react-icons/fa";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
+import { findGroupForProfileOnAssignment } from "./groupMembershipUtils";
 import { GroupCreateData, GroupManagementProvider, useGroupManagement } from "./GroupManagementContext";
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
@@ -83,38 +87,29 @@ function downloadCSV(csvContent: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export type RolesWithProfilesAndGroupMemberships = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["user_roles"]["Row"],
-  "user_roles",
-  Database["public"]["Tables"]["user_roles"]["Relationships"],
-  "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(email)"
->;
+export type RolesWithProfilesAndGroupMemberships = UserRoleWithPrivateProfileGroupMembershipsAndUser;
 
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
-  const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
-    resource: "assignment_groups",
-    meta: { select: "*, assignment_groups_members(*)" },
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
-    pagination: { pageSize: 1000 }
-    // liveMode: "auto"
-  });
-  const { data: profiles } = useList<RolesWithProfilesAndGroupMemberships>({
-    resource: "user_roles",
-    meta: {
-      select:
-        "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(email)"
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "role", operator: "eq", value: "student" },
-      { field: "disabled", operator: "eq", value: false },
-      { field: "profiles.assignment_groups_members.assignment_id", operator: "eq", value: assignment.id }
-    ],
-    pagination: { pageSize: 1000 }
-    // liveMode: "auto"
-  });
-  const groupsData = groups?.data;
+  const courseController = useCourseController();
+  const { assignmentGroupsWithMembers, userRolesWithProfiles } = courseController;
+
+  const groupsPredicate = useCallback(
+    (g: AssignmentGroupWithMembersAndMentor) => g.assignment_id === assignment.id,
+    [assignment.id]
+  );
+  const groupsUnsorted = useListTableControllerValues(assignmentGroupsWithMembers, groupsPredicate);
+  const groupsData = useMemo(() => [...groupsUnsorted].sort((a, b) => a.name.localeCompare(b.name)), [groupsUnsorted]);
+
+  const studentPredicate = useCallback(
+    (r: RolesWithProfilesAndGroupMemberships) => r.role === "student" && !r.disabled,
+    []
+  );
+  const profiles = useListTableControllerValues(userRolesWithProfiles, studentPredicate);
+
+  const groupsReady = useIsTableControllerReady(assignmentGroupsWithMembers);
+  const rolesReady = useIsTableControllerReady(userRolesWithProfiles);
+  const dataReady = groupsReady && rolesReady;
+
   const [loading, setLoading] = useState<boolean>(false);
   const [groupViewOn, setGroupViewOn] = useState<boolean>(false);
   const {
@@ -126,7 +121,6 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     removeGroupToCreate,
     removeMoveToFulfill
   } = useGroupManagement();
-  const invalidate = useInvalidate();
   const { tags } = useTags();
   const supabase = createClient();
 
@@ -210,10 +204,15 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         type: "error"
       });
     } finally {
+      try {
+        await Promise.all([
+          courseController.assignmentGroupsWithMembers.refetchAll(),
+          courseController.userRolesWithProfiles.refetchAll()
+        ]);
+      } catch (refetchErr) {
+        Sentry.captureException(refetchErr);
+      }
       setLoading(false);
-      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-      invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
-      invalidate({ resource: "user_roles", invalidates: ["list"] });
     }
   };
 
@@ -228,7 +227,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     }
   };
 
-  if (!groupsData || !assignment) {
+  if (!dataReady || !assignment) {
     return (
       <Box>
         <Skeleton height="100px" />
@@ -297,7 +296,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                             <Table.Cell>
                               {group.member_ids.map((member_id, key) => {
                                 return (
-                                  profiles?.data?.find((prof: { private_profile_id: string }) => {
+                                  profiles.find((prof) => {
                                     return prof.private_profile_id == member_id;
                                   })?.profiles.name + (key < group.member_ids.length - 1 ? ", " : "")
                                 );
@@ -343,7 +342,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                           <Table.Row key={move.profile_id}>
                             <Table.Cell>
                               {
-                                profiles?.data?.find((prof: { private_profile_id: string }) => {
+                                profiles.find((prof) => {
                                   return prof.private_profile_id == move.profile_id;
                                 })?.profiles.name
                               }
@@ -450,7 +449,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         <BulkModifyGroup
           groups={groupsData}
           assignment={assignment}
-          profiles={profiles?.data as RolesWithProfilesAndGroupMemberships[]}
+          profiles={profiles}
           trigger={
             <Button size="sm" variant="outline">
               Tweak a Group
@@ -459,9 +458,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         />
       </Flex>
       {groupViewOn ? (
-        <TableByGroups assignment={assignment} profiles={profiles?.data} groupsData={groupsData} />
+        <TableByGroups assignment={assignment} profiles={profiles} groupsData={groupsData} />
       ) : (
-        <TableByStudents assignment={assignment} groupsData={groupsData} profiles={profiles?.data} loading={loading} />
+        <TableByStudents assignment={assignment} groupsData={groupsData} profiles={profiles} loading={loading} />
       )}
     </Box>
   );
@@ -478,28 +477,18 @@ function TableByGroups({
 }: {
   assignment: Assignment;
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
-  groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  groupsData: AssignmentGroupWithMembersAndMentor[];
 }) {
   const { modProfiles, movesToFulfill } = useGroupManagement();
   const graders = useGradersAndInstructors();
-  const supabase = createClient();
-  const invalidate = useInvalidate();
+  const { assignmentGroupsWithMembers } = useCourseController();
   const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
 
   const updateMentor = async (groupId: number, mentorProfileId: string | null) => {
     setUpdatingMentorGroupId(groupId);
     try {
-      const { error } = await supabase
-        .from("assignment_groups")
-        .update({ mentor_profile_id: mentorProfileId })
-        .eq("id", groupId);
-      if (error) {
-        Sentry.captureException(error);
-        toaster.create({ title: "Error updating mentor", description: error.message, type: "error" });
-      } else {
-        toaster.create({ title: "Mentor updated", type: "success" });
-        invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-      }
+      await assignmentGroupsWithMembers.update(groupId, { mentor_profile_id: mentorProfileId });
+      toaster.create({ title: "Mentor updated", type: "success" });
     } catch (e) {
       Sentry.captureException(e);
       toaster.create({
@@ -536,7 +525,7 @@ function TableByGroups({
     });
 
     const ungroupedProfiles = profiles
-      ?.filter((profile) => profile.profiles.assignment_groups_members.length === 0)
+      ?.filter((profile) => !findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id))
       .slice()
       .sort((a, b) => (a.profiles.name ?? "").localeCompare(b.profiles.name ?? ""));
     ungroupedProfiles?.forEach((profile) => {
@@ -699,9 +688,9 @@ function TableByGroups({
       <TableByStudents
         assignment={assignment}
         groupsData={groupsData}
-        profiles={profiles?.filter((profile) => {
-          return profile.profiles.assignment_groups_members.length === 0;
-        })}
+        profiles={profiles?.filter(
+          (profile) => !findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id)
+        )}
         loading={false}
       />
     </Flex>
@@ -719,7 +708,7 @@ function TableByStudents({
   loading
 }: {
   assignment: Assignment;
-  groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  groupsData: AssignmentGroupWithMembersAndMentor[];
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   loading: boolean;
 }) {
@@ -738,11 +727,7 @@ function TableByStudents({
       : [];
 
     sortedProfiles.forEach((profile) => {
-      const groupID =
-        profile.profiles.assignment_groups_members.length > 0
-          ? profile.profiles.assignment_groups_members[0].assignment_group_id
-          : undefined;
-      const group = groupsData?.find((g) => g.id === groupID);
+      const group = findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id);
 
       let status = "OK";
       if (assignment.group_config === "groups" && !group) {
@@ -811,11 +796,7 @@ function TableByStudents({
         </Table.Header>
         <Table.Body>
           {profiles?.map((profile) => {
-            const groupID =
-              profile.profiles.assignment_groups_members.length > 0
-                ? profile.profiles.assignment_groups_members[0].assignment_group_id
-                : undefined;
-            const group = groupsData?.find((group) => group.id === groupID);
+            const group = findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id);
             let errorMessage;
             let error = false;
             if (assignment.group_config === "groups" && !group) {
@@ -951,9 +932,11 @@ function TableByStudents({
                                           {
                                             profile_id: profile.private_profile_id,
                                             old_group_id:
-                                              profile.profiles.assignment_groups_members.length > 0
-                                                ? profile.profiles.assignment_groups_members[0].assignment_group_id
-                                                : null,
+                                              findGroupForProfileOnAssignment(
+                                                groupsData,
+                                                assignment.id,
+                                                profile.private_profile_id
+                                              )?.id ?? null,
                                             new_group_id: Number(groupId)
                                           }
                                         ]);

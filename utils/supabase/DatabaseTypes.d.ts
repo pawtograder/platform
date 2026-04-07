@@ -91,6 +91,14 @@ export type AssignmentGroupWithMembersInvitationsAndJoinRequests = GetResult<
   Database["public"]["Tables"]["assignment_groups"]["Relationships"],
   "*, assignment_groups_members(*), assignment_group_invitations(*), assignment_group_join_request(*)"
 >;
+/** Matches CourseController.assignmentGroupsWithMembers / TableController select (no invitations). */
+export type AssignmentGroupWithMembersAndMentor = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignment_groups"]["Row"],
+  "assignment_groups",
+  Database["public"]["Tables"]["assignment_groups"]["Relationships"],
+  "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+>;
 export type Notification = GetResult<
   Database["public"],
   Database["public"]["Tables"]["notifications"]["Row"],
@@ -147,6 +155,14 @@ export type UserRoleWithPrivateProfileAndUser = GetResult<
   "user_roles",
   Database["public"]["Tables"]["user_roles"]["Relationships"],
   "*, profiles!private_profile_id(*), users(*)"
+>;
+/** Staff roster row including group memberships on the private profile (instructor group management). */
+export type UserRoleWithPrivateProfileGroupMembershipsAndUser = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["user_roles"]["Row"],
+  "user_roles",
+  Database["public"]["Tables"]["user_roles"]["Relationships"],
+  "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
 >;
 export type UserRoleWithCourse = GetResult<
   Database["public"],

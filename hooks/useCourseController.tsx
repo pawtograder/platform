@@ -421,7 +421,10 @@ export class CourseController {
   private _labSectionLeaders?: TableController<"lab_section_leaders">;
   private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
-  private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
+  private _userRolesWithProfiles?: TableController<
+    "user_roles",
+    "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+  >;
   private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
   private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
   private _assignments?: TableController<"assignments">;
@@ -659,12 +662,14 @@ export class CourseController {
     return this._classSections;
   }
 
-  get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
+  get userRolesWithProfiles(): TableController<
+    "user_roles",
+    "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+  > {
     if (!this._userRolesWithProfiles) {
-      let query = this.client
-        .from("user_roles")
-        .select("*, profiles!private_profile_id(*), users(*)")
-        .eq("class_id", this.courseId);
+      const staffSelect =
+        "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)";
+      let query = this.client.from("user_roles").select(staffSelect).eq("class_id", this.courseId);
       if (!this.isStaff) {
         query = query.eq("user_id", this._userId);
       }
@@ -672,7 +677,7 @@ export class CourseController {
         client: this.client,
         table: "user_roles",
         query,
-        selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
+        selectForSingleRow: staffSelect,
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.userRolesWithProfiles,
         autoFetchMissingRows: this.isStaff
@@ -1359,7 +1364,10 @@ export class CourseController {
       | TableController<"lab_sections">
       | TableController<"class_sections">
       | TableController<"lab_section_meetings">
-      | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
+      | TableController<
+          "user_roles",
+          "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+        >
       | TableController<"student_deadline_extensions">
       | TableController<"assignment_due_date_exceptions">
       | TableController<"assignments">
