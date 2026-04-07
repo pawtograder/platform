@@ -2238,6 +2238,7 @@ export default function GradebookTable() {
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [isAutoLayouting, setIsAutoLayouting] = useState(false);
+  const [exportWithRenderExpressions, setExportWithRenderExpressions] = useState(false);
   const [activeDragColumnId, setActiveDragColumnId] = useState<string | null>(null);
   const [activeDropGapIndex, setActiveDropGapIndex] = useState<number | null>(null);
   const [isReorderingColumns, setIsReorderingColumns] = useState(false);
@@ -2460,6 +2461,38 @@ export default function GradebookTable() {
       setIsAutoLayouting(false);
     }
   }, [gradebookController]);
+
+  const downloadGradebookCsv = useCallback(() => {
+    const csv = gradebookController.exportGradebook(courseController, {
+      useRenderExpressions: exportWithRenderExpressions
+    });
+    const csvText = csv
+      .map((row) =>
+        row
+          .map((cell) => {
+            let stringCell = cell === null || cell === undefined ? "" : String(cell);
+            if (/^[=+@-]/.test(stringCell)) {
+              stringCell = `'${stringCell}`;
+            }
+            return `"${stringCell.replace(/"/g, '""')}"`;
+          })
+          .join(",")
+      )
+      .join("\n");
+    // UTF-8 BOM so Excel (especially on Windows) opens the file as UTF-8; otherwise emoji show as mojibake.
+    const csvTextWithBom = `\uFEFF${csvText}`;
+    const blob = new Blob([csvTextWithBom], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "gradebook.csv";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      a.remove();
+    }, 0);
+  }, [courseController, exportWithRenderExpressions, gradebookController]);
 
   // Expand all groups
   const expandAll = useCallback(() => {
@@ -3653,30 +3686,28 @@ export default function GradebookTable() {
         </Text>
         {isInstructor && (
           <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const csv = gradebookController.exportGradebook(courseController);
-                const blob = new Blob(
-                  [
-                    csv
-                      .map((row) =>
-                        row.map((cell) => (typeof cell === "string" ? `"${cell.replace(/"/g, "")}"` : cell)).join(",")
-                      )
-                      .join("\n")
-                  ],
-                  { type: "text/csv" }
-                );
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = "gradebook.csv";
-                a.click();
-              }}
-            >
-              <Icon as={FiDownload} mr={2} /> Download Gradebook
-            </Button>
+            <PopoverRoot positioning={{ placement: "top-end" }}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Icon as={FiDownload} mr={2} /> Download Gradebook
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent maxW="300px">
+                <PopoverBody p={3}>
+                  <VStack align="start" gap={3}>
+                    <Checkbox
+                      checked={exportWithRenderExpressions}
+                      onCheckedChange={(details) => setExportWithRenderExpressions(details.checked === true)}
+                    >
+                      Use render expressions in CSV
+                    </Checkbox>
+                    <Button size="sm" variant="subtle" colorPalette="green" onClick={downloadGradebookCsv}>
+                      Download CSV
+                    </Button>
+                  </VStack>
+                </PopoverBody>
+              </PopoverContent>
+            </PopoverRoot>
             <ImportGradebookColumn />
             <AddColumnDialog />
           </HStack>
