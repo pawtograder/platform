@@ -8632,6 +8632,8 @@ export type Database = {
           name: string;
           per_student_grading_shared_base: number | null;
           per_student_grading_totals: Json | null;
+          per_student_tweak_notes: Json | null;
+          per_student_tweaks: Json | null;
           released: boolean;
           rubric_id: number;
           rubric_part_student_assignments: Json | null;
@@ -8639,6 +8641,7 @@ export type Database = {
           total_autograde_score: number;
           total_score: number;
           tweak: number;
+          tweak_note: string | null;
           updated_at: string;
         };
         Insert: {
@@ -8655,6 +8658,8 @@ export type Database = {
           name: string;
           per_student_grading_shared_base?: number | null;
           per_student_grading_totals?: Json | null;
+          per_student_tweak_notes?: Json | null;
+          per_student_tweaks?: Json | null;
           released?: boolean;
           rubric_id: number;
           rubric_part_student_assignments?: Json | null;
@@ -8662,6 +8667,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score: number;
           tweak: number;
+          tweak_note?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -8678,6 +8684,8 @@ export type Database = {
           name?: string;
           per_student_grading_shared_base?: number | null;
           per_student_grading_totals?: Json | null;
+          per_student_tweak_notes?: Json | null;
+          per_student_tweaks?: Json | null;
           released?: boolean;
           rubric_id?: number;
           rubric_part_student_assignments?: Json | null;
@@ -8685,6 +8693,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score?: number;
           tweak?: number;
+          tweak_note?: string | null;
           updated_at?: string;
         };
         Relationships: [
