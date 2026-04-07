@@ -2476,7 +2476,9 @@ export default function GradebookTable() {
           .join(",")
       )
       .join("\n");
-    const blob = new Blob([csvText], { type: "text/csv" });
+    // UTF-8 BOM so Excel (especially on Windows) opens the file as UTF-8; otherwise emoji show as mojibake.
+    const csvTextWithBom = `\uFEFF${csvText}`;
+    const blob = new Blob([csvTextWithBom], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

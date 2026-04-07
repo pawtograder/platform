@@ -48,7 +48,8 @@ async function readCellNumber(page: Page, rowName: string, columnName: string) {
 }
 
 function parseCsv(csvText: string) {
-  const parsed = Papa.parse<string[]>(csvText, {
+  const text = csvText.charCodeAt(0) === 0xfeff ? csvText.slice(1) : csvText;
+  const parsed = Papa.parse<string[]>(text, {
     skipEmptyLines: true
   });
   if (parsed.errors.length > 0) {
