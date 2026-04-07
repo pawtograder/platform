@@ -462,7 +462,7 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
                           borderRadius: "4px",
                           fontSize: "14px"
                         }}
-                        aria-label={`Extra tweak points for student ${studentId}`}
+                        aria-label={`Extra tweak points for this student`}
                       />
                       <Button
                         size="sm"
