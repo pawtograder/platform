@@ -2938,7 +2938,7 @@ export default function GradebookTable() {
     count: rowModel.rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 45, // Estimated row height in pixels
-    overscan: 5
+    overscan: 20
   });
 
   const virtualRows = virtualizer.getVirtualItems();
