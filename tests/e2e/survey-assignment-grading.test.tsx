@@ -7,8 +7,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
-  supabase,
-  logMagicLinkOnFailure
+  supabase
 } from "./TestingUtils";
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { addDays } from "date-fns";
@@ -90,9 +89,8 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     [studentA, studentB, studentC, instructor, grader] = users;
     await clearCourseSurveys();
   });
-  test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status === testInfo.expectedStatus) return;
-    await logMagicLinkOnFailure([studentA, studentB, studentC, instructor, grader]);
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([studentA, studentB, studentC, instructor, grader]);
   });
 
   test("student views team collaboration survey and takes it", async ({ page }) => {

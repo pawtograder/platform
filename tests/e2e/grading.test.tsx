@@ -11,8 +11,7 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  TestingUser,
-  logMagicLinkOnFailure
+  TestingUser
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -127,9 +126,8 @@ test.beforeAll(async () => {
     })
     .select("id");
 });
-test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return;
-  await logMagicLinkOnFailure([student, instructor, grader, student2]);
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor, grader, student2]);
 });
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
 const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glove test";

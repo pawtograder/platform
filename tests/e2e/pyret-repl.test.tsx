@@ -8,8 +8,7 @@ import {
   loginAsUser,
   supabase,
   TestingUser,
-  getTestRunPrefix,
-  logMagicLinkOnFailure
+  getTestRunPrefix
 } from "./TestingUtils";
 
 let course: Course;
@@ -49,9 +48,8 @@ test.beforeAll(async () => {
     class_id: course.id
   });
 });
-test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return;
-  await logMagicLinkOnFailure([student, instructor]);
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
 });
 async function insertPyretSubmission({
   student_profile_id,

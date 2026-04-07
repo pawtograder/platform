@@ -11,8 +11,7 @@ import {
   TestingUser,
   createAssignmentsAndGradebookColumns,
   insertPreBakedSubmission,
-  supabase,
-  logMagicLinkOnFailure
+  supabase
 } from "./TestingUtils";
 // removed unused import
 
@@ -435,9 +434,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
     }).toPass();
   });
-  test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status === testInfo.expectedStatus) return;
-    await logMagicLinkOnFailure([...students, instructor]);
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([...students, instructor]);
   });
   test.beforeEach(async ({ page }) => {
     await loginAsUser(page, instructor!, course);

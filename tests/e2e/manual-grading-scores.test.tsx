@@ -11,8 +11,7 @@ import {
   insertPreBakedSubmission,
   loginAsUser,
   supabase,
-  TestingUser,
-  logMagicLinkOnFailure
+  TestingUser
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -180,9 +179,8 @@ test.describe("Manual grading score calculation", () => {
       }
     ]);
   });
-  test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status === testInfo.expectedStatus) return;
-    await logMagicLinkOnFailure([instructor, studentA, studentB, studentC]);
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([instructor, studentA, studentB, studentC]);
   });
 
   // ──────────────── Individual assignment grading ────────────────

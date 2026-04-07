@@ -9,8 +9,7 @@ import {
   insertAssignment,
   loginAsUser,
   supabase,
-  TestingUser,
-  logMagicLinkOnFailure
+  TestingUser
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
 
@@ -401,9 +400,8 @@ Tests failed: 7/10 (file access denied in sandbox)`
     // No instructor output - submission is clean
   });
 });
-test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return;
-  await logMagicLinkOnFailure([instructor, student1, student2, student3, grader]);
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor, student1, student2, student3, grader]);
 });
 // Clean up test data after all tests complete
 test.afterAll(async () => {

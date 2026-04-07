@@ -2,14 +2,7 @@ import { Course, DayOfWeek } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import {
-  supabase,
-  createClass,
-  createUsersInClass,
-  logMagicLinkOnFailure,
-  loginAsUser,
-  TestingUser
-} from "./TestingUtils";
+import { supabase, createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
 
 let course: Course;
@@ -74,9 +67,8 @@ test.beforeAll(async () => {
     }
   }
 });
-test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return;
-  await logMagicLinkOnFailure([instructor1, instructor2]);
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor1, instructor2]);
 });
 test.describe("Lab Sections Page", () => {
   test.describe.configure({ mode: "serial" });

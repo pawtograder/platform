@@ -9,8 +9,7 @@ import {
   insertAssignment,
   loginAsUser,
   TestingUser,
-  supabase,
-  logMagicLinkOnFailure
+  supabase
 } from "@/tests/e2e/TestingUtils";
 
 let course: Course;
@@ -100,9 +99,8 @@ test.beforeEach(async () => {
     throw new Error(`Failed to gift tokens: ${giftError.message}`);
   }
 });
-test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return;
-  await logMagicLinkOnFailure([student, instructor]);
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
 });
 test.describe("Gifted tokens bug (#648)", () => {
   test("Student with gifted tokens can still see and apply remaining tokens", async ({ page }) => {

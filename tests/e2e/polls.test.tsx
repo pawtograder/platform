@@ -1,5 +1,5 @@
 import { expect, test } from "../global-setup";
-import { createClass, createUsersInClass, logMagicLinkOnFailure, loginAsUser, supabase } from "./TestingUtils";
+import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -81,9 +81,8 @@ test.describe("Polls", () => {
     ]);
     [student, instructor] = users;
   });
-  test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status === testInfo.expectedStatus) return;
-    await logMagicLinkOnFailure([student, instructor]);
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([student, instructor]);
   });
 
   test.beforeEach(async () => {

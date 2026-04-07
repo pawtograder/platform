@@ -506,7 +506,7 @@ export async function generateMagicLink(user: TestingUser): Promise<string> {
   return `${baseUrl}/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
 }
 
-export async function logMagicLinkOnFailure(users: (TestingUser | undefined)[]) {
+export async function logMagicLink(users: (TestingUser | undefined)[]) {
   if (!process.env.E2E_PRINT_MAGIC_LINKS) return;
   for (const user of users.filter(Boolean)) {
     try {

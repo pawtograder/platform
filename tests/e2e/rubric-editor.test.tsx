@@ -10,8 +10,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
-  TestingUser,
-  logMagicLinkOnFailure
+  TestingUser
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -73,9 +72,8 @@ test.beforeAll(async () => {
     }
   }
 });
-test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return;
-  await logMagicLinkOnFailure([instructor, student]);
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor, student]);
 });
 test.describe("Rubric editor", () => {
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {

@@ -9,8 +9,7 @@ import {
   createUsersInClass,
   loginAsUser,
   supabase,
-  TestingUser,
-  logMagicLinkOnFailure
+  TestingUser
 } from "./TestingUtils";
 
 let course: Course;
@@ -121,9 +120,8 @@ test.beforeAll(async () => {
   lab2 = _lab2;
   lab2Students = _lab2Students;
 });
-test.afterEach(async ({}, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return;
-  await logMagicLinkOnFailure([instructor]);
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor]);
 });
 async function sendBatchEmails({
   page,
