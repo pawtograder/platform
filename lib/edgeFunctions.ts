@@ -38,7 +38,11 @@ export async function liveMeetingForHelpRequest(
   params: FunctionTypes.LiveMeetingForHelpRequestRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<{ Meeting: CreateMeetingCommandOutput; Attendee: CreateAttendeeCommandOutput }>(supabase, "live-meeting-for-help-request", { body: params });
+  return await invokeEdgeFunction<{ Meeting: CreateMeetingCommandOutput; Attendee: CreateAttendeeCommandOutput }>(
+    supabase,
+    "live-meeting-for-help-request",
+    { body: params }
+  );
 }
 
 export async function liveMeetingEnd(params: FunctionTypes.LiveMeetingEndRequest, supabase: SupabaseClient<Database>) {
@@ -92,7 +96,9 @@ export async function assignmentGroupJoin(
   params: FunctionTypes.AssignmentGroupJoinRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<{ message: string; joined_group: boolean }>(supabase, "assignment-group-join", { body: params });
+  return await invokeEdgeFunction<{ message: string; joined_group: boolean }>(supabase, "assignment-group-join", {
+    body: params
+  });
 }
 export async function assignmentGroupCopyGroupsFromAssignment(
   params: FunctionTypes.AssignmentGroupCopyGroupsFromAssignmentRequest,
@@ -142,7 +148,11 @@ export async function repositoryListCommits(
   params: FunctionTypes.RepositoryListCommitsRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<{ commits: ListCommitsResponse["data"]; has_more: boolean }>(supabase, "repository-list-commits", { body: params });
+  return await invokeEdgeFunction<{ commits: ListCommitsResponse["data"]; has_more: boolean }>(
+    supabase,
+    "repository-list-commits",
+    { body: params }
+  );
 }
 
 export async function rerunGrader(
@@ -179,27 +189,39 @@ export async function triggerWorkflow(
   params: FunctionTypes.AutograderTriggerGradingWorkflowRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<{ message: string }>(supabase, "autograder-trigger-grading-workflow", { body: params });
+  return await invokeEdgeFunction<{ message: string }>(supabase, "autograder-trigger-grading-workflow", {
+    body: params
+  });
 }
 export async function assignmentGroupInstructorCreateGroup(
   params: FunctionTypes.AssignmentGroupInstructorCreateRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<{ message: string; id: number }>(supabase, "assignment-group-instructor-create", { body: params });
+  return await invokeEdgeFunction<{ message: string; id: number }>(supabase, "assignment-group-instructor-create", {
+    body: params
+  });
 }
 
 export async function assignmentCreateHandoutRepo(
   params: FunctionTypes.AssignmentCreateHandoutRepoRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<FunctionTypes.AssignmentCreateHandoutRepoResponse>(supabase, "assignment-create-handout-repo", { body: params });
+  return await invokeEdgeFunction<FunctionTypes.AssignmentCreateHandoutRepoResponse>(
+    supabase,
+    "assignment-create-handout-repo",
+    { body: params }
+  );
 }
 
 export async function assignmentCreateSolutionRepo(
   params: FunctionTypes.AssignmentCreateSolutionRepoRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<FunctionTypes.AssignmentCreateSolutionRepoResponse>(supabase, "assignment-create-solution-repo", { body: params });
+  return await invokeEdgeFunction<FunctionTypes.AssignmentCreateSolutionRepoResponse>(
+    supabase,
+    "assignment-create-solution-repo",
+    { body: params }
+  );
 }
 export async function resendOrgInvitation(
   params: { course_id: number; user_id: string },
@@ -211,7 +233,9 @@ export async function assignmentDelete(
   params: FunctionTypes.AssignmentDeleteRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<FunctionTypes.AssignmentDeleteResponse>(supabase, "assignment-delete", { body: params });
+  return await invokeEdgeFunction<FunctionTypes.AssignmentDeleteResponse>(supabase, "assignment-delete", {
+    body: params
+  });
 }
 
 export async function courseImportSis(params: FunctionTypes.CourseImportRequest, supabase: SupabaseClient<Database>) {
@@ -222,7 +246,9 @@ export async function invitationCreate(
   params: FunctionTypes.CreateInvitationRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<FunctionTypes.CreateInvitationResponse>(supabase, "invitation-create", { body: params });
+  return await invokeEdgeFunction<FunctionTypes.CreateInvitationResponse>(supabase, "invitation-create", {
+    body: params
+  });
 }
 
 export async function userFetchAzureProfile(params: { accessToken: string }, supabase: SupabaseClient<Database>) {
@@ -330,7 +356,10 @@ export async function mcpTokensRevoke(
   params: { token_id: string },
   supabase: SupabaseClient<Database>
 ): Promise<{ success: boolean; message: string }> {
-  return await invokeEdgeFunction<{ success: boolean; message: string }>(supabase, "mcp-tokens", { method: "DELETE", body: params });
+  return await invokeEdgeFunction<{ success: boolean; message: string }>(supabase, "mcp-tokens", {
+    method: "DELETE",
+    body: params
+  });
 }
 
 // AI Help Feedback types

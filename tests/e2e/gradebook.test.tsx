@@ -471,23 +471,32 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // trigger recalculation of the average-assignments (and transitively final-grade) columns.
     // This is needed because the code walk score may have been set before the dependency was
     // registered, so the dependent-column recalculation trigger never fired for it.
-    const { data: codeWalkRecords } = await supabase
+    const { data: codeWalkRecords, error: codeWalkRecordsError } = await supabase
       .from("gradebook_column_students")
       .select("id, score, is_private")
       .eq("class_id", course.id)
       .eq("gradebook_column_id", gradebookColumn!.id);
+    if (codeWalkRecordsError) {
+      throw new Error(`Failed to load code-walk gradebook rows: ${codeWalkRecordsError.message}`);
+    }
     if (codeWalkRecords && codeWalkRecords.length > 0) {
       for (const rec of codeWalkRecords) {
         if (rec.score !== null && rec.score !== undefined) {
           const tempScore = Number(rec.score) + 0.001;
-          await supabase
+          const { error: bumpError } = await supabase
             .from("gradebook_column_students")
             .update({ score: tempScore })
             .eq("id", rec.id);
-          await supabase
+          if (bumpError) {
+            throw new Error(`Failed to bump code-walk row ${rec.id}: ${bumpError.message}`);
+          }
+          const { error: restoreError } = await supabase
             .from("gradebook_column_students")
             .update({ score: rec.score })
             .eq("id", rec.id);
+          if (restoreError) {
+            throw new Error(`Failed to restore code-walk row ${rec.id}: ${restoreError.message}`);
+          }
         }
       }
     }
@@ -1177,6 +1186,9 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     await waitForVirtualizerIdle(page);
 
     const colName = "Test Assignment 4 (Group)";
+    const headersBefore = await getGradebookDataHeaderTitles(page);
+    const beforeIndex = headersBefore.indexOf(colName);
+    expect(beforeIndex).toBeGreaterThan(0);
 
     // Get sort_order from DB before move
     const { data: colBefore } = await supabase
@@ -1207,7 +1219,12 @@ test.describe("Gradebook column reorder (issue #531)", () => {
       expect(colAfterLeft!.sort_order).toBe(sortOrderBefore - 1);
     }).toPass({ timeout: 5000 });
 
+    // Verify column moved in the rendered UI
     await waitForVirtualizerIdle(page);
+    await expect(async () => {
+      const headersAfterLeft = await getGradebookDataHeaderTitles(page);
+      expect(headersAfterLeft.indexOf(colName)).toBe(beforeIndex - 1);
+    }).toPass({ timeout: 5000 });
 
     await headerCell.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Right", exact: true }).click();
@@ -1221,6 +1238,13 @@ test.describe("Gradebook column reorder (issue #531)", () => {
         .eq("id", colBefore!.id)
         .single();
       expect(colRestored!.sort_order).toBe(sortOrderBefore);
+    }).toPass({ timeout: 5000 });
+
+    // Verify column restored in the rendered UI
+    await waitForVirtualizerIdle(page);
+    await expect(async () => {
+      const headersAfterRight = await getGradebookDataHeaderTitles(page);
+      expect(headersAfterRight.indexOf(colName)).toBe(beforeIndex);
     }).toPass({ timeout: 5000 });
   });
 });

@@ -37,14 +37,14 @@ Run `npm run seed` to create a test class with students, assignments, and login 
   - Run Playwright with matching **`BASE_URL`**: `BASE_URL=http://localhost:3001 npx playwright test ...` (the **built** app URL comes from the build step above; Playwright only needs `BASE_URL` to match where `next start` listens).
   - If a test is flaky in dev mode, switch back to prod-build runs immediately.
 - **E2E prerequisites — Edge Functions and secrets**: Several E2E tests invoke Supabase Edge Functions (e.g. `autograder-create-submission`, `autograder-submit-feedback`). For these to work locally:
-  1. **Serve Edge Functions** with the functions env file: `npx supabase functions serve --env-file .env.functions`
-  2. **`.env.functions` must contain** (in addition to Supabase keys):
+  1. **Serve Edge Functions**: `npx supabase functions serve --env-file .env.local`
+  2. **`.env.local` must contain** (in addition to Supabase keys):
      - `E2E_ENABLE=true` — enables the E2E testing bypass in Edge Functions
-     - `END_TO_END_SECRET=<value>` — must match the value used by the test process (tests fall back to `"not-a-secret"` if not set in `.env.local`)
-     - `EDGE_FUNCTION_SECRET=<value>` — must match the value stored in the Supabase DB vault (`vault.secrets` table, name `edge-function-secret`). The local Supabase seed sets this to `some-secret-value`.
-  3. **`.env.local` should also contain** `END_TO_END_SECRET=<same value as .env.functions>` so the test runner process and the Edge Function agree on the secret.
-  4. **No need to run `npm run seed`** before E2E tests — tests create their own fixtures. Seeding is only needed for manual browser testing.
-  5. You can verify Edge Functions are working: `curl http://127.0.0.1:54321/functions/v1/autograder-create-submission` should return `{"error":{"recoverable":false,"message":"No token provided","details":"No token provided"}}` (not `WORKER_ERROR`).
+     - `END_TO_END_SECRET=not-a-secret` — shared secret between the test runner and Edge Functions
+     - `EDGE_FUNCTION_SECRET=some-secret-value` — must match the value stored in the Supabase DB vault (`vault.secrets` table, name `edge-function-secret`). The local Supabase seed sets this to `some-secret-value`.
+     - `GITHUB_APP_ID=1` and `GITHUB_PRIVATE_KEY_STRING` (any valid RSA private key) — required for the Edge Function runtime to boot (the GitHub App client initializes at module load). E2E tests bypass GitHub auth, so dummy values work.
+  3. **No need to run `npm run seed`** before E2E tests — tests create their own fixtures. Seeding is only needed for manual browser testing.
+  4. You can verify Edge Functions are working: `curl http://127.0.0.1:54321/functions/v1/autograder-create-submission` should return `{"error":{"recoverable":false,"message":"No token provided","details":"No token provided"}}` (not `WORKER_ERROR`).
 - **Build**: `npm run build` (requires ~8 GB memory via `NODE_OPTIONS=--max-old-space-size=8000`).
 - **Format**: `npm run format` (Prettier auto-fix).
 

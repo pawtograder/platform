@@ -12,6 +12,9 @@ DECLARE
     new_col_id bigint;
     next_sort_order integer;
 BEGIN
+    -- Serialize sort_order allocation per class to prevent duplicates under concurrent inserts
+    PERFORM pg_advisory_xact_lock(NEW.class_id);
+
     -- Get the gradebook_id for this class
     SELECT g.id INTO gradebook_id
     FROM public.gradebooks g
