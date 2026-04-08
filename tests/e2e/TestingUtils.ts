@@ -352,7 +352,7 @@ export async function updateClassSettings({
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient(process.env.SUPABASE_URL!, (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!);
 
   // Generate magic link using admin client (same as TestingUtils.ts does)
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -382,7 +382,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // Helper function to create a Supabase client authenticated as a specific user
 export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!);
 
   // Generate magic link using admin client
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -1661,6 +1661,17 @@ export async function insertSubmissionViaAPI({
     }
   });
   if (error) {
+    // Non-2xx response — try to extract structured error details from the response body
+    if (error.context instanceof Response) {
+      try {
+        const body = await error.context.json();
+        if (body?.error?.details) {
+          throw new Error(String(body.error.details));
+        }
+      } catch (e) {
+        if (e instanceof Error && !(e instanceof TypeError)) throw e;
+      }
+    }
     throw new Error(`Failed to create submission: ${error.message}`);
   }
   if (data == null) {
@@ -2910,7 +2921,7 @@ export async function createAssignmentsAndGradebookColumns({
     slug: "average-assignments",
     score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
     max_score: 100,
-    sort_order: 2,
+    sort_order: numAssignments,
     rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 

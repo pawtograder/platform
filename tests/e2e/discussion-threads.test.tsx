@@ -305,10 +305,15 @@ test.describe("Custom Discussion Topics", () => {
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
     await page.getByText("New Post").click();
+    await page.waitForURL("**/discussion/new");
 
-    // Verify the custom topic appears in the topic selector
-    await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
-    await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
+    // Verify the custom topic appears in the topic selector.
+    // Topics are loaded asynchronously by the course controller after navigation,
+    // so retry until the data arrives.
+    await expect(async () => {
+      await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
+      await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
+    }).toPass({ timeout: 20000 });
 
     await argosScreenshot(page, "New Thread Form With Custom Topic");
 

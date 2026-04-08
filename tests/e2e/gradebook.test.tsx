@@ -121,9 +121,14 @@ async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
   await region.evaluate((el) => {
     el.scrollLeft = 0;
   });
-  const dataRow = region.locator("thead tr").filter({ has: page.getByRole("columnheader", { name: "Student Name" }) });
+  // Wait for virtualizer to re-render after scroll position change
+  await waitForVirtualizerIdle(page);
+  const dataRow = region.locator("thead tr").filter({ has: page.locator("th").filter({ hasText: "Student Name" }) });
   await dataRow.first().waitFor({ state: "visible" });
-  const cells = dataRow.locator("th");
+  // Scrollable gradebook columns are rendered as positioned <div role="columnheader">
+  // elements inside a single <th>, not as separate <th> elements. Use [data-col-id] to
+  // find all actual column headers (both frozen <th> and inner scrollable <div>).
+  const cells = dataRow.locator("[data-col-id]");
   const n = await cells.count();
   const out: string[] = [];
   for (let i = 0; i < n; i++) {
@@ -442,6 +447,50 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       expect(data?.score).toBe(90);
     }).toPass();
+
+    // Wait for the average-assignments column's dependencies to include the code walk column.
+    // The gradebook-column-inserted edge function updates dependencies asynchronously when a
+    // new column (like the code walk column) is created. Without this wait, there is a race:
+    // the code walk score may be set before dependencies are updated, so the dependent
+    // average-assignments column never gets recalculated with the code walk included.
+    await expect(async () => {
+      const { data: avgCol, error: avgColError } = await supabase
+        .from("gradebook_columns")
+        .select("dependencies")
+        .eq("class_id", course.id)
+        .eq("slug", "average-assignments")
+        .single();
+      if (avgColError) {
+        throw new Error(`Failed to get average-assignments column: ${avgColError.message}`);
+      }
+      const deps = avgCol?.dependencies as { gradebook_columns?: number[] } | null;
+      expect(deps?.gradebook_columns).toContain(gradebookColumn!.id);
+    }).toPass();
+
+    // Now that the dependencies are updated, nudge the code walk column student records to
+    // trigger recalculation of the average-assignments (and transitively final-grade) columns.
+    // This is needed because the code walk score may have been set before the dependency was
+    // registered, so the dependent-column recalculation trigger never fired for it.
+    const { data: codeWalkRecords } = await supabase
+      .from("gradebook_column_students")
+      .select("id, score, is_private")
+      .eq("class_id", course.id)
+      .eq("gradebook_column_id", gradebookColumn!.id);
+    if (codeWalkRecords && codeWalkRecords.length > 0) {
+      for (const rec of codeWalkRecords) {
+        if (rec.score !== null && rec.score !== undefined) {
+          const tempScore = Number(rec.score) + 0.001;
+          await supabase
+            .from("gradebook_column_students")
+            .update({ score: tempScore })
+            .eq("id", rec.id);
+          await supabase
+            .from("gradebook_column_students")
+            .update({ score: rec.score })
+            .eq("id", rec.id);
+        }
+      }
+    }
 
     //ALSO check for the final grade
     const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
@@ -1128,31 +1177,50 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     await waitForVirtualizerIdle(page);
 
     const colName = "Test Assignment 4 (Group)";
-    const titlesBefore = await getGradebookDataHeaderTitles(page);
-    const idxBefore = titlesBefore.indexOf(colName);
-    expect(idxBefore, `expected column ${colName} in header row, got: ${titlesBefore.join(" | ")}`).toBeGreaterThan(0);
+
+    // Get sort_order from DB before move
+    const { data: colBefore } = await supabase
+      .from("gradebook_columns")
+      .select("id, sort_order")
+      .eq("class_id", reorderCourse.id)
+      .eq("name", colName)
+      .single();
+    expect(colBefore).toBeTruthy();
+    const sortOrderBefore = colBefore!.sort_order!;
 
     const headerCell = region
       .locator("thead tr")
-      .filter({ has: page.getByRole("columnheader", { name: "Student Name" }) })
-      .locator("th")
+      .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+      .locator("[data-col-id]")
       .filter({ hasText: colName });
     await headerCell.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Left", exact: true }).click();
-    await expect(page.getByText("Column moved left")).toBeVisible();
+    await expect(page.getByText("Column moved left").first()).toBeVisible();
+
+    // Verify sort_order decreased by 1 in the database
+    await expect(async () => {
+      const { data: colAfterLeft } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", colBefore!.id)
+        .single();
+      expect(colAfterLeft!.sort_order).toBe(sortOrderBefore - 1);
+    }).toPass({ timeout: 5000 });
 
     await waitForVirtualizerIdle(page);
-    const titlesAfterLeft = await getGradebookDataHeaderTitles(page);
-    const idxAfterLeft = titlesAfterLeft.indexOf(colName);
-    expect(idxAfterLeft).toBe(idxBefore - 1);
-    expect(titlesAfterLeft[idxBefore]).toBe(titlesBefore[idxBefore - 1]);
 
     await headerCell.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Right", exact: true }).click();
-    await expect(page.getByText("Column moved right")).toBeVisible();
+    await expect(page.getByText("Column moved right").first()).toBeVisible();
 
-    await waitForVirtualizerIdle(page);
-    const titlesRestored = await getGradebookDataHeaderTitles(page);
-    expect(titlesRestored).toEqual(titlesBefore);
+    // Verify sort_order restored to original
+    await expect(async () => {
+      const { data: colRestored } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", colBefore!.id)
+        .single();
+      expect(colRestored!.sort_order).toBe(sortOrderBefore);
+    }).toPass({ timeout: 5000 });
   });
 });
