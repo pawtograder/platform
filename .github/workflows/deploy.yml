@@ -9,10 +9,52 @@ on:
 jobs:
   deploy:
     runs-on: pawtograder-ci
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      frontend_image: ${{ steps.image_name.outputs.frontend_image }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set frontend image output
+        id: image_name
+        run: |
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/platform-frontend"
+          IMAGE_TAG="sha-${GITHUB_SHA}"
+          FRONTEND_IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
+          echo "frontend_image=${FRONTEND_IMAGE}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push frontend image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.image_name.outputs.frontend_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+            NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
+            NEXT_PUBLIC_PAWTOGRADER_WEB_URL=${{ vars.NEXT_PUBLIC_PAWTOGRADER_WEB_URL }}
+            NEXT_PUBLIC_BUGSINK_DSN=${{ secrets.BUGSINK_DSN }}
+            NEXT_PUBLIC_BUGSINK_HOST=${{ vars.NEXT_PUBLIC_BUGSINK_HOST }}
+            NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}
+            NEXT_PUBLIC_POSTHOG_HOST=${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}
+            NEXT_PUBLIC_POSTHOG_UI_HOST=${{ vars.NEXT_PUBLIC_POSTHOG_UI_HOST }}
+            NEXT_PUBLIC_ENABLE_SIGNUPS=${{ vars.NEXT_PUBLIC_ENABLE_SIGNUPS }}
+            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
+            SENTRY_RELEASE=${{ github.sha }}
       - uses: supabase/setup-cli@v1
         with:
           version: latest
