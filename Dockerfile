@@ -45,6 +45,7 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
+RUN groupadd --system --gid 1001 appgroup && useradd --system --uid 1001 --gid appgroup --create-home appuser
 
 COPY package.json package-lock.json ./
 COPY --from=builder /app/node_modules ./node_modules
@@ -57,5 +58,8 @@ COPY --from=builder /app/sentry.server.config.ts ./sentry.server.config.ts
 COPY --from=builder /app/sentry.edge.config.ts ./sentry.edge.config.ts
 COPY --from=builder /app/instrumentation.ts ./instrumentation.ts
 COPY --from=builder /app/instrumentation-client.ts ./instrumentation-client.ts
+RUN chown -R appuser:appgroup /app
+
+USER appuser
 
 CMD ["npm", "run", "start"]

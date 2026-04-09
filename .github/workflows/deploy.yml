@@ -15,14 +15,18 @@ jobs:
     outputs:
       frontend_image: ${{ steps.image_name.outputs.frontend_image }}
     steps:
+      - name: Resolve deployment SHA
+        id: resolved_sha
+        run: |
+          echo "value=${{ github.event.pull_request.head.sha || github.sha }}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ steps.resolved_sha.outputs.value }}
       - name: Set frontend image output
         id: image_name
         run: |
           IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/platform-frontend"
-          IMAGE_TAG="sha-${GITHUB_SHA}"
+          IMAGE_TAG="sha-${{ steps.resolved_sha.outputs.value }}"
           FRONTEND_IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
           echo "frontend_image=${FRONTEND_IMAGE}" >> "$GITHUB_OUTPUT"
       - name: Set up Docker Buildx
@@ -53,8 +57,8 @@ jobs:
             NEXT_PUBLIC_POSTHOG_HOST=${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}
             NEXT_PUBLIC_POSTHOG_UI_HOST=${{ vars.NEXT_PUBLIC_POSTHOG_UI_HOST }}
             NEXT_PUBLIC_ENABLE_SIGNUPS=${{ vars.NEXT_PUBLIC_ENABLE_SIGNUPS }}
-            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
-            SENTRY_RELEASE=${{ github.sha }}
+            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ steps.resolved_sha.outputs.value }}
+            SENTRY_RELEASE=${{ steps.resolved_sha.outputs.value }}
             SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
       - uses: supabase/setup-cli@v1
         with:
