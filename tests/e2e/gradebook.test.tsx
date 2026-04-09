@@ -1219,6 +1219,5 @@ test.describe("Gradebook column reorder (issue #531)", () => {
         .single();
       expect(colRestored!.sort_order).toBe(sortOrderBefore);
     }).toPass({ timeout: 5000 });
-
   });
 });
