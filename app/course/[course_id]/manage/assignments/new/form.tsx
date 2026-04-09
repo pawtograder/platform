@@ -566,6 +566,9 @@ export default function AssignmentForm({
   const [allowNotGradedSubmissions, setAllowNotGradedSubmissions] = useState<boolean>(
     form.getValues("allow_not_graded_submissions") == true
   );
+  const [requireTokensBeforeDueDate, setRequireTokensBeforeDueDate] = useState<boolean>(
+    form.getValues("require_tokens_before_due_date") == true
+  );
   const timezone = course.time_zone || "America/New_York";
   const isEditing = !!form.getValues("id");
 
@@ -574,6 +577,9 @@ export default function AssignmentForm({
     const subscription = watch((value, { name }) => {
       if (name === "allow_not_graded_submissions" || !name) {
         setAllowNotGradedSubmissions(value.allow_not_graded_submissions);
+      }
+      if (name === "require_tokens_before_due_date" || !name) {
+        setRequireTokensBeforeDueDate(value.require_tokens_before_due_date);
       }
     });
     return () => subscription.unsubscribe();
@@ -749,6 +755,17 @@ export default function AssignmentForm({
                   min: { value: 0, message: "Max late tokens must be at least 0" }
                 })}
               />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field helperText="When checked, students must apply late tokens manually before the original due date. When unchecked, a late token is applied automatically when a student submits after the deadline.">
+              <Checkbox.Root {...register("require_tokens_before_due_date")} checked={requireTokensBeforeDueDate}>
+                <Checkbox.HiddenInput />
+                <Checkbox.Control>
+                  <LuCheck />
+                </Checkbox.Control>
+                <Checkbox.Label>Require students to apply late tokens before the original due date</Checkbox.Label>
+              </Checkbox.Root>
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
