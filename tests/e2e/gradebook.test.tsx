@@ -457,13 +457,19 @@ test.describe("Gradebook Page - Comprehensive", () => {
           .update({ is_recalculating: false })
           .eq("class_id", course.id)
           .eq("is_recalculating", true);
-        // Kick the recalculation worker directly (pg_net may not be processing)
-        const edgeSecret = process.env.EDGE_FUNCTION_SECRET;
+        // Kick the recalculation worker directly (pg_net may be slow)
+        const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
         if (edgeSecret) {
-          await supabase.functions.invoke("gradebook-column-recalculate", {
-            headers: { "x-edge-function-secret": edgeSecret }
-          });
+          await supabase.functions
+            .invoke("gradebook-column-recalculate", {
+              headers: { "x-edge-function-secret": edgeSecret }
+            })
+            .catch(() => {});
         }
+        // Also invoke via the DB's internal mechanism as fallback
+        await supabase
+          .rpc("invoke_gradebook_recalculation_background_task" as never)
+          .catch(() => {});
       }
       expect(data?.score).toBe(90);
     }).toPass({ timeout: 120_000 });
