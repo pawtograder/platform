@@ -1,5 +1,9 @@
 -- Expose grading review total_score on assignments_for_student_dashboard so the student
 -- assignments list can show final total (hand + autograder) instead of autograder-only.
+--
+-- New columns must be appended at the end of the SELECT list: PostgreSQL rejects
+-- CREATE OR REPLACE VIEW when an inserted column would shift existing column ordinals
+-- ("cannot change name of view column ..." / SQLSTATE 42P16).
 
 CREATE OR REPLACE VIEW public.assignments_for_student_dashboard
 WITH (security_invoker = true) AS
@@ -198,9 +202,6 @@ SELECT a.id,
        gr.grader_result_id,
        gr.grader_result_score,
        gr.grader_result_max_score,
-       gv.grading_submission_review_id,
-       gv.grading_submission_review_completed_at,
-       gv.grading_total_score,
        sr.repository_id,
        sr.repository,
        sr.is_github_ready,
@@ -217,7 +218,10 @@ SELECT a.id,
        de.exception_tokens_consumed,
        de.exception_created_at,
        de.exception_creator_id,
-       de.exception_note
+       de.exception_note,
+       gv.grading_submission_review_id,
+       gv.grading_submission_review_completed_at,
+       gv.grading_total_score
 FROM public.assignments a
 JOIN ur_students ur ON ur.class_id = a.class_id
 LEFT JOIN chosen_submission cs

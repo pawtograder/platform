@@ -14,12 +14,12 @@ import {
 dotenv.config({ path: ".env.local" });
 
 test.describe("Student assignments dashboard score display", () => {
-  test("shows total score when grading is complete, not autograder-only", async ({ page }) => {
+  test("Latest Submission shows autograder while pending, then total after grading completes", async ({ page }) => {
     const course: Course = await createClass();
     const [student] = await createUsersInClass([
       {
-        name: "Dashboard Total Student",
-        email: "dashboard-total-student@pawtograder.net",
+        name: "Dashboard Score Student",
+        email: "dashboard-score-student@pawtograder.net",
         role: "student",
         class_id: course.id,
         useMagicLink: true
@@ -29,7 +29,7 @@ test.describe("Student assignments dashboard score display", () => {
     const assignment = await insertAssignment({
       due_date: addDays(new Date(), -2).toUTCString(),
       class_id: course.id,
-      name: "Dashboard Total Score Assignment"
+      name: "Dashboard Score Assignment"
     });
 
     const { grading_review_id } = await insertPreBakedSubmission({
@@ -38,7 +38,11 @@ test.describe("Student assignments dashboard score display", () => {
       class_id: course.id
     });
 
-    // Pre-baked submission uses autograder 5/10; final grade after hand-grading differs.
+    await loginAsUser(page, student, course);
+    await page.goto(`/course/${course.id}/assignments`, { waitUntil: "networkidle", timeout: 30000 });
+
+    await expect(page.getByRole("link", { name: "#1 (5/10)" })).toBeVisible();
+
     const finalTotal = 88;
     const { error: reviewError } = await supabase
       .from("submission_reviews")
@@ -52,11 +56,9 @@ test.describe("Student assignments dashboard score display", () => {
       throw new Error(`Failed to update grading review: ${reviewError.message}`);
     }
 
-    await loginAsUser(page, student, course);
-    await page.goto(`/course/${course.id}/assignments`, { waitUntil: "networkidle", timeout: 30000 });
+    await page.reload({ waitUntil: "networkidle", timeout: 30000 });
 
     await expect(page.getByRole("link", { name: new RegExp(`#\\d+ \\(${finalTotal}/100\\)`) })).toBeVisible();
-    // Would incorrectly pass if the UI still showed only autograder (5/10).
     await expect(page.getByRole("link", { name: "#1 (5/10)" })).not.toBeVisible();
   });
 });
