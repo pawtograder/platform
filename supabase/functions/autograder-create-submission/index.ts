@@ -918,7 +918,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             }
 
             // Auto-apply a late token if the assignment allows it
-            if (!repoData.assignments.require_tokens_before_due_date && (repoData.assignments.max_late_tokens ?? 0) > 0) {
+            if (
+              !repoData.assignments.require_tokens_before_due_date &&
+              (repoData.assignments.max_late_tokens ?? 0) > 0
+            ) {
               const minutesLate = Math.ceil((pushTime.getTime() - finalDueDate.getTime()) / 60000);
               const hoursLate = Math.max(1, Math.ceil(minutesLate / 60));
 
@@ -953,10 +956,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                     .eq("class_id", repoData.assignments.class_id!)
                     .eq("student_id", profileId!));
 
-              const tokensUsedInClass = (classExceptions ?? []).reduce(
-                (sum, e) => sum + (e.tokens_consumed ?? 0),
-                0
-              );
+              const tokensUsedInClass = (classExceptions ?? []).reduce((sum, e) => sum + (e.tokens_consumed ?? 0), 0);
 
               const tokensNeeded = Math.ceil(hoursLate / 24);
               const maxTokensAssignment = repoData.assignments.max_late_tokens ?? 0;
@@ -973,25 +973,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               }
 
               // Auto-insert the extension so the submission is accepted
-              const { error: insertError } = await adminSupabase
-                .from("assignment_due_date_exceptions")
-                .insert({
-                  assignment_id: repoData.assignment_id,
-                  student_id: repoData.assignment_group_id ? null : profileId,
-                  assignment_group_id: repoData.assignment_group_id ?? null,
-                  class_id: repoData.assignments.class_id!,
-                  creator_id: profileId!,
-                  hours: hoursLate,
-                  minutes: 0,
-                  tokens_consumed: tokensNeeded,
-                  note: "Auto-applied on late submission"
-                });
+              const { error: insertError } = await adminSupabase.from("assignment_due_date_exceptions").insert({
+                assignment_id: repoData.assignment_id,
+                student_id: repoData.assignment_group_id ? null : profileId,
+                assignment_group_id: repoData.assignment_group_id ?? null,
+                class_id: repoData.assignments.class_id!,
+                creator_id: profileId!,
+                hours: hoursLate,
+                minutes: 0,
+                tokens_consumed: tokensNeeded,
+                note: "Auto-applied on late submission"
+              });
 
               if (insertError) {
                 Sentry.captureException(insertError, scope);
-                throw new UserVisibleError(
-                  `Failed to auto-apply late token: ${insertError.message}`
-                );
+                throw new UserVisibleError(`Failed to auto-apply late token: ${insertError.message}`);
               }
               // Fall through — submission will proceed normally
             } else {
