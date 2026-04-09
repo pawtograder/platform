@@ -400,7 +400,9 @@ Tests failed: 7/10 (file access denied in sandbox)`
     // No instructor output - submission is clean
   });
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor, student1, student2, student3, grader]);
+});
 // Clean up test data after all tests complete
 test.afterAll(async () => {
   // Clean up in reverse dependency order

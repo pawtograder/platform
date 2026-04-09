@@ -36,7 +36,9 @@ test.beforeAll(async () => {
     }
   ]);
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student1, student2, instructor]);
+});
 test.describe("Discussion Thread Page", () => {
   test.describe.configure({ mode: "serial" });
   test("A student can view the discussion feed", async ({ page }) => {

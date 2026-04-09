@@ -489,7 +489,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
     }).toPass();
   });
-
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([...students, instructor]);
+  });
   test.beforeEach(async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     const navRegion = page.locator("#course-nav");

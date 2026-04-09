@@ -43,7 +43,9 @@ test.beforeAll(async () => {
   // Create an authenticated client for the student to use for RPC calls
   studentClient = await createAuthenticatedClient(student!);
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
+});
 test.describe("Regrade request deadline enforcement", () => {
   test.describe.configure({ mode: "serial" });
 

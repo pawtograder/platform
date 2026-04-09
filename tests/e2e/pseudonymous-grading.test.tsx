@@ -79,7 +79,9 @@ test.beforeAll(async () => {
   });
   submission_id = submission_res.submission_id;
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
+});
 const SELF_REVIEW_COMMENT = "This is my self-review comment for pseudonymous grading test";
 const GRADING_REVIEW_COMMENT_1 = "Great work on this implementation! - Pseudonymous grading test";
 const GRADING_REVIEW_COMMENT_2 = "Excellent code quality - Pseudonymous grading test";

@@ -120,7 +120,9 @@ test.beforeAll(async () => {
   lab2 = _lab2;
   lab2Students = _lab2Students;
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor]);
+});
 async function sendBatchEmails({
   page,
   target_text,

@@ -501,6 +501,32 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     throw new Error(`Failed to sign in with magic link: ${message}`);
   }
 }
+export async function generateMagicLink(user: TestingUser): Promise<string> {
+  const { data, error } = await supabase.auth.admin.generateLink({
+    email: user.email,
+    type: "magiclink"
+  });
+  if (error) throw new Error(`Failed to generate magic link for ${user.email}: ${error.message}`);
+  const tokenHash = data.properties?.hashed_token;
+  if (!tokenHash) throw new Error(`Failed to generate magic link for ${user.email}: missing token hash`);
+  const baseUrl = (process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return `${baseUrl}/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
+}
+
+export async function logMagicLink(users: (TestingUser | undefined)[]) {
+  if (process.env.E2E_PRINT_MAGIC_LINKS !== "true") return;
+  for (const user of users.filter(Boolean)) {
+    try {
+      const link = await generateMagicLink(user!);
+      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
+    } catch (err) {
+      console.warn(
+        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+}
+
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);

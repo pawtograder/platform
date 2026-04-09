@@ -89,6 +89,9 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     [studentA, studentB, studentC, instructor, grader] = users;
     await clearCourseSurveys();
   });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([studentA, studentB, studentC, instructor, grader]);
+  });
 
   test("student views team collaboration survey and takes it", async ({ page }) => {
     // Create a published survey with the team collaboration JSON

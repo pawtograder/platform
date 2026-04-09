@@ -96,6 +96,9 @@ test.describe("Surveys Page", () => {
     [studentA, studentB, instructor, grader] = users;
     await clearCourseSurveys();
   });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([studentA, studentB, instructor, grader]);
+  });
 
   test("student sees empty state when no surveys exist", async ({ page }) => {
     await loginAsUser(page, studentA, course);
