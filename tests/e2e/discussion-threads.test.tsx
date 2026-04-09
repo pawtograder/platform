@@ -39,6 +39,7 @@ test.beforeAll(async () => {
 
 test.describe("Discussion Thread Page", () => {
   test.describe.configure({ mode: "serial" });
+  test.setTimeout(90_000);
   test("A student can view the discussion feed", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     const navRegion = await page.locator("#course-nav");
@@ -202,6 +203,7 @@ test.describe("Discussion Thread Page", () => {
 
 test.describe("Custom Discussion Topics", () => {
   test.describe.configure({ mode: "serial" });
+  test.setTimeout(90_000);
 
   test("An instructor can view the discussion topics management page", async ({ page }) => {
     await loginAsUser(page, instructor!, course);

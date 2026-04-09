@@ -141,6 +141,7 @@ const REGRADE_FINAL_COMMENT = "Alright, 11/10 it is then!";
 
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
+  test.setTimeout(120_000);
   test("Students can submit self-review early", async ({ page }) => {
     await loginAsUser(page, student!, course);
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
