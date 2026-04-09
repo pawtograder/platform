@@ -1,4 +1,7 @@
 "use client";
+
+export const dynamic = "force-dynamic";
+
 // import { useCallback, useEffect, useState } from "react";
 
 export default function CanvasClasses() {
