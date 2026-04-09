@@ -472,7 +472,7 @@ export class CourseController {
     // Create profiles and userRolesWithProfiles immediately
     // These are accessed frequently and should be ready
     void this.profiles; // Triggers lazy creation
-    if (this.isStaff) {
+    if (this.canViewFullClassUserRoles) {
       void this.userRolesWithProfiles; // Triggers lazy creation
     }
     // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
@@ -670,7 +670,7 @@ export class CourseController {
       const staffSelect =
         "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)";
       let query = this.client.from("user_roles").select(staffSelect).eq("class_id", this.courseId);
-      if (!this.isStaff) {
+      if (!this.canViewFullClassUserRoles) {
         query = query.eq("user_id", this._userId);
       }
       this._userRolesWithProfiles = new TableController({
@@ -680,7 +680,7 @@ export class CourseController {
         selectForSingleRow: staffSelect,
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.userRolesWithProfiles,
-        autoFetchMissingRows: this.isStaff
+        autoFetchMissingRows: this.canViewFullClassUserRoles
       });
     }
     return this._userRolesWithProfiles;
@@ -1180,6 +1180,14 @@ export class CourseController {
 
   get isStaff() {
     return this.role === "instructor" || this.role === "grader";
+  }
+
+  /**
+   * Full class roster in `user_roles` (matches `fetchCourseControllerData` / SSR `isStaff` for queries).
+   * Platform admins are not `isStaff` in the course sense but still receive the unfiltered query on the server.
+   */
+  private get canViewFullClassUserRoles(): boolean {
+    return this.role === "instructor" || this.role === "grader" || this.role === "admin";
   }
 
   getUserRole(user_id: string) {

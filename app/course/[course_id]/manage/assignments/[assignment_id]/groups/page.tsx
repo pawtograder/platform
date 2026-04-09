@@ -892,12 +892,12 @@ function TableByStudents({
 
                               <NativeSelect.Root disabled={loading}>
                                 <NativeSelect.Field
-                                  value={groupId ?? group?.id}
+                                  value={groupId ?? group?.id ?? ""}
                                   onChange={(e) => {
                                     setGroupId(e.target.value);
                                   }}
                                 >
-                                  <option value={undefined}>(No group)</option>
+                                  <option value="">(No group)</option>
                                   {groupsData?.map((group) => (
                                     <option key={group.id} value={group.id}>
                                       {group.name}
@@ -922,24 +922,34 @@ function TableByStudents({
                                   <Button
                                     colorPalette={"green"}
                                     onClick={() => {
-                                      if (group?.id == Number(groupId)) {
-                                        toaster.error({
-                                          title: "Failed to stage changes",
-                                          description: "Cannot move student to a group they are already in"
-                                        });
-                                      } else {
-                                        addMovesToFulfill([
-                                          {
-                                            profile_id: profile.private_profile_id,
-                                            old_group_id:
-                                              findGroupForProfileOnAssignment(
-                                                groupsData,
-                                                assignment.id,
-                                                profile.private_profile_id
-                                              )?.id ?? null,
-                                            new_group_id: Number(groupId)
-                                          }
-                                        ]);
+                                      {
+                                        const raw = groupId ?? "";
+                                        const newGroupId =
+                                          raw === "" || raw === "undefined"
+                                            ? null
+                                            : (() => {
+                                                const n = Number(raw);
+                                                return Number.isFinite(n) ? n : null;
+                                              })();
+                                        if (newGroupId !== null && group?.id === newGroupId) {
+                                          toaster.error({
+                                            title: "Failed to stage changes",
+                                            description: "Cannot move student to a group they are already in"
+                                          });
+                                        } else {
+                                          addMovesToFulfill([
+                                            {
+                                              profile_id: profile.private_profile_id,
+                                              old_group_id:
+                                                findGroupForProfileOnAssignment(
+                                                  groupsData,
+                                                  assignment.id,
+                                                  profile.private_profile_id
+                                                )?.id ?? null,
+                                              new_group_id: newGroupId
+                                            }
+                                          ]);
+                                        }
                                       }
                                       setGroupId(undefined);
                                     }}

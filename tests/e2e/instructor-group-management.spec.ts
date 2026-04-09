@@ -152,5 +152,9 @@ test.describe("Instructor group management", () => {
     await expect(page.getByText("Pending Changes")).toBeVisible();
     await page.getByRole("button", { name: "Publish Changes" }).click();
     await expect(page.getByText(/Changes published/i).first()).toBeVisible({ timeout: 30_000 });
+
+    await expect(page.getByRole("row").filter({ hasText: studentBName }).getByText(groupName)).toBeVisible({
+      timeout: 60_000
+    });
   });
 });
