@@ -507,7 +507,7 @@ export async function generateMagicLink(user: TestingUser): Promise<string> {
 }
 
 export async function logMagicLink(users: (TestingUser | undefined)[]) {
-  if (!process.env.E2E_PRINT_MAGIC_LINKS) return;
+  if (process.env.E2E_PRINT_MAGIC_LINKS !== "true") return;
   for (const user of users.filter(Boolean)) {
     try {
       const link = await generateMagicLink(user!);
