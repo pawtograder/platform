@@ -11,20 +11,7 @@ on:
 permissions: {}
 
 jobs:
-  # Gate: for PRs, only run if the author is a trusted contributor.
-  # The staging environment's required-reviewers rule enforces re-approval
-  # on each run, so we don't use label-based gating (labels persist across
-  # new pushes and would bypass re-approval).
-  authorize:
-    runs-on: ubuntu-latest
-    if: >-
-      github.event_name != 'pull_request_target' ||
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
-    steps:
-      - run: echo "Authorized"
-
   deploy:
-    needs: authorize
     runs-on: pawtograder-ci
     environment: staging
     permissions:
