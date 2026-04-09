@@ -5,6 +5,17 @@ const bundlingProfile = process.env.NEXT_BUNDLING_PROFILE ?? "worker";
 const useLegacyWebpackTweaks = bundlingProfile === "legacy";
 const useWebpackBuildWorker = bundlingProfile === "worker";
 const disableSentryBundlingPlugin = process.env.NEXT_DISABLE_SENTRY === "1";
+const isCi = process.env.CI === "1" || process.env.CI === "true";
+const sentryBuildProfile = process.env.SENTRY_BUILD_PROFILE ?? (isCi ? "ci-fast" : "full");
+const useFastSentryBuildProfile = sentryBuildProfile === "ci-fast";
+const disableSentryComponentAnnotation =
+  process.env.SENTRY_DISABLE_COMPONENT_ANNOTATION === "1" || useFastSentryBuildProfile;
+const disableSentryRouteManifestInjection =
+  process.env.SENTRY_DISABLE_ROUTE_MANIFEST_INJECTION === "1" || useFastSentryBuildProfile;
+const disableSentryReleaseCreate = process.env.SENTRY_DISABLE_RELEASE_CREATE === "1";
+const disableSentryReleaseFinalize = process.env.SENTRY_DISABLE_RELEASE_FINALIZE === "1";
+const disableSentrySourcemaps = process.env.SENTRY_DISABLE_SOURCEMAPS === "1";
+const useSentryRunAfterProductionCompileHook = process.env.SENTRY_USE_RUN_AFTER_PRODUCTION_COMPILE === "1";
 
 const optimizePackageImports = [
   "@chakra-ui/react",
@@ -133,8 +144,18 @@ const sentryConfig = {
   tunnelRoute: true,
   org: "pawtograder",
   project: "pawtograder-web",
+  // Keep Sentry enabled in CI while reducing build-time-only instrumentation overhead.
+  routeManifestInjection: disableSentryRouteManifestInjection ? false : true,
   reactComponentAnnotation: {
-    enabled: true
+    enabled: !disableSentryComponentAnnotation
+  },
+  sourcemaps: {
+    disable: disableSentrySourcemaps
+  },
+  useRunAfterProductionCompileHook: useSentryRunAfterProductionCompileHook,
+  release: {
+    create: !disableSentryReleaseCreate,
+    finalize: !disableSentryReleaseFinalize
   },
   silent: !process.env.CI,
   disableLogger: true
