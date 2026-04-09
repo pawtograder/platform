@@ -42,8 +42,6 @@ jobs:
           tags: ${{ steps.image_name.outputs.frontend_image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          secrets: |
-            supabase_service_role_key=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
             NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}

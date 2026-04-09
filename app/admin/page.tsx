@@ -6,6 +6,8 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { AdminDashboardContent } from "./AdminDashboardContent";
 
+export const dynamic = "force-dynamic";
+
 /**
  * Admin dashboard: header streams immediately; metrics load inside Suspense.
  */

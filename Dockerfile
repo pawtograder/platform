@@ -39,8 +39,7 @@ ENV NEXT_PUBLIC_GIT_COMMIT_SHA=$NEXT_PUBLIC_GIT_COMMIT_SHA
 ENV SENTRY_RELEASE=$SENTRY_RELEASE
 ENV SUPABASE_URL=$SUPABASE_URL
 
-RUN --mount=type=secret,id=supabase_service_role_key \
-    SUPABASE_SERVICE_ROLE_KEY="$(cat /run/secrets/supabase_service_role_key)" npm run build
+RUN npm run build
 
 FROM base AS runner
 ENV NODE_ENV=production
