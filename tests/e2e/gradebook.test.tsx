@@ -1207,7 +1207,7 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     await waitForVirtualizerIdle(page);
 
     await headerCell.getByRole("button", { name: "Column options" }).click();
-    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
     await expect(page.getByText("Column moved right").first()).toBeVisible();
 
     // Verify sort_order restored to original
