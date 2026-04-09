@@ -42,6 +42,8 @@ jobs:
           tags: ${{ steps.image_name.outputs.frontend_image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          secrets: |
+            supabase_service_role_key=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
             NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -55,6 +57,7 @@ jobs:
             NEXT_PUBLIC_ENABLE_SIGNUPS=${{ vars.NEXT_PUBLIC_ENABLE_SIGNUPS }}
             NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
             SENTRY_RELEASE=${{ github.sha }}
+            SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
       - uses: supabase/setup-cli@v1
         with:
           version: latest
