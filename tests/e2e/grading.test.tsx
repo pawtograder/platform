@@ -15,6 +15,7 @@ import {
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
+
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
   page: Page,
@@ -136,6 +137,9 @@ const GRADING_REVIEW_COMMENT_3 = "I have stared at this for a long time, and I a
 
 const REGRADE_COMMENT = "I think that I deserve better than a 10/10!";
 const REGRADE_RESOLUTION = "I do not think it is possible to get more than 10/10!";
+/** Grading Review Check 3 on line 4 starts at 10 pts; fractional resolve must persist in DB/UI */
+const REGRADE_RESOLVE_ADJUSTMENT = "0.5";
+const REGRADE_RESOLVE_EXPECTED_POINTS = "10.5";
 const REGRADE_ESCALATION = "But I heard that Ben Bitdiddle got an 11/10!";
 const REGRADE_FINAL_COMMENT = "Alright, 11/10 it is then!";
 
@@ -352,10 +356,20 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
     await argosScreenshot(page, "Instructors can resolve the regrade request");
-    await page.getByRole("textbox", { name: "Grade adjustment" }).fill("40");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    await expect(page.getByText("This is a significant change (>50%)")).toBeVisible();
-    await page.getByRole("button", { name: "Resolve regrade request", exact: true }).click();
+    // Popover content is portalled (not under the rubric check region); scope to the resolve dialog.
+    const resolveRegradePopover = page.getByRole("dialog").filter({ hasText: "Grade Adjustment:" });
+    await expect(resolveRegradePopover).toBeVisible();
+    await resolveRegradePopover.getByRole("textbox", { name: /Grade adjustment/i }).fill(REGRADE_RESOLVE_ADJUSTMENT);
+    await expect(resolveRegradePopover).toContainText(
+      new RegExp(`New points awarded:\\s*${REGRADE_RESOLVE_EXPECTED_POINTS.replace(".", "\\.")}`)
+    );
+    await resolveRegradePopover.getByRole("button", { name: "Resolve regrade request", exact: true }).click();
+    await expect(
+      page.getByLabel("Grading checks on line 4").getByRole("heading", { name: /Regrade Resolved/i })
+    ).toBeVisible({
+      timeout: 30_000
+    });
+    await expect(page.getByLabel("Grading checks on line 4")).toContainText(REGRADE_RESOLVE_EXPECTED_POINTS);
   });
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
     await loginAsUser(page, student!, course);
