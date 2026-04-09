@@ -30,13 +30,6 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: "npm"
-      - name: Install dependencies
-        run: npm ci
       - name: Deploy a branch preview environment
         id: deploy
         uses: pawtograder/coolify-supabase-deployment-action@main
@@ -66,6 +59,13 @@ jobs:
           UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
           UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
       - name: Run Playwright tests
