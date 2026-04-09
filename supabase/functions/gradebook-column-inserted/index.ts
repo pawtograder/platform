@@ -178,14 +178,20 @@ Deno.serve(async (req) => {
       // of this column. This handles the race where scores were set on the new
       // dependent column BEFORE the dependencies were updated — those scores
       // would have been excluded from the calculation.
+      const { data: studentRows, error: studentRowsError } = await admin
+        .from("gradebook_column_students")
+        .select("class_id, gradebook_id, student_id, is_private")
+        .eq("gradebook_column_id", col.id);
+      if (studentRowsError) {
+        return new Response(JSON.stringify({ error: `Failed to load rows for column ${col.id}` }), {
+          headers: { "Content-Type": "application/json" },
+          status: 500
+        });
+      }
+
       const { error: enqueueError } = await admin.rpc("enqueue_gradebook_row_recalculation_batch", {
         p_rows:
-          (
-            await admin
-              .from("gradebook_column_students")
-              .select("class_id, gradebook_id, student_id, is_private")
-              .eq("gradebook_column_id", col.id)
-          ).data?.map((r) => ({
+          studentRows?.map((r) => ({
             class_id: r.class_id,
             gradebook_id: r.gradebook_id,
             student_id: r.student_id,
@@ -195,9 +201,10 @@ Deno.serve(async (req) => {
           })) ?? []
       });
       if (enqueueError) {
-        console.error(
-          `Failed to enqueue recalculation after deps update for column ${col.id}: ${enqueueError.message}`
-        );
+        return new Response(JSON.stringify({ error: `Failed to enqueue recalculation for column ${col.id}` }), {
+          headers: { "Content-Type": "application/json" },
+          status: 500
+        });
       }
     }
   }
