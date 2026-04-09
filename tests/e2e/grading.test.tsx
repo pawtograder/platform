@@ -356,11 +356,14 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
     await argosScreenshot(page, "Instructors can resolve the regrade request");
-    await page.getByRole("textbox", { name: /Grade adjustment/i }).fill(REGRADE_RESOLVE_ADJUSTMENT);
-    await expect(page.getByLabel("Grading checks on line 4")).toContainText(
+    // Popover content is portalled (not under the rubric check region); scope to the resolve dialog.
+    const resolveRegradePopover = page.getByRole("dialog").filter({ hasText: "Grade Adjustment:" });
+    await expect(resolveRegradePopover).toBeVisible();
+    await resolveRegradePopover.getByRole("textbox", { name: /Grade adjustment/i }).fill(REGRADE_RESOLVE_ADJUSTMENT);
+    await expect(resolveRegradePopover).toContainText(
       new RegExp(`New points awarded:\\s*${REGRADE_RESOLVE_EXPECTED_POINTS.replace(".", "\\.")}`)
     );
-    await page.getByRole("button", { name: "Resolve regrade request", exact: true }).click();
+    await resolveRegradePopover.getByRole("button", { name: "Resolve regrade request", exact: true }).click();
     await expect(
       page.getByLabel("Grading checks on line 4").getByRole("heading", { name: /Regrade Resolved/i })
     ).toBeVisible({
