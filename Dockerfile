@@ -39,16 +39,25 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     NEXT_OUTPUT_STANDALONE=true
 
+# Fail fast if critical build arg is missing
+RUN test -n "$NEXT_PUBLIC_PAWTOGRADER_WEB_URL" \
+    || (echo "ERROR: NEXT_PUBLIC_PAWTOGRADER_WEB_URL build arg is required" && exit 1)
+
 RUN NODE_OPTIONS=--max-old-space-size=8000 npm run build
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000 NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
+
+# Non-root user for security
+RUN groupadd --system --gid 1001 appgroup \
+    && useradd --system --uid 1001 --gid appgroup appuser
 
 # Copy standalone server + static assets + public files
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
+COPY --from=builder --chown=appuser:appgroup /app/.next/standalone ./
+COPY --from=builder --chown=appuser:appgroup /app/.next/static ./.next/static
+COPY --from=builder --chown=appuser:appgroup /app/public ./public
 
+USER appuser
 EXPOSE 3000
 CMD ["node", "server.js"]

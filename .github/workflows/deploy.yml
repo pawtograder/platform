@@ -21,6 +21,9 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" != "pull_request_target" ]]; then
             echo "trusted=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event.pull_request.head.repo.fork }}" == "true" ]]; then
+            echo "Fork PRs cannot trigger deploy previews" >&2
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event.pull_request.author_association }}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
             echo "trusted=true" >> "$GITHUB_OUTPUT"
           else
