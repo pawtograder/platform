@@ -173,6 +173,29 @@ Deno.serve(async (req) => {
         });
       }
       updated++;
+
+      // After updating dependencies, enqueue recalculation for all student rows
+      // of this column. This handles the race where scores were set on the new
+      // dependent column BEFORE the dependencies were updated — those scores
+      // would have been excluded from the calculation.
+      const { error: enqueueError } = await admin.rpc("enqueue_gradebook_row_recalculation_batch", {
+        p_rows: (
+          await admin
+            .from("gradebook_column_students")
+            .select("class_id, gradebook_id, student_id, is_private")
+            .eq("gradebook_column_id", col.id)
+        ).data?.map((r) => ({
+          class_id: r.class_id,
+          gradebook_id: r.gradebook_id,
+          student_id: r.student_id,
+          is_private: r.is_private,
+          source: "deps_update",
+          source_column_id: null
+        })) ?? []
+      });
+      if (enqueueError) {
+        console.error(`Failed to enqueue recalculation after deps update for column ${col.id}: ${enqueueError.message}`);
+      }
     }
   }
 

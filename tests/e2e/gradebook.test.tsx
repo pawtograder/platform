@@ -467,39 +467,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(deps?.gradebook_columns).toContain(gradebookColumn!.id);
     }).toPass();
 
-    // Now that the dependencies are updated, nudge the code walk column student records to
-    // trigger recalculation of the average-assignments (and transitively final-grade) columns.
-    // This is needed because the code walk score may have been set before the dependency was
-    // registered, so the dependent-column recalculation trigger never fired for it.
-    const { data: codeWalkRecords, error: codeWalkRecordsError } = await supabase
-      .from("gradebook_column_students")
-      .select("id, score, is_private")
-      .eq("class_id", course.id)
-      .eq("gradebook_column_id", gradebookColumn!.id);
-    if (codeWalkRecordsError) {
-      throw new Error(`Failed to load code-walk gradebook rows: ${codeWalkRecordsError.message}`);
-    }
-    if (codeWalkRecords && codeWalkRecords.length > 0) {
-      for (const rec of codeWalkRecords) {
-        if (rec.score !== null && rec.score !== undefined) {
-          const tempScore = Number(rec.score) + 0.001;
-          const { error: bumpError } = await supabase
-            .from("gradebook_column_students")
-            .update({ score: tempScore })
-            .eq("id", rec.id);
-          if (bumpError) {
-            throw new Error(`Failed to bump code-walk row ${rec.id}: ${bumpError.message}`);
-          }
-          const { error: restoreError } = await supabase
-            .from("gradebook_column_students")
-            .update({ score: rec.score })
-            .eq("id", rec.id);
-          if (restoreError) {
-            throw new Error(`Failed to restore code-walk row ${rec.id}: ${restoreError.message}`);
-          }
-        }
-      }
-    }
+    // The gradebook-column-inserted edge function now enqueues recalculation
+    // after updating dependencies, so the average-assignments and final-grade
+    // columns will be recalculated automatically. Just wait for the result.
 
     //ALSO check for the final grade
     const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
@@ -570,6 +540,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(scoreInput).toHaveValue("50.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
     await expect(partCell).toHaveText(/50\.5/);
+
+    // Restore original value so subsequent serial tests see the expected score
+    await partCell.click();
+    await scoreInput.fill("84.5");
+    await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(partCell).toHaveText(/84\.5/);
   });
 
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {
@@ -620,8 +596,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(after).toBe(30);
     }).toPass();
 
-    // Scroll right to reveal virtualized columns (Code Walk, Participation, Final Grade)
+    // Expand assignment groups and scroll right to reveal virtualized columns
     const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await tableRegion.getByRole("button", { name: "Expand all groups" }).click();
+    await waitForVirtualizerIdle(page);
     await tableRegion.evaluate((el) => {
       el.scrollLeft = el.scrollWidth;
     });
