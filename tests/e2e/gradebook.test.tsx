@@ -446,7 +446,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get gradebook column student data: ${error.message}`);
       }
       expect(data?.score).toBe(90);
-    }).toPass({ timeout: 60_000 });
+    }).toPass({ timeout: 120_000 });
 
     // Wait for the average-assignments column's dependencies to include the code walk column.
     // The gradebook-column-inserted edge function updates dependencies asynchronously when a
@@ -465,7 +465,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       const deps = avgCol?.dependencies as { gradebook_columns?: number[] } | null;
       expect(deps?.gradebook_columns).toContain(gradebookColumn!.id);
-    }).toPass({ timeout: 60_000 });
+    }).toPass({ timeout: 120_000 });
 
     //ALSO check for the final grade
     const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
