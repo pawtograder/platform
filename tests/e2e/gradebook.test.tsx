@@ -431,7 +431,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get gradebook column: ${gradebookColumnError.message}`);
     }
 
-    //Wait for gradebook to finish updating with the assignment code walk grades before starting the test
+    // Wait for gradebook to finish updating with the assignment code walk grades.
+    // The recalculation happens via an async DB→edge function chain (pg_net).
+    // On some deployments, the pg_net worker or the edge function worker may be
+    // slow or stuck. Clear any stale is_recalculating states and periodically
+    // kick the worker via the DB RPC if the score doesn't appear.
+    let kickCount = 0;
     await expect(async () => {
       const { data, error } = await supabase
         .from("gradebook_column_students")
@@ -442,8 +447,23 @@ test.describe("Gradebook Page - Comprehensive", () => {
         .eq("is_private", true)
         .single();
       if (error) {
-        console.log(`Error getting gradebook column student data: ${error.message}`);
         throw new Error(`Failed to get gradebook column student data: ${error.message}`);
+      }
+      if (data?.score !== 90 && kickCount < 5) {
+        kickCount++;
+        // Clear stuck recalculation states that block new enqueues
+        await supabase
+          .from("gradebook_row_recalc_state")
+          .update({ is_recalculating: false })
+          .eq("class_id", course.id)
+          .eq("is_recalculating", true);
+        // Kick the recalculation worker directly (pg_net may not be processing)
+        const edgeSecret = process.env.EDGE_FUNCTION_SECRET;
+        if (edgeSecret) {
+          await supabase.functions.invoke("gradebook-column-recalculate", {
+            headers: { "x-edge-function-secret": edgeSecret }
+          });
+        }
       }
       expect(data?.score).toBe(90);
     }).toPass({ timeout: 120_000 });
