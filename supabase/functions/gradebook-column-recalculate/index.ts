@@ -615,6 +615,39 @@ async function processRowsAll(
               `[DEBUG] ${workerId} BATCH_UPDATE (scoped, chunk ${chunkIndex + 1}): Only ${clearedCount}/${results.length} rows cleared. Version mismatches: ${versionMismatchCount}, Errors: ${errorCount}`
             );
           }
+
+          // For version-mismatched rows: clear is_recalculating so new enqueues
+          // can proceed, then re-enqueue. Without this, rows stay permanently
+          // stuck in is_recalculating=true after a version conflict.
+          const mismatchedRows = results.filter((r) => !r.version_matched && !r.error && !r.cleared);
+          if (mismatchedRows.length > 0) {
+            console.log(
+              `[DEBUG] ${workerId} VERSION_MISMATCH_RECOVERY: Clearing is_recalculating for ${mismatchedRows.length} mismatched rows and re-enqueueing`
+            );
+            // Clear is_recalculating but keep dirty=true
+            for (const row of mismatchedRows) {
+              await adminSupabase
+                .from("gradebook_row_recalc_state")
+                .update({ is_recalculating: false })
+                .eq("class_id", classId)
+                .eq("gradebook_id", gradebook_id)
+                .eq("student_id", row.student_id)
+                .eq("is_private", row.is_private);
+            }
+            // Re-enqueue via the queue so the worker re-processes with fresh data
+            const reEnqueueMessages = mismatchedRows.map((row) =>
+              JSON.stringify({
+                class_id: classId,
+                gradebook_id,
+                student_id: row.student_id,
+                is_private: row.is_private
+              })
+            );
+            await adminSupabase.schema("pgmq_public").rpc("send_batch", {
+              queue_name: "gradebook_row_recalculate",
+              messages: reEnqueueMessages
+            });
+          }
         }
       } else {
         console.log(
