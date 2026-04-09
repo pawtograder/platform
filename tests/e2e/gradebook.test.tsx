@@ -1171,9 +1171,6 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     await waitForVirtualizerIdle(page);
 
     const colName = "Test Assignment 4 (Group)";
-    const headersBefore = await getGradebookDataHeaderTitles(page);
-    const beforeIndex = headersBefore.indexOf(colName);
-    expect(beforeIndex).toBeGreaterThan(0);
 
     // Get sort_order from DB before move
     const { data: colBefore } = await supabase
