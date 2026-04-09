@@ -10109,6 +10109,9 @@ export type Database = {
           grader_result_id: number | null;
           grader_result_max_score: number | null;
           grader_result_score: number | null;
+          grading_submission_review_completed_at: string | null;
+          grading_submission_review_id: number | null;
+          grading_total_score: number | null;
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"] | null;
           group_formation_deadline: string | null;
