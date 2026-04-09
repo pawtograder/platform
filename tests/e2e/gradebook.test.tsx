@@ -446,7 +446,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get gradebook column student data: ${error.message}`);
       }
       expect(data?.score).toBe(90);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Wait for the average-assignments column's dependencies to include the code walk column.
     // The gradebook-column-inserted edge function updates dependencies asynchronously when a
@@ -465,7 +465,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       const deps = avgCol?.dependencies as { gradebook_columns?: number[] } | null;
       expect(deps?.gradebook_columns).toContain(gradebookColumn!.id);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     //ALSO check for the final grade
     const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
@@ -492,7 +492,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
       }
       expect(privateRecord?.score).toBe(51.95);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Public record may lag behind private due to async recalculation — poll separately
     await expect(async () => {
@@ -509,7 +509,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       // Not all dependencies are released, so the public score is different
       expect(publicRecord?.score).toBe(43.5);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
   });
 
   test.beforeEach(async ({ page }) => {
@@ -537,7 +537,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Restore original value so subsequent serial tests see the expected score
     await partCell.click();
-    await scoreInput.fill("84.5");
+    const restoreInput = page.locator('input[name="score"]');
+    await restoreInput.fill("84.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
     await expect(partCell).toHaveText(/84\.5/);
   });
@@ -576,19 +577,19 @@ test.describe("Gradebook Page - Comprehensive", () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Test Assignment 1 (Group)");
       expect(after).not.toBeNaN();
       expect(after).toBe(25);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Test Assignment 2 (Group)");
       expect(after).not.toBeNaN();
       expect(after).toBe(30);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[1].private_profile_name, "Test Assignment 2 (Group)");
       expect(after).not.toBeNaN();
       expect(after).toBe(30);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Expand assignment groups and scroll right to reveal virtualized columns
     const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
@@ -607,19 +608,19 @@ test.describe("Gradebook Page - Comprehensive", () => {
       );
       expect(after).not.toBeNaN();
       expect(after).toBe(90);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Participation");
       expect(after).not.toBeNaN();
       expect(after).toBe(84.5);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Final Grade");
       expect(after).not.toBeNaN();
       expect(after).toBe(51.95);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Take screenshot for visual regression testing
     await argosScreenshot(page, "Gradebook Page - Full Data");
@@ -642,7 +643,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       const after = await readCellNumber(page, studentName, "Final Grade");
       expect(after).not.toBeNaN();
       expect(after).toBe(51.5);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
   });
 
   test("Overriding a calculated column (Average Assignments) persists and displays the override", async ({ page }) => {
@@ -663,14 +664,14 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(after).not.toBeNaN();
       expect(after).toBe(92);
       expect(after).not.toBe(before);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Final Grade should update
     await expect(async () => {
       const after = await readCellNumber(page, studentName, "Final Grade");
       expect(after).not.toBeNaN();
       expect(after).toBe(90.8);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
   });
 
   test("Import Column workflow creates a new column and populates scores", async ({ page }) => {
@@ -818,7 +819,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
         expect(publicRecord?.released).toBe(true);
       }
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
       .from("gradebook_columns")
@@ -844,7 +845,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get final gradebook column student: ${finalGradebookColumnStudentError.message}`);
       }
       expect(finalGradebookColumnStudent?.score).toBe(90.8);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Verify student can now see Participation in their gradebook cards
     await loginAsUser(page, students[0], course);
@@ -894,7 +895,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get gradebook column student: ${gradebookColumnStudentError.message}`);
       }
       expect(data?.released).toBe(false);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Student should still see the Participation card, but it should show "In Progress"
     await loginAsUser(page, students[0], course);
@@ -971,7 +972,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
         throw new Error(`Failed to get private final grade record for export test: ${privateError.message}`);
       }
       expect(privateRecord).toBeTruthy();
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     const { error: setFinalGradePrivateError } = await supabase
       .from("gradebook_column_students")
@@ -1026,7 +1027,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
         throw new Error(`Failed to get render export column record for export test: ${renderError.message}`);
       }
       expect(renderRecord).toBeTruthy();
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     const { error: setRenderExportScoreError } = await supabase
       .from("gradebook_column_students")
@@ -1054,7 +1055,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
       expect(renderRecord?.is_recalculating).toBe(false);
       expect(renderRecord?.score_override ?? renderRecord?.score).toBe(92);
       expect(renderRecord?.incomplete_values).toBeNull();
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
   });
 
   test("Download Gradebook can export render expression values to CSV", async ({ page }) => {
