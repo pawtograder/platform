@@ -40,7 +40,7 @@ export function useNextIncompleteReviewUrl(): string | null {
     const nextOption =
       options.find(
         (opt) => opt.hasIncompleteReview && (!currentSubmissionId || opt.submissionId > currentSubmissionId)
-      ) || options.find((opt) => opt.hasIncompleteReview);
+      ) || options.find((opt) => opt.hasIncompleteReview && opt.submissionId !== currentSubmissionId);
 
     if (!nextOption) return null;
 
