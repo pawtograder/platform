@@ -1,8 +1,10 @@
+import { fetchStudentDashboardBundle } from "@/lib/ssr-course-dashboard";
+import { findGithubIdentity } from "@/lib/githubIdentity";
 import { Survey, SurveyResponse } from "@/types/survey";
-import { createClient } from "@/utils/supabase/server";
+import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import {
+  Badge,
   Box,
-  Button,
   CardBody,
   CardHeader,
   CardRoot,
@@ -12,23 +14,74 @@ import {
   DataListRoot,
   Heading,
   HStack,
+  Icon,
   Stack,
   Text,
   VStack
 } from "@chakra-ui/react";
-import { format } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
+import { format, formatDistanceToNow, isPast } from "date-fns";
+import { FaClipboardList, FaExclamationCircle } from "react-icons/fa";
 
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
-import { TZDate } from "@date-fns/tz";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
+
+function SurveyDashboardCta({
+  href,
+  label,
+  ariaLabel,
+  colorPalette
+}: {
+  href: string;
+  label: string;
+  ariaLabel: string;
+  colorPalette: "blue" | "red" | "yellow" | "green" | "gray";
+}) {
+  return (
+    <Link href={href} aria-label={ariaLabel} style={{ textDecoration: "none" }}>
+      <Box
+        as="span"
+        display="inline-flex"
+        alignItems="center"
+        justifyContent="center"
+        h="8"
+        px="3"
+        fontSize="sm"
+        fontWeight="medium"
+        borderRadius="l2"
+        colorPalette={colorPalette}
+        bg="colorPalette.solid"
+        color="colorPalette.contrast"
+        _hover={{ opacity: 0.92 }}
+        _active={{ opacity: 0.88 }}
+      >
+        {label}
+      </Box>
+    </Link>
+  );
+}
+
+function sortIncompleteSurveysForBanner(surveys: Survey[]): Survey[] {
+  const now = Date.now();
+  return [...surveys].sort((a, b) => {
+    const aTime = a.due_date ? new Date(a.due_date).getTime() : Number.POSITIVE_INFINITY;
+    const bTime = b.due_date ? new Date(b.due_date).getTime() : Number.POSITIVE_INFINITY;
+    const aOver = a.due_date != null && aTime < now;
+    const bOver = b.due_date != null && bTime < now;
+    if (aOver !== bOver) {
+      return aOver ? -1 : 1;
+    }
+    return aTime - bTime;
+  });
+}
 
 export default async function StudentDashboard({
   course_id,
@@ -37,42 +90,37 @@ export default async function StudentDashboard({
   course_id: number;
   private_profile_id: string;
 }) {
+  const headersList = await headers();
+  const user_id = headersList.get("X-User-ID");
+
   const supabase = await createClient();
-  const { data: assignments } = await supabase
-    .from("assignments_with_effective_due_dates")
-    .select(
-      "*, submissions!submissio_assignment_id_fkey(*, grader_results!grader_results_submission_id_fkey(*)), classes(time_zone)"
-    )
-    .eq("class_id", course_id)
-    .eq("submissions.is_active", true)
-    .eq("student_profile_id", private_profile_id)
-    .gte("due_date", new Date().toISOString())
-    .order("due_date", { ascending: false })
-    .limit(5);
+  const { course, assignments, surveysRaw, regradeRequests, responsesRaw, classSection, labSection, leadersRaw } =
+    await fetchStudentDashboardBundle(supabase, course_id, user_id ?? "", private_profile_id);
 
-  const { data: surveysRaw } = await supabase
-    .from("surveys")
-    .select("*")
-    .eq("class_id", course_id)
-    .eq("status", "published")
-    .or(`due_date.gte.${new Date().toISOString()},due_date.is.null`)
-    .order("created_at", { ascending: false })
-    .limit(5);
+  const identitiesResult = await supabase.auth.getUserIdentities();
+  const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
-  const surveys = (surveysRaw ?? []) as unknown as Survey[];
+  const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
 
-  let surveyResponses: SurveyResponse[] = [];
-  if (surveys.length > 0) {
-    const surveyIds = surveys.map((s) => s.id);
+  const nowMs = Date.now();
+  const surveys = ((surveysRaw ?? []) as unknown as Survey[]).filter(
+    (s) => s.status === "published" && (s.available_at == null || new Date(s.available_at).getTime() <= nowMs)
+  );
 
-    const { data: responsesRaw } = await supabase
-      .from("survey_responses")
-      .select("*")
-      .eq("profile_id", private_profile_id)
-      .in("survey_id", surveyIds);
+  const surveyResponses = (responsesRaw ?? []) as unknown as SurveyResponse[];
 
-    surveyResponses = (responsesRaw ?? []) as unknown as SurveyResponse[];
-  }
+  type StudentUpcomingAssignmentRow = {
+    id: number;
+    title: string | null;
+    due_date: string | null;
+    submissions?: Array<{
+      created_at: string;
+      ordinal: number | null;
+      grader_results?: { errors?: unknown; score?: number | null; max_score?: number | null } | null;
+    }> | null;
+  };
+  const upcomingAssignments = (assignments ?? []) as StudentUpcomingAssignmentRow[];
+  const regradeRows = (regradeRequests ?? []) as RegradeRequestWithDetails[];
 
   // Build a quick lookup: survey_id -> response
   const responsesBySurveyId = new Map<string, SurveyResponse>();
@@ -80,70 +128,16 @@ export default async function StudentDashboard({
     responsesBySurveyId.set(r.survey_id, r);
   }
 
-  // Query 5 most recent regrade requests for the student
-  const { data: regradeRequests } = await supabase
-    .from("submission_regrade_requests")
-    .select(
-      `
-      *,
-      assignments(id, title),
-      submissions!inner(id, ordinal),
-      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
-      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
-      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
-    `
-    )
-    .eq("class_id", course_id)
-    .order("created_at", { ascending: false })
-    .limit(5);
+  const incompletePublishedSurveys = surveys.filter((s) => {
+    const r = responsesBySurveyId.get(s.id);
+    return !r?.is_submitted;
+  });
+  const incompleteSurveysForBanner = sortIncompleteSurveysForBanner(incompletePublishedSurveys);
 
-  const identities = await supabase.auth.getUserIdentities();
-  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
-
-  const { data: course } = await supabase
-    .from("classes")
-    .select("time_zone, office_hours_ics_url, events_ics_url")
-    .eq("id", course_id)
-    .single();
-
-  const hasCalendar = course?.office_hours_ics_url || course?.events_ics_url;
-
-  // Get user role to fetch section information
-  const headersList = await headers();
-  const user_id = headersList.get("X-User-ID");
-  const { data: userRole } = user_id
-    ? await supabase
-        .from("user_roles")
-        .select("class_section_id, lab_section_id")
-        .eq("class_id", course_id)
-        .eq("user_id", user_id)
-        .eq("disabled", false)
-        .single()
-    : { data: null };
-
-  // Fetch class section if assigned
-  const { data: classSection } = userRole?.class_section_id
-    ? await supabase.from("class_sections").select("*").eq("id", userRole.class_section_id).single()
-    : { data: null };
-
-  // Fetch lab section if assigned
-  const { data: labSection } = userRole?.lab_section_id
-    ? await supabase.from("lab_sections").select("*").eq("id", userRole.lab_section_id).single()
-    : { data: null };
-
-  // Fetch lab section leaders if lab section exists
-  let labLeaders: string[] = [];
-  if (labSection?.id) {
-    const { data: leaders } = await supabase
-      .from("lab_section_leaders")
-      .select("profiles(name)")
-      .eq("lab_section_id", labSection.id);
-    if (leaders) {
-      labLeaders = leaders
-        .map((l) => (l.profiles as { name: string | null })?.name)
-        .filter((name): name is string => name !== null);
-    }
-  }
+  const labLeaders: string[] =
+    leadersRaw
+      ?.map((l) => (l.profiles as { name: string | null })?.name)
+      .filter((name): name is string => name !== null) ?? [];
 
   const DAYS_OF_WEEK: Record<string, string> = {
     monday: "Monday",
@@ -165,8 +159,71 @@ export default async function StudentDashboard({
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
-      {identities.data && !githubIdentity && <LinkAccount />}
+      {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+
+      {incompleteSurveysForBanner.length > 0 && (
+        <Box w="100%" mb={3}>
+          <Text fontWeight="semibold" fontSize="sm" mb={2} color="fg.muted">
+            Surveys to complete
+          </Text>
+          <VStack gap={2} align="stretch">
+            {incompleteSurveysForBanner.map((survey) => {
+              const response = responsesBySurveyId.get(survey.id);
+              const isOverdue = Boolean(survey.due_date && isPast(new Date(survey.due_date)));
+              const inProgress = Boolean(response && !response.is_submitted);
+              const href = `/course/${course_id}/surveys/${survey.id}`;
+              return (
+                <Box
+                  key={survey.id}
+                  w="100%"
+                  p={3}
+                  borderRadius="md"
+                  border="1px solid"
+                  borderColor={isOverdue ? "red.300" : "blue.300"}
+                  bg={isOverdue ? "red.50" : "blue.50"}
+                  _dark={{
+                    bg: isOverdue ? "red.900" : "blue.900",
+                    borderColor: isOverdue ? "red.600" : "blue.600"
+                  }}
+                >
+                  <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
+                    <HStack gap={3} align="flex-start">
+                      <Icon fontSize="lg" color={isOverdue ? "red.500" : "blue.500"} mt={0.5}>
+                        {isOverdue ? <FaExclamationCircle /> : <FaClipboardList />}
+                      </Icon>
+                      <VStack align="start" gap={0}>
+                        <HStack gap={2} flexWrap="wrap">
+                          <Text fontWeight="semibold" fontSize="sm">
+                            {survey.title ?? "Untitled survey"}
+                          </Text>
+                          <Badge colorPalette={isOverdue ? "red" : inProgress ? "yellow" : "blue"} size="sm">
+                            {isOverdue ? "Overdue" : inProgress ? "In progress" : "Pending"}
+                          </Badge>
+                        </HStack>
+                        {survey.due_date && (
+                          <Text fontSize="xs" color="fg.muted">
+                            {isOverdue
+                              ? `Was due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`
+                              : `Due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`}
+                          </Text>
+                        )}
+                      </VStack>
+                    </HStack>
+                    <SurveyDashboardCta
+                      href={href}
+                      label={inProgress ? "Continue" : "Take survey"}
+                      ariaLabel={`${inProgress ? "Continue" : "Take survey"}: ${survey.title ?? "Untitled survey"}`}
+                      colorPalette={isOverdue ? "red" : "blue"}
+                    />
+                  </HStack>
+                </Box>
+              );
+            })}
+          </VStack>
+        </Box>
+      )}
+
       {/* Section Cards */}
       {(classSection || labSection) && (
         <HStack gap={4} align="stretch" flexWrap="wrap">
@@ -238,7 +295,7 @@ export default async function StudentDashboard({
           Upcoming Assignments
         </Heading>
         <Stack spaceY={4}>
-          {assignments?.map((assignment) => {
+          {upcomingAssignments.map((assignment) => {
             const mostRecentSubmission = assignment.submissions?.sort(
               (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
             )[0];
@@ -263,13 +320,11 @@ export default async function StudentDashboard({
                     <DataListItem>
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
-                        {assignment.due_date
-                          ? formatInTimeZone(
-                              new TZDate(assignment.due_date),
-                              assignment.classes?.time_zone || "America/New_York",
-                              "Pp"
-                            )
-                          : "No due date"}
+                        {assignment.due_date ? (
+                          <TimeZoneAwareDate date={assignment.due_date} format="Pp" />
+                        ) : (
+                          "No due date"
+                        )}
                       </DataListItemValue>
                     </DataListItem>
                     <DataListItem>
@@ -304,7 +359,7 @@ export default async function StudentDashboard({
                   <DataListItem>
                     <DataListItemLabel>Info</DataListItemLabel>
                     <DataListItemValue>
-                      There are no published, active surveys for this course right now.
+                      There are no published surveys for you in this course right now.
                     </DataListItemValue>
                   </DataListItem>
                 </DataListRoot>
@@ -329,6 +384,10 @@ export default async function StudentDashboard({
                     buttonLabel = "View";
                     colorScheme = "gray";
                   }
+                } else {
+                  statusLabel = "In progress";
+                  buttonLabel = "Continue";
+                  colorScheme = "yellow";
                 }
               }
 
@@ -353,11 +412,12 @@ export default async function StudentDashboard({
                           {statusLabel}
                         </Text>
                       </Box>
-                      <Link href={href}>
-                        <Button size="sm" colorScheme={colorScheme}>
-                          {buttonLabel}
-                        </Button>
-                      </Link>
+                      <SurveyDashboardCta
+                        href={href}
+                        label={buttonLabel}
+                        ariaLabel={`${buttonLabel} survey: ${survey.title ?? "Untitled survey"}`}
+                        colorPalette={colorScheme}
+                      />
                     </Stack>
                   </CardHeader>
                   <CardBody>
@@ -365,9 +425,7 @@ export default async function StudentDashboard({
                       <DataListItem>
                         <DataListItemLabel>Due</DataListItemLabel>
                         <DataListItemValue>
-                          {survey.due_date
-                            ? formatInTimeZone(new TZDate(survey.due_date), "America/New_York", "Pp")
-                            : "No due date"}
+                          {survey.due_date ? <TimeZoneAwareDate date={survey.due_date} format="Pp" /> : "No due date"}
                         </DataListItemValue>
                       </DataListItem>
 
@@ -375,7 +433,7 @@ export default async function StudentDashboard({
                         <DataListItem>
                           <DataListItemLabel>Submitted</DataListItemLabel>
                           <DataListItemValue>
-                            {formatInTimeZone(new TZDate(response.submitted_at), "America/New_York", "Pp")}
+                            <TimeZoneAwareDate date={response.submitted_at} format="Pp" />
                           </DataListItemValue>
                         </DataListItem>
                       )}
@@ -392,8 +450,8 @@ export default async function StudentDashboard({
         <Heading size="lg" mb={4}>
           Recent Regrade Requests
         </Heading>
-        <RegradeRequestsTable regradeRequests={regradeRequests || []} courseId={course_id} />
-        {regradeRequests && regradeRequests.length > 0 && (
+        <RegradeRequestsTable regradeRequests={regradeRows} courseId={course_id} />
+        {regradeRows.length > 0 && (
           <Link href={`/course/${course_id}/regrade-requests`}>
             <Box mt={4} textAlign="center">
               <span style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}>

@@ -23,6 +23,8 @@ export type GroupManagementContextType = {
   addMovesToFulfill: (data: StudentMoveData[]) => void;
   removeMoveToFulfill: (data: StudentMoveData) => void;
   removeGroupToCreate: (data: GroupCreateData) => void;
+  /** Retain only failed items (for partial success); clears successful ones. */
+  retainOnlyFailedMovesAndGroups: (failedProfileIds: Set<string>, failedGroupNames: Set<string>) => void;
   modProfiles: string[];
 };
 
@@ -133,6 +135,20 @@ export function GroupManagementProvider({ children }: { children: React.ReactNod
     setMovesToFulfill([]);
   };
 
+  const retainOnlyFailedMovesAndGroups = (failedProfileIds: Set<string>, failedGroupNames: Set<string>) => {
+    setMovesToFulfill((prev) => prev.filter((m) => failedProfileIds.has(m.profile_id)));
+    setGroupsToCreate((prev) => prev.filter((g) => failedGroupNames.has(g.name)));
+    setModProfiles((prev) => {
+      const retainedMoves = movesToFulfill.filter((m) => failedProfileIds.has(m.profile_id));
+      const retainedGroups = groupsToCreate.filter((g) => failedGroupNames.has(g.name));
+      const retainedProfileIds = new Set<string>([
+        ...retainedMoves.map((m) => m.profile_id),
+        ...retainedGroups.flatMap((g) => g.member_ids)
+      ]);
+      return prev.filter((p) => retainedProfileIds.has(p));
+    });
+  };
+
   return (
     <GroupManagementContext.Provider
       value={{
@@ -144,6 +160,7 @@ export function GroupManagementProvider({ children }: { children: React.ReactNod
         clearMovesToFulfill,
         addMovesToFulfill,
         removeMoveToFulfill,
+        retainOnlyFailedMovesAndGroups,
         modProfiles
       }}
     >

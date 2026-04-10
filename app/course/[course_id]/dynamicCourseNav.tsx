@@ -1,6 +1,6 @@
 "use client";
 
-import { Alert } from "@/components/ui/alert";
+import { TimeZoneModal } from "@/components/TimeZoneModal";
 import { useColorMode } from "@/components/ui/color-mode";
 import {
   DrawerBackdrop,
@@ -20,7 +20,7 @@ import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from 
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
-import React, { Fragment, useEffect, useRef, useState } from "react";
+import React, { Fragment, useEffect, useRef } from "react";
 import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
@@ -230,25 +230,6 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
   );
 }
 
-function TimeZoneWarning({ courseTz }: { courseTz: string }) {
-  const [dismissed, setDismissed] = useState(false);
-  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (courseTz === browserTz || dismissed) {
-    return <></>;
-  }
-  return (
-    <Alert
-      status="warning"
-      w={{ base: "100%", md: "fit-content" }}
-      size="sm"
-      closable
-      onClose={() => setDismissed(true)}
-    >
-      Warning: This course is in {courseTz} but your computer appears to be in {browserTz}
-    </Alert>
-  );
-}
-
 export default function DynamicCourseNav() {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
@@ -405,8 +386,7 @@ export default function DynamicCourseNav() {
             </HStack>
           </Box>
 
-          {/* Timezone warning */}
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+          <TimeZoneModal />
         </VStack>
       </Box>
 
@@ -498,7 +478,6 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
           <UserMenu />
         </Flex>
       </Box>

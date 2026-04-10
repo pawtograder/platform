@@ -1,4 +1,5 @@
 import { test as base, Page } from "@playwright/test";
+import { logMagicLink, TestingUser } from "@/tests/e2e/TestingUtils";
 
 // Function to inject visual test setup
 const injectVisualTestSetup = async (page: Page) => {
@@ -32,8 +33,18 @@ const injectVisualTestSetup = async (page: Page) => {
   });
 };
 
+type E2EFixtures = {
+  logMagicLinksOnFailure: (users: (TestingUser | undefined)[]) => Promise<void>;
+};
+
 // Extend the base test to include visual test setup
-export const test = base.extend({
+export const test = base.extend<E2EFixtures>({
+  logMagicLinksOnFailure: async ({}, use, testInfo) => {
+    await use(async (users) => {
+      if (testInfo.status === testInfo.expectedStatus) return;
+      await logMagicLink(users);
+    });
+  },
   page: async ({ page }, use) => {
     // Set up initial script for new page loads
     await page.addInitScript(() => {

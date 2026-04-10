@@ -1,6 +1,16 @@
-import { createClient } from "@/utils/supabase/server";
-import * as Sentry from "@sentry/nextjs";
+import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
+import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
+import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { fetchInstructorDashboardBundle } from "@/lib/ssr-course-dashboard";
+import { findGithubIdentity } from "@/lib/githubIdentity";
+import { getUserRolesForCourse } from "@/lib/ssrUtils";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { TZDate } from "@date-fns/tz";
 import {
+  Badge,
   Box,
   CardBody,
   CardHeader,
@@ -9,27 +19,20 @@ import {
   DataListItemLabel,
   DataListItemValue,
   DataListRoot,
-  Heading,
-  Stack,
-  VStack,
-  Badge,
   Flex,
-  Text,
+  Heading,
   HStack,
+  Stack,
+  Text,
+  VStack,
   Table
 } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
+import * as Sentry from "@sentry/nextjs";
 import { formatInTimeZone } from "date-fns-tz";
-import Link from "next/link";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import { getUserRolesForCourse } from "@/lib/ssrUtils";
-import LinkAccount from "@/components/github/link-account";
-import { redirect } from "next/navigation";
+import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
-import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
-import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
-import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
+import Link from "next/link";
+import { redirect } from "next/navigation";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -176,8 +179,6 @@ type InstructorDashboardMetricRow = {
   students_without_submissions: number;
 };
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
-  const supabase = await createClient();
-
   // Validate current user can access course dashboard
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
@@ -189,13 +190,49 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     redirect("/");
   }
 
-  // Get dashboard metrics via RPC
-  const { data: metricsRaw, error: metricsError } = await supabase.rpc("get_instructor_dashboard_overview_metrics", {
-    p_class_id: course_id
-  });
+  const supabase = await createClient();
+  const {
+    metricsRaw,
+    metricsError,
+    helpRequests,
+    helpRequestsError,
+    course,
+    courseError,
+    surveysForDashboardRaw,
+    surveysDashboardError,
+    workflowStatsHour,
+    workflowStatsHourError,
+    workflowStatsDay,
+    workflowStatsDayError,
+    recentErrors,
+    recentErrorsError
+  } = await fetchInstructorDashboardBundle(supabase, course_id);
+
+  const identitiesResult = await supabase.auth.getUserIdentities();
+  const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
+
   if (metricsError) {
-    Sentry.captureException(metricsError);
+    Sentry.captureException(new Error(metricsError));
   }
+  if (helpRequestsError) {
+    Sentry.captureException(new Error(helpRequestsError));
+  }
+  if (courseError) {
+    Sentry.captureException(new Error(courseError));
+  }
+  if (surveysDashboardError) {
+    Sentry.captureException(new Error(surveysDashboardError));
+  }
+  if (workflowStatsHourError) {
+    Sentry.captureException(new Error(workflowStatsHourError));
+  }
+  if (workflowStatsDayError) {
+    Sentry.captureException(new Error(workflowStatsDayError));
+  }
+  if (recentErrorsError) {
+    Sentry.captureException(new Error(recentErrorsError));
+  }
+
   const metricsLoadFailed = Boolean(metricsError);
   const metrics = (!metricsLoadFailed && Array.isArray(metricsRaw)
     ? metricsRaw
@@ -223,70 +260,6 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const unreleasedAssignments = metrics.filter((m) => m.grades_release_status === "not_released").length;
   const noSubmissionAssignments = metrics.filter((m) => m.grades_release_status === "no_submissions").length;
   const releasableAssignments = metrics.length - noSubmissionAssignments;
-
-  const { data: helpRequests, error: helpRequestsError } = await supabase
-    .from("help_requests")
-    .select("*")
-    .eq("class_id", course_id)
-    .eq("status", "open")
-    .order("created_at", { ascending: true });
-
-  if (helpRequestsError) {
-    Sentry.captureException(helpRequestsError);
-  }
-  const { data: course, error: courseError } = await supabase
-    .from("classes")
-    .select("time_zone, office_hours_ics_url, events_ics_url")
-    .eq("id", course_id)
-    .single();
-
-  if (courseError) {
-    Sentry.captureException(courseError);
-  }
-  const identities = await supabase.auth.getUserIdentities();
-  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
-
-  // Get workflow run statistics using the secure RPC function
-  const { data: workflowStatsHour, error: workflowStatsHourError } = await supabase.rpc("get_workflow_statistics", {
-    p_class_id: course_id,
-    p_duration_hours: 1
-  });
-
-  if (workflowStatsHourError) {
-    Sentry.captureException(workflowStatsHourError);
-  }
-
-  const { data: workflowStatsDay, error: workflowStatsDayError } = await supabase.rpc("get_workflow_statistics", {
-    p_class_id: course_id,
-    p_duration_hours: 24
-  });
-
-  if (workflowStatsDayError) {
-    Sentry.captureException(workflowStatsDayError);
-  }
-
-  // Get the 5 most recent errors with details
-  const { data: recentErrors, error: recentErrorsError } = await supabase
-    .from("workflow_run_error")
-    .select(
-      `
-      id,
-      name,
-      created_at,
-      submissions!submission_id(
-        profiles!profile_id(name, id),
-        assignments!assignment_id(title),
-        assignment_groups!assignment_group_id(name)
-      )
-    `
-    )
-    .eq("class_id", course_id)
-    .order("created_at", { ascending: false })
-    .limit(5);
-
-  if (recentErrorsError) {
-    Sentry.captureException(recentErrorsError);
-  }
 
   // Extract workflow statistics from RPC response
   const extractWorkflowStats = (
@@ -515,10 +488,128 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     </Box>
   );
 
+  type StaffSurveyDashRow = {
+    id: string;
+    survey_id: string;
+    title: string | null;
+    status: string;
+    due_date: string | null;
+    updated_at: string | null;
+  };
+
+  const staffSurveys = (surveysForDashboardRaw ?? []) as StaffSurveyDashRow[];
+  const nowMs = Date.now();
+  const surveysOpenCollecting = staffSurveys.filter(
+    (s) => s.status === "published" && (!s.due_date || new Date(s.due_date).getTime() >= nowMs)
+  );
+  const openSurveyIdSet = new Set(surveysOpenCollecting.map((s) => s.id));
+  const surveysRecentThree = [...staffSurveys.filter((s) => !openSurveyIdSet.has(s.id))]
+    .sort((a, b) => {
+      const aKey = new Date(a.due_date ?? a.updated_at ?? 0).getTime();
+      const bKey = new Date(b.due_date ?? b.updated_at ?? 0).getTime();
+      return bKey - aKey;
+    })
+    .slice(0, 3);
+
+  const showSurveysDashboard = surveysOpenCollecting.length > 0 || surveysRecentThree.length > 0;
+  const isInstructor = role.role === "instructor";
+  const dashboardSurveyTz = course?.time_zone ?? "America/New_York";
+
+  const formatSurveyDueShort = (s: StaffSurveyDashRow) =>
+    s.due_date ? formatInTimeZone(new TZDate(s.due_date), dashboardSurveyTz, "MMM d") : "—";
+
+  const renderSurveyMiniTable = (rows: StaffSurveyDashRow[], { showClosedHint }: { showClosedHint: boolean }) => (
+    <Table.Root
+      size="sm"
+      css={{
+        "& td": { py: 2, px: 2 }
+      }}
+    >
+      <Table.Body>
+        {rows.map((s) => (
+          <Table.Row key={s.id}>
+            <Table.Cell>
+              <HStack gap={2} align="flex-start" flexWrap="wrap" rowGap={1}>
+                <Text fontSize="sm" fontWeight="medium" whiteSpace="normal" wordBreak="break-word">
+                  {s.title ?? "Untitled"}
+                </Text>
+                {showClosedHint && s.status === "closed" && (
+                  <Text fontSize="xs" color="fg.muted" flexShrink={0}>
+                    closed
+                  </Text>
+                )}
+              </HStack>
+            </Table.Cell>
+            <Table.Cell whiteSpace="nowrap">
+              <Text fontSize="sm" color="fg.muted">
+                {formatSurveyDueShort(s)}
+              </Text>
+            </Table.Cell>
+            <Table.Cell textAlign="end" whiteSpace="nowrap">
+              <HStack gap={3} justify="flex-end">
+                <Link href={`/course/${course_id}/manage/surveys/${s.survey_id}/responses`}>
+                  <Text fontSize="sm" color="blue.600">
+                    Results
+                  </Text>
+                </Link>
+                {isInstructor && s.status === "published" && (
+                  <Link href={`/course/${course_id}/manage/surveys/${s.id}/edit`}>
+                    <Text fontSize="sm" color="blue.600">
+                      Edit
+                    </Text>
+                  </Link>
+                )}
+              </HStack>
+            </Table.Cell>
+          </Table.Row>
+        ))}
+      </Table.Body>
+    </Table.Root>
+  );
+
   return (
     <VStack spaceY={0} align="stretch" p={2}>
       {!githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+
+      {showSurveysDashboard && (
+        <Box mb={2} borderWidth="1px" borderColor="border.subtle" borderRadius="md" overflowX="auto">
+          <HStack
+            justify="space-between"
+            align="center"
+            px={2}
+            py={1.5}
+            borderBottomWidth="1px"
+            borderColor="border.subtle"
+          >
+            <Heading size="md">Surveys</Heading>
+            <Link href={`/course/${course_id}/manage/surveys`}>
+              <Text fontSize="sm" color="blue.600">
+                All
+              </Text>
+            </Link>
+          </HStack>
+          <Box px={1} py={1}>
+            {surveysOpenCollecting.length > 0 && (
+              <Box mb={surveysRecentThree.length > 0 ? 1 : 0}>
+                <Text fontSize="sm" color="fg.muted" fontWeight="semibold" px={1} mb={1}>
+                  Open
+                </Text>
+                {renderSurveyMiniTable(surveysOpenCollecting, { showClosedHint: false })}
+              </Box>
+            )}
+            {surveysRecentThree.length > 0 && (
+              <Box>
+                <Text fontSize="sm" color="fg.muted" fontWeight="semibold" px={1} mb={1}>
+                  Recent
+                </Text>
+                {renderSurveyMiniTable(surveysRecentThree, { showClosedHint: true })}
+              </Box>
+            )}
+          </Box>
+        </Box>
+      )}
+
       {/* Calendar Schedule Section */}
       {hasCalendar && (
         <Box>
@@ -643,7 +734,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CardHeader>
                 <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
               </CardHeader>
-              <CardBody>Requested: {new Date(request.created_at).toLocaleString()}</CardBody>
+              <CardBody>
+                Requested: <TimeZoneAwareDate date={request.created_at} format="compact" />
+              </CardBody>
             </CardRoot>
           ))}
         </Stack>
@@ -783,13 +876,27 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               </CardHeader>
               <CardBody>
                 <Stack spaceY={2}>
-                  {recentErrors && recentErrors.length > 0 ? (
-                    recentErrors.map((error) => {
+                  {recentErrorsError ? (
+                    <Text fontSize="sm" color="fg.muted" textAlign="center">
+                      Unable to load recent errors.
+                    </Text>
+                  ) : recentErrors && recentErrors.length > 0 ? (
+                    (
+                      recentErrors as Array<{
+                        id: string;
+                        name: string;
+                        created_at: string;
+                        submissions?: {
+                          profiles?: { name: string | null } | null;
+                          assignment_groups?: { name: string | null } | null;
+                          assignments?: { title: string | null } | null;
+                        } | null;
+                      }>
+                    ).map((error) => {
                       const submission = error.submissions;
                       const studentName =
                         submission?.profiles?.name || submission?.assignment_groups?.name || "Unknown";
                       const assignmentTitle = submission?.assignments?.title || "Unknown Assignment";
-                      const timeAgo = new Date(error.created_at).toLocaleString();
 
                       return (
                         <Box key={error.id} p={2} border="1px solid" borderColor="border.subtle" borderRadius="md">
@@ -798,7 +905,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                               {error.name}
                             </Text>
                             <Text fontSize="xs" color="fg.muted">
-                              {timeAgo}
+                              <TimeZoneAwareDate date={error.created_at} format="compact" />
                             </Text>
                           </Flex>
                           <Text fontSize="sm" color="fg.muted">

@@ -239,26 +239,30 @@ export async function wrapRequestHandler(
         JSON.stringify({
           error: {
             recoverable: false,
-            message: "Security Error",
-            details: "This request has been reported to the staff"
-          }
-        }),
-        {
-          headers: genericErrorHeaders
-        }
-      );
-    }
-    if (e instanceof UserVisibleError) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            recoverable: e.status >= 500,
-            message: "Internal Server Error",
+            message: e.details,
             details: e.details
           }
         }),
         {
-          headers: genericErrorHeaders
+          headers: genericErrorHeaders,
+          status: e.status
+        }
+      );
+    }
+    if (e instanceof UserVisibleError) {
+      // Surface the actual message to clients; the previous "Internal Server Error" title
+      // was shown in UIs that only display `error.message`, hiding `details`.
+      return new Response(
+        JSON.stringify({
+          error: {
+            recoverable: e.status >= 500,
+            message: e.details,
+            details: e.details
+          }
+        }),
+        {
+          headers: genericErrorHeaders,
+          status: e.status
         }
       );
     }
@@ -272,7 +276,8 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders
+          headers: genericErrorHeaders,
+          status: e.status
         }
       );
     }
@@ -281,12 +286,13 @@ export async function wrapRequestHandler(
         JSON.stringify({
           error: {
             recoverable: true,
-            message: "Illegal Argument",
+            message: e.details,
             details: e.details
           }
         }),
         {
-          headers: genericErrorHeaders
+          headers: genericErrorHeaders,
+          status: e.status
         }
       );
     }

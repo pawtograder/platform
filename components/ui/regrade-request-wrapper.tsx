@@ -822,8 +822,23 @@ function EditablePoints({
     try {
       const supabase = createClient();
 
-      // Convert empty string to 0, otherwise parse the number
-      const numericValue = editValue === "" ? 0 : Math.round(parseFloat(editValue) || 0);
+      const trimmed = editValue.trim();
+      let numericValue: number;
+      if (trimmed === "") {
+        numericValue = 0;
+      } else {
+        const parsed = parseFloat(trimmed);
+        if (Number.isNaN(parsed)) {
+          toaster.create({
+            title: "Invalid number",
+            description: "Enter a valid point value (decimals allowed).",
+            type: "error"
+          });
+          setIsUpdating(false);
+          return;
+        }
+        numericValue = parsed;
+      }
 
       const rpcParams = {
         regrade_request_id: regradeRequestId,

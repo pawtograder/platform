@@ -2,14 +2,17 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
+  IndividualScores,
   SubmissionWithGraderResultsAndFiles,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, Textarea, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
+import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Alert } from "@/components/ui/alert";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
@@ -29,7 +32,7 @@ import {
   useRubricById,
   useRubricParts
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
   useAssignmentGroupWithMembers,
@@ -37,6 +40,7 @@ import {
   useCourseController,
   useIsDroppedStudent
 } from "@/hooks/useCourseController";
+import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
 import {
   SubmissionProvider,
   useRubricCriteriaInstances,
@@ -48,10 +52,8 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
-import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { activateSubmission } from "@/lib/edgeFunctions";
-import { formatDueDateInTimezone } from "@/lib/utils";
+import { submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
@@ -59,7 +61,6 @@ import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import * as Sentry from "@sentry/nextjs";
 import { format, formatRelative, isAfter } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -69,6 +70,7 @@ import {
   FaCheckCircle,
   FaFile,
   FaFileExport,
+  FaGithub,
   FaHistory,
   FaInfo,
   FaQuestionCircle,
@@ -81,7 +83,10 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import { linkToSubPage } from "./utils";
+import {
+  getSubmissionFilesOrResultsTab,
+  linkToSubPage
+} from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -104,7 +109,39 @@ const iconMap: { [key: string]: ReactElementType } = {
   FiSend,
   PiSignOut
 };
-function SubmissionReviewScoreTweak() {
+function parseProfileIdToNumberMap(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+    if (!Number.isNaN(n) && Number.isFinite(n)) {
+      out[k] = n;
+    }
+  }
+  return out;
+}
+
+function parseProfileIdToStringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === "string" && v.trim().length > 0) {
+      out[k] = v.trim();
+    }
+  }
+  return out;
+}
+
+function normalizeOptionalNote(s: string): string | null {
+  const t = s.trim();
+  return t.length > 0 ? t : null;
+}
+
+function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStudentTotals: boolean }) {
   const submission = useSubmission();
   const reviewId = submission.grading_review_id;
   if (!reviewId) {
@@ -112,11 +149,48 @@ function SubmissionReviewScoreTweak() {
   }
   const review = useSubmissionReviewOrGradingReview(reviewId);
   const isInstructor = useIsInstructor();
+  const { private_profile_id } = useClassProfiles();
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id
+  });
+  const groupMemberIds = useMemo(
+    () => (assignmentGroupWithMembers?.assignment_groups_members ?? []).map((m) => m.profile_id).sort(),
+    [assignmentGroupWithMembers?.assignment_groups_members]
+  );
+
   const [tweakValue, setTweakValue] = useState<number | undefined>(review?.tweak);
-  const [isEditing, setIsEditing] = useState(false);
+  const [tweakNoteDraft, setTweakNoteDraft] = useState(review?.tweak_note ?? "");
+  const [perStudentTweakDrafts, setPerStudentTweakDrafts] = useState<Record<string, string>>({});
+  const [perStudentNoteDrafts, setPerStudentNoteDrafts] = useState<Record<string, string>>({});
+  const [isEditingShared, setIsEditingShared] = useState(false);
+  const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submissionController = useSubmissionController();
+
+  useEffect(() => {
+    if (!review || isEditingShared) {
+      return;
+    }
+    setTweakValue(review.tweak);
+    setTweakNoteDraft(review.tweak_note ?? "");
+  }, [review, isEditingShared]);
+
+  useEffect(() => {
+    if (!review || editingStudentId != null) {
+      return;
+    }
+    const tMap = parseProfileIdToNumberMap(review.per_student_tweaks);
+    const nMap = parseProfileIdToStringMap(review.per_student_tweak_notes);
+    const nextT: Record<string, string> = {};
+    const nextN: Record<string, string> = {};
+    for (const id of groupMemberIds) {
+      nextT[id] = tMap[id] !== undefined ? String(tMap[id]) : "";
+      nextN[id] = nMap[id] ?? "";
+    }
+    setPerStudentTweakDrafts(nextT);
+    setPerStudentNoteDrafts(nextN);
+  }, [review, groupMemberIds, editingStudentId]);
 
   const handleTweakChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -130,89 +204,371 @@ function SubmissionReviewScoreTweak() {
     }
   }, []);
 
-  const handleTweakSave = useCallback(async () => {
+  const saveSharedTweak = useCallback(async () => {
     if (!review) {
       return;
     }
     setIsSaving(true);
     setError(null);
     try {
-      // Normalize undefined → null and skip if no change
-      const original = review.tweak ?? null;
-      const current = tweakValue ?? null;
-      if (original === current) {
-        setIsEditing(false);
+      const originalTweak = review.tweak ?? null;
+      const currentTweak = tweakValue ?? null;
+      const originalNote = normalizeOptionalNote(review.tweak_note ?? "");
+      const currentNote = normalizeOptionalNote(tweakNoteDraft);
+      if (originalTweak === currentTweak && originalNote === currentNote) {
+        setIsEditingShared(false);
         return;
       }
       await submissionController.submission_reviews.update(review.id, {
-        tweak: current ?? 0
+        tweak: currentTweak ?? 0,
+        tweak_note: currentNote
       });
-      setIsEditing(false);
+      setIsEditingShared(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save tweak");
     } finally {
       setIsSaving(false);
     }
-  }, [review, tweakValue, submissionController]);
+  }, [review, tweakValue, tweakNoteDraft, submissionController]);
 
-  const handleCancel = useCallback(() => {
-    setTweakValue(review?.tweak);
-    setIsEditing(false);
-    setError(null);
-  }, [review?.tweak]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter") {
-        handleTweakSave();
-      } else if (e.key === "Escape") {
-        handleCancel();
+  const saveStudentTweak = useCallback(
+    async (studentId: string) => {
+      if (!review) {
+        return;
+      }
+      setIsSaving(true);
+      setError(null);
+      try {
+        const prevT = parseProfileIdToNumberMap(review.per_student_tweaks);
+        const prevN = parseProfileIdToStringMap(review.per_student_tweak_notes);
+        const rawAmt = perStudentTweakDrafts[studentId]?.trim() ?? "";
+        const amt = rawAmt === "" ? undefined : Number(rawAmt);
+        if (rawAmt !== "" && (Number.isNaN(amt!) || !Number.isFinite(amt!))) {
+          setError("Enter a valid number for the per-student tweak, or leave blank.");
+          setIsSaving(false);
+          return;
+        }
+        const nextT = { ...prevT };
+        if (amt === undefined || amt === 0) {
+          delete nextT[studentId];
+        } else {
+          nextT[studentId] = amt!;
+        }
+        const nextN = { ...prevN };
+        const noteVal = normalizeOptionalNote(perStudentNoteDrafts[studentId] ?? "");
+        if (noteVal == null) {
+          delete nextN[studentId];
+        } else {
+          nextN[studentId] = noteVal;
+        }
+        const sameT = JSON.stringify(prevT) === JSON.stringify(nextT);
+        const sameN = JSON.stringify(prevN) === JSON.stringify(nextN);
+        if (sameT && sameN) {
+          setEditingStudentId(null);
+          return;
+        }
+        await submissionController.submission_reviews.update(review.id, {
+          per_student_tweaks: Object.keys(nextT).length > 0 ? nextT : null,
+          per_student_tweak_notes: Object.keys(nextN).length > 0 ? nextN : null
+        });
+        setEditingStudentId(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save per-student tweak");
+      } finally {
+        setIsSaving(false);
       }
     },
-    [handleTweakSave, handleCancel]
+    [review, perStudentTweakDrafts, perStudentNoteDrafts, submissionController]
+  );
+
+  const cancelSharedEdit = useCallback(() => {
+    setTweakValue(review?.tweak);
+    setTweakNoteDraft(review?.tweak_note ?? "");
+    setIsEditingShared(false);
+    setError(null);
+  }, [review?.tweak, review?.tweak_note]);
+
+  const handleSharedKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void saveSharedTweak();
+      } else if (e.key === "Escape") {
+        cancelSharedEdit();
+      }
+    },
+    [saveSharedTweak, cancelSharedEdit]
   );
 
   if (!review) {
     return <></>;
   }
 
+  const perT = parseProfileIdToNumberMap(review.per_student_tweaks);
+  const perN = parseProfileIdToStringMap(review.per_student_tweak_notes);
+  const sharedTweakNum = review.tweak ?? 0;
+  const hasSharedTweak = sharedTweakNum !== 0;
+  const sharedNote = review.tweak_note?.trim();
+
   if (!isInstructor) {
-    if (review.tweak) {
-      return <Text>Includes instructor&apos;s tweak {review.tweak}</Text>;
+    if (showSplitStudentTotals && groupMemberIds.length > 0) {
+      const myId = private_profile_id;
+      const myT = myId ? perT[myId] : undefined;
+      const myN = myId ? perN[myId] : undefined;
+      if (!hasSharedTweak && !sharedNote && myT === undefined && !myN) {
+        return <></>;
+      }
+      return (
+        <Box mt={2} mb={2}>
+          <Text fontWeight="semibold" fontSize="sm" mb={1}>
+            Score tweaks
+          </Text>
+          {hasSharedTweak && (
+            <Text fontSize="sm">
+              Shared tweak (whole group): {sharedTweakNum}
+              {sharedNote ? ` — ${sharedNote}` : ""}
+            </Text>
+          )}
+          {!hasSharedTweak && sharedNote && <Text fontSize="sm">Instructor note (shared): {sharedNote}</Text>}
+          {myId && (myT !== undefined || myN) && (
+            <Text fontSize="sm" mt={1}>
+              Your additional tweak: {myT ?? 0}
+              {myN ? ` — ${myN}` : ""}
+            </Text>
+          )}
+        </Box>
+      );
+    }
+    if (hasSharedTweak || sharedNote) {
+      return (
+        <Text fontSize="sm" mt={2}>
+          {hasSharedTweak && <>Includes instructor&apos;s tweak {sharedTweakNum}</>}
+          {hasSharedTweak && sharedNote && " "}
+          {sharedNote && <>({sharedNote})</>}
+        </Text>
+      );
     }
     return <></>;
   }
 
-  if (isEditing) {
+  if (showSplitStudentTotals && groupMemberIds.length > 0) {
     return (
       <Box mt={2} mb={2}>
-        <HStack align="center" gap={2}>
-          <Text fontWeight="bold" fontSize="sm">
-            Tweak:
+        <Text fontWeight="semibold" fontSize="sm" mb={2}>
+          Score tweaks
+        </Text>
+        <Text fontSize="xs" color="text.muted" mb={2}>
+          Shared tweak applies to everyone (whole-group rubric + autograder). Per-student tweaks add only to that
+          student&apos;s total.
+        </Text>
+        <Box borderWidth="1px" borderRadius="md" p={2} mb={3} borderColor="border.emphasized">
+          <Text fontWeight="medium" fontSize="sm" mb={1}>
+            Shared (whole group)
           </Text>
-          <input
-            type="number"
-            step="any"
-            value={tweakValue ?? ""}
-            onChange={handleTweakChange}
-            onKeyDown={handleKeyDown}
-            autoFocus
-            style={{
-              width: "80px",
-              padding: "4px 8px",
-              border: "1px solid #ccc",
-              borderRadius: "4px",
-              fontSize: "14px"
-            }}
-            aria-label="Tweak score"
-          />
-          <Button size="sm" variant="surface" onClick={handleTweakSave} loading={isSaving} disabled={isSaving}>
-            Save
-          </Button>
-          <Button size="sm" variant="ghost" onClick={handleCancel} disabled={isSaving}>
-            Cancel
-          </Button>
-        </HStack>
+          {isEditingShared ? (
+            <VStack align="stretch" gap={2}>
+              <HStack align="center" gap={2} flexWrap="wrap">
+                <Text fontSize="sm">Points:</Text>
+                <input
+                  type="number"
+                  step="any"
+                  value={tweakValue ?? ""}
+                  onChange={handleTweakChange}
+                  onKeyDown={handleSharedKeyDown}
+                  style={{
+                    width: "100px",
+                    padding: "4px 8px",
+                    border: "1px solid #ccc",
+                    borderRadius: "4px",
+                    fontSize: "14px"
+                  }}
+                  aria-label="Shared tweak score"
+                />
+                <Button size="sm" variant="surface" onClick={() => void saveSharedTweak()} loading={isSaving}>
+                  Save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={cancelSharedEdit} disabled={isSaving}>
+                  Cancel
+                </Button>
+              </HStack>
+              <Box>
+                <Text fontSize="xs" color="text.muted" mb={1}>
+                  Note (optional, staff-visible)
+                </Text>
+                <Textarea
+                  size="sm"
+                  rows={2}
+                  value={tweakNoteDraft}
+                  onChange={(e) => setTweakNoteDraft(e.target.value)}
+                  placeholder="Why this tweak? Who should know?"
+                />
+              </Box>
+            </VStack>
+          ) : (
+            <VStack align="stretch" gap={1}>
+              <HStack>
+                <Text fontSize="sm">Tweak:</Text>
+                <Text
+                  as="span"
+                  cursor="pointer"
+                  color="blue.500"
+                  textDecoration="underline"
+                  fontSize="sm"
+                  onClick={() => setIsEditingShared(true)}
+                >
+                  {hasSharedTweak ? sharedTweakNum : "0 (click to edit)"}
+                </Text>
+              </HStack>
+              {sharedNote && (
+                <Text fontSize="xs" color="text.muted">
+                  Note: {sharedNote}
+                </Text>
+              )}
+              <Button size="xs" variant="outline" alignSelf="flex-start" onClick={() => setIsEditingShared(true)}>
+                Edit shared tweak / note
+              </Button>
+            </VStack>
+          )}
+        </Box>
+        <VStack align="stretch" gap={2}>
+          {groupMemberIds.map((studentId) => {
+            const savedT = perT[studentId];
+            const savedN = perN[studentId];
+            const isEditing = editingStudentId === studentId;
+            return (
+              <Box key={studentId} borderWidth="1px" borderRadius="md" p={2} borderColor="border.muted">
+                <HStack justify="space-between" mb={1}>
+                  <PersonName uid={studentId} />
+                  {!isEditing && (
+                    <Button size="xs" variant="ghost" onClick={() => setEditingStudentId(studentId)}>
+                      Edit
+                    </Button>
+                  )}
+                </HStack>
+                {isEditing ? (
+                  <VStack align="stretch" gap={2}>
+                    <HStack align="center" gap={2} flexWrap="wrap">
+                      <Text fontSize="sm">Extra points:</Text>
+                      <input
+                        type="number"
+                        step="any"
+                        value={perStudentTweakDrafts[studentId] ?? ""}
+                        onChange={(e) => setPerStudentTweakDrafts((prev) => ({ ...prev, [studentId]: e.target.value }))}
+                        style={{
+                          width: "100px",
+                          padding: "4px 8px",
+                          border: "1px solid #ccc",
+                          borderRadius: "4px",
+                          fontSize: "14px"
+                        }}
+                        aria-label={`Extra tweak points for this student`}
+                      />
+                      <Button
+                        size="sm"
+                        variant="surface"
+                        onClick={() => void saveStudentTweak(studentId)}
+                        loading={isSaving}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setPerStudentTweakDrafts((prev) => ({
+                            ...prev,
+                            [studentId]: savedT !== undefined ? String(savedT) : ""
+                          }));
+                          setPerStudentNoteDrafts((prev) => ({ ...prev, [studentId]: savedN ?? "" }));
+                          setEditingStudentId(null);
+                          setError(null);
+                        }}
+                        disabled={isSaving}
+                      >
+                        Cancel
+                      </Button>
+                    </HStack>
+                    <Box>
+                      <Text fontSize="xs" color="text.muted" mb={1}>
+                        Note (optional)
+                      </Text>
+                      <Textarea
+                        size="sm"
+                        rows={2}
+                        value={perStudentNoteDrafts[studentId] ?? ""}
+                        onChange={(e) => setPerStudentNoteDrafts((prev) => ({ ...prev, [studentId]: e.target.value }))}
+                        placeholder="Reason for this student-only adjustment"
+                      />
+                    </Box>
+                  </VStack>
+                ) : (
+                  <VStack align="stretch" gap={0}>
+                    <Text fontSize="sm">Extra tweak: {savedT !== undefined ? savedT : "—"}</Text>
+                    {savedN && (
+                      <Text fontSize="xs" color="text.muted">
+                        Note: {savedN}
+                      </Text>
+                    )}
+                  </VStack>
+                )}
+              </Box>
+            );
+          })}
+        </VStack>
+        {error && (
+          <Text color="red.500" fontSize="sm" mt={2}>
+            {error}
+          </Text>
+        )}
+      </Box>
+    );
+  }
+
+  if (isEditingShared) {
+    return (
+      <Box mt={2} mb={2}>
+        <Text fontWeight="semibold" fontSize="sm" mb={2}>
+          Score tweak
+        </Text>
+        <VStack align="stretch" gap={2}>
+          <HStack align="center" gap={2} flexWrap="wrap">
+            <Text fontSize="sm">Points:</Text>
+            <input
+              type="number"
+              step="any"
+              value={tweakValue ?? ""}
+              onChange={handleTweakChange}
+              onKeyDown={handleSharedKeyDown}
+              autoFocus
+              style={{
+                width: "100px",
+                padding: "4px 8px",
+                border: "1px solid #ccc",
+                borderRadius: "4px",
+                fontSize: "14px"
+              }}
+              aria-label="Tweak score"
+            />
+            <Button size="sm" variant="surface" onClick={() => void saveSharedTweak()} loading={isSaving}>
+              Save
+            </Button>
+            <Button size="sm" variant="ghost" onClick={cancelSharedEdit} disabled={isSaving}>
+              Cancel
+            </Button>
+          </HStack>
+          <Box>
+            <Text fontSize="xs" color="text.muted" mb={1}>
+              Note (optional, staff-visible)
+            </Text>
+            <Textarea
+              size="sm"
+              rows={3}
+              value={tweakNoteDraft}
+              onChange={(e) => setTweakNoteDraft(e.target.value)}
+              placeholder="Why this tweak? Who should know?"
+            />
+          </Box>
+        </VStack>
         {error && (
           <Text color="red.500" fontSize="sm" mt={1}>
             {error}
@@ -222,21 +578,20 @@ function SubmissionReviewScoreTweak() {
     );
   }
 
-  // Display mode - show current tweak or placeholder
   return (
     <Box mt={2} mb={2}>
-      <HStack align="center" gap={2}>
-        <Text fontWeight="bold" fontSize="sm">
-          Tweak:
-        </Text>
-        {review.tweak !== null && review.tweak !== undefined ? (
+      <Text fontWeight="semibold" fontSize="sm" mb={1}>
+        Score tweak
+      </Text>
+      <HStack align="center" gap={2} flexWrap="wrap">
+        <Text fontSize="sm">Points:</Text>
+        {review.tweak !== null && review.tweak !== undefined && review.tweak !== 0 ? (
           <Text
             as="span"
             cursor="pointer"
             color="blue.500"
             textDecoration="underline"
-            _hover={{ color: "blue.600" }}
-            onClick={() => setIsEditing(true)}
+            onClick={() => setIsEditingShared(true)}
             aria-label="Click to edit tweak"
           >
             {review.tweak}
@@ -247,14 +602,26 @@ function SubmissionReviewScoreTweak() {
             cursor="pointer"
             color="gray.500"
             fontStyle="italic"
-            _hover={{ color: "gray.600" }}
-            onClick={() => setIsEditing(true)}
+            onClick={() => setIsEditingShared(true)}
             aria-label="Click to add tweak"
           >
             Click to add tweak
           </Text>
         )}
       </HStack>
+      {sharedNote && (
+        <Text fontSize="xs" color="text.muted" mt={1}>
+          Note: {sharedNote}
+        </Text>
+      )}
+      <Button size="xs" variant="outline" mt={1} onClick={() => setIsEditingShared(true)}>
+        Edit tweak / note
+      </Button>
+      {error && (
+        <Text color="red.500" fontSize="sm" mt={1}>
+          {error}
+        </Text>
+      )}
     </Box>
   );
 }
@@ -508,6 +875,21 @@ function generateSubmissionMarkdown(
       }
       if (review.tweak != null) {
         lines.push(`- **Score Tweak:** ${review.tweak}`);
+      }
+      const twNote = typeof review.tweak_note === "string" ? review.tweak_note.trim() : "";
+      if (twNote) {
+        lines.push(`- **Tweak note:** ${twNote}`);
+      }
+      const pst = review.per_student_tweaks as Record<string, unknown> | null | undefined;
+      const psn = review.per_student_tweak_notes as Record<string, unknown> | null | undefined;
+      if (pst && typeof pst === "object" && Object.keys(pst).length > 0) {
+        lines.push("- **Per-student tweaks:**");
+        for (const [pid, val] of Object.entries(pst)) {
+          const num = typeof val === "number" ? val : Number(val);
+          const note =
+            psn && typeof psn === "object" && typeof psn[pid] === "string" ? (psn[pid] as string).trim() : "";
+          lines.push(`  - ${pid}: ${Number.isFinite(num) ? num : val}${note ? ` (${note})` : ""}`);
+        }
       }
       lines.push("");
     }
@@ -1278,12 +1660,150 @@ function UnGradedGradingSummary() {
   );
 }
 
+function isIndividualScores(value: unknown): value is IndividualScores {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(
+    (v) => typeof v === "number" || v === undefined || v === null
+  );
+}
+
+function isNonEmptyPerStudentGradingTotals(value: unknown): value is IndividualScores {
+  return isIndividualScores(value) && Object.keys(value as Record<string, unknown>).length > 0;
+}
+
+/** Full per-student totals (shared hand rubric + autograder + tweak + individual/assign-to-student slice). */
+function PerStudentGradingTotalsDisplay({
+  totals,
+  individualScores,
+  sharedBase,
+  maxPoints
+}: {
+  totals: IndividualScores;
+  individualScores: IndividualScores | null;
+  sharedBase: number | null | undefined;
+  maxPoints: number | null;
+}) {
+  const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const entries = Object.entries(totals).filter((entry): entry is [string, number] => typeof entry[1] === "number");
+  if (entries.length === 0) return null;
+
+  entries.sort(([a], [b]) => {
+    if (a === private_profile_id) return -1;
+    if (b === private_profile_id) return 1;
+    return a.localeCompare(b);
+  });
+
+  const resolvedSharedBase = sharedBase != null && Number.isFinite(Number(sharedBase)) ? Number(sharedBase) : null;
+
+  return (
+    <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
+      <Text fontWeight="semibold" fontSize="sm" mb={1}>
+        Scores by student
+      </Text>
+      <Text fontSize="xs" color="text.muted" mb={2}>
+        <strong>Shared</strong> is the same for everyone (whole-group rubric + autograder + shared tweak).{" "}
+        <strong>Individual</strong> is that student&apos;s personal / assigned rubric slice. Any per-student tweak is
+        included in <strong>Total</strong>. <strong>Total</strong> is capped to the assignment maximum when that setting
+        is on.
+      </Text>
+      <VStack align="stretch" gap={2}>
+        {entries.map(([profileId, totalScore]) => {
+          const isMe = profileId === private_profile_id;
+          const rawInd = individualScores?.[profileId];
+          const individualNum = typeof rawInd === "number" && Number.isFinite(rawInd) ? rawInd : 0;
+          const sharedNum = resolvedSharedBase != null ? resolvedSharedBase : totalScore - individualNum;
+          const isCapped =
+            maxPoints != null && resolvedSharedBase != null && totalScore + 1e-6 < resolvedSharedBase + individualNum;
+          const totalLabel = maxPoints != null ? `${totalScore}/${maxPoints}` : String(totalScore);
+
+          return (
+            <Box
+              key={profileId}
+              w="100%"
+              pb={2}
+              borderBottomWidth="1px"
+              borderColor="border.muted"
+              _last={{ borderBottomWidth: "0", pb: 0 }}
+            >
+              <HStack mb={1}>
+                <PersonName uid={profileId} />
+                {isMe && (
+                  <Text fontSize="xs" color="fg.info" fontWeight="bold">
+                    (You)
+                  </Text>
+                )}
+              </HStack>
+              <DataListRoot orientation="horizontal" size="sm">
+                <DataListItem label="Shared" value={String(sharedNum)} />
+                <DataListItem label="Individual" value={String(individualNum)} />
+                <DataListItem
+                  label="Total"
+                  value={
+                    <Text as="span" fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                      {totalLabel}
+                    </Text>
+                  }
+                />
+              </DataListRoot>
+              {isCapped && (
+                <Text fontSize="xs" color="text.muted" mt={1}>
+                  Total capped at assignment maximum.
+                </Text>
+              )}
+            </Box>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
+function IndividualScoresDisplay({ individualScores }: { individualScores: IndividualScores }) {
+  const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const entries = Object.entries(individualScores).filter((entry): entry is [string, number] => entry[1] !== undefined);
+  if (entries.length === 0) return null;
+
+  const myEntry = entries.find(([profileId]) => profileId === private_profile_id);
+  const sortedEntries = isGraderOrInstructor ? entries : myEntry ? [myEntry] : [];
+
+  if (sortedEntries.length === 0) return null;
+
+  return (
+    <Box w="100%" p={2} borderWidth="1px" borderRadius="md" borderColor="border.info" bg="bg.subtle">
+      <Text fontWeight="semibold" fontSize="sm" mb={2}>
+        Individual Scores
+      </Text>
+      <VStack align="start" gap={1}>
+        {sortedEntries.map(([profileId, score]) => {
+          const isMe = profileId === private_profile_id;
+          return (
+            <HStack key={profileId} w="100%" justifyContent="space-between">
+              <HStack>
+                <PersonName uid={profileId} />
+                {isMe && !isGraderOrInstructor && (
+                  <Text fontSize="xs" color="fg.info" fontWeight="bold">
+                    (You)
+                  </Text>
+                )}
+              </HStack>
+              <Text fontWeight={isMe && !isGraderOrInstructor ? "bold" : "normal"} fontSize="sm">
+                {score}
+              </Text>
+            </HStack>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const scrollRootRef = useRef<HTMLDivElement>(null);
-  const course = useCourse();
 
   const reviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const rubric = useRubricById(reviewAssignment?.rubric_id);
@@ -1299,6 +1819,10 @@ function RubricView() {
   }
   const gradingReview = useSubmissionReviewOrGradingReview(reviewId);
   const { assignment } = useAssignmentController();
+
+  const showPerStudentGradingTotals =
+    gradingReview?.per_student_grading_totals &&
+    isNonEmptyPerStudentGradingTotals(gradingReview.per_student_grading_totals);
 
   return (
     <Box
@@ -1325,29 +1849,22 @@ function RubricView() {
             <Text fontSize="sm">Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}</Text>
             <Text fontSize="sm" data-visual-test="blackout">
               Due:{" "}
-              {reviewAssignment.due_date
-                ? formatDueDateInTimezone(
-                    reviewAssignment.due_date,
-                    course.time_zone ?? "America/New_York",
-                    false,
-                    false
-                  )
-                : "N/A"}
+              {reviewAssignment.due_date ? (
+                <TimeZoneAwareDate date={reviewAssignment.due_date} format="MMM d, h:mm a" />
+              ) : (
+                "N/A"
+              )}
             </Text>
             {reviewAssignment.release_date && (
               <Text fontSize="sm">
                 Grading visible to student after:{" "}
-                {formatDueDateInTimezone(
-                  reviewAssignment.release_date,
-                  course.time_zone ?? "America/New_York",
-                  false,
-                  false
-                )}
+                <TimeZoneAwareDate date={reviewAssignment.release_date} format="MMM d, h:mm a" />
               </Text>
             )}
           </Box>
         )}
-        {assignment.total_points !== null &&
+        {!showPerStudentGradingTotals &&
+          assignment.total_points !== null &&
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
@@ -1355,7 +1872,24 @@ function RubricView() {
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
-        <SubmissionReviewScoreTweak />
+        {showPerStudentGradingTotals && (
+          <PerStudentGradingTotalsDisplay
+            totals={gradingReview.per_student_grading_totals as IndividualScores}
+            individualScores={
+              gradingReview.individual_scores && isIndividualScores(gradingReview.individual_scores)
+                ? gradingReview.individual_scores
+                : null
+            }
+            sharedBase={gradingReview.per_student_grading_shared_base}
+            maxPoints={assignment.total_points}
+          />
+        )}
+        {!showPerStudentGradingTotals &&
+          gradingReview?.individual_scores &&
+          isIndividualScores(gradingReview.individual_scores) && (
+            <IndividualScoresDisplay individualScores={gradingReview.individual_scores} />
+          )}
+        <SubmissionReviewScoreTweak showSplitStudentTotals={Boolean(showPerStudentGradingTotals)} />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
@@ -1388,6 +1922,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const { course_id } = useParams();
   const submission = useSubmission();
+  const hasGraderOutput = submissionHasGraderOutput(submission.grader_results);
+  const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
+  const activeSubPage = explicitSubPage ?? (hasGraderOutput ? "results" : "files");
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
@@ -1414,8 +1951,12 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     <Flex direction="column" minW="0px">
       {isGraderOrInstructor && dueDate && (
         <Box border={hasExtension ? "1px solid" : "none"} borderColor="border.warning" p={2} borderRadius="md">
-          Student&apos;s Due Date: {formatInTimeZone(dueDate, time_zone, "MMM d h:mm aaa")}
-          <AdjustDueDateDialog student_id={submission.profile_id || ""} assignment={assignment} />
+          Student&apos;s Due Date: <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" />
+          <AdjustDueDateDialog
+            student_id={submission.profile_id || ""}
+            group={assignmentGroupWithMembers || undefined}
+            assignment={assignment}
+          />
           {Boolean(hasExtension) && ` (${hoursExtended}-hour extension applied)`}
           {canStillSubmit && (
             <Alert status="warning">
@@ -1432,19 +1973,26 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             <HStack gap={1}>
               {submission.is_active && <ActiveSubmissionIcon />}
               {assignmentGroupWithMembers ? (
-                <HStack gap={1}>
-                  Group {assignmentGroupWithMembers.name} (
-                  {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                    <HStack key={member.profile_id} gap={1}>
-                      <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
-                      <StudentSummaryTrigger
-                        key={member.profile_id}
-                        student_id={member.profile_id}
-                        course_id={parseInt(course_id as string, 10)}
-                      />
-                    </HStack>
-                  ))}
-                  )
+                <HStack gap={1} flexWrap="wrap" alignItems="baseline">
+                  <HStack gap={1}>
+                    Group {assignmentGroupWithMembers.name} (
+                    {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
+                      <HStack key={member.profile_id} gap={1}>
+                        <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
+                        <StudentSummaryTrigger
+                          key={member.profile_id}
+                          student_id={member.profile_id}
+                          course_id={parseInt(course_id as string, 10)}
+                        />
+                      </HStack>
+                    ))}
+                    )
+                  </HStack>
+                  {assignmentGroupWithMembers.mentor_profile_id && (
+                    <Text fontSize="sm" color="fg.muted">
+                      Mentor: <PersonName uid={assignmentGroupWithMembers.mentor_profile_id} showAvatar={false} />
+                    </Text>
+                  )}
                 </HStack>
               ) : (
                 <>
@@ -1500,29 +2048,30 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </HStack>
       </Flex>
 
-      <Box
-        p={0}
-        m={0}
-        borderBottomColor="border.emphasized"
-        borderBottomWidth="2px"
-        bg="bg.muted"
-        defaultValue="results"
-      >
+      <Box p={0} m={0} borderBottomColor="border.emphasized" borderBottomWidth="2px" bg="bg.muted">
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
-          <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
+          <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
-          <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
+          <Button variant={activeSubPage === "files" ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files
           </Button>
         </NextLink>
+        {isGraderOrInstructor && assignment.enable_repo_analytics && (
+          <NextLink href={linkToSubPage(pathname, "repo-analytics", searchParams)}>
+            <Button variant={pathname.includes("/repo-analytics") ? "solid" : "ghost"}>
+              <Icon as={FaGithub} />
+              Repo Analytics
+            </Button>
+          </NextLink>
+        )}
       </Box>
       <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4}>
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>
           {children}
         </Box>
         <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>

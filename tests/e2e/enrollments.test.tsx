@@ -36,7 +36,9 @@ test.beforeAll(async () => {
     }
   ]);
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student1, instructor1]);
+});
 test.describe("Enrollments Page", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeEach(async ({ page }) => {

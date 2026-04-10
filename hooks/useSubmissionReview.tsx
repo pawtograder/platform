@@ -5,7 +5,8 @@ import {
   useMyReviewAssignments,
   useReviewAssignment,
   useRubricChecksByRubric,
-  useRubricCriteriaByRubric
+  useRubricCriteriaByRubric,
+  useRubricParts
 } from "./useAssignment";
 import {
   useAllCommentsForReview,
@@ -14,6 +15,8 @@ import {
   useWritableSubmissionReviews
 } from "./useSubmission";
 import { useNavigationProgress } from "@/components/ui/navigation-progress";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import { computeRubricGradingCompletion, gradeTargetsForSubmission } from "@/lib/rubricGradingCompletion";
 
 export type SubmissionReviewContextType = {
   activeReviewAssignmentId: number | undefined;
@@ -317,77 +320,67 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
 
 export function useMissingRubricChecksForActiveReview() {
   const activeSubmissionReview = useActiveSubmissionReview();
+  const submission = useSubmission();
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
 
-  // Get rubric data using hooks filtered by rubric_id
   const rubricChecks = useRubricChecksByRubric(activeSubmissionReview?.rubric_id);
   const allCriteria = useRubricCriteriaByRubric(activeSubmissionReview?.rubric_id);
+  const rubricPartsRaw = useRubricParts(activeSubmissionReview?.rubric_id ?? null);
+  const rubricParts = useMemo(() => rubricPartsRaw ?? [], [rubricPartsRaw]);
+  const groupRow = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id ?? undefined
+  });
+  const groupMemberProfileIds = (groupRow?.assignment_groups_members ?? []).map((m) => m.profile_id);
 
-  const { missing_required_checks, missing_optional_checks } = useMemo(() => {
-    if (!activeSubmissionReview || !rubricChecks.length) {
-      return { missing_required_checks: [], missing_optional_checks: [] };
+  const gradeTargets = useMemo(
+    () =>
+      gradeTargetsForSubmission({
+        assignmentGroupId: submission.assignment_group_id,
+        profileId: submission.profile_id,
+        groupMemberProfileIds
+      }),
+    [submission.assignment_group_id, submission.profile_id, groupMemberProfileIds]
+  );
+
+  const rubricPartStudentAssignments =
+    (activeSubmissionReview?.rubric_part_student_assignments as Record<string, string | null> | null) ?? null;
+
+  return useMemo(() => {
+    if (!activeSubmissionReview || !rubricChecks?.length) {
+      return {
+        missing_required_checks: [],
+        missing_optional_checks: [],
+        missing_required_criteria: [],
+        missing_optional_criteria: []
+      };
     }
 
-    // Calculate criteria evaluation for saturation check
-    const criteriaEvaluation = allCriteria.map((criteria) => {
-      const checksForCriteria = rubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
-      const check_count_applied = checksForCriteria.filter((check) =>
-        comments.some((comment) => comment.rubric_check_id === check.id)
-      ).length;
-
-      return {
-        criteria,
-        check_count_applied
-      };
-    });
-
-    const saturatedCriteria = criteriaEvaluation.filter(
-      (item) => item.criteria.max_checks_per_submission === item.check_count_applied
-    );
+    const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
+      computeRubricGradingCompletion({
+        rubricChecks: rubricChecks ?? [],
+        allCriteria: allCriteria ?? [],
+        rubricParts: rubricParts ?? [],
+        comments,
+        rubricPartStudentAssignments,
+        gradeTargets,
+        rubricPartIdsInScope: null
+      });
 
     return {
-      missing_required_checks: rubricChecks.filter(
-        (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
-      ),
-      missing_optional_checks: rubricChecks.filter(
-        (check) =>
-          !check.is_required &&
-          !comments.some((comment) => comment.rubric_check_id === check.id) &&
-          !saturatedCriteria.some((item) => item.criteria.id === check.rubric_criteria_id)
-      )
+      missing_required_checks,
+      missing_optional_checks,
+      missing_required_criteria,
+      missing_optional_criteria
     };
-  }, [rubricChecks, comments, activeSubmissionReview, allCriteria]);
-
-  const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    if (!activeSubmissionReview || !allCriteria.length) {
-      return { missing_required_criteria: [], missing_optional_criteria: [] };
-    }
-
-    const criteriaEvaluation = allCriteria.map((criteria) => {
-      const checksForCriteria = rubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
-      const check_count_applied = checksForCriteria.filter((check) =>
-        comments.some((comment) => comment.rubric_check_id === check.id)
-      ).length;
-
-      return {
-        criteria,
-        check_count_applied
-      };
-    });
-
-    return {
-      missing_required_criteria: criteriaEvaluation.filter(
-        (item) =>
-          item.criteria.min_checks_per_submission !== null &&
-          item.check_count_applied < item.criteria.min_checks_per_submission
-      ),
-      missing_optional_criteria: criteriaEvaluation.filter(
-        (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
-      )
-    };
-  }, [comments, allCriteria, rubricChecks, activeSubmissionReview]);
-
-  return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
+  }, [
+    activeSubmissionReview,
+    rubricChecks,
+    allCriteria,
+    rubricParts,
+    comments,
+    rubricPartStudentAssignments,
+    gradeTargets
+  ]);
 }
 
 export function useActiveSubmissionReview() {

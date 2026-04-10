@@ -1,6 +1,6 @@
 import { Provider } from "@/components/ui/provider";
 import { Theme, ClientOnly } from "@chakra-ui/react";
-import { Geist } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 import "@uiw/react-markdown-preview/markdown.css";
@@ -15,10 +15,7 @@ export const metadata = {
   description: "Pawtograder is an application for managing student assignments"
 };
 
-const geistSans = Geist({
-  display: "swap",
-  subsets: ["latin"]
-});
+const geistSans = GeistSans;
 
 export default function RootLayout({
   children

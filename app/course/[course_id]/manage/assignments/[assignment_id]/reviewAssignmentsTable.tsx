@@ -1,16 +1,17 @@
 "use client";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import { useEffect, useMemo, useState } from "react";
-import { ColumnDef, Row } from "@tanstack/react-table";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Badge } from "@/components/ui/badge";
-import { Table, Spinner, Text } from "@chakra-ui/react";
-import TableController from "@/lib/TableController";
-import { createClient } from "@/utils/supabase/client";
-import { useCourseController } from "@/hooks/useCourseController";
-import { useParams, useRouter } from "next/navigation";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 import PersonName from "@/components/ui/person-name";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import TableController from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Spinner, Table, Text } from "@chakra-ui/react";
+import { ColumnDef, Row } from "@tanstack/react-table";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"] & {
   submissions: {
@@ -151,12 +152,7 @@ export default function ReviewAssignmentsTable() {
         header: "Due Date",
         accessorKey: "due_date",
         cell: function render({ row }: { row: Row<ReviewAssignmentRow> }) {
-          const dueDate = new Date(row.original.due_date);
-          return (
-            <span>
-              {dueDate.toLocaleDateString()} {dueDate.toLocaleTimeString()}
-            </span>
-          );
+          return <TimeZoneAwareDate date={row.original.due_date} format="full" />;
         },
         enableColumnFilter: true,
         enableSorting: true

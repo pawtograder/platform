@@ -28,6 +28,7 @@ const optimizePackageImports = [
 ];
 
 const nextConfig: NextConfig = {
+  output: process.env.NEXT_OUTPUT_STANDALONE === "true" ? "standalone" : undefined,
   experimental: {
     optimizePackageImports,
     ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {})
@@ -140,6 +141,9 @@ const nextConfig: NextConfig = {
     : {})
 };
 
+// Skip Sentry webpack integration when DSN is unset (local dev) or explicitly disabled (CI speed).
+const hasSentryDsn = !!process.env.NEXT_PUBLIC_BUGSINK_DSN;
+
 const sentryConfig = {
   tunnelRoute: true,
   org: "pawtograder",
@@ -161,4 +165,6 @@ const sentryConfig = {
   disableLogger: true
 };
 
-export default disableSentryBundlingPlugin ? nextConfig : withSentryConfig(nextConfig, sentryConfig);
+export default hasSentryDsn && !disableSentryBundlingPlugin
+  ? withSentryConfig(nextConfig, sentryConfig)
+  : nextConfig;

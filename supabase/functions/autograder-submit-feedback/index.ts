@@ -19,6 +19,10 @@ import {
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
+import {
+  fetchDefaultGradeTargetStudentProfileId,
+  fetchRubricCheckIdsRequiringTargetStudentProfileId
+} from "../_shared/rubricCommentTargetStudentProfileId.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
@@ -144,6 +148,29 @@ async function insertComments({
       }
     }
   }
+
+  const rubricCheckIdsFromPayload = comments
+    .map((c) => c.rubric_check_id)
+    .filter((id): id is number => typeof id === "number");
+  const individualRubricCheckIds = await fetchRubricCheckIdsRequiringTargetStudentProfileId(
+    adminSupabase,
+    rubricCheckIdsFromPayload
+  );
+  let defaultIndividualTarget: string | null = null;
+  if (individualRubricCheckIds.size > 0) {
+    defaultIndividualTarget = await fetchDefaultGradeTargetStudentProfileId(adminSupabase, submission_id);
+    if (!defaultIndividualTarget) {
+      throw new UserVisibleError(
+        "Could not resolve a student target for individual rubric comments on this submission.",
+        400
+      );
+    }
+  }
+  const targetFieldForCheck = (rubricCheckId: number | null | undefined) =>
+    rubricCheckId != null && individualRubricCheckIds.has(rubricCheckId)
+      ? { target_student_profile_id: defaultIndividualTarget! }
+      : {};
+
   const submissionLineComments = comments.filter((eachComment) => "line" in eachComment);
   if (submissionLineComments.length > 0) {
     const fileMap = new Map<string, string>();
@@ -178,7 +205,8 @@ async function insertComments({
         eventually_visible: true,
         submission_review_id: grading_review_id,
         class_id,
-        author: profileMap.get(eachComment.author.name)
+        author: profileMap.get(eachComment.author.name),
+        ...targetFieldForCheck(eachComment.rubric_check_id)
       }))
     );
     if (submissionFileCommentsError) {
@@ -222,7 +250,8 @@ async function insertComments({
         author: profileMap.get(eachComment.author.name),
         released: eachComment.released,
         eventually_visible: true,
-        submission_review_id: grading_review_id
+        submission_review_id: grading_review_id,
+        ...targetFieldForCheck(eachComment.rubric_check_id)
       }))
     );
     if (submissionArtifactCommentsError) {
@@ -247,7 +276,8 @@ async function insertComments({
         author: profileMap.get(eachComment.author.name),
         released: eachComment.released,
         eventually_visible: true,
-        submission_review_id: grading_review_id
+        submission_review_id: grading_review_id,
+        ...targetFieldForCheck(eachComment.rubric_check_id)
       }))
     );
     if (submissionCommentsError) {

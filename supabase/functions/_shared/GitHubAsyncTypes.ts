@@ -5,7 +5,8 @@ export type GitHubAsyncMethod =
   | "sync_repo_permissions"
   | "archive_repo_and_lock"
   | "rerun_autograder"
-  | "sync_repo_to_handout";
+  | "sync_repo_to_handout"
+  | "fetch_repo_analytics";
 
 export type SyncTeamArgs = {
   org: string;
@@ -91,13 +92,23 @@ export type SyncRepoToHandoutArgs = {
   assignment_title: string;
 };
 
+export type FetchRepoAnalyticsArgs = {
+  assignment_id: number;
+  org: string;
+  /** Manual refresh: single repo (main queue). Mutually exclusive with `repository_ids` batch. */
+  repository_id?: number | null;
+  /** Bulk enqueue: fixed batch of repository PKs (e.g. 20 per message from SQL). */
+  repository_ids?: number[] | null;
+};
+
 export type GitHubAsyncArgs =
   | SyncTeamArgs
   | CreateRepoArgs
   | SyncRepoPermissionsArgs
   | ArchiveRepoAndLockArgs
   | RerunAutograderArgs
-  | SyncRepoToHandoutArgs;
+  | SyncRepoToHandoutArgs
+  | FetchRepoAnalyticsArgs;
 
 export type GitHubAsyncEnvelope = {
   method: GitHubAsyncMethod;

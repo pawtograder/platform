@@ -5,22 +5,46 @@ import {
   useReviewAssignmentRubricParts,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric,
+  useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
+import {
+  computeRubricAnnotationTargetMeta,
+  countFileCommentsForCheckScopedToTarget,
+  effectiveAnnotationTargetStudentProfileId,
+  useRubricAnnotationTargetMeta
+} from "@/hooks/useRubricAnnotationTargetMeta";
 import { useSubmission, useSubmissionController, useSubmissionFileComments } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import type { SubmissionWithGraderResultsAndFiles } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import rehypeSourcePositions from "@/lib/rehype-source-positions";
-import { Box, Badge, Button, Flex, Heading, HStack, Icon, Separator, Spinner, Text, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  Badge,
+  Button,
+  Flex,
+  Heading,
+  HStack,
+  Icon,
+  NativeSelectField,
+  NativeSelectRoot,
+  Separator,
+  Spinner,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import type { Element } from "hast";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import rehypeSanitize from "rehype-sanitize";
+import remarkEscapeHtml from "@/lib/remark-escape-html";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkGemoji from "remark-gemoji";
@@ -33,6 +57,7 @@ import CodeFile, {
   RubricCheckSubOptions,
   RubricCriteriaSelectGroupOption
 } from "./code-file";
+import { GroupMemberSelectOption } from "./group-member-select-option";
 import LineCommentForm from "./line-comments-form";
 import MessageInput from "./message-input";
 import { StudentVisibilityIndicator } from "./rubric-sidebar";
@@ -210,35 +235,18 @@ function resolveRelativePath(currentFilePath: string, relativePath: string): str
   return resolved.join("/");
 }
 
-/** Max size (10MB) for inlining images as data URIs. Larger files return "" to avoid OOM. */
-const MAX_INLINE_IMAGE_SIZE = 10 * 1024 * 1024;
-
 /**
- * Fetches binary file content from Supabase Storage and returns a data URI.
- * Uses FileReader.readAsDataURL for O(n) base64 encoding (avoids quadratic reduce on large files).
- * Returns "" if the file exceeds MAX_INLINE_IMAGE_SIZE to avoid OOM; callers should render a
- * placeholder for oversized or failed images.
+ * Returns a signed URL for a binary file in Supabase Storage.
+ * Uses signed URLs instead of downloading full blobs to avoid holding large files in JS memory.
+ * Returns "" on error; callers should render a placeholder for failed images.
  */
-async function fetchBinaryFileAsDataUri(storageKey: string, mimeType: string): Promise<string> {
+async function fetchBinaryFileSignedUrl(storageKey: string): Promise<string> {
   const client = createClient();
-  const { data, error } = await client.storage.from("submission-files").download(storageKey);
+  const { data, error } = await client.storage.from("submission-files").createSignedUrl(storageKey, 60 * 60 * 24);
   if (error || !data) {
     return "";
   }
-  const size = data.size ?? 0;
-  if (size > MAX_INLINE_IMAGE_SIZE) {
-    return "";
-  }
-  const blob = new Blob([data], { type: mimeType });
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      resolve(typeof result === "string" ? result : `data:${mimeType};base64,`);
-    };
-    reader.onerror = () => resolve("");
-    reader.readAsDataURL(blob);
-  });
+  return data.signedUrl;
 }
 
 /**
@@ -316,6 +324,16 @@ function MarkdownLineActionPopup({
   const existingComments = useSubmissionFileComments({ file_id: file.id });
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
+  const rubricParts = useRubricParts(rubric?.id ?? null);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id ?? undefined
+  });
+  const groupMembers = useMemo(
+    () => assignmentGroupWithMembers?.assignment_groups_members ?? [],
+    [assignmentGroupWithMembers]
+  );
+  const [pickedAnnotationStudentId, setPickedAnnotationStudentId] = useState<string | null>(null);
+  const annotationTargetMeta = useRubricAnnotationTargetMeta(selectedCheckOption?.criteria ?? null);
 
   const criteria: RubricCriteriaSelectGroupOption[] = useMemo(() => {
     let criteriaWithAnnotationChecks: RubricCriteria[] = [];
@@ -351,9 +369,19 @@ function MarkdownLineActionPopup({
             )
             .sort((a, b) => a.ordinal - b.ordinal)
             .map((check) => {
-              const existingAnnotationsForCheck = existingComments.filter(
-                (comment) => comment.rubric_check_id === check.id
-              ).length;
+              const rubricPart = rubricParts?.find((p) => p.id === criteria.rubric_part_id);
+              const targetMeta = computeRubricAnnotationTargetMeta({
+                criteria: criteria as RubricCriteria,
+                part: rubricPart,
+                members: groupMembers,
+                review
+              });
+              const existingAnnotationsForCheck = countFileCommentsForCheckScopedToTarget(
+                existingComments,
+                check.id,
+                targetMeta,
+                pickedAnnotationStudentId
+              );
               const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
               const option: RubricCheckSelectOption = {
                 label: check.name,
@@ -385,7 +413,20 @@ function MarkdownLineActionPopup({
       options: [{ label: "Leave a comment", value: "comment" }]
     });
     return criteriaOptions;
-  }, [assignedPartIds, existingComments, rubricCriteria, rubricChecks]);
+  }, [
+    assignedPartIds,
+    existingComments,
+    rubricCriteria,
+    rubricChecks,
+    rubricParts,
+    groupMembers,
+    review,
+    pickedAnnotationStudentId
+  ]);
+
+  useEffect(() => {
+    setPickedAnnotationStudentId(null);
+  }, [selectedCheckOption?.criteria?.id, selectedCheckOption?.check?.id]);
 
   useEffect(() => {
     if (!visible) return;
@@ -514,6 +555,25 @@ function MarkdownLineActionPopup({
                 size="sm"
               />
             )}
+            {selectedCheckOption.check && annotationTargetMeta.mode === "individual" && (
+              <NativeSelectRoot size="sm">
+                <NativeSelectField
+                  aria-label="Group member this annotation is for"
+                  value={pickedAnnotationStudentId ?? ""}
+                  onChange={(e) => setPickedAnnotationStudentId(e.target.value || null)}
+                >
+                  <option value="">Select group member…</option>
+                  {annotationTargetMeta.members.map((m) => (
+                    <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
+                  ))}
+                </NativeSelectField>
+              </NativeSelectRoot>
+            )}
+            {selectedCheckOption.check && annotationTargetMeta.mode === "assign_blocked" && (
+              <Text fontSize="sm" color="fg.error">
+                {annotationTargetMeta.reason}
+              </Text>
+            )}
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
@@ -540,6 +600,14 @@ function MarkdownLineActionPopup({
                   });
                   return;
                 }
+                const targetEff = effectiveAnnotationTargetStudentProfileId(
+                  annotationTargetMeta,
+                  pickedAnnotationStudentId
+                );
+                if (targetEff.error) {
+                  toaster.error({ title: "Cannot save annotation", description: targetEff.error });
+                  return;
+                }
                 const values = {
                   comment,
                   line: lineNumber,
@@ -554,7 +622,8 @@ function MarkdownLineActionPopup({
                   eventually_visible: selectedCheckOption.check
                     ? selectedCheckOption.check.student_visibility !== "never"
                     : true,
-                  regrade_request_id: null
+                  regrade_request_id: null,
+                  target_student_profile_id: targetEff.targetId
                 };
                 try {
                   await submissionController.submission_file_comments.create(values);
@@ -831,12 +900,9 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
 
         if (matchingFile) {
           if (matchingFile.is_binary && matchingFile.storage_key) {
-            // Binary file - fetch from Supabase Storage. Returns "" if oversized (exceeds MAX_INLINE_IMAGE_SIZE)
-            // or on error; we skip adding to resolved so the img component renders its placeholder.
-            const mime = matchingFile.mime_type || getMimeFromExtension(matchingFile.name);
-            const dataUri = await fetchBinaryFileAsDataUri(matchingFile.storage_key, mime);
-            if (dataUri) {
-              resolved[imgPath] = dataUri;
+            const signedUrl = await fetchBinaryFileSignedUrl(matchingFile.storage_key);
+            if (signedUrl) {
+              resolved[imgPath] = signedUrl;
             }
           } else if (!matchingFile.is_binary && matchingFile.contents && isImageFile(matchingFile.name)) {
             // SVG or text-based image stored inline
@@ -1182,8 +1248,8 @@ export default function MarkdownFilePreview({ file, allFiles, onNavigateToFile }
             }}
           >
             <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath, remarkGemoji]}
-              rehypePlugins={[rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
+              remarkPlugins={[remarkEscapeHtml, remarkGfm, remarkMath, remarkGemoji]}
+              rehypePlugins={[rehypeSanitize, rehypeKatex, rehypeHighlight, rehypeSourcePositions]}
               components={components}
             >
               {content}

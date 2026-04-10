@@ -1,28 +1,34 @@
-"use client";
+import { createClient } from "@/utils/supabase/server";
+import type { GradebookRecordsForStudent } from "@/hooks/useGradebook";
+import GradebookLayoutClient from "./GradebookLayoutClient";
 
-import { useCourseController } from "@/hooks/useCourseController";
-import { GradebookProvider } from "@/hooks/useGradebook";
-import { Box } from "@chakra-ui/react";
-import { useEffect } from "react";
+export default async function ManageGradebookLayout({
+  children,
+  params
+}: {
+  children: React.ReactNode;
+  params: Promise<{ course_id: string }>;
+}) {
+  const { course_id } = await params;
+  let initialGradebookRecords: GradebookRecordsForStudent[] | null = null;
 
-export default function GradebookLayout({ children }: { children: React.ReactNode }) {
-  const course = useCourseController();
-  const title = (() => {
+  // Reject partially numeric segments (parseInt("123foo", 10) === 123).
+  const hasValidCourseIdSegment = course_id != null && /^\d+$/.test(course_id);
+  const classId = hasValidCourseIdSegment ? Number.parseInt(course_id, 10) : Number.NaN;
+
+  if (hasValidCourseIdSegment && !Number.isNaN(classId)) {
     try {
-      const c = course.course; // may throw until loaded
-      return `${c.course_title || c.name} - Gradebook - Pawtograder`;
+      const supabase = await createClient();
+      const { data, error } = await supabase.rpc("get_gradebook_records_for_all_students", {
+        p_class_id: classId
+      });
+      if (!error && data != null && Array.isArray(data)) {
+        initialGradebookRecords = data as GradebookRecordsForStudent[];
+      }
     } catch {
-      return undefined;
+      initialGradebookRecords = null;
     }
-  })();
-  useEffect(() => {
-    if (title) document.title = title;
-  }, [title]);
-  return (
-    <GradebookProvider>
-      <Box w="100vw" overflowX="hidden">
-        {children}
-      </Box>
-    </GradebookProvider>
-  );
+  }
+
+  return <GradebookLayoutClient initialGradebookRecords={initialGradebookRecords}>{children}</GradebookLayoutClient>;
 }

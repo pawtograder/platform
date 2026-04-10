@@ -7,6 +7,7 @@ import AssignmentLeaderboard from "@/components/ui/assignment-leaderboard";
 import Markdown from "@/components/ui/markdown";
 import { NotGradedSubmissionIcon } from "@/components/ui/not-graded-submission-icon";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
+import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
@@ -156,6 +157,9 @@ export default function AssignmentPage() {
               return sm.is_active;
             })}
           />
+          {enrollment?.role === "student" && (
+            <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
+          )}
           {submissionsPeriod && maxSubmissions ? (
             <Box w="925px">
               <Alert.Root
