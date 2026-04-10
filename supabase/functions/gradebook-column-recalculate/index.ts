@@ -178,38 +178,6 @@ async function processRowsAll(
         rows: rowsInput
       });
 
-      const versionsByStudent = new Map<string, number>();
-      {
-        let vFrom = 0;
-        const vPageSize = 1000;
-        while (true) {
-          const vTo = vFrom + vPageSize - 1;
-          const { data: verPage, error: verErr } = await adminSupabase
-            .from("gradebook_row_recalc_state")
-            .select("student_id, version, dirty, is_recalculating")
-            .eq("class_id", classId)
-            .eq("gradebook_id", gradebook_id)
-            .eq("is_private", is_private)
-            .order("student_id", { ascending: true })
-            .range(vFrom, vTo);
-          if (verErr) {
-            Sentry.captureException(verErr, gbScope);
-            break;
-          }
-          if (!verPage || verPage.length === 0) break;
-          for (const row of verPage as unknown as Array<{
-            student_id: string;
-            version: number;
-            dirty: boolean;
-            is_recalculating: boolean;
-          }>) {
-            versionsByStudent.set(row.student_id, row.version);
-          }
-          if (verPage.length < vPageSize) break;
-          vFrom += vPageSize;
-        }
-      }
-
       console.log(`Upserting ${rowEntries.length} rows for gradebook ${gradebook_id}`);
 
       // Track row keys being upserted for duplicate detection
@@ -268,6 +236,36 @@ async function processRowsAll(
         console.log(
           `[DEBUG] ${workerId} UPSERT: Successfully upserted ${rowEntries.length} rows for gradebook ${gradebook_id}`
         );
+      }
+
+      // Read versions AFTER the upsert so expected_version matches the
+      // post-upsert value. Reading before the upsert caused systematic
+      // version mismatches that left rows permanently stuck.
+      const versionsByStudent = new Map<string, number>();
+      {
+        let vFrom = 0;
+        const vPageSize = 1000;
+        while (true) {
+          const vTo = vFrom + vPageSize - 1;
+          const { data: verPage, error: verErr } = await adminSupabase
+            .from("gradebook_row_recalc_state")
+            .select("student_id, version")
+            .eq("class_id", classId)
+            .eq("gradebook_id", gradebook_id)
+            .eq("is_private", is_private)
+            .order("student_id", { ascending: true })
+            .range(vFrom, vTo);
+          if (verErr) {
+            Sentry.captureException(verErr, gbScope);
+            break;
+          }
+          if (!verPage || verPage.length === 0) break;
+          for (const row of verPage as unknown as Array<{ student_id: string; version: number }>) {
+            versionsByStudent.set(row.student_id, row.version);
+          }
+          if (verPage.length < vPageSize) break;
+          vFrom += vPageSize;
+        }
       }
 
       // Batch update all students in a single RPC call
@@ -430,23 +428,6 @@ async function processRowsAll(
         rows: rowsInputScoped
       });
 
-      const versionsByStudentScoped = new Map<string, number>();
-      {
-        const { data: verRows, error: verErr } = await adminSupabase
-          .from("gradebook_row_recalc_state")
-          .select("student_id, version")
-          .eq("class_id", classId)
-          .eq("gradebook_id", gradebook_id)
-          .eq("is_private", is_private)
-          .in("student_id", studentIds);
-        if (verErr) {
-          Sentry.captureException(verErr, gbScope);
-        }
-        for (const row of (verRows as unknown as Array<{ student_id: string; version: number }>) ?? []) {
-          versionsByStudentScoped.set(row.student_id, row.version);
-        }
-      }
-
       // Track row keys being upserted for duplicate detection
       const upsertRowKeysScoped = rowEntries.map((entry) => {
         const key = rowKey(classId, gradebook_id, entry.msg.message.student_id, is_private);
@@ -504,6 +485,27 @@ async function processRowsAll(
         console.log(
           `[DEBUG] ${workerId} UPSERT (scoped): Successfully upserted ${rowEntries.length} rows for gradebook ${gradebook_id}`
         );
+      }
+
+      // Read versions AFTER the upsert so expected_version matches the
+      // post-upsert value. Reading before the upsert caused systematic
+      // version mismatches: the upsert increments version, then the
+      // batch RPC tried to clear with the stale pre-upsert version.
+      const versionsByStudentScoped = new Map<string, number>();
+      {
+        const { data: verRows, error: verErr } = await adminSupabase
+          .from("gradebook_row_recalc_state")
+          .select("student_id, version")
+          .eq("class_id", classId)
+          .eq("gradebook_id", gradebook_id)
+          .eq("is_private", is_private)
+          .in("student_id", studentIds);
+        if (verErr) {
+          Sentry.captureException(verErr, gbScope);
+        }
+        for (const row of (verRows as unknown as Array<{ student_id: string; version: number }>) ?? []) {
+          versionsByStudentScoped.set(row.student_id, row.version);
+        }
       }
 
       // Batch update all students in a single RPC call
