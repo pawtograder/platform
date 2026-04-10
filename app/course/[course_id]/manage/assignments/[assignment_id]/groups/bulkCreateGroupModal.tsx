@@ -1,9 +1,4 @@
-import {
-  Assignment,
-  AssignmentGroupWithMembersInvitationsAndJoinRequests,
-  Tag,
-  UserRole
-} from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentGroupWithMembersAndMentor, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Button,
@@ -25,7 +20,7 @@ import useTags from "@/hooks/useTags";
 import { useList } from "@refinedev/core";
 import TagDisplay from "@/components/ui/tag";
 
-export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
+export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersAndMentor[]) {
   const studentRoles = useAllStudentRoles();
   const profiles = useMemo(() => studentRoles.map((r) => r.profiles), [studentRoles]);
   const ungroupedProfiles = useMemo(() => {
@@ -44,7 +39,7 @@ export default function BulkCreateGroup({
   groups,
   assignment
 }: {
-  groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  groups: AssignmentGroupWithMembersAndMentor[];
   assignment: Assignment;
 }) {
   const [groupTextField, setGroupTextField] = useState<string>("");
