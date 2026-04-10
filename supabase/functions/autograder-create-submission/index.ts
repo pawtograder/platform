@@ -924,77 +924,29 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             ) {
               const minutesLate = Math.ceil((pushTime.getTime() - finalDueDate.getTime()) / 60000);
               const hoursLate = Math.max(1, Math.ceil(minutesLate / 60));
-
-              // Count tokens already used on this assignment
-              const { data: assignmentExceptions, error: assignmentExceptionsError } = await (repoData.assignment_group_id
-                ? adminSupabase
-                    .from("assignment_due_date_exceptions")
-                    .select("tokens_consumed")
-                    .eq("assignment_id", repoData.assignment_id)
-                    .eq("assignment_group_id", repoData.assignment_group_id)
-                : adminSupabase
-                    .from("assignment_due_date_exceptions")
-                    .select("tokens_consumed")
-                    .eq("assignment_id", repoData.assignment_id)
-                    .eq("student_id", profileId!));
-              if (assignmentExceptionsError) {
-                Sentry.captureException(assignmentExceptionsError, scope);
-                throw new UserVisibleError("Failed to verify assignment late-token balance. Please retry.", 500);
-              }
-              const tokensUsedOnAssignment = (assignmentExceptions ?? []).reduce(
-                (sum, e) => sum + (e.tokens_consumed ?? 0),
-                0
-              );
-
-              // Count tokens already used across all assignments in this class
-              const { data: classExceptions, error: classExceptionsError } = await (repoData.assignment_group_id
-                ? adminSupabase
-                    .from("assignment_due_date_exceptions")
-                    .select("tokens_consumed")
-                    .eq("class_id", repoData.assignments.class_id!)
-                    .eq("assignment_group_id", repoData.assignment_group_id)
-                : adminSupabase
-                    .from("assignment_due_date_exceptions")
-                    .select("tokens_consumed")
-                    .eq("class_id", repoData.assignments.class_id!)
-                    .eq("student_id", profileId!));
-              if (classExceptionsError) {
-                Sentry.captureException(classExceptionsError, scope);
-                throw new UserVisibleError("Failed to verify class late-token balance. Please retry.", 500);
-              }
-
-              const tokensUsedInClass = (classExceptions ?? []).reduce((sum, e) => sum + (e.tokens_consumed ?? 0), 0);
-
               const tokensNeeded = Math.ceil(hoursLate / 24);
-              const maxTokensAssignment = repoData.assignments.max_late_tokens ?? 0;
-              const maxTokensClass = repoData.assignments.classes?.late_tokens_per_student ?? 0;
-              const tokensRemainingAssignment = maxTokensAssignment - tokensUsedOnAssignment;
-              const tokensRemainingClass = maxTokensClass - tokensUsedInClass;
-              const tokensRemaining = Math.min(tokensRemainingAssignment, tokensRemainingClass);
 
-              if (tokensNeeded > tokensRemaining) {
-                throw new UserVisibleError(
-                  `You don't have enough late tokens to submit. You need ${tokensNeeded} token(s) but only have ${Math.max(0, tokensRemaining)} remaining.`,
-                  400
-                );
-              }
-
-              // Auto-insert the extension so the submission is accepted
-              const { error: insertError } = await adminSupabase.from("assignment_due_date_exceptions").insert({
-                assignment_id: repoData.assignment_id,
-                student_id: repoData.assignment_group_id ? null : profileId,
-                assignment_group_id: repoData.assignment_group_id ?? null,
-                class_id: repoData.assignments.class_id!,
-                creator_id: profileId!,
-                hours: hoursLate,
-                minutes: 0,
-                tokens_consumed: tokensNeeded,
-                note: "Auto-applied on late submission"
+              // Atomically check token balance and insert extension in one DB transaction
+              const { data: result, error: rpcError } = await adminSupabase.rpc("apply_late_token_extension", {
+                p_assignment_id: repoData.assignment_id,
+                p_student_id: repoData.assignment_group_id ? null : profileId,
+                p_assignment_group_id: repoData.assignment_group_id ?? null,
+                p_class_id: repoData.assignments.class_id!,
+                p_creator_id: profileId!,
+                p_hours: hoursLate,
+                p_tokens_needed: tokensNeeded
               });
 
-              if (insertError) {
-                Sentry.captureException(insertError, scope);
-                throw new UserVisibleError(`Failed to auto-apply late token: ${insertError.message}`);
+              if (rpcError) {
+                Sentry.captureException(rpcError, scope);
+                throw new UserVisibleError(`Failed to auto-apply late token: ${rpcError.message}`);
+              }
+
+              if (!result.success) {
+                throw new UserVisibleError(
+                  `You don't have enough late tokens to submit. You need ${result.tokens_needed} token(s) but only have ${result.tokens_remaining} remaining.`,
+                  400
+                );
               }
               // Fall through — submission will proceed normally
             } else {
