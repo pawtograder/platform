@@ -926,7 +926,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               const hoursLate = Math.max(1, Math.ceil(minutesLate / 60));
 
               // Count tokens already used on this assignment
-              const { data: assignmentExceptions } = await (repoData.assignment_group_id
+              const { data: assignmentExceptions, error: assignmentExceptionsError } = await (repoData.assignment_group_id
                 ? adminSupabase
                     .from("assignment_due_date_exceptions")
                     .select("tokens_consumed")
@@ -937,14 +937,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                     .select("tokens_consumed")
                     .eq("assignment_id", repoData.assignment_id)
                     .eq("student_id", profileId!));
-
+              if (assignmentExceptionsError) {
+                Sentry.captureException(assignmentExceptionsError, scope);
+                throw new UserVisibleError("Failed to verify assignment late-token balance. Please retry.", 500);
+              }
               const tokensUsedOnAssignment = (assignmentExceptions ?? []).reduce(
                 (sum, e) => sum + (e.tokens_consumed ?? 0),
                 0
               );
 
               // Count tokens already used across all assignments in this class
-              const { data: classExceptions } = await (repoData.assignment_group_id
+              const { data: classExceptions, error: classExceptionsError } = await (repoData.assignment_group_id
                 ? adminSupabase
                     .from("assignment_due_date_exceptions")
                     .select("tokens_consumed")
@@ -955,6 +958,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                     .select("tokens_consumed")
                     .eq("class_id", repoData.assignments.class_id!)
                     .eq("student_id", profileId!));
+              if (classExceptionsError) {
+                Sentry.captureException(classExceptionsError, scope);
+                throw new UserVisibleError("Failed to verify class late-token balance. Please retry.", 500);
+              }
 
               const tokensUsedInClass = (classExceptions ?? []).reduce((sum, e) => sum + (e.tokens_consumed ?? 0), 0);
 
