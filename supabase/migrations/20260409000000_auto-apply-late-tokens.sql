@@ -31,13 +31,20 @@ BEGIN
     ('x' || substr(md5(p_class_id::text || '-' || COALESCE(p_assignment_group_id::text, p_student_id::text)), 1, 16))::bit(64)::bigint
   );
 
-  -- Get per-assignment limit
-  SELECT COALESCE(max_late_tokens, 0) INTO v_max_tokens_assignment
-  FROM public.assignments WHERE id = p_assignment_id;
+  -- Load limits from the same assignment/class pair so the RPC cannot mix contexts
+  SELECT
+    COALESCE(a.max_late_tokens, 0),
+    COALESCE(c.late_tokens_per_student, 0)
+  INTO v_max_tokens_assignment, v_max_tokens_class
+  FROM public.assignments a
+  JOIN public.classes c
+    ON c.id = a.class_id
+  WHERE a.id = p_assignment_id
+    AND a.class_id = p_class_id;
 
-  -- Get per-class limit
-  SELECT COALESCE(late_tokens_per_student, 0) INTO v_max_tokens_class
-  FROM public.classes WHERE id = p_class_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Assignment % does not belong to class %', p_assignment_id, p_class_id;
+  END IF;
 
   -- Count tokens already used on this assignment
   SELECT COALESCE(SUM(tokens_consumed), 0) INTO v_tokens_used_assignment
@@ -62,6 +69,10 @@ BEGIN
   v_tokens_remaining_assignment := v_max_tokens_assignment - v_tokens_used_assignment;
   v_tokens_remaining_class := v_max_tokens_class - v_tokens_used_class;
   v_tokens_remaining := LEAST(v_tokens_remaining_assignment, v_tokens_remaining_class);
+
+  IF p_tokens_needed <= 0 OR p_hours <= 0 THEN
+    RAISE EXCEPTION 'p_tokens_needed and p_hours must be positive, got % and %', p_tokens_needed, p_hours;
+  END IF;
 
   IF p_tokens_needed > v_tokens_remaining THEN
     RETURN jsonb_build_object(
