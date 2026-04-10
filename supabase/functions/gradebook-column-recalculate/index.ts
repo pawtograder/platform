@@ -637,14 +637,12 @@ async function processRowsAll(
                 .eq("is_private", row.is_private);
             }
             // Re-enqueue via the queue so the worker re-processes with fresh data
-            const reEnqueueMessages = mismatchedRows.map((row) =>
-              JSON.stringify({
-                class_id: classId,
-                gradebook_id,
-                student_id: row.student_id,
-                is_private: row.is_private
-              })
-            );
+            const reEnqueueMessages = mismatchedRows.map((row) => ({
+              class_id: classId,
+              gradebook_id,
+              student_id: row.student_id,
+              is_private: row.is_private
+            }));
             await adminSupabase.schema("pgmq_public").rpc("send_batch", {
               queue_name: "gradebook_row_recalculate",
               messages: reEnqueueMessages
