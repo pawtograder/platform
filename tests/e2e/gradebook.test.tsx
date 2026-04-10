@@ -467,7 +467,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
             .catch(() => {});
         }
         // Also invoke via the DB's internal mechanism as fallback
-        await supabase.rpc("invoke_gradebook_recalculation_background_task" as never).catch(() => {});
+        await supabase.rpc("invoke_gradebook_recalculation_background_task");
       }
       expect(data?.score).toBe(90);
     }).toPass({ timeout: 120_000 });
