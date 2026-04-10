@@ -136,16 +136,18 @@ export function GroupManagementProvider({ children }: { children: React.ReactNod
   };
 
   const retainOnlyFailedMovesAndGroups = (failedProfileIds: Set<string>, failedGroupNames: Set<string>) => {
-    setMovesToFulfill((prev) => prev.filter((m) => failedProfileIds.has(m.profile_id)));
-    setGroupsToCreate((prev) => prev.filter((g) => failedGroupNames.has(g.name)));
-    setModProfiles((prev) => {
-      const retainedMoves = movesToFulfill.filter((m) => failedProfileIds.has(m.profile_id));
-      const retainedGroups = groupsToCreate.filter((g) => failedGroupNames.has(g.name));
-      const retainedProfileIds = new Set<string>([
-        ...retainedMoves.map((m) => m.profile_id),
-        ...retainedGroups.flatMap((g) => g.member_ids)
-      ]);
-      return prev.filter((p) => retainedProfileIds.has(p));
+    setMovesToFulfill((prevMoves) => {
+      const nextMoves = prevMoves.filter((m) => failedProfileIds.has(m.profile_id));
+      setGroupsToCreate((prevGroups) => {
+        const nextGroups = prevGroups.filter((g) => failedGroupNames.has(g.name));
+        const retainedProfileIds = new Set<string>([
+          ...nextMoves.map((m) => m.profile_id),
+          ...nextGroups.flatMap((g) => g.member_ids)
+        ]);
+        setModProfiles((prevMod) => prevMod.filter((p) => retainedProfileIds.has(p)));
+        return nextGroups;
+      });
+      return nextMoves;
     });
   };
 
