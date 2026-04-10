@@ -24,6 +24,9 @@ test.describe("Time zone dialog and indicator", () => {
       }
     ]);
   });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([student]);
+  });
 
   test("Opens dialog when no preference and time zones differ; persists selection", async ({ page }) => {
     // Clear localStorage BEFORE any navigation

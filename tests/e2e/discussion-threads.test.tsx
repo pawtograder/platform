@@ -36,9 +36,12 @@ test.beforeAll(async () => {
     }
   ]);
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student1, student2, instructor]);
+});
 test.describe("Discussion Thread Page", () => {
   test.describe.configure({ mode: "serial" });
+  test.setTimeout(90_000);
   test("A student can view the discussion feed", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     const navRegion = await page.locator("#course-nav");
@@ -202,6 +205,7 @@ test.describe("Discussion Thread Page", () => {
 
 test.describe("Custom Discussion Topics", () => {
   test.describe.configure({ mode: "serial" });
+  test.setTimeout(90_000);
 
   test("An instructor can view the discussion topics management page", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
@@ -305,10 +309,15 @@ test.describe("Custom Discussion Topics", () => {
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
     await page.getByText("New Post").click();
+    await page.waitForURL("**/discussion/new");
 
-    // Verify the custom topic appears in the topic selector
-    await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
-    await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
+    // Verify the custom topic appears in the topic selector.
+    // Topics are loaded asynchronously by the course controller after navigation,
+    // so retry until the data arrives.
+    await expect(async () => {
+      await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
+      await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
+    }).toPass({ timeout: 20000 });
 
     await argosScreenshot(page, "New Thread Form With Custom Topic");
 

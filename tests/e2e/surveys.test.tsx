@@ -46,7 +46,10 @@ const seedSurvey = async <T = any,>(
 };
 
 const getAuthedClient = async (user: User) => {
-  const client = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const client = createClient(
+    process.env.SUPABASE_URL!,
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+  );
   const access_token = await getAuthTokenForUser(user);
   await client.auth.setSession({ access_token, refresh_token: "ignore" });
   return client;
@@ -95,6 +98,9 @@ test.describe("Surveys Page", () => {
     ]);
     [studentA, studentB, instructor, grader] = users;
     await clearCourseSurveys();
+  });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([studentA, studentB, instructor, grader]);
   });
 
   test("student sees empty state when no surveys exist", async ({ page }) => {

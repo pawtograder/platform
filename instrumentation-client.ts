@@ -27,13 +27,17 @@ Sentry.init({
   beforeSend(event) {
     // Filter React hydration mismatch errors — typically caused by browser extensions
     // (Grammarly, Google Translate, ad blockers, etc.) modifying the DOM before React hydrates.
+    // In production React minifies these to error codes #418, #423, #425.
     if (
-      event.exception?.values?.some(
-        (e) =>
-          e.value?.includes("Hydration failed") ||
-          e.value?.includes("There was an error while hydrating") ||
-          e.value?.includes("Text content does not match server-rendered HTML")
-      )
+      event.exception?.values?.some((e) => {
+        const v = e.value ?? "";
+        return (
+          v.includes("Hydration failed") ||
+          v.includes("There was an error while hydrating") ||
+          v.includes("Text content does not match server-rendered HTML") ||
+          /Minified React error #(418|423|425)/.test(v)
+        );
+      })
     ) {
       return null;
     }

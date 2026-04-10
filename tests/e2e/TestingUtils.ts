@@ -352,7 +352,10 @@ export async function updateClassSettings({
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient(
+    process.env.SUPABASE_URL!,
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+  );
 
   // Generate magic link using admin client (same as TestingUtils.ts does)
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -382,7 +385,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // Helper function to create a Supabase client authenticated as a specific user
 export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient<Database>(
+    process.env.SUPABASE_URL!,
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+  );
 
   // Generate magic link using admin client
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -501,6 +507,32 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
     throw new Error(`Failed to sign in with magic link: ${message}`);
   }
 }
+export async function generateMagicLink(user: TestingUser): Promise<string> {
+  const { data, error } = await supabase.auth.admin.generateLink({
+    email: user.email,
+    type: "magiclink"
+  });
+  if (error) throw new Error(`Failed to generate magic link for ${user.email}: ${error.message}`);
+  const tokenHash = data.properties?.hashed_token;
+  if (!tokenHash) throw new Error(`Failed to generate magic link for ${user.email}: missing token hash`);
+  const baseUrl = (process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return `${baseUrl}/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
+}
+
+export async function logMagicLink(users: (TestingUser | undefined)[]) {
+  if (process.env.E2E_PRINT_MAGIC_LINKS !== "true") return;
+  for (const user of users.filter(Boolean)) {
+    try {
+      const link = await generateMagicLink(user!);
+      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
+    } catch (err) {
+      console.warn(
+        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+}
+
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);
@@ -1676,6 +1708,20 @@ export async function insertSubmissionViaAPI({
     }
   });
   if (error) {
+    // Non-2xx response — try to extract structured error details from the response body
+    if (error.context instanceof Response) {
+      const rawBody = await error.context.text().catch(() => "");
+      if (rawBody) {
+        try {
+          const body = JSON.parse(rawBody) as { error?: { details?: unknown } };
+          if (body?.error?.details) {
+            throw new Error(String(body.error.details));
+          }
+        } catch (e) {
+          if (e instanceof Error && !(e instanceof SyntaxError)) throw e;
+        }
+      }
+    }
     throw new Error(`Failed to create submission: ${error.message}`);
   }
   if (data == null) {
@@ -2925,7 +2971,7 @@ export async function createAssignmentsAndGradebookColumns({
     slug: "average-assignments",
     score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
     max_score: 100,
-    sort_order: 2,
+    sort_order: numAssignments,
     rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 
