@@ -2,8 +2,9 @@ ALTER TABLE assignments
   ADD COLUMN require_tokens_before_due_date boolean NOT NULL DEFAULT true;
 
 -- Atomically checks token balance and inserts a due date extension in one transaction.
--- Returns jsonb: { success: true } or { success: false, error: "..." }
-CREATE OR REPLACE FUNCTION apply_late_token_extension(
+-- Returns jsonb: { success: true } or
+-- { success: false, tokens_needed: integer, tokens_remaining: integer }
+CREATE OR REPLACE FUNCTION public.apply_late_token_extension(
   p_assignment_id bigint,
   p_student_id uuid,
   p_assignment_group_id bigint,
@@ -14,6 +15,7 @@ CREATE OR REPLACE FUNCTION apply_late_token_extension(
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path TO ''
 AS $$
 DECLARE
   v_max_tokens_assignment integer;
@@ -26,20 +28,20 @@ DECLARE
 BEGIN
   -- Lock on (assignment, student/group) to prevent concurrent inserts from racing
   PERFORM pg_advisory_xact_lock(
-    ('x' || substr(md5(p_assignment_id::text || '-' || COALESCE(p_assignment_group_id::text, p_student_id::text)), 1, 16))::bit(64)::bigint
+    ('x' || substr(md5(p_class_id::text || '-' || COALESCE(p_assignment_group_id::text, p_student_id::text)), 1, 16))::bit(64)::bigint
   );
 
   -- Get per-assignment limit
   SELECT COALESCE(max_late_tokens, 0) INTO v_max_tokens_assignment
-  FROM assignments WHERE id = p_assignment_id;
+  FROM public.assignments WHERE id = p_assignment_id;
 
   -- Get per-class limit
   SELECT COALESCE(late_tokens_per_student, 0) INTO v_max_tokens_class
-  FROM classes WHERE id = p_class_id;
+  FROM public.classes WHERE id = p_class_id;
 
   -- Count tokens already used on this assignment
   SELECT COALESCE(SUM(tokens_consumed), 0) INTO v_tokens_used_assignment
-  FROM assignment_due_date_exceptions
+  FROM public.assignment_due_date_exceptions
   WHERE assignment_id = p_assignment_id
     AND (
       (p_assignment_group_id IS NOT NULL AND assignment_group_id = p_assignment_group_id)
@@ -49,7 +51,7 @@ BEGIN
 
   -- Count tokens already used across all assignments in this class
   SELECT COALESCE(SUM(tokens_consumed), 0) INTO v_tokens_used_class
-  FROM assignment_due_date_exceptions
+  FROM public.assignment_due_date_exceptions
   WHERE class_id = p_class_id
     AND (
       (p_assignment_group_id IS NOT NULL AND assignment_group_id = p_assignment_group_id)
@@ -70,7 +72,7 @@ BEGIN
   END IF;
 
   -- Insert the extension
-  INSERT INTO assignment_due_date_exceptions
+  INSERT INTO public.assignment_due_date_exceptions
     (assignment_id, student_id, assignment_group_id, class_id, creator_id, hours, minutes, tokens_consumed, note)
   VALUES
     (p_assignment_id, p_student_id, p_assignment_group_id, p_class_id, p_creator_id, p_hours, 0, p_tokens_needed, 'Auto-applied on late submission');
@@ -78,3 +80,6 @@ BEGIN
   RETURN jsonb_build_object('success', true);
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.apply_late_token_extension(bigint, uuid, bigint, bigint, uuid, integer, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.apply_late_token_extension(bigint, uuid, bigint, bigint, uuid, integer, integer) TO service_role;
