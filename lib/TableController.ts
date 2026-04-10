@@ -596,6 +596,10 @@ export type BroadcastMessage =
     }
   | GradebookRowRecalcStateBroadcastMessage
   | OfficeHoursBroadcastMessage;
+
+/** Page size for PostgREST `range` pagination (initial full load and {@link fetchPostgrestAllPages}). */
+export const POSTGREST_PAGE_SIZE_DEFAULT = 1000;
+
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
   Query extends string = "*",
@@ -958,7 +962,7 @@ export default class TableController<
 
     try {
       let page = 0;
-      const pageSize = 1000;
+      const pageSize = POSTGREST_PAGE_SIZE_DEFAULT;
       const changedRows: ResultOne[] = [];
 
       // Fetch in pages ordered by updated_at to advance watermark monotonically
@@ -1044,7 +1048,7 @@ export default class TableController<
   private async _fetchInitialData(loadEntireTable: boolean): Promise<ResultOne[]> {
     const rows: ResultOne[] = [];
     let page = 0;
-    const pageSize = 1000;
+    const pageSize = POSTGREST_PAGE_SIZE_DEFAULT;
     let nRows: number | undefined;
 
     // Always add ORDER BY id to ensure deterministic pagination
@@ -2657,4 +2661,49 @@ export default class TableController<
   get rowCount() {
     return this._rows.length;
   }
+}
+
+/**
+ * Loads all rows for a PostgREST query using the same paging strategy as {@link TableController}
+ * when `loadEntireTable` is true: apply deterministic `order` columns, then fetch with `range` in
+ * chunks (default 1000) until a short page or empty result.
+ *
+ * Use for views or denormalized result sets where rows must **not** be merged by primary key.
+ * For example, `active_submissions_for_class` repeats `submission_id` for each group member;
+ * {@link TableController} would treat those as duplicate ids and drop rows.
+ */
+export async function fetchPostgrestAllPages<Row>(
+  // PostgREST builders are generic-heavy; callers pass a fully filtered query before ordering.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  filteredQuery: any,
+  orderBy: { column: string; ascending?: boolean }[],
+  options?: { pageSize?: number; isCancelled?: () => boolean }
+): Promise<Row[]> {
+  let orderedQuery = filteredQuery;
+  for (const o of orderBy) {
+    orderedQuery = orderedQuery.order(o.column, { ascending: o.ascending ?? true });
+  }
+  const pageSize = options?.pageSize ?? POSTGREST_PAGE_SIZE_DEFAULT;
+  const rows: Row[] = [];
+  let page = 0;
+  for (;;) {
+    if (options?.isCancelled?.()) {
+      return rows;
+    }
+    const rangeStart = page * pageSize;
+    const rangeEnd = (page + 1) * pageSize - 1;
+    const { data, error } = await orderedQuery.range(rangeStart, rangeEnd);
+    if (error) {
+      throw error;
+    }
+    if (!data || data.length === 0) {
+      break;
+    }
+    rows.push(...(data as Row[]));
+    if (data.length < pageSize) {
+      break;
+    }
+    page++;
+  }
+  return rows;
 }
