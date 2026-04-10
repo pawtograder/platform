@@ -46,9 +46,12 @@ import {
   useSetActiveSubmissionReviewId,
   useSetIgnoreAssignedReview
 } from "@/hooks/useSubmissionReview";
+import { useNextIncompleteReviewUrl } from "@/hooks/useNextIncompleteReview";
 import { computeRubricGradingCompletion, gradeTargetsForSubmission } from "@/lib/rubricGradingCompletion";
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
+import { useRouter } from "next/navigation";
+import { Switch } from "./switch";
 import PersonName from "./person-name";
 import SelfReviewDueDateInformation from "./self-review-due-date-information";
 import { Toaster, toaster } from "./toaster";
@@ -344,6 +347,18 @@ export function CompleteReviewAssignmentButton() {
  *
  * Displays missing required and optional rubric checks and criteria, and prevents completion until all required checks are addressed. On completion, updates the review status and shows a success or error notification.
  */
+function useAutoAdvance(): [boolean, (v: boolean) => void] {
+  const [on, setOn] = useState(() => {
+    if (typeof localStorage === "undefined") return false;
+    return localStorage.getItem("pawtograder-auto-advance-review") === "true";
+  });
+  const toggle = (v: boolean) => {
+    localStorage.setItem("pawtograder-auto-advance-review", String(v));
+    setOn(v);
+  };
+  return [on, toggle];
+}
+
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
@@ -351,6 +366,9 @@ export function CompleteReviewButton() {
     useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
   const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
+  const nextIncompleteUrl = useNextIncompleteReviewUrl();
+  const [autoAdvance, setAutoAdvance] = useAutoAdvance();
 
   if (
     !activeSubmissionReview ||
@@ -439,42 +457,53 @@ export function CompleteReviewButton() {
                 <Text>All checks have been applied. Click the button below to mark the review as complete.</Text>
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-                <Button
-                  variant="solid"
-                  colorPalette="green"
-                  loading={isLoading}
-                  onClick={async () => {
-                    if (!activeSubmissionReview) {
-                      toaster.error({
-                        title: "Error marking review as complete",
-                        description: "No active submission review found."
-                      });
-                      return;
-                    }
-                    try {
-                      setIsLoading(true);
-                      await submissionController.submission_reviews.update(activeSubmissionReview.id, {
-                        completed_at: new Date().toISOString(),
-                        completed_by: private_profile_id
-                      });
+                <VStack align="start" gap={2} w="100%">
+                  {nextIncompleteUrl && (
+                    <Switch checked={autoAdvance} onCheckedChange={(e) => setAutoAdvance(e.checked)} size="sm">
+                      Auto-advance to next review
+                    </Switch>
+                  )}
+                  <Button
+                    variant="solid"
+                    colorPalette="green"
+                    loading={isLoading}
+                    onClick={async () => {
+                      if (!activeSubmissionReview) {
+                        toaster.error({
+                          title: "Error marking review as complete",
+                          description: "No active submission review found."
+                        });
+                        return;
+                      }
+                      try {
+                        setIsLoading(true);
+                        await submissionController.submission_reviews.update(activeSubmissionReview.id, {
+                          completed_at: new Date().toISOString(),
+                          completed_by: private_profile_id
+                        });
 
-                      toaster.success({
-                        title: "Review marked as complete",
-                        description: "Your review has been marked as complete."
-                      });
-                    } catch (error) {
-                      console.error("Error marking review as complete", error);
-                      toaster.error({
-                        title: "Error marking review as complete",
-                        description: "An error occurred while marking the review as complete."
-                      });
-                    } finally {
-                      setIsLoading(false);
-                    }
-                  }}
-                >
-                  Mark as Complete
-                </Button>
+                        toaster.success({
+                          title: "Review marked as complete",
+                          description: "Your review has been marked as complete."
+                        });
+
+                        if (autoAdvance && nextIncompleteUrl) {
+                          router.push(nextIncompleteUrl);
+                        }
+                      } catch (error) {
+                        console.error("Error marking review as complete", error);
+                        toaster.error({
+                          title: "Error marking review as complete",
+                          description: "An error occurred while marking the review as complete."
+                        });
+                      } finally {
+                        setIsLoading(false);
+                      }
+                    }}
+                  >
+                    Mark as Complete
+                  </Button>
+                </VStack>
               )}
             </VStack>
           </Popover.Body>

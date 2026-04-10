@@ -81,6 +81,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaChartLine, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import { CompleteReviewButton } from "./submission-review-toolbar";
 import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
@@ -1724,6 +1725,11 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
           )}
         </Box>
       ))}
+      {activeReviewAssignment && (
+        <Box pt={4} pb={2} w="100%">
+          <CompleteReviewButton />
+        </Box>
+      )}
     </VStack>
   );
 }
