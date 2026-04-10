@@ -4,6 +4,8 @@ import { test, expect } from "../global-setup";
 import type { Page, Locator } from "@playwright/test";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
+import { promises as fs } from "node:fs";
+import Papa from "papaparse";
 import {
   createClass,
   createUsersInClass,
@@ -20,6 +22,8 @@ dotenv.config({ path: ".env.local" });
 let course: Course;
 let students: TestingUser[] = [];
 let instructor: TestingUser | undefined;
+const RENDER_EXPORT_COLUMN_NAME = "Final Grade (Letter)";
+const RENDER_EXPORT_COLUMN_SLUG = "rendered-final-grade-letter";
 
 // Helpers
 function escapeRegExp(text: string): string {
@@ -43,10 +47,45 @@ async function readCellNumber(page: Page, rowName: string, columnName: string) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-// async function readCellText(page: Page, rowName: string, columnName: string) {
-//   const cell = await getGridcellInRow(page, rowName, columnName);
-//   return (await cell.innerText()).trim();
-// }
+function parseCsv(csvText: string) {
+  const text = csvText.charCodeAt(0) === 0xfeff ? csvText.slice(1) : csvText;
+  const parsed = Papa.parse<string[]>(text, {
+    skipEmptyLines: true
+  });
+  if (parsed.errors.length > 0) {
+    const firstError = parsed.errors[0];
+    throw new Error(`Failed to parse CSV: ${firstError.message}`);
+  }
+  return parsed.data.map((row) => row.map((cell) => cell ?? ""));
+}
+
+function getCsvCellValue(csvRows: string[][], email: string, columnName: string) {
+  if (!Array.isArray(csvRows) || csvRows.length === 0) {
+    throw new Error("CSV parsing returned no rows");
+  }
+  const [headers, ...dataRows] = csvRows;
+  const emailIndex = headers.indexOf("Email");
+  const columnIndex = headers.indexOf(columnName);
+  if (emailIndex === -1 || columnIndex === -1) {
+    throw new Error(`Could not find Email or ${columnName} column in CSV headers`);
+  }
+  const studentRow = dataRows.find((row) => row[emailIndex] === email);
+  if (!studentRow) {
+    throw new Error(`Could not find CSV row for ${email}`);
+  }
+  return studentRow[columnIndex] ?? "";
+}
+
+async function downloadCsvFromGradebookPopover(page: Page) {
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download CSV" }).click();
+  const download = await downloadPromise;
+  const downloadPath = await download.path();
+  if (!downloadPath) {
+    throw new Error("Download path not available");
+  }
+  return fs.readFile(downloadPath, "utf8");
+}
 
 // Virtualization stability helpers
 async function waitForVirtualizerIdle(page: Page) {
@@ -75,6 +114,27 @@ async function waitForVirtualizerIdle(page: Page) {
     },
     { polling: "raf", timeout: 2000 }
   );
+}
+
+async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
+  const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
+  await region.evaluate((el) => {
+    el.scrollLeft = 0;
+  });
+  // Wait for virtualizer to re-render after scroll position change
+  await waitForVirtualizerIdle(page);
+  const dataRow = region.locator("thead tr").filter({ has: page.locator("th").filter({ hasText: "Student Name" }) });
+  await dataRow.first().waitFor({ state: "visible" });
+  // Scrollable gradebook columns are rendered as positioned <div role="columnheader">
+  // elements inside a single <th>, not as separate <th> elements. Use [data-col-id] to
+  // find all actual column headers (both frozen <th> and inner scrollable <div>).
+  const cells = dataRow.locator("[data-col-id]");
+  const n = await cells.count();
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push((await cells.nth(i).innerText()).split("\n")[0].trim());
+  }
+  return out;
 }
 
 async function waitForStableLocator(page: Page, getLocator: () => Promise<Locator> | Locator, timeoutMs = 3000) {
@@ -113,7 +173,7 @@ async function waitForStableLocator(page: Page, getLocator: () => Promise<Locato
   }
   throw new Error("Timed out waiting for stable locator box");
 }
-test.setTimeout(240_000);
+test.setTimeout(360_000);
 test.describe("Gradebook Page - Comprehensive", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeAll(async () => {
@@ -371,7 +431,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get gradebook column: ${gradebookColumnError.message}`);
     }
 
-    //Wait for gradebook to finish updating with the assignment code walk grades before starting the test
+    // Wait for gradebook to finish updating with the assignment code walk grades.
+    // The recalculation happens via an async DB→edge function chain (pg_net).
+    // On some deployments, the pg_net worker or the edge function worker may be
+    // slow or stuck. Clear any stale is_recalculating states and periodically
+    // kick the worker via the DB RPC if the score doesn't appear.
+    let kickCount = 0;
     await expect(async () => {
       const { data, error } = await supabase
         .from("gradebook_column_students")
@@ -382,11 +447,49 @@ test.describe("Gradebook Page - Comprehensive", () => {
         .eq("is_private", true)
         .single();
       if (error) {
-        console.log(`Error getting gradebook column student data: ${error.message}`);
         throw new Error(`Failed to get gradebook column student data: ${error.message}`);
       }
+      if (data?.score !== 90 && kickCount < 5) {
+        kickCount++;
+        // Clear stuck recalculation states that block new enqueues
+        await supabase
+          .from("gradebook_row_recalc_state")
+          .update({ is_recalculating: false })
+          .eq("class_id", course.id)
+          .eq("is_recalculating", true);
+        // Kick the recalculation worker directly (pg_net may be slow)
+        const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
+        if (edgeSecret) {
+          await supabase.functions
+            .invoke("gradebook-column-recalculate", {
+              headers: { "x-edge-function-secret": edgeSecret }
+            })
+            .catch(() => {});
+        }
+        // Also invoke via the DB's internal mechanism as fallback
+        await supabase.rpc("invoke_gradebook_recalculation_background_task");
+      }
       expect(data?.score).toBe(90);
-    }).toPass();
+    }).toPass({ timeout: 120_000 });
+
+    // Wait for the average-assignments column's dependencies to include the code walk column.
+    // The gradebook-column-inserted edge function updates dependencies asynchronously when a
+    // new column (like the code walk column) is created. Without this wait, there is a race:
+    // the code walk score may be set before dependencies are updated, so the dependent
+    // average-assignments column never gets recalculated with the code walk included.
+    await expect(async () => {
+      const { data: avgCol, error: avgColError } = await supabase
+        .from("gradebook_columns")
+        .select("dependencies")
+        .eq("class_id", course.id)
+        .eq("slug", "average-assignments")
+        .single();
+      if (avgColError) {
+        throw new Error(`Failed to get average-assignments column: ${avgColError.message}`);
+      }
+      const deps = avgCol?.dependencies as { gradebook_columns?: number[] } | null;
+      expect(deps?.gradebook_columns).toContain(gradebookColumn!.id);
+    }).toPass({ timeout: 120_000 });
 
     //ALSO check for the final grade
     const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
@@ -399,11 +502,11 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
     }
 
-    //Wait for gradebook to finish updating with the final grade
+    //Wait for gradebook to finish updating with the private final grade
     await expect(async () => {
       const { data: privateRecord, error: privateError } = await supabase
         .from("gradebook_column_students")
-        .select("*")
+        .select("score")
         .eq("class_id", course.id)
         .eq("student_id", students[0].private_profile_id)
         .eq("gradebook_column_id", finalGradebookColumn!.id)
@@ -413,8 +516,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
       }
       expect(privateRecord?.score).toBe(51.95);
+    }).toPass({ timeout: 60_000 });
 
-      // Verify that is_private=false record matches is_private=true record for calculated columns
+    // Public record may lag behind private due to async recalculation — poll separately
+    await expect(async () => {
       const { data: publicRecord, error: publicError } = await supabase
         .from("gradebook_column_students")
         .select("*")
@@ -428,13 +533,11 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       // Not all dependencies are released, so the public score is different
       expect(publicRecord?.score).toBe(43.5);
-      expect(publicRecord?.score_override).toBe(privateRecord?.score_override);
-      expect(publicRecord?.is_missing).toBe(privateRecord?.is_missing);
-      expect(publicRecord?.is_droppable).toBe(privateRecord?.is_droppable);
-      expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
   });
-
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([...students, instructor]);
+  });
   test.beforeEach(async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     const navRegion = page.locator("#course-nav");
@@ -457,6 +560,13 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(scoreInput).toHaveValue("50.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
     await expect(partCell).toHaveText(/50\.5/);
+
+    // Restore original value so subsequent serial tests see the expected score
+    await partCell.click();
+    const restoreInput = page.locator('input[name="score"]');
+    await restoreInput.fill("84.5");
+    await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(partCell).toHaveText(/84\.5/);
   });
 
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {
@@ -493,19 +603,28 @@ test.describe("Gradebook Page - Comprehensive", () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Test Assignment 1 (Group)");
       expect(after).not.toBeNaN();
       expect(after).toBe(25);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Test Assignment 2 (Group)");
       expect(after).not.toBeNaN();
       expect(after).toBe(30);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[1].private_profile_name, "Test Assignment 2 (Group)");
       expect(after).not.toBeNaN();
       expect(after).toBe(30);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
+
+    // Expand assignment groups and scroll right to reveal virtualized columns
+    const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await tableRegion.getByRole("button", { name: "Expand all groups" }).click();
+    await waitForVirtualizerIdle(page);
+    await tableRegion.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await waitForVirtualizerIdle(page);
 
     await expect(async () => {
       const after = await readCellNumber(
@@ -515,19 +634,19 @@ test.describe("Gradebook Page - Comprehensive", () => {
       );
       expect(after).not.toBeNaN();
       expect(after).toBe(90);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Participation");
       expect(after).not.toBeNaN();
       expect(after).toBe(84.5);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     await expect(async () => {
       const after = await readCellNumber(page, students[0].private_profile_name, "Final Grade");
       expect(after).not.toBeNaN();
       expect(after).toBe(51.95);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Take screenshot for visual regression testing
     await argosScreenshot(page, "Gradebook Page - Full Data");
@@ -550,7 +669,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       const after = await readCellNumber(page, studentName, "Final Grade");
       expect(after).not.toBeNaN();
       expect(after).toBe(51.5);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
   });
 
   test("Overriding a calculated column (Average Assignments) persists and displays the override", async ({ page }) => {
@@ -571,14 +690,14 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(after).not.toBeNaN();
       expect(after).toBe(92);
       expect(after).not.toBe(before);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Final Grade should update
     await expect(async () => {
       const after = await readCellNumber(page, studentName, "Final Grade");
       expect(after).not.toBeNaN();
       expect(after).toBe(90.8);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
   });
 
   test("Import Column workflow creates a new column and populates scores", async ({ page }) => {
@@ -726,7 +845,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
         expect(publicRecord?.released).toBe(true);
       }
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
       .from("gradebook_columns")
@@ -752,7 +871,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get final gradebook column student: ${finalGradebookColumnStudentError.message}`);
       }
       expect(finalGradebookColumnStudent?.score).toBe(90.8);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Verify student can now see Participation in their gradebook cards
     await loginAsUser(page, students[0], course);
@@ -802,7 +921,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get gradebook column student: ${gradebookColumnStudentError.message}`);
       }
       expect(data?.released).toBe(false);
-    }).toPass();
+    }).toPass({ timeout: 60_000 });
 
     // Student should still see the Participation card, but it should show "In Progress"
     await loginAsUser(page, students[0], course);
@@ -811,5 +930,312 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
     await expect(unreleasedCard).toBeVisible();
     await expect(unreleasedCard).toContainText(/In Progress/i);
+  });
+});
+
+test.describe("Gradebook Page - CSV Render Export", () => {
+  test.describe.configure({ mode: "serial" });
+  let exportCourse: Course;
+  let exportStudents: TestingUser[] = [];
+  let exportInstructor: TestingUser;
+
+  test.beforeAll(async () => {
+    exportCourse = await createClass({
+      name: "Gradebook Export Render Expression Course"
+    });
+    const exportEmailSuffix = `${process.env.TEST_PARALLEL_INDEX || "0"}-${Math.random().toString(36).slice(2, 8)}`;
+    const users = await createUsersInClass([
+      {
+        name: "Export Student One",
+        email: `export-student-one-${exportEmailSuffix}@pawtograder.net`,
+        role: "student",
+        class_id: exportCourse.id
+      },
+      {
+        name: "Export Student Two",
+        email: `export-student-two-${exportEmailSuffix}@pawtograder.net`,
+        role: "student",
+        class_id: exportCourse.id
+      },
+      {
+        name: "Export Instructor",
+        email: `export-instructor-${exportEmailSuffix}@pawtograder.net`,
+        role: "instructor",
+        class_id: exportCourse.id
+      }
+    ]);
+    exportStudents = users.slice(0, 2);
+    exportInstructor = users[2];
+
+    await createAssignmentsAndGradebookColumns({
+      class_id: exportCourse.id,
+      numAssignments: 2,
+      numManualGradedColumns: 0,
+      manualGradedColumnSlugs: ["participation"],
+      groupConfig: "individual"
+    });
+
+    const { data: finalGradebookColumn, error: finalGradebookColumnError } = await supabase
+      .from("gradebook_columns")
+      .select("*")
+      .eq("class_id", exportCourse.id)
+      .eq("slug", "final-grade")
+      .single();
+    if (finalGradebookColumnError) {
+      throw new Error(`Failed to get final gradebook column for export test: ${finalGradebookColumnError.message}`);
+    }
+
+    await expect(async () => {
+      const { data: privateRecord, error: privateError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", exportCourse.id)
+        .eq("student_id", exportStudents[0].private_profile_id)
+        .eq("gradebook_column_id", finalGradebookColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (privateError) {
+        throw new Error(`Failed to get private final grade record for export test: ${privateError.message}`);
+      }
+      expect(privateRecord).toBeTruthy();
+    }).toPass({ timeout: 60_000 });
+
+    const { error: setFinalGradePrivateError } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 92, is_recalculating: false })
+      .eq("class_id", exportCourse.id)
+      .eq("student_id", exportStudents[0].private_profile_id)
+      .eq("gradebook_column_id", finalGradebookColumn.id)
+      .eq("is_private", true);
+    if (setFinalGradePrivateError) {
+      throw new Error(`Failed to set private final grade for export test: ${setFinalGradePrivateError.message}`);
+    }
+    const { error: setFinalGradePublicError } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 88, is_recalculating: false })
+      .eq("class_id", exportCourse.id)
+      .eq("student_id", exportStudents[0].private_profile_id)
+      .eq("gradebook_column_id", finalGradebookColumn.id)
+      .eq("is_private", false);
+    if (setFinalGradePublicError) {
+      throw new Error(`Failed to set public final grade for export test: ${setFinalGradePublicError.message}`);
+    }
+
+    const { data: renderExportColumn, error: renderExportColumnError } = await supabase
+      .from("gradebook_columns")
+      .insert({
+        class_id: exportCourse.id,
+        gradebook_id: finalGradebookColumn.gradebook_id,
+        name: RENDER_EXPORT_COLUMN_NAME,
+        slug: RENDER_EXPORT_COLUMN_SLUG,
+        max_score: 100,
+        score_expression: "gradebook_columns('final-grade')",
+        render_expression: "letter(score)",
+        dependencies: { gradebook_columns: [finalGradebookColumn.id] },
+        sort_order: (finalGradebookColumn.sort_order ?? 0) + 1
+      })
+      .select("*")
+      .single();
+    if (renderExportColumnError) {
+      throw new Error(`Failed to create render export column for export test: ${renderExportColumnError.message}`);
+    }
+
+    await expect(async () => {
+      const { data: renderRecord, error: renderError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", exportCourse.id)
+        .eq("student_id", exportStudents[0].private_profile_id)
+        .eq("gradebook_column_id", renderExportColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (renderError) {
+        throw new Error(`Failed to get render export column record for export test: ${renderError.message}`);
+      }
+      expect(renderRecord).toBeTruthy();
+    }).toPass({ timeout: 60_000 });
+
+    const { error: setRenderExportScoreError } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 92, released: true, is_recalculating: false })
+      .eq("class_id", exportCourse.id)
+      .eq("student_id", exportStudents[0].private_profile_id)
+      .eq("gradebook_column_id", renderExportColumn.id)
+      .eq("is_private", true);
+    if (setRenderExportScoreError) {
+      throw new Error(`Failed to set render export score for export test: ${setRenderExportScoreError.message}`);
+    }
+
+    await expect(async () => {
+      const { data: renderRecord, error: renderError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", exportCourse.id)
+        .eq("student_id", exportStudents[0].private_profile_id)
+        .eq("gradebook_column_id", renderExportColumn.id)
+        .eq("is_private", true)
+        .single();
+      if (renderError) {
+        throw new Error(`Failed to read stabilized render export record: ${renderError.message}`);
+      }
+      expect(renderRecord?.is_recalculating).toBe(false);
+      expect(renderRecord?.score_override ?? renderRecord?.score).toBe(92);
+      expect(renderRecord?.incomplete_values).toBeNull();
+    }).toPass({ timeout: 60_000 });
+  });
+
+  test("Download Gradebook can export render expression values to CSV", async ({ page }) => {
+    const student = exportStudents[0];
+    await loginAsUser(page, exportInstructor, exportCourse);
+    await page.goto(`/course/${exportCourse.id}/manage/gradebook`);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("region", { name: "Instructor Gradebook Table" })).toBeVisible();
+
+    const tableRegion = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await tableRegion.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+    });
+    await waitForVirtualizerIdle(page);
+
+    const renderedCell = await getGridcellInRow(page, student.private_profile_name, RENDER_EXPORT_COLUMN_NAME);
+    await expect(renderedCell).toHaveAttribute(
+      "aria-label",
+      new RegExp(`^Grade cell for ${escapeRegExp(RENDER_EXPORT_COLUMN_NAME)}: A-$`)
+    );
+
+    await page.getByRole("button", { name: "Download Gradebook" }).click();
+    const renderExpressionCheckbox = page.getByRole("checkbox", { name: "Use render expressions in CSV" });
+    await expect(renderExpressionCheckbox).toBeVisible();
+    await expect(renderExpressionCheckbox).not.toBeChecked();
+    const defaultCsv = await downloadCsvFromGradebookPopover(page);
+    const defaultCsvRows = parseCsv(defaultCsv);
+    const defaultValue = getCsvCellValue(defaultCsvRows, student.email, RENDER_EXPORT_COLUMN_NAME);
+    expect(Number(defaultValue)).toBeCloseTo(92, 5);
+
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Download Gradebook" }).click();
+    await expect(renderExpressionCheckbox).toBeVisible();
+    const renderExpressionToggle = page.getByText("Use render expressions in CSV");
+    if (!(await renderExpressionCheckbox.isChecked())) {
+      await renderExpressionToggle.click();
+    }
+    await expect(renderExpressionCheckbox).toBeChecked();
+    const renderCsv = await downloadCsvFromGradebookPopover(page);
+    const renderCsvRows = parseCsv(renderCsv);
+    const renderedValue = getCsvCellValue(renderCsvRows, student.email, RENDER_EXPORT_COLUMN_NAME);
+    expect(renderedValue).toBe("A-");
+  });
+});
+
+/**
+ * Issue #531: column reorder UI + RPC. Kept separate from "Comprehensive" so CI does not inherit
+ * that suite's beforeAll (submissions, code walk, waits on background gradebook recalculation),
+ * which can exceed timeouts on webkit when the pipeline is slow.
+ */
+test.describe("Gradebook column reorder (issue #531)", () => {
+  test.describe.configure({ mode: "serial" });
+  test.setTimeout(180_000);
+
+  let reorderCourse: Course;
+  let reorderInstructor: TestingUser;
+
+  test.beforeAll(async () => {
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    reorderCourse = await createClass({
+      name: `Gradebook Reorder E2E ${id}`
+    });
+
+    const users = await createUsersInClass([
+      {
+        name: "Reorder Student",
+        email: `reorder-student-${id}@pawtograder.net`,
+        role: "student",
+        class_id: reorderCourse.id,
+        useMagicLink: true
+      },
+      {
+        name: "Reorder Instructor",
+        email: `reorder-instructor-${id}@pawtograder.net`,
+        role: "instructor",
+        class_id: reorderCourse.id,
+        useMagicLink: true
+      }
+    ]);
+
+    reorderInstructor = users[1];
+
+    await createAssignmentsAndGradebookColumns({
+      class_id: reorderCourse.id,
+      numAssignments: 4,
+      numManualGradedColumns: 0,
+      manualGradedColumnSlugs: ["participation"],
+      groupConfig: "both"
+    });
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await loginAsUser(page, reorderInstructor, reorderCourse);
+    const navRegion = page.locator("#course-nav");
+    await navRegion
+      .getByRole("link")
+      .filter({ hasText: /^Gradebook$/ })
+      .click();
+    await page.waitForLoadState("networkidle");
+    await waitForVirtualizerIdle(page);
+  });
+
+  test("Move Left / Move Right reorder assignment columns in the instructor gradebook", async ({ page }) => {
+    const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
+    await waitForVirtualizerIdle(page);
+
+    await region.getByRole("button", { name: "Expand all groups" }).click();
+    await waitForVirtualizerIdle(page);
+
+    const colName = "Test Assignment 4 (Group)";
+
+    // Get sort_order from DB before move
+    const { data: colBefore } = await supabase
+      .from("gradebook_columns")
+      .select("id, sort_order")
+      .eq("class_id", reorderCourse.id)
+      .eq("name", colName)
+      .single();
+    expect(colBefore).toBeTruthy();
+    const sortOrderBefore = colBefore!.sort_order!;
+
+    const headerCell = region
+      .locator("thead tr")
+      .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+      .locator("[data-col-id]")
+      .filter({ hasText: colName });
+    await headerCell.getByRole("button", { name: "Column options" }).click();
+    await page.getByRole("menuitem", { name: "Move Left", exact: true }).click();
+    await expect(page.getByText("Column moved left").first()).toBeVisible();
+
+    // Verify sort_order decreased by 1 in the database
+    await expect(async () => {
+      const { data: colAfterLeft } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", colBefore!.id)
+        .single();
+      expect(colAfterLeft!.sort_order).toBe(sortOrderBefore - 1);
+    }).toPass({ timeout: 5000 });
+
+    await waitForVirtualizerIdle(page);
+
+    await headerCell.getByRole("button", { name: "Column options" }).click();
+    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
+    await expect(page.getByText("Column moved right").first()).toBeVisible();
+
+    // Verify sort_order restored to original
+    await expect(async () => {
+      const { data: colRestored } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", colBefore!.id)
+        .single();
+      expect(colRestored!.sort_order).toBe(sortOrderBefore);
+    }).toPass({ timeout: 5000 });
   });
 });

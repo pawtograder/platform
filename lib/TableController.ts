@@ -172,7 +172,9 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
   survey_assignments: ["staff"], // Assignment data only to staff
 
   // Leaderboard table - broadcasts to all class members
-  assignment_leaderboard: ["staff", "students"]
+  assignment_leaderboard: ["staff", "students"],
+  // No unified realtime broadcast today; load via TableController like other static course metadata.
+  gradebooks: []
 };
 
 /**
@@ -1481,8 +1483,8 @@ export default class TableController<
     const newCount = currentCount + 1;
     TableController._controllerCounts.set(tableName, newCount);
 
-    // Only log creation if there are more than 4 live controllers for this table
-    if (newCount > 4) {
+    // Only log creation if there are more than 10 live controllers for this table
+    if (newCount > 10) {
       // eslint-disable-next-line no-console
       console.log(
         `⚠️ TableController created for "${tableName}" (count: ${newCount} - potential leak!)`,

@@ -1,5 +1,7 @@
+import { fetchStudentDashboardBundle } from "@/lib/ssr-course-dashboard";
+import { findGithubIdentity } from "@/lib/githubIdentity";
 import { Survey, SurveyResponse } from "@/types/survey";
-import { createClient } from "@/utils/supabase/server";
+import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import {
   Badge,
   Box,
@@ -26,6 +28,7 @@ import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { OfficeHoursStatusCard } from "@/components/help-queue/office-hours-status-card";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -87,63 +90,15 @@ export default async function StudentDashboard({
   course_id: number;
   private_profile_id: string;
 }) {
-  const supabase = await createClient();
   const headersList = await headers();
   const user_id = headersList.get("X-User-ID");
 
-  const [
-    { data: course },
-    { data: assignments },
-    { data: surveysRaw },
-    { data: regradeRequests },
-    identities,
-    { data: userRole }
-  ] = await Promise.all([
-    supabase.from("classes").select("time_zone, office_hours_ics_url, events_ics_url").eq("id", course_id).single(),
-    supabase
-      .from("assignments_with_effective_due_dates")
-      .select(
-        "*, submissions!submissio_assignment_id_fkey(*, grader_results!grader_results_submission_id_fkey(*)), classes(time_zone)"
-      )
-      .eq("class_id", course_id)
-      .eq("submissions.is_active", true)
-      .eq("student_profile_id", private_profile_id)
-      .gte("due_date", new Date().toISOString())
-      .order("due_date", { ascending: true })
-      .limit(5),
-    supabase
-      .from("surveys")
-      .select("*")
-      .eq("class_id", course_id)
-      .eq("status", "published")
-      .order("created_at", { ascending: false })
-      .limit(100),
-    supabase
-      .from("submission_regrade_requests")
-      .select(
-        `
-      *,
-      assignments(id, title),
-      submissions!inner(id, ordinal),
-      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
-      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
-      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
-    `
-      )
-      .eq("class_id", course_id)
-      .order("created_at", { ascending: false })
-      .limit(5),
-    supabase.auth.getUserIdentities(),
-    user_id
-      ? supabase
-          .from("user_roles")
-          .select("class_section_id, lab_section_id")
-          .eq("class_id", course_id)
-          .eq("user_id", user_id)
-          .eq("disabled", false)
-          .single()
-      : Promise.resolve({ data: null })
-  ]);
+  const supabase = await createClient();
+  const { course, assignments, surveysRaw, regradeRequests, responsesRaw, classSection, labSection, leadersRaw } =
+    await fetchStudentDashboardBundle(supabase, course_id, user_id ?? "", private_profile_id);
+
+  const identitiesResult = await supabase.auth.getUserIdentities();
+  const githubIdentity = findGithubIdentity(identitiesResult.data?.identities);
 
   const hasCalendar = Boolean(course?.office_hours_ics_url || course?.events_ics_url);
 
@@ -152,28 +107,20 @@ export default async function StudentDashboard({
     (s) => s.status === "published" && (s.available_at == null || new Date(s.available_at).getTime() <= nowMs)
   );
 
-  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
-
-  const [{ data: responsesRaw }, { data: classSection }, { data: labSection }] = await Promise.all([
-    surveys.length > 0
-      ? supabase
-          .from("survey_responses")
-          .select("*")
-          .eq("profile_id", private_profile_id)
-          .in(
-            "survey_id",
-            surveys.map((s) => s.id)
-          )
-      : Promise.resolve({ data: null }),
-    userRole?.class_section_id
-      ? supabase.from("class_sections").select("*").eq("id", userRole.class_section_id).single()
-      : Promise.resolve({ data: null }),
-    userRole?.lab_section_id
-      ? supabase.from("lab_sections").select("*").eq("id", userRole.lab_section_id).single()
-      : Promise.resolve({ data: null })
-  ]);
-
   const surveyResponses = (responsesRaw ?? []) as unknown as SurveyResponse[];
+
+  type StudentUpcomingAssignmentRow = {
+    id: number;
+    title: string | null;
+    due_date: string | null;
+    submissions?: Array<{
+      created_at: string;
+      ordinal: number | null;
+      grader_results?: { errors?: unknown; score?: number | null; max_score?: number | null } | null;
+    }> | null;
+  };
+  const upcomingAssignments = (assignments ?? []) as StudentUpcomingAssignmentRow[];
+  const regradeRows = (regradeRequests ?? []) as RegradeRequestWithDetails[];
 
   // Build a quick lookup: survey_id -> response
   const responsesBySurveyId = new Map<string, SurveyResponse>();
@@ -186,10 +133,6 @@ export default async function StudentDashboard({
     return !r?.is_submitted;
   });
   const incompleteSurveysForBanner = sortIncompleteSurveysForBanner(incompletePublishedSurveys);
-
-  const { data: leadersRaw } = labSection?.id
-    ? await supabase.from("lab_section_leaders").select("profiles(name)").eq("lab_section_id", labSection.id)
-    : { data: null };
 
   const labLeaders: string[] =
     leadersRaw
@@ -216,7 +159,7 @@ export default async function StudentDashboard({
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
-      {identities.data && !githubIdentity && <LinkAccount />}
+      {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
 
       {incompleteSurveysForBanner.length > 0 && (
@@ -352,7 +295,7 @@ export default async function StudentDashboard({
           Upcoming Assignments
         </Heading>
         <Stack spaceY={4}>
-          {assignments?.map((assignment) => {
+          {upcomingAssignments.map((assignment) => {
             const mostRecentSubmission = assignment.submissions?.sort(
               (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
             )[0];
@@ -507,8 +450,8 @@ export default async function StudentDashboard({
         <Heading size="lg" mb={4}>
           Recent Regrade Requests
         </Heading>
-        <RegradeRequestsTable regradeRequests={regradeRequests || []} courseId={course_id} />
-        {regradeRequests && regradeRequests.length > 0 && (
+        <RegradeRequestsTable regradeRequests={regradeRows} courseId={course_id} />
+        {regradeRows.length > 0 && (
           <Link href={`/course/${course_id}/regrade-requests`}>
             <Box mt={4} textAlign="center">
               <span style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}>

@@ -45,6 +45,23 @@ export type AssignmentsForStudentDashboard = Omit<
   id: number;
 };
 
+function formatLatestSubmissionLabel(assignment: AssignmentsForStudentDashboard): string {
+  if (!assignment.submission_id) {
+    return "Have not submitted yet";
+  }
+  const ordinal = assignment.submission_ordinal ?? 0;
+  const gradingComplete =
+    assignment.grading_submission_review_completed_at != null &&
+    assignment.grading_total_score != null &&
+    assignment.total_points != null;
+  if (gradingComplete) {
+    return `#${ordinal} (${assignment.grading_total_score}/${assignment.total_points})`;
+  }
+  const agScore = assignment.grader_result_score ?? 0;
+  const agMax = assignment.grader_result_max_score ?? 0;
+  return `#${ordinal} (${agScore}/${agMax})`;
+}
+
 export default function StudentPage() {
   const { identities } = useIdentity();
   const { course_id } = useParams();
@@ -121,9 +138,7 @@ export default function StudentPage() {
         repo: repo,
         is_repo_ready: assignment.is_github_ready ?? false,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
-        submission_text: !assignment.submission_id
-          ? "Have not submitted yet"
-          : `#${assignment.submission_ordinal} (${assignment.grader_result_score || 0}/${assignment.grader_result_max_score || 0})`,
+        submission_text: formatLatestSubmissionLabel(assignment),
         submission_link: assignment.submission_id
           ? `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.submission_id}`
           : undefined,

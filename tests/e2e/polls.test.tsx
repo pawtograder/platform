@@ -81,6 +81,9 @@ test.describe("Polls", () => {
     ]);
     [student, instructor] = users;
   });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([student, instructor]);
+  });
 
   test.beforeEach(async () => {
     await clearPolls();

@@ -99,7 +99,9 @@ test.beforeEach(async () => {
     throw new Error(`Failed to gift tokens: ${giftError.message}`);
   }
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
+});
 test.describe("Gifted tokens bug (#648)", () => {
   test("Student with gifted tokens can still see and apply remaining tokens", async ({ page }) => {
     const lastAssignment = assignments[NUM_ASSIGNMENTS_TO_USE_TOKENS];

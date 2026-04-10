@@ -44,6 +44,7 @@ import { toaster } from "@/components/ui/toaster";
 import {
   useAllRubricChecks,
   useAssignmentController,
+  useAssignmentData,
   useGraderPseudonymousMode,
   useReferenceCheckRecordsFromCheck,
   useReviewAssignment,
@@ -325,18 +326,22 @@ export function CommentActions({
   const isInstructor = useIsInstructor();
   const isStudent = useIsStudent();
 
-  // Get the submission review to check if it's completed
-  const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id || -1);
+  // Get the submission review to check completion and release (issue #446: no grader edits after release)
+  const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id ?? undefined);
 
   // Check if current user can edit/delete this comment
   // 1. Instructors can edit all comments
-  // 2. Graders can only edit their own comments
-  // 3. Students can edit their own comments IF the review is not completed (or no review exists)
+  // 2. Graders can only edit their own comments while the review is not released to students
+  // 3. Students can edit their own comments IF the review is not completed (or no review exists),
+  //    and the review is not released
   const isCommentAuthor = comment.author === private_profile_id || comment.author === public_profile_id;
   const isReviewCompleted = comment.submission_review_id ? submissionReview?.completed_at != null : false;
+  const isReviewReleased = Boolean(submissionReview?.released);
 
   const canEditComment =
-    isInstructor || (isGraderOrInstructor && isCommentAuthor) || (isStudent && isCommentAuthor && !isReviewCompleted);
+    isInstructor ||
+    (isGraderOrInstructor && isCommentAuthor && !isReviewReleased) ||
+    (isStudent && isCommentAuthor && !isReviewCompleted && !isReviewReleased);
 
   // Don't show actions if user can't edit
   if (!canEditComment) {
@@ -525,6 +530,8 @@ export function RubricCheckComment({
     check?.artifact && submission
       ? submission.submission_artifacts.find((a) => a.name === check.artifact)?.id
       : undefined;
+  const assignment = useAssignmentData();
+
   if (!comment) {
     return <Skeleton w="100%" h="100px" />;
   }
@@ -546,8 +553,11 @@ export function RubricCheckComment({
     }
   }
   const hasPoints = comment.points !== null;
+  const isSelfReviewComment =
+    criteria?.rubric_id !== undefined && criteria.rubric_id === assignment.self_review_rubric_id;
   // Check if student can create a regrade request
-  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
+  const canCreateRegradeRequest =
+    !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released && !isSelfReviewComment;
 
   return (
     <Box

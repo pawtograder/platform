@@ -72,7 +72,9 @@ test.beforeAll(async () => {
     }
   }
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor, student]);
+});
 test.describe("Rubric editor", () => {
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {
     await loginAsUser(page, instructor!, course);

@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { setNewPasswordAction } from "@/app/actions";
 import { FormMessage, Message } from "@/components/form-message";
 import { SubmitButton } from "@/components/ui/submit-button";
