@@ -69,7 +69,12 @@ import {
   useSubmissionReviewForRubric,
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
-import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import {
+  useActiveReviewAssignment,
+  useActiveReviewAssignmentId,
+  useActiveRubricId,
+  useActiveSubmissionReviewId
+} from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
@@ -1576,6 +1581,30 @@ function RubricMenu() {
     </Box>
   );
 }
+/**
+ * Renders the CompleteReviewButton at the bottom of the rubric list using the
+ * same gating conditions as the top toolbar in layout.tsx:
+ *   - grader/instructor only
+ *   - no assigned rubric parts (full-rubric review, not a partial assignment)
+ *   - review not already completed
+ */
+function RubricSidebarConfirmButton() {
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const isInstructorOrGrader = useIsGraderOrInstructor();
+  const activeSubmissionReviewId = useActiveSubmissionReviewId();
+  const review = useSubmissionReviewOrGradingReview(activeSubmissionReviewId ?? -1);
+
+  if (!isInstructorOrGrader || assignedRubricParts.length > 0 || !review || review.completed_at) {
+    return null;
+  }
+  return (
+    <Box pt={4} pb={2} w="100%">
+      <CompleteReviewButton />
+    </Box>
+  );
+}
+
 export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
   const unsortedRubrics = useRubrics();
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
@@ -1725,11 +1754,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
           )}
         </Box>
       ))}
-      {activeReviewAssignment && (
-        <Box pt={4} pb={2} w="100%">
-          <CompleteReviewButton />
-        </Box>
-      )}
+      <RubricSidebarConfirmButton />
     </VStack>
   );
 }
