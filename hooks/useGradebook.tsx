@@ -259,6 +259,7 @@ export function useReferencedContent(
   }, [
     gradebookController,
     gradebookController.studentSubmissions,
+    gradebookController.gradebook_columns.rows,
     column,
     student_id,
     dependencies,
