@@ -669,6 +669,16 @@ export function AssignmentProvider({
   const initialDataRef = useRef(initialData);
   initialDataRef.current = initialData;
 
+  // Clear stale controller synchronously during render when assignment_id changes,
+  // so AssignmentControllerCreator never sees a controller built for a different assignment.
+  // React will re-render immediately with null before committing the stale pair.
+  const [prevAssignmentId, setPrevAssignmentId] = useState(assignment_id);
+  if (assignment_id !== prevAssignmentId) {
+    setPrevAssignmentId(assignment_id);
+    setController(null);
+    setReady(false);
+  }
+
   useEffect(() => {
     if (!assignment_id || isNaN(assignment_id)) return;
 
