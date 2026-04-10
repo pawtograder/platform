@@ -659,36 +659,44 @@ export function AssignmentProvider({
   initialData?: AssignmentControllerInitialData;
 }) {
   const params = useParams();
-  const controller = useRef<AssignmentController | null>(null);
   const courseController = useCourseController();
+  const [controller, setController] = useState<AssignmentController | null>(null);
   const [ready, setReady] = useState(false);
   const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
 
-  if (controller.current === null) {
-    controller.current = new AssignmentController({
-      client: createClient(),
-      assignment_id: initial_assignment_id ?? Number(params.assignment_id),
-      classRealTimeController: courseController.classRealTimeController,
-      initialData
-    });
-    setReady(false);
-  }
+  // Use ref for initialData so it doesn't trigger effect re-runs
+  // (it's SSR-provided data that should only be used on first creation)
+  const initialDataRef = useRef(initialData);
+  initialDataRef.current = initialData;
+
   useEffect(() => {
+    if (!assignment_id || isNaN(assignment_id)) return;
+
+    const ctrl = new AssignmentController({
+      client: createClient(),
+      assignment_id,
+      classRealTimeController: courseController.classRealTimeController,
+      initialData: initialDataRef.current
+    });
+    setController(ctrl);
+    setReady(false);
+
     return () => {
-      if (controller.current) {
-        controller.current.close();
-        controller.current = null;
-      }
+      ctrl.close(); // Closure captures exact instance — no ref ambiguity
     };
-  }, []);
+  }, [assignment_id, courseController.classRealTimeController]);
 
   if (!assignment_id || isNaN(assignment_id)) {
     return <Text>Error: Invalid Assignment ID.</Text>;
   }
 
+  if (!controller) {
+    return null;
+  }
+
   return (
-    <AssignmentContext.Provider value={{ assignmentController: controller.current }}>
-      <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller.current} />
+    <AssignmentContext.Provider value={{ assignmentController: controller }}>
+      <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller} />
       {ready && children}
     </AssignmentContext.Provider>
   );
@@ -726,6 +734,8 @@ function AssignmentControllerCreator({
 
   // Wait for all table controllers to be ready
   useEffect(() => {
+    let cancelled = false;
+    setTableControllersReady(false);
     const promises = [
       controller.reviewAssignments.readyPromise,
       controller.regradeRequests.readyPromise,
@@ -739,8 +749,11 @@ function AssignmentControllerCreator({
       controller.leaderboard.readyPromise
     ];
     Promise.all(promises).then(() => {
-      setTableControllersReady(true);
+      if (!cancelled) setTableControllersReady(true);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [controller]);
 
   // Set assignment base data

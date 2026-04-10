@@ -15,7 +15,7 @@ import {
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 
@@ -481,17 +481,14 @@ export function OfficeHoursControllerProvider({
   role: Database["public"]["Enums"]["app_role"];
   children: React.ReactNode;
 }) {
-  const controller = useRef<OfficeHoursController | null>(null);
-  // Memoize client to prevent recreating on every render
-  const clientRef = useRef<SupabaseClient<Database> | null>(null);
-  if (!clientRef.current) {
-    clientRef.current = createClient();
-  }
-  const client = clientRef.current;
   const { classRealTimeController } = useCourseController();
   const [officeHoursRealTimeController, setOfficeHoursRealTimeController] =
     useState<OfficeHoursRealTimeController | null>(null);
+  const [controller, setController] = useState<OfficeHoursController | null>(null);
+
+  // Create OfficeHoursRealTimeController
   useEffect(() => {
+    const client = createClient();
     const newController = new OfficeHoursRealTimeController({
       client,
       classId,
@@ -500,35 +497,31 @@ export function OfficeHoursControllerProvider({
     });
     setOfficeHoursRealTimeController(newController);
 
-    // Cleanup: close the controller when deps change or on unmount
     return () => {
       newController.close();
     };
-  }, [client, classId, profileId, role]);
+  }, [classId, profileId, role]);
 
-  // Initialize controller with required dependencies
-  if (!controller.current && officeHoursRealTimeController) {
-    controller.current = new OfficeHoursController(
+  // Create OfficeHoursController when both RT controllers are available
+  useEffect(() => {
+    if (!officeHoursRealTimeController) return;
+
+    const client = createClient();
+    const ctrl = new OfficeHoursController(
       classId,
       client,
       classRealTimeController,
       officeHoursRealTimeController
     );
-    // Initialize the critical controllers now that everything is stable
-    controller.current.initializeEagerControllers();
-  }
+    ctrl.initializeEagerControllers();
+    setController(ctrl);
 
-  useEffect(() => {
-    // Cleanup on unmount
     return () => {
-      if (controller.current) {
-        controller.current.close();
-        controller.current = null;
-      }
+      ctrl.close(); // Closure captures exact instance
     };
-  }, []);
+  }, [classId, classRealTimeController, officeHoursRealTimeController]);
 
-  if (!controller.current) {
+  if (!controller) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />
@@ -536,7 +529,7 @@ export function OfficeHoursControllerProvider({
     );
   }
   return (
-    <OfficeHoursControllerContext.Provider value={controller.current}>
+    <OfficeHoursControllerContext.Provider value={controller}>
       <OfficeHoursControllerProviderImpl />
       {children}
     </OfficeHoursControllerContext.Provider>
