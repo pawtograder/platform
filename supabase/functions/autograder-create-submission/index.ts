@@ -936,7 +936,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 p_creator_id: profileId!,
                 p_hours_late: hoursLate,
                 p_tokens_needed: tokensNeeded,
-                p_idempotency_key: `${repoData.assignment_id}-${sha}`
+                p_idempotency_key: `${repoData.id}-${sha}`
               });
 
               if (rpcError) {
