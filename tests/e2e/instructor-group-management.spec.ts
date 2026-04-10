@@ -13,6 +13,8 @@ import {
   createClass,
   createUserInClass,
   dismissTimeZonePreferenceModal,
+  ensureTimeZonePreferenceInitialized,
+  gotoCourseUrlWhenHeadingVisible,
   insertAssignment,
   supabase
 } from "./TestingUtils";
@@ -79,6 +81,8 @@ test.describe("Instructor group management", () => {
 
     test.setTimeout(180_000);
 
+    await ensureTimeZonePreferenceInitialized(page, "course");
+
     await page.goto("/sign-in");
     await page.getByLabel("Sign in email").fill(instructorEmail);
     await page.getByLabel("Sign in password").fill(instructorPassword);
@@ -86,9 +90,11 @@ test.describe("Instructor group management", () => {
     await page.waitForURL((url) => !url.pathname.includes("/sign-in"), { timeout: 30_000 });
     await dismissTimeZonePreferenceModal(page, 15_000);
 
-    await page.goto(`/course/${classId}/manage/assignments/${assignmentId}/groups`);
-    await dismissTimeZonePreferenceModal(page, 15_000);
-    await expect(page.getByRole("heading", { name: "Configure Groups" })).toBeVisible({ timeout: 30_000 });
+    await gotoCourseUrlWhenHeadingVisible(
+      page,
+      `/course/${classId}/manage/assignments/${assignmentId}/groups`,
+      "Configure Groups"
+    );
 
     const groupName = `e2egrp${Date.now().toString(36)}`;
 

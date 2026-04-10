@@ -7,7 +7,7 @@ import {
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { Page } from "@playwright/test";
+import { expect, Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
@@ -457,6 +457,28 @@ export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 100
 
   await timezoneDialog.waitFor({ state: "hidden", timeout: timeoutMs });
   return true;
+}
+
+/**
+ * Navigates to a course URL and waits until the timezone preference dialog (if any) is gone
+ * and an expected heading is visible. Use after `ensureTimeZonePreferenceInitialized` for CI
+ * where the modal can mount late (e.g. Etc/Unknown browser TZ) after a short dismiss window.
+ */
+export async function gotoCourseUrlWhenHeadingVisible(
+  page: Page,
+  url: string,
+  headingName: string,
+  options?: { navigationTimeoutMs?: number; assertTimeoutMs?: number }
+): Promise<void> {
+  const navTimeout = options?.navigationTimeoutMs ?? 60_000;
+  const assertTimeout = options?.assertTimeoutMs ?? 90_000;
+
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeout });
+
+  await expect(async () => {
+    await dismissTimeZonePreferenceModal(page, 12_000);
+    await expect(page.getByRole("heading", { name: headingName })).toBeVisible({ timeout: 12_000 });
+  }).toPass({ timeout: assertTimeout });
 }
 
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
