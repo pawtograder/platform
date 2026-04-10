@@ -507,12 +507,7 @@ export function OfficeHoursControllerProvider({
     if (!officeHoursRealTimeController) return;
 
     const client = createClient();
-    const ctrl = new OfficeHoursController(
-      classId,
-      client,
-      classRealTimeController,
-      officeHoursRealTimeController
-    );
+    const ctrl = new OfficeHoursController(classId, client, classRealTimeController, officeHoursRealTimeController);
     ctrl.initializeEagerControllers();
     setController(ctrl);
 
