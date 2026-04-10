@@ -349,11 +349,18 @@ export function CompleteReviewAssignmentButton() {
  */
 function useAutoAdvance(): [boolean, (v: boolean) => void] {
   const [on, setOn] = useState(() => {
-    if (typeof localStorage === "undefined") return false;
-    return localStorage.getItem("pawtograder-auto-advance-review") === "true";
+    try {
+      return window.localStorage.getItem("pawtograder-auto-advance-review") === "true";
+    } catch {
+      return false;
+    }
   });
   const toggle = (v: boolean) => {
-    localStorage.setItem("pawtograder-auto-advance-review", String(v));
+    try {
+      window.localStorage.setItem("pawtograder-auto-advance-review", String(v));
+    } catch {
+
+    }
     setOn(v);
   };
   return [on, toggle];
