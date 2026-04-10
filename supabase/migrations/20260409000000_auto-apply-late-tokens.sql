@@ -19,7 +19,7 @@ CREATE OR REPLACE FUNCTION public.apply_late_token_extension(
   p_assignment_group_id bigint,
   p_class_id bigint,
   p_creator_id uuid,
-  p_hours integer,
+  p_hours_late integer,
   p_tokens_needed integer,
   p_idempotency_key text
 ) RETURNS jsonb
@@ -35,7 +35,6 @@ DECLARE
   v_tokens_remaining_assignment integer;
   v_tokens_remaining_class integer;
   v_tokens_remaining integer;
-  v_rows_inserted integer;
 BEGIN
   -- If this exact push already has an extension, return success immediately (idempotent retry)
   IF EXISTS (
@@ -45,8 +44,8 @@ BEGIN
     RETURN jsonb_build_object('success', true);
   END IF;
 
-  IF p_tokens_needed <= 0 OR p_hours <= 0 THEN
-    RAISE EXCEPTION 'p_tokens_needed and p_hours must be positive, got % and %', p_tokens_needed, p_hours;
+  IF p_tokens_needed <= 0 OR p_hours_late <= 0 THEN
+    RAISE EXCEPTION 'p_tokens_needed and p_hours_late must be positive, got % and %', p_tokens_needed, p_hours_late;
   END IF;
 
   -- Lock on (class, student/group) to prevent concurrent submissions from the same
@@ -57,8 +56,8 @@ BEGIN
 
   -- Load limits from the same assignment/class pair so the RPC cannot mix contexts
   SELECT
-    COALESCE(a.max_late_tokens, 0),
-    COALESCE(c.late_tokens_per_student, 0)
+    a.max_late_tokens,
+    c.late_tokens_per_student
   INTO v_max_tokens_assignment, v_max_tokens_class
   FROM public.assignments a
   JOIN public.classes c
@@ -69,6 +68,7 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Assignment % does not belong to class %', p_assignment_id, p_class_id;
   END IF;
+
 
   -- Count tokens already used on this assignment
   SELECT COALESCE(SUM(tokens_consumed), 0) INTO v_tokens_used_assignment
@@ -106,7 +106,7 @@ BEGIN
   INSERT INTO public.assignment_due_date_exceptions
     (assignment_id, student_id, assignment_group_id, class_id, creator_id, hours, minutes, tokens_consumed, note, auto_apply_idempotency_key)
   VALUES
-    (p_assignment_id, p_student_id, p_assignment_group_id, p_class_id, p_creator_id, p_hours, 0, p_tokens_needed, 'Auto-applied on late submission', p_idempotency_key)
+    (p_assignment_id, p_student_id, p_assignment_group_id, p_class_id, p_creator_id, p_hours_late, 0, p_tokens_needed, 'Auto-applied on late submission', p_idempotency_key)
   ON CONFLICT (auto_apply_idempotency_key) WHERE auto_apply_idempotency_key IS NOT NULL
   DO NOTHING;
 

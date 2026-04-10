@@ -934,7 +934,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 p_assignment_group_id: repoData.assignment_group_id ?? null,
                 p_class_id: repoData.assignments.class_id!,
                 p_creator_id: profileId!,
-                p_hours: hoursLate,
+                p_hours_late: hoursLate,
                 p_tokens_needed: tokensNeeded,
                 p_idempotency_key: `${repoData.assignment_id}-${sha}`
               });
