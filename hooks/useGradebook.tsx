@@ -192,12 +192,8 @@ export function useLinkToAssignment(column_id: number, student_id: string) {
     let result: string | null | undefined = null;
     for (const assignment_id of assignmentIdsToTry) {
       const assignment = gradesForStudent?.find((s) => s.assignment_id === assignment_id);
-      if (assignment) {
-        if (assignment.submission_id) {
-          result = `/course/${column?.class_id}/assignments/${assignment.assignment_id}/submissions/${assignment.submission_id}`;
-        } else {
-          result = undefined;
-        }
+      if (assignment?.submission_id) {
+        result = `/course/${column?.class_id}/assignments/${assignment.assignment_id}/submissions/${assignment.submission_id}`;
         break;
       }
     }
@@ -2037,8 +2033,14 @@ export function GradebookProvider({
   /** Increments each time `controller.current` is assigned a new `GradebookController` (avoids stale context when a boolean dep fails to change). */
   const [controllerGeneration, setControllerGeneration] = useState(0);
   const [studentSubmissionsEpoch, setStudentSubmissionsEpoch] = useState(0);
+  const [submissionsLoadError, setSubmissionsLoadError] = useState<Error | null>(null);
+  const [submissionsFetchNonce, setSubmissionsFetchNonce] = useState(0);
   const onStudentSubmissionsHydrated = useCallback(() => {
     setStudentSubmissionsEpoch((e) => e + 1);
+  }, []);
+  const retrySubmissionsFetch = useCallback(() => {
+    setSubmissionsLoadError(null);
+    setSubmissionsFetchNonce((n) => n + 1);
   }, []);
 
   // Load MathJS first, then create controller
@@ -2120,7 +2122,7 @@ export function GradebookProvider({
       gradebookController: c as GradebookController,
       studentSubmissionsEpoch
     };
-  }, [studentSubmissionsEpoch]);
+  }, [studentSubmissionsEpoch, controllerGeneration]);
 
   if (!gradebook_id || isNaN(Number(gradebook_id))) {
     return <Text>Error: Gradebook is not enabled for this course.</Text>;
@@ -2175,9 +2177,28 @@ export function GradebookProvider({
         setReady={setReady}
         controller={controller.current}
         onStudentSubmissionsHydrated={onStudentSubmissionsHydrated}
+        submissionsFetchNonce={submissionsFetchNonce}
+        onSubmissionsLoadError={setSubmissionsLoadError}
       />
-      {!ready && <LoadingScreen />}
-      {ready && children}
+      {submissionsLoadError ? (
+        <Box p={4}>
+          <VStack gap={4}>
+            <Heading size="md" color="red.500">
+              Failed to Load Submissions
+            </Heading>
+            <Text>Could not load submission data for the gradebook.</Text>
+            <Text fontSize="sm" color="text.subtle">
+              Error: {submissionsLoadError.message}
+            </Text>
+            <Button onClick={retrySubmissionsFetch}>Retry</Button>
+          </VStack>
+        </Box>
+      ) : (
+        <>
+          {!ready && <LoadingScreen />}
+          {ready && children}
+        </>
+      )}
     </GradebookContext.Provider>
   );
 }
@@ -2186,12 +2207,16 @@ function GradebookControllerCreator({
   class_id,
   setReady,
   controller,
-  onStudentSubmissionsHydrated
+  onStudentSubmissionsHydrated,
+  submissionsFetchNonce,
+  onSubmissionsLoadError
 }: {
   class_id: number;
   setReady: (ready: boolean) => void;
   controller: GradebookController;
   onStudentSubmissionsHydrated: () => void;
+  submissionsFetchNonce: number;
+  onSubmissionsLoadError: (error: Error | null) => void;
 }) {
   const [controllerIsReady, setControllerIsReady] = useState(controller.isReady);
   useEffect(() => {
@@ -2221,10 +2246,12 @@ function GradebookControllerCreator({
   useEffect(() => {
     if (!class_id) {
       setSubmissionsLoading(false);
+      onSubmissionsLoadError(null);
       return;
     }
     let cancelled = false;
     setSubmissionsLoading(true);
+    onSubmissionsLoadError(null);
     const supabase = createClient();
 
     (async () => {
@@ -2249,17 +2276,19 @@ function GradebookControllerCreator({
         }
         controller.studentSubmissions = next;
         onStudentSubmissionsHydrated();
+        setSubmissionsLoading(false);
       } catch (err) {
-        Sentry.captureException(err);
-      } finally {
-        if (!cancelled) setSubmissionsLoading(false);
+        if (!cancelled) {
+          Sentry.captureException(err);
+          onSubmissionsLoadError(err instanceof Error ? err : new Error(String(err)));
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [class_id, controller, onStudentSubmissionsHydrated]);
+  }, [class_id, controller, onStudentSubmissionsHydrated, submissionsFetchNonce, onSubmissionsLoadError]);
 
   useEffect(() => {
     if (!submissionsLoading && controllerIsReady) {
