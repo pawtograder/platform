@@ -358,9 +358,7 @@ function useAutoAdvance(): [boolean, (v: boolean) => void] {
   const toggle = (v: boolean) => {
     try {
       window.localStorage.setItem("pawtograder-auto-advance-review", String(v));
-    } catch {
-
-    }
+    } catch {}
     setOn(v);
   };
   return [on, toggle];
