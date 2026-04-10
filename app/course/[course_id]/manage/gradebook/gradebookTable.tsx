@@ -1516,10 +1516,12 @@ function GradebookColumnHeader({
   const [isUnreleasing, setIsUnreleasing] = useState(false);
   const supabase = useMemo(() => createClient(), []);
   const headerRef = useRef<HTMLDivElement>(null);
+  const isMovingRef = useRef(false);
 
   const moveLeft = useCallback(async () => {
-    if (column.sort_order == null) return;
+    if (column.sort_order == null || isMovingRef.current) return;
 
+    isMovingRef.current = true;
     setIsMovingLeft(true);
     try {
       const { error } = await supabase.rpc("gradebook_column_move_left", {
@@ -1541,13 +1543,15 @@ function GradebookColumnHeader({
         type: "error"
       });
     } finally {
+      isMovingRef.current = false;
       setIsMovingLeft(false);
     }
   }, [column_id, column, supabase, gradebookController]);
 
   const moveRight = useCallback(async () => {
-    if (column.sort_order == null) return;
+    if (column.sort_order == null || isMovingRef.current) return;
 
+    isMovingRef.current = true;
     setIsMovingRight(true);
     try {
       const { error } = await supabase.rpc("gradebook_column_move_right", {
@@ -1570,6 +1574,7 @@ function GradebookColumnHeader({
         type: "error"
       });
     } finally {
+      isMovingRef.current = false;
       setIsMovingRight(false);
     }
   }, [column_id, column, supabase, gradebookController]);
