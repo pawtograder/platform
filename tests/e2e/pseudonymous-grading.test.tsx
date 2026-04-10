@@ -276,7 +276,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByPlaceholder("Add a comment to open this").fill(REGRADE_REQUEST_COMMENT);
     await region.getByLabel("Open Request", { exact: true }).click();
 
-    await expect(region.getByText(REGRADE_REQUEST_COMMENT)).toBeVisible();
+    await expect(region.getByText(REGRADE_REQUEST_COMMENT).first()).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await argosScreenshot(page, "Pseudonymous grading - Student opens regrade request");
   });
@@ -295,7 +295,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByLabel("Add Comment", { exact: true }).click();
 
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
-    await expect(region.getByText(GRADER_REGRADE_RESPONSE)).toBeVisible();
+    await expect(region.getByText(GRADER_REGRADE_RESPONSE).first()).toBeVisible();
 
     // Instructor should see their own pseudonym AND real name in their comment
     // The format should be "Pseudonym (Real Name)"

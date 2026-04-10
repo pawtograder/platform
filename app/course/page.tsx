@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { termToTermText } from "@/components/ui/semesterText";
