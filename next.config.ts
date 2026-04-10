@@ -165,6 +165,4 @@ const sentryConfig = {
   disableLogger: true
 };
 
-export default hasSentryDsn && !disableSentryBundlingPlugin
-  ? withSentryConfig(nextConfig, sentryConfig)
-  : nextConfig;
+export default hasSentryDsn && !disableSentryBundlingPlugin ? withSentryConfig(nextConfig, sentryConfig) : nextConfig;
