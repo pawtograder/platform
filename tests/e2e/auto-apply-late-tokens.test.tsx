@@ -48,7 +48,6 @@ test.beforeEach(async () => {
 });
 
 test.describe("Auto-apply late tokens", () => {
-
   test("When require_tokens_before_due_date is false and student has tokens, submitting late auto-applies a token", async () => {
     const FAKE_SHA = "abc123def456abc123def456abc123def456abc123";
     const IDEMPOTENCY_KEY = `${assignment.id}-${FAKE_SHA}`;
