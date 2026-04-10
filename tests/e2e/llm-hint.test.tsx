@@ -193,7 +193,9 @@ test.beforeAll(async () => {
     }
   }
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
+});
 // Helper function to call the LLM hint API with authentication
 async function callLLMHintAPI(
   request: {

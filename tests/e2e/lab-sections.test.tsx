@@ -67,7 +67,9 @@ test.beforeAll(async () => {
     }
   }
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor1, instructor2]);
+});
 test.describe("Lab Sections Page", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeEach(async ({ page }) => {

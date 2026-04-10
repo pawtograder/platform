@@ -1483,8 +1483,8 @@ export default class TableController<
     const newCount = currentCount + 1;
     TableController._controllerCounts.set(tableName, newCount);
 
-    // Only log creation if there are more than 4 live controllers for this table
-    if (newCount > 4) {
+    // Only log creation if there are more than 10 live controllers for this table
+    if (newCount > 10) {
       // eslint-disable-next-line no-console
       console.log(
         `⚠️ TableController created for "${tableName}" (count: ${newCount} - potential leak!)`,

@@ -2,8 +2,7 @@ import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
-  /* config options here */
+  output: process.env.NEXT_OUTPUT_STANDALONE === "true" ? "standalone" : undefined,
   experimental: {
     optimizePackageImports: [
       "@chakra-ui/react",

@@ -1541,6 +1541,13 @@ export function CourseControllerProvider({
   const [courseController, setCourseController] = useState<CourseController | null>(null);
   const { user } = useAuthState();
   const userId = user?.id;
+
+  // Use ref for initialData so it doesn't trigger effect re-runs.
+  // initialData is SSR-provided and gets a new object reference on every server render,
+  // which would otherwise cause unnecessary CourseController/ClassRealTimeController recreation.
+  const initialDataRef = useRef(initialData);
+  initialDataRef.current = initialData;
+
   // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
     if (userId) {
@@ -1552,7 +1559,14 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      const _courseController = new CourseController(role, course_id, client, realTimeController, userId, initialData);
+      const _courseController = new CourseController(
+        role,
+        course_id,
+        client,
+        realTimeController,
+        userId,
+        initialDataRef.current
+      );
       setCourseController(_courseController);
       const start = async () => {
         try {
@@ -1583,7 +1597,7 @@ export function CourseControllerProvider({
         realTimeController.close();
       };
     }
-  }, [course_id, profile_id, role, userId, initialData]);
+  }, [course_id, profile_id, role, userId]);
 
   if (!courseController || !userId) {
     return (
