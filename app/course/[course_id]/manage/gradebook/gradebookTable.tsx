@@ -374,6 +374,12 @@ function ScoreExprDocs() {
     </Text>
   );
 }
+
+/** Staff-only applies only when a score expression exists; avoids persisting a hidden checkbox value. */
+function effectiveInstructorOnlyForSubmit(scoreExpression: string | undefined, instructorOnly: boolean | undefined) {
+  return Boolean((scoreExpression ?? "").trim()) && Boolean(instructorOnly);
+}
+
 function AddColumnDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const gradebookController = useGradebookController();
@@ -398,6 +404,7 @@ function AddColumnDialog() {
     handleSubmit,
     reset,
     watch,
+    setValue,
     formState: { errors }
   } = useForm<FormValues>({
     defaultValues: {
@@ -411,6 +418,13 @@ function AddColumnDialog() {
     }
   });
   const addColumnScoreExpr = watch("scoreExpression");
+  const scoreExpressionRegister = register("scoreExpression", {
+    onChange: (e) => {
+      if (!(e.target as HTMLTextAreaElement).value.trim()) {
+        setValue("instructorOnly", false);
+      }
+    }
+  });
 
   // Reset form when dialog opens/closes
   useEffect(() => {
@@ -430,7 +444,7 @@ function AddColumnDialog() {
         slug: data.slug,
         score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
         render_expression: data.renderExpression?.length ? data.renderExpression : null,
-        instructor_only: Boolean(data.instructorOnly),
+        instructor_only: effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly),
         dependencies,
         class_id: gradebookController.class_id,
         gradebook_id: gradebookController.gradebook_id,
@@ -542,7 +556,7 @@ function AddColumnDialog() {
                   <Label htmlFor="scoreExpression">Score Expression</Label>
                   <Textarea
                     id="scoreExpression"
-                    {...register("scoreExpression")}
+                    {...scoreExpressionRegister}
                     placeholder="Score Expression"
                     rows={4}
                   />
@@ -613,6 +627,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     reset,
     setError,
     watch,
+    setValue,
     formState: { errors }
   } = useForm<FormValues>({
     defaultValues: {
@@ -623,29 +638,40 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       scoreExpression: column?.score_expression ?? "",
       renderExpression: column?.render_expression ?? "",
       showCalculatedRanges: column?.show_calculated_ranges ?? false,
-      instructorOnly: column?.instructor_only ?? false
+      instructorOnly:
+        (column?.instructor_only ?? false) && Boolean((column?.score_expression ?? "").trim())
     }
   });
 
+  const scoreExpression = watch("scoreExpression");
+
   useEffect(() => {
     if (column) {
+      const expr = column.score_expression ?? "";
       reset({
         name: column.name ?? "",
         description: column.description ?? "",
         maxScore: column.max_score ?? 0,
         slug: column.slug ?? "",
-        scoreExpression: column.score_expression ?? "",
+        scoreExpression: expr,
         renderExpression: column.render_expression ?? "",
         showCalculatedRanges: column.show_calculated_ranges ?? false,
-        instructorOnly: column.instructor_only ?? false
+        instructorOnly: (column.instructor_only ?? false) && Boolean(expr.trim())
       });
     }
   }, [columnId, column, reset]);
 
+  const scoreExpressionRegister = register("scoreExpression", {
+    onChange: (e) => {
+      if (!(e.target as HTMLTextAreaElement).value.trim()) {
+        setValue("instructorOnly", false);
+      }
+    }
+  });
+
   if (!columnId) return null;
   if (!column) throw new Error(`Column ${columnId} not found`);
 
-  const scoreExpression = watch("scoreExpression");
   const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
 
   const onSubmit = async (data: FieldValues) => {
@@ -668,7 +694,8 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       if ((column.render_expression ?? "") !== (data.renderExpression ?? "")) settingsChanged.push("render_expression");
       if ((column.show_calculated_ranges ?? false) !== (data.showCalculatedRanges ?? false))
         settingsChanged.push("show_calculated_ranges");
-      if ((column.instructor_only ?? false) !== (data.instructorOnly ?? false)) settingsChanged.push("instructor_only");
+      const submittedInstructorOnly = effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly);
+      if ((column.instructor_only ?? false) !== submittedInstructorOnly) settingsChanged.push("instructor_only");
 
       await updateColumn({
         resource: "gradebook_columns",
@@ -681,7 +708,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
           score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
           render_expression: data.renderExpression?.length ? data.renderExpression : null,
           show_calculated_ranges: data.showCalculatedRanges ?? false,
-          instructor_only: data.instructorOnly ?? false,
+          instructor_only: submittedInstructorOnly,
           dependencies
         }
       });
@@ -782,7 +809,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   <Textarea
                     id="scoreExpression"
                     disabled={!canEditScoreExpression}
-                    {...register("scoreExpression")}
+                    {...scoreExpressionRegister}
                     placeholder="Score Expression"
                     rows={4}
                   />

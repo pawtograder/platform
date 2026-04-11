@@ -183,7 +183,7 @@ abstract class DependencySourceBase implements DependencySource {
         this.valuesMap.get(context.student_id)?.find((value) => {
           if (value.key !== k || value.class_id !== class_id) return false;
           if (value.instructor_only) {
-            return context.is_private_calculation === true;
+            return true;
           }
           return value.is_private === context.is_private_calculation;
         })?.value;
@@ -201,7 +201,7 @@ abstract class DependencySourceBase implements DependencySource {
     const matchingValue = studentValues?.find((value) => {
       if (value.key !== key || value.class_id !== class_id) return false;
       if (value.instructor_only) {
-        return context.is_private_calculation === true;
+        return true;
       }
       return value.is_private === context.is_private_calculation;
     });
