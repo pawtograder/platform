@@ -158,7 +158,10 @@ async function kickRecalculation(class_id: number) {
     .update({ is_recalculating: false })
     .eq("class_id", class_id)
     .eq("is_recalculating", true);
-  await supabase.rpc("invoke_gradebook_recalculation_background_task").then(() => {}, () => {});
+  await supabase.rpc("invoke_gradebook_recalculation_background_task").then(
+    () => {},
+    () => {}
+  );
   const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
   if (edgeSecret) {
     await supabase.functions
