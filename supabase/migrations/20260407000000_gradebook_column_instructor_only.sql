@@ -1,5 +1,5 @@
--- Issue #520: Instructor-only gradebook columns (hidden from students until column is "released",
--- then student view is a frozen copy of the instructor is_private=true row — no public recalculation).
+-- Issue #520: Instructor-only gradebook columns (hidden from students until column is "released").
+-- On release the application clears instructor_only, so the column becomes a normal visible column.
 
 ALTER TABLE public.gradebook_columns
   ADD COLUMN IF NOT EXISTS instructor_only boolean NOT NULL DEFAULT false;

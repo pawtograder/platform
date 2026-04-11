@@ -552,7 +552,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
     }).toPass({ timeout: 60_000 });
 
-    // Issue #520: instructor-only manual column — RLS hides until released; public row is a snapshot after release.
+    // Issue #520: instructor-only manual column — RLS hides until released; on release instructor_only is cleared and column behaves normally.
     const { data: gbRow } = await supabase.from("gradebooks").select("id").eq("class_id", course.id).single();
     if (!gbRow) {
       throw new Error("Failed to resolve gradebook id for instructor-only column test");
@@ -622,6 +622,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     expect(studCellErr).toBeNull();
     expect(studCell).toBeNull();
 
+    // Two-step release (mirrors the UI flow): release first, then clear instructor_only
     const { error: releaseIoErr } = await supabase
       .from("gradebook_columns")
       .update({ released: true })
@@ -629,6 +630,22 @@ test.describe("Gradebook Page - Comprehensive", () => {
     if (releaseIoErr) {
       throw new Error(releaseIoErr.message);
     }
+    const { error: clearIoErr } = await supabase
+      .from("gradebook_columns")
+      .update({ instructor_only: false })
+      .eq("id", ioColumnId);
+    if (clearIoErr) {
+      throw new Error(clearIoErr.message);
+    }
+
+    // Verify instructor_only was cleared
+    const { data: colAfterRelease } = await supabase
+      .from("gradebook_columns")
+      .select("instructor_only, released")
+      .eq("id", ioColumnId)
+      .single();
+    expect(colAfterRelease?.instructor_only).toBe(false);
+    expect(colAfterRelease?.released).toBe(true);
 
     await expect(async () => {
       const { data: priv, error: pErr } = await supabase
@@ -651,7 +668,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(pub?.score).toBe(50);
     }).toPass();
 
-    const snapshotPublicScore = 50;
+    // After release + clear instructor_only, column behaves normally: private→public sync is live.
     const { error: bumpErr } = await supabase
       .from("gradebook_column_students")
       .update({ score_override: 61 })
@@ -662,6 +679,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(bumpErr.message);
     }
 
+    // Public row should sync the overridden score (not stay frozen at 50)
     await expect(async () => {
       const { data: priv, error } = await supabase
         .from("gradebook_column_students")
@@ -672,16 +690,16 @@ test.describe("Gradebook Page - Comprehensive", () => {
         .single();
       if (error) throw new Error(error.message);
       expect(priv?.score).toBe(61);
-    }).toPass();
-
-    const { data: pubAfterBump } = await supabase
-      .from("gradebook_column_students")
-      .select("score")
-      .eq("gradebook_column_id", ioColumnId)
-      .eq("student_id", students[0].private_profile_id)
-      .eq("is_private", false)
-      .single();
-    expect(pubAfterBump?.score).toBe(snapshotPublicScore);
+      const { data: pub, error: pubErr } = await supabase
+        .from("gradebook_column_students")
+        .select("score")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", false)
+        .single();
+      if (pubErr) throw new Error(pubErr.message);
+      expect(pub?.score).toBe(61);
+    }).toPass({ timeout: 60_000 });
 
     const { data: studColAfter } = await studentClient
       .from("gradebook_columns")
@@ -696,7 +714,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       .eq("student_id", students[0].private_profile_id)
       .eq("is_private", false)
       .maybeSingle();
-    expect(studScoreAfter?.score).toBe(snapshotPublicScore);
+    expect(studScoreAfter?.score).toBe(61);
 
     await studentClient.auth.signOut();
   });
