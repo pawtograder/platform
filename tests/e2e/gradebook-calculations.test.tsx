@@ -151,13 +151,44 @@ async function unreleaseColumn(class_id: number, column_slug: string) {
   if (error) throw new Error(`Unrelease failed for ${column_slug}: ${error.message}`);
 }
 
-/** Clear stuck recalculation states and kick the background worker. */
+/** Clear stuck recalculation states, enqueue all calculated rows, and kick the worker. */
 async function kickRecalculation(class_id: number) {
+  // Clear any stuck recalculating states
   await supabase
     .from("gradebook_row_recalc_state")
     .update({ is_recalculating: false })
     .eq("class_id", class_id)
     .eq("is_recalculating", true);
+
+  // Enqueue recalculation for all calculated column rows in the class.
+  // Score changes on manual columns don't auto-enqueue dependent calculated rows,
+  // so we need to push them into the PGMQ queue ourselves.
+  const { data: calcRows } = await supabase
+    .from("gradebook_column_students")
+    .select("class_id, gradebook_id, student_id, is_private, gradebook_columns!inner(score_expression)")
+    .eq("class_id", class_id)
+    .not("gradebook_columns.score_expression", "is", null);
+
+  if (calcRows && calcRows.length > 0) {
+    const batch = calcRows.map((r) => ({
+      class_id: r.class_id,
+      gradebook_id: r.gradebook_id,
+      student_id: r.student_id,
+      is_private: r.is_private
+    }));
+    // Deduplicate by unique key
+    const seen = new Set<string>();
+    const deduped = batch.filter((r) => {
+      const key = `${r.class_id}:${r.gradebook_id}:${r.student_id}:${r.is_private}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    await supabase.rpc("enqueue_gradebook_row_recalculation_batch", {
+      p_rows: deduped as unknown as Record<string, unknown>[]
+    });
+  }
+
   await supabase.rpc("invoke_gradebook_recalculation_background_task").then(
     () => {},
     () => {}
@@ -258,8 +289,12 @@ async function waitForNullScore(opts: {
 
 /** Create a Supabase client authenticated as a specific student for RLS checks. */
 async function createStudentClient(student: TestingUser) {
-  const client = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
-  const { error } = await client.auth.signInWithPassword({ email: student.email, password: student.password });
+  const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  // Ensure the user has a known password (magic-link users get a random one at creation)
+  const knownPassword = student.password;
+  await supabase.auth.admin.updateUserById(student.user_id, { password: knownPassword });
+  const client = createClient<Database>(process.env.SUPABASE_URL!, anonKey!);
+  const { error } = await client.auth.signInWithPassword({ email: student.email, password: knownPassword });
   if (error) throw new Error(`Student login failed: ${error.message}`);
   return client;
 }
@@ -651,16 +686,21 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     await page.goto(`/course/${course.id}/gradebook`);
     await page.waitForLoadState("networkidle");
 
+    // Wait for the gradebook region to appear, then expand all groups
+    await expect(page.getByText("Expand All")).toBeVisible({ timeout: 30_000 });
+    await page.getByText("Expand All").click();
+    // Wait a tick for state update to propagate
+    await page.waitForTimeout(500);
+
     // Student gradebook should show released columns as cards
-    await expect(page.getByRole("article", { name: "Grade for HW 1" })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("article", { name: "Grade for HW 2" })).toBeVisible();
-    await expect(page.getByRole("article", { name: "Grade for HW 3" })).toBeVisible();
-    await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
+    await expect(page.getByRole("article", { name: "Grade for HW 1" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("article", { name: "Grade for HW 2" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("article", { name: "Grade for HW 3" })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible({ timeout: 10_000 });
 
     // Final grade card should show the student-visible value (84 for Alice).
-    // Use the card article + regex to avoid matching unrelated "84" elsewhere on the page.
     const finalCard = page.getByRole("article", { name: "Grade for Final Grade" });
-    await expect(finalCard).toBeVisible({ timeout: 30_000 });
+    await expect(finalCard).toBeVisible({ timeout: 10_000 });
     await expect(finalCard).toContainText(/84(\.0+)?/);
   });
 });
@@ -1903,10 +1943,15 @@ test.describe("Fixture 5: Score Override Precedence", () => {
     await page.goto(`/course/${course.id}/gradebook`);
     await page.waitForLoadState("networkidle");
 
+    // Wait for the gradebook region to appear, then expand all groups
+    await expect(page.getByText("Expand All")).toBeVisible({ timeout: 30_000 });
+    await page.getByText("Expand All").click();
+    await page.waitForTimeout(500);
+
     // Scope assertions to specific grade cards — bare getByText("80") could match
     // dates, IDs, or other numeric text on the page.
     const quizAvgCard = page.getByRole("article", { name: "Grade for Quiz Average" });
-    await expect(quizAvgCard).toBeVisible({ timeout: 30_000 });
+    await expect(quizAvgCard).toBeVisible({ timeout: 10_000 });
     await expect(quizAvgCard).toContainText(/80(\.0+)?/);
 
     const bonusCard = page.getByRole("article", { name: "Grade for Final with Bonus" });
