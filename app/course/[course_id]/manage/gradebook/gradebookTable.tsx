@@ -609,7 +609,6 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     reset,
     setError,
     watch,
-    setValue,
     formState: { errors }
   } = useForm<FormValues>({
     defaultValues: {
