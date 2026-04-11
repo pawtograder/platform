@@ -12200,6 +12200,10 @@ export type Database = {
         Args: { p_class_id: number; p_enabled: boolean; p_name: string };
         Returns: undefined;
       };
+      merge_class_feature_as_service_role: {
+        Args: { p_class_id: number; p_enabled: boolean; p_name: string };
+        Returns: undefined;
+      };
       only_calendar_or_discord_ids_changed: {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
         Returns: boolean;

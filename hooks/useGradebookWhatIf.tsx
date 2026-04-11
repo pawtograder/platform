@@ -468,8 +468,12 @@ class GradebookWhatIfController {
           return ret;
         }
       }) as ImportFunction;
+      // Client what-if runs in the student UI: users only see public-facing grades and
+      // is_private_calculation is always false here. Server-side recalculation sets
+      // enforcePrivateCalculationMatch: true; keep it false for this path.
       addCommonExpressionFunctions(imports, {
-        includeSecurityGuards: false
+        includeSecurityGuards: false,
+        enforcePrivateCalculationMatch: false
       });
 
       math.import(imports, { override: true });

@@ -35,6 +35,7 @@ import {
 
 import { Alert } from "@/components/ui/alert";
 import pluralize from "pluralize";
+import type { MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaExclamationTriangle, FaMagic } from "react-icons/fa";
 import { FaPencil } from "react-icons/fa6";
@@ -311,6 +312,7 @@ function GradebookCard({
     whatIfEnabled &&
     studentGrade?.score_override == null &&
     whatIfVal?.what_if !== undefined &&
+    whatIfVal?.what_if !== null &&
     whatIfVal?.what_if !== score;
   const canEdit = whatIfEnabled && canEditColumn(column);
   const whatIfController = useGradebookWhatIf();
@@ -330,7 +332,17 @@ function GradebookCard({
       justifyContent="space-between"
       cursor={canEdit ? "pointer" : "default"}
       display="flex"
-      onClick={canEdit ? () => setIsEditing(true) : undefined}
+      onClick={
+        canEdit
+          ? (e: MouseEvent<HTMLDivElement>) => {
+              const target = e.target as HTMLElement;
+              if (target.closest("a, button, input, textarea, select, [role='link']")) {
+                return;
+              }
+              setIsEditing(true);
+            }
+          : undefined
+      }
       borderRadius="none"
       borderBottom="none"
       textAlign="left"

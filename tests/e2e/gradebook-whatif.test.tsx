@@ -82,13 +82,16 @@ test.describe("Gradebook What-If", () => {
     const participationCard = getGradeCard(page, "Participation");
     await expect(participationCard).toBeVisible();
 
+    const participationBefore = normalizeText(await participationCard.innerText());
+    const targetValue = participationBefore.includes("100/100") ? "0" : "100";
+
     await participationCard.click();
     const whatIfInput = participationCard.locator('input[type="number"]');
     await expect(whatIfInput).toBeVisible();
-    await whatIfInput.fill("100");
+    await whatIfInput.fill(targetValue);
     await whatIfInput.press("Enter");
 
-    await expect(participationCard).toContainText("100/100");
+    await expect(participationCard).toContainText(targetValue === "100" ? "100/100" : "0/100");
   });
 
   test("updates dependent final-grade simulation and restores baseline on clear", async ({ page }) => {
@@ -149,14 +152,16 @@ test.describe("Gradebook What-If", () => {
     await expect(assignmentCard).toBeVisible();
 
     const finalBefore = normalizeText(await finalCard.innerText());
+    const assignmentBefore = normalizeText(await assignmentCard.innerText());
+    const assignmentTarget = assignmentBefore.includes("100/100") ? "0" : "100";
 
     await assignmentCard.click();
     const whatIfInput = assignmentCard.locator('input[type="number"]');
     await expect(whatIfInput).toBeVisible();
-    await whatIfInput.fill("100");
+    await whatIfInput.fill(assignmentTarget);
     await whatIfInput.press("Enter");
 
-    await expect(assignmentCard).toContainText("100/100");
+    await expect(assignmentCard).toContainText(assignmentTarget === "100" ? "100/100" : "0/100");
     await expect(async () => {
       const finalAfter = normalizeText(await finalCard.innerText());
       expect(finalAfter).not.toBe(finalBefore);

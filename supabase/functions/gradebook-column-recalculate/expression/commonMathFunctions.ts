@@ -25,6 +25,7 @@ export type ExpressionContextForCommonFunctions = {
 
 type ImportMap = Record<string, (...args: never[]) => unknown>;
 
+/** True when `value` has the required shape for expression operands; optional fields (e.g. is_missing) may be absent. */
 function isGradebookExpressionValue(value: unknown): value is GradebookExpressionValue {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;

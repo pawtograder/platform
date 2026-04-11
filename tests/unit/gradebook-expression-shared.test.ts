@@ -51,6 +51,26 @@ describe("gradebook expression shared helpers", () => {
     expect(pickPreferredGradebookValue(undefined, undefined)).toBeUndefined();
   });
 
+  test("pickPreferredGradebookValue treats score_override0 as valid (not missing)", () => {
+    const overrideValue: GradebookColumnDependencyValue = {
+      score: 100,
+      score_override: null,
+      is_missing: false,
+      column_slug: "test"
+    };
+    const baseValue: GradebookColumnDependencyValue = {
+      score: 50,
+      score_override: 0,
+      is_missing: false,
+      column_slug: "test"
+    };
+
+    expect(pickPreferredGradebookValue(overrideValue, baseValue)).toEqual({
+      ...baseValue,
+      score: 0
+    });
+  });
+
   test("pushMissingDependenciesToContext tracks direct and nested missing dependencies", () => {
     const context: { incomplete_values: IncompleteValuesAdvice | null } = {
       incomplete_values: null
@@ -84,6 +104,31 @@ describe("gradebook expression shared helpers", () => {
     expect(context.incomplete_values).toBeNull();
   });
 
+  test("pushMissingDependenciesToContext merges mixed present and missing entries", () => {
+    const context: { incomplete_values: IncompleteValuesAdvice | null } = {
+      incomplete_values: null
+    };
+    const present: GradebookColumnDependencyValue = {
+      score: 80,
+      score_override: null,
+      is_missing: false,
+      column_slug: "graded-col"
+    };
+    const missing: GradebookColumnDependencyValue = {
+      score: null,
+      score_override: null,
+      is_missing: true,
+      column_slug: "missing-col",
+      incomplete_values: {
+        missing: {
+          gradebook_columns: ["nested-col"]
+        }
+      }
+    };
+    pushMissingDependenciesToContext(context, [present, missing]);
+    expect(context.incomplete_values?.missing?.gradebook_columns).toEqual(["missing-col", "nested-col"]);
+  });
+
   test("dedupeIncompleteValues removes duplicate column slugs", () => {
     const input: IncompleteValuesAdvice = {
       missing: {
@@ -97,6 +142,14 @@ describe("gradebook expression shared helpers", () => {
     expect(dedupeIncompleteValues(input)).toEqual({
       missing: { gradebook_columns: ["a", "b"] },
       not_released: { gradebook_columns: ["x", "y"] }
+    });
+  });
+
+  test("dedupeIncompleteValues tolerates null input and empty arrays", () => {
+    expect(dedupeIncompleteValues(null)).toBeNull();
+    expect(dedupeIncompleteValues(undefined)).toBeUndefined();
+    expect(dedupeIncompleteValues({ missing: { gradebook_columns: [] } })).toEqual({
+      missing: { gradebook_columns: [] }
     });
   });
 
