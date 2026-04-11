@@ -375,9 +375,8 @@ function ScoreExprDocs() {
   );
 }
 
-/** Staff-only applies only when a score expression exists; avoids persisting a hidden checkbox value. */
-function effectiveInstructorOnlyForSubmit(scoreExpression: string | undefined, instructorOnly: boolean | undefined) {
-  return Boolean((scoreExpression ?? "").trim()) && Boolean(instructorOnly);
+function effectiveInstructorOnlyForSubmit(instructorOnly: boolean | undefined) {
+  return Boolean(instructorOnly);
 }
 
 function AddColumnDialog() {
@@ -403,8 +402,6 @@ function AddColumnDialog() {
     register,
     handleSubmit,
     reset,
-    watch,
-    setValue,
     formState: { errors }
   } = useForm<FormValues>({
     defaultValues: {
@@ -417,14 +414,7 @@ function AddColumnDialog() {
       instructorOnly: false
     }
   });
-  const addColumnScoreExpr = watch("scoreExpression");
-  const scoreExpressionRegister = register("scoreExpression", {
-    onChange: (e) => {
-      if (!(e.target as HTMLTextAreaElement).value.trim()) {
-        setValue("instructorOnly", false);
-      }
-    }
-  });
+  const scoreExpressionRegister = register("scoreExpression");
 
   // Reset form when dialog opens/closes
   useEffect(() => {
@@ -444,7 +434,7 @@ function AddColumnDialog() {
         slug: data.slug,
         score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
         render_expression: data.renderExpression?.length ? data.renderExpression : null,
-        instructor_only: effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly),
+        instructor_only: effectiveInstructorOnlyForSubmit(data.instructorOnly),
         dependencies,
         class_id: gradebookController.class_id,
         gradebook_id: gradebookController.gradebook_id,
@@ -577,14 +567,11 @@ function AddColumnDialog() {
                   )}
                   <RenderExprDocs />
                 </Box>
-                {addColumnScoreExpr && (
-                  <Box>
-                    <Checkbox {...register("instructorOnly")}>
-                      Staff-only column (hidden from students until you release the column; then they see a snapshot of
-                      the staff view, not a live recalculation)
-                    </Checkbox>
-                  </Box>
-                )}
+                <Box>
+                  <Checkbox {...register("instructorOnly")}>
+                    Staff-only column (hidden from students until you release it)
+                  </Checkbox>
+                </Box>
                 <HStack justifyContent="flex-end">
                   <Button type="submit" colorPalette="green" loading={isLoading}>
                     Save
@@ -638,8 +625,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       scoreExpression: column?.score_expression ?? "",
       renderExpression: column?.render_expression ?? "",
       showCalculatedRanges: column?.show_calculated_ranges ?? false,
-      instructorOnly:
-        (column?.instructor_only ?? false) && Boolean((column?.score_expression ?? "").trim())
+      instructorOnly: column?.instructor_only ?? false
     }
   });
 
@@ -656,18 +642,12 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         scoreExpression: expr,
         renderExpression: column.render_expression ?? "",
         showCalculatedRanges: column.show_calculated_ranges ?? false,
-        instructorOnly: (column.instructor_only ?? false) && Boolean(expr.trim())
+        instructorOnly: column.instructor_only ?? false
       });
     }
   }, [columnId, column, reset]);
 
-  const scoreExpressionRegister = register("scoreExpression", {
-    onChange: (e) => {
-      if (!(e.target as HTMLTextAreaElement).value.trim()) {
-        setValue("instructorOnly", false);
-      }
-    }
-  });
+  const scoreExpressionRegister = register("scoreExpression");
 
   if (!columnId) return null;
   if (!column) throw new Error(`Column ${columnId} not found`);
@@ -694,7 +674,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       if ((column.render_expression ?? "") !== (data.renderExpression ?? "")) settingsChanged.push("render_expression");
       if ((column.show_calculated_ranges ?? false) !== (data.showCalculatedRanges ?? false))
         settingsChanged.push("show_calculated_ranges");
-      const submittedInstructorOnly = effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly);
+      const submittedInstructorOnly = effectiveInstructorOnlyForSubmit(data.instructorOnly);
       if ((column.instructor_only ?? false) !== submittedInstructorOnly) settingsChanged.push("instructor_only");
 
       await updateColumn({
@@ -832,14 +812,11 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     )}
                   </Box>
                 )}
-                {scoreExpression && (
-                  <Box>
-                    <Checkbox {...register("instructorOnly")} checked={watch("instructorOnly") ?? false}>
-                      Staff-only column (hidden from students until you release the column; then they see a snapshot of
-                      the staff view)
-                    </Checkbox>
-                  </Box>
-                )}
+                <Box>
+                  <Checkbox {...register("instructorOnly")} checked={watch("instructorOnly") ?? false}>
+                    Staff-only column (hidden from students until you release it)
+                  </Checkbox>
+                </Box>
                 <Box>
                   <Label htmlFor="renderExpression">Render Expression</Label>
                   <Input id="renderExpression" {...register("renderExpression")} placeholder="Render Expression" />
@@ -1633,11 +1610,44 @@ function GradebookColumnHeader({
   }, [column_id, column, supabase, gradebookController]);
 
   const releaseColumn = useCallback(async () => {
+    if (column.instructor_only) {
+      // Block release while grades are being recalculated
+      const hasRecalculating = allGrades.some((grade) => grade.is_recalculating);
+      if (hasRecalculating) {
+        toaster.create({
+          title: "Column is recalculating",
+          description: "Some grades are still being recalculated. Please try again in a moment.",
+          type: "error"
+        });
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Releasing "${column.name}" will make it permanently visible to students and it will behave as a normal column. This cannot be undone. Continue?`
+      );
+      if (!confirmed) return;
+    }
+
     setIsReleasing(true);
     try {
-      const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
+      if (column.instructor_only) {
+        // Step 1: Release while still instructor_only — triggers snapshot sync
+        const { error: releaseError } = await supabase
+          .from("gradebook_columns")
+          .update({ released: true })
+          .eq("id", column_id);
+        if (releaseError) throw releaseError;
 
-      if (error) throw error;
+        // Step 2: Clear instructor_only — column now behaves normally; triggers recalc for calculated columns
+        const { error: clearError } = await supabase
+          .from("gradebook_columns")
+          .update({ instructor_only: false })
+          .eq("id", column_id);
+        if (clearError) throw clearError;
+      } else {
+        const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
+        if (error) throw error;
+      }
 
       await gradebookController.gradebook_columns.refetchByIds([column_id]);
 
@@ -1655,7 +1665,7 @@ function GradebookColumnHeader({
     } finally {
       setIsReleasing(false);
     }
-  }, [column_id, column, supabase, gradebookController]);
+  }, [column_id, column, supabase, gradebookController, allGrades]);
 
   const unreleaseColumn = useCallback(async () => {
     setIsUnreleasing(true);
@@ -1702,10 +1712,13 @@ function GradebookColumnHeader({
         ret.push(`Mixed release status: ${releasedCount}/${totalCount} students can see their grades`);
       }
     }
+    if (column.instructor_only) {
+      ret.push("Staff-only: hidden from students until released");
+    }
     if (column.render_expression) {
       ret.push(`Rendered as ${column.render_expression}`);
     }
-    if (!column.score_expression) {
+    if (!column.score_expression && !column.instructor_only) {
       if (column.released) {
         ret.push("Released to students");
       } else {
@@ -1924,16 +1937,16 @@ function GradebookColumnHeader({
                   </Tooltip.Root>
                 </Box>
               )}
-              {column.score_expression ? (
+              {column.instructor_only ? (
                 <Box position="relative" zIndex={10000}>
-                  <WrappedTooltip
-                    content={
-                      column.instructor_only
-                        ? "Staff-only: students do not see this column until it is released; then they see a frozen copy of the staff calculation"
-                        : "Visibility: Students see this value calculated based on released dependencies"
-                    }
-                  >
-                    <Icon as={LucideInfo} size="sm" color={column.instructor_only ? "purple.500" : "blue.500"} />
+                  <WrappedTooltip content="Staff-only: hidden from students until released">
+                    <Icon as={LucideInfo} size="sm" color="purple.500" />
+                  </WrappedTooltip>
+                </Box>
+              ) : column.score_expression ? (
+                <Box position="relative" zIndex={10000}>
+                  <WrappedTooltip content="Visibility: Students see this value calculated based on released dependencies">
+                    <Icon as={LucideInfo} size="sm" color="blue.500" />
                   </WrappedTooltip>
                 </Box>
               ) : hasMixedReleaseStatus ? (
