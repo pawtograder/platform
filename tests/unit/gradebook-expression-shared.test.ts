@@ -176,7 +176,6 @@ describe("gradebook expression shared helpers", () => {
       is_droppable: true,
       is_excused: false,
       max_score: 50,
-      released: true,
       is_private: false,
       column_slug: "a"
     };
@@ -187,7 +186,6 @@ describe("gradebook expression shared helpers", () => {
       is_droppable: true,
       is_excused: false,
       max_score: 100,
-      released: true,
       is_private: false,
       column_slug: "b"
     };
@@ -216,7 +214,6 @@ describe("gradebook expression shared helpers", () => {
       is_droppable: true,
       is_excused: false,
       max_score: 10,
-      released: true,
       is_private: true,
       column_slug: "private-col"
     };
@@ -244,7 +241,6 @@ describe("gradebook expression shared helpers", () => {
         is_droppable: true,
         is_excused: false,
         max_score: 10,
-        released: true,
         is_private: false,
         column_slug: "drop"
       },
@@ -255,7 +251,6 @@ describe("gradebook expression shared helpers", () => {
         is_droppable: false,
         is_excused: false,
         max_score: 10,
-        released: true,
         is_private: false,
         column_slug: "keep"
       },
@@ -266,7 +261,6 @@ describe("gradebook expression shared helpers", () => {
         is_droppable: true,
         is_excused: false,
         max_score: 0,
-        released: true,
         is_private: false,
         column_slug: "invalid"
       }
