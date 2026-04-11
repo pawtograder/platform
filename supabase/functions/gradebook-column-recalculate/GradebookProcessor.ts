@@ -723,31 +723,9 @@ export async function processGradebookRowsCalculation(
       let nextIncomplete: unknown | null = null;
       let nextReleased = false;
 
+      // Do not put a public snapshot in studentOverrideMap: gradebook_columns(...) must resolve
+      // instructor-only deps via base values (private row), not shadow them with the frozen student row.
       if (isInstructorOnlyColumn(column) && !is_private) {
-        const maxScoreIo = (column as { max_score: number | null }).max_score ?? 0;
-        const valueForSlugIo = {
-          class_id,
-          created_at: new Date().toISOString(),
-          gradebook_column_id: columnId,
-          gradebook_id,
-          id: (gcsByColumnId.get(columnId)?.id as number) ?? 0,
-          incomplete_values: current?.incomplete_values ?? null,
-          is_droppable: (current?.is_droppable as boolean) ?? false,
-          is_excused: (current?.is_excused as boolean) ?? false,
-          is_missing: (current?.is_missing as boolean) ?? false,
-          is_private,
-          released: (current?.released as boolean) ?? false,
-          score:
-            current?.score_override !== null && current?.score_override !== undefined
-              ? current?.score_override
-              : ((current?.score as number | null) ?? null),
-          score_override: (current?.score_override as number | null) ?? null,
-          score_override_note: (current?.score_override_note as string | null) ?? null,
-          student_id,
-          column_slug: slug,
-          max_score: maxScoreIo
-        };
-        studentOverrideMap.set(slug, valueForSlugIo);
         continue;
       }
 
