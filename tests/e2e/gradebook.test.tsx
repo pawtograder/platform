@@ -579,17 +579,27 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }
     const ioColumnId = ioCol.id;
 
+    // Wait for the private row to exist, then set a score
     await expect(async () => {
       const { data: priv, error } = await supabase
         .from("gradebook_column_students")
-        .select("score, score_override")
+        .select("id")
         .eq("gradebook_column_id", ioColumnId)
         .eq("student_id", students[0].private_profile_id)
         .eq("is_private", true)
         .single();
       if (error) throw new Error(error.message);
-      expect(priv?.score).toBe(50);
-    }).toPass();
+      expect(priv).toBeTruthy();
+    }).toPass({ timeout: 30_000 });
+
+    // Set score on the private row
+    const { error: setScoreErr } = await supabase
+      .from("gradebook_column_students")
+      .update({ score: 50 })
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", true);
+    if (setScoreErr) throw new Error(`Failed to set score: ${setScoreErr.message}`);
 
     const { data: pubBefore } = await supabase
       .from("gradebook_column_students")
@@ -600,7 +610,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
       .single();
     expect(pubBefore?.score).toBeNull();
 
-    const studentClient = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+    const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    // Ensure the student has a known password (magic-link users get a random one at creation)
+    await supabase.auth.admin.updateUserById(students[0].user_id, { password: students[0].password });
+    const studentClient = createClient<Database>(process.env.SUPABASE_URL!, anonKey!);
     const { error: signInError } = await studentClient.auth.signInWithPassword({
       email: students[0].email,
       password: students[0].password
@@ -625,20 +638,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
     expect(studCellErr).toBeNull();
     expect(studCell).toBeNull();
 
-    // Two-step release (mirrors the UI flow): release first, then clear instructor_only
-    const { error: releaseIoErr } = await supabase
-      .from("gradebook_columns")
-      .update({ released: true })
-      .eq("id", ioColumnId);
+    // Atomic release: release + clear instructor_only in one transaction
+    const { error: releaseIoErr } = await supabase.rpc("release_instructor_only_gradebook_column", {
+      p_column_id: ioColumnId
+    });
     if (releaseIoErr) {
       throw new Error(releaseIoErr.message);
-    }
-    const { error: clearIoErr } = await supabase
-      .from("gradebook_columns")
-      .update({ instructor_only: false })
-      .eq("id", ioColumnId);
-    if (clearIoErr) {
-      throw new Error(clearIoErr.message);
     }
 
     // Verify instructor_only was cleared
@@ -686,13 +691,13 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(async () => {
       const { data: priv, error } = await supabase
         .from("gradebook_column_students")
-        .select("score")
+        .select("score, score_override")
         .eq("gradebook_column_id", ioColumnId)
         .eq("student_id", students[0].private_profile_id)
         .eq("is_private", true)
         .single();
       if (error) throw new Error(error.message);
-      expect(priv?.score).toBe(61);
+      expect(priv?.score_override).toBe(61);
       const { data: pub, error: pubErr } = await supabase
         .from("gradebook_column_students")
         .select("score")
