@@ -4,6 +4,7 @@
 
 CREATE OR REPLACE FUNCTION public.recalculate_gradebook_column_for_all_students_statement() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path = public, pg_temp
     AS $$
 DECLARE
   rows_to_enqueue jsonb[];
@@ -40,3 +41,28 @@ $$;
 -- Update column comment to reflect the new release-clears-flag behavior.
 COMMENT ON COLUMN public.gradebook_columns.instructor_only IS
   'When true, students cannot see the column or their cell rows. On release, the application clears this flag and the column becomes a normal visible column with standard recalculation and sync behavior.';
+
+-- Atomic release for instructor-only columns: sets released=true then clears instructor_only
+-- in a single transaction to prevent partial state.
+CREATE OR REPLACE FUNCTION public.release_instructor_only_gradebook_column(p_column_id bigint)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- Step 1: Release while still instructor_only — triggers snapshot sync
+  UPDATE public.gradebook_columns
+  SET released = true
+  WHERE id = p_column_id AND instructor_only = true;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Column % is not an instructor-only column or does not exist', p_column_id;
+  END IF;
+
+  -- Step 2: Clear instructor_only — column now behaves normally; triggers recalc
+  UPDATE public.gradebook_columns
+  SET instructor_only = false
+  WHERE id = p_column_id;
+END;
+$$;

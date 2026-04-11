@@ -164,6 +164,8 @@ async function kickRecalculation(class_id: number) {
     await supabase.functions
       .invoke("gradebook-column-recalculate", { headers: { "x-edge-function-secret": edgeSecret } })
       .catch(() => {});
+  } else {
+    console.debug("[kickRecalculation] No EDGE_FUNCTION_SECRET; relying on background task only");
   }
 }
 

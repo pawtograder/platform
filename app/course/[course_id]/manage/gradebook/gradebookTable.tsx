@@ -375,8 +375,13 @@ function ScoreExprDocs() {
   );
 }
 
-function effectiveInstructorOnlyForSubmit(instructorOnly: boolean | undefined) {
-  return Boolean(instructorOnly);
+function normalizeScoreExpression(scoreExpression: string | undefined): string | null {
+  const normalized = scoreExpression?.trim();
+  return normalized ? normalized : null;
+}
+
+function effectiveInstructorOnlyForSubmit(scoreExpression: string | undefined, instructorOnly: boolean | undefined) {
+  return Boolean(normalizeScoreExpression(scoreExpression)) && Boolean(instructorOnly);
 }
 
 function AddColumnDialog() {
@@ -432,9 +437,9 @@ function AddColumnDialog() {
         description: data.description,
         max_score: data.maxScore,
         slug: data.slug,
-        score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
+        score_expression: normalizeScoreExpression(data.scoreExpression),
         render_expression: data.renderExpression?.length ? data.renderExpression : null,
-        instructor_only: effectiveInstructorOnlyForSubmit(data.instructorOnly),
+        instructor_only: effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly),
         dependencies,
         class_id: gradebookController.class_id,
         gradebook_id: gradebookController.gradebook_id,
@@ -664,11 +669,12 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       if (column.description !== data.description) settingsChanged.push("description");
       if (column.max_score !== data.maxScore) settingsChanged.push("max_score");
       if (column.slug !== data.slug) settingsChanged.push("slug");
-      if ((column.score_expression ?? "") !== (data.scoreExpression ?? "")) settingsChanged.push("score_expression");
+      const normalizedExpr = normalizeScoreExpression(data.scoreExpression);
+      if ((column.score_expression ?? null) !== normalizedExpr) settingsChanged.push("score_expression");
       if ((column.render_expression ?? "") !== (data.renderExpression ?? "")) settingsChanged.push("render_expression");
       if ((column.show_calculated_ranges ?? false) !== (data.showCalculatedRanges ?? false))
         settingsChanged.push("show_calculated_ranges");
-      const submittedInstructorOnly = effectiveInstructorOnlyForSubmit(data.instructorOnly);
+      const submittedInstructorOnly = effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly);
       if ((column.instructor_only ?? false) !== submittedInstructorOnly) settingsChanged.push("instructor_only");
 
       await updateColumn({
@@ -679,7 +685,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
           description: data.description,
           max_score: data.maxScore,
           slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
+          score_expression: normalizedExpr,
           render_expression: data.renderExpression?.length ? data.renderExpression : null,
           show_calculated_ranges: data.showCalculatedRanges ?? false,
           instructor_only: submittedInstructorOnly,
@@ -1625,19 +1631,11 @@ function GradebookColumnHeader({
     setIsReleasing(true);
     try {
       if (column.instructor_only) {
-        // Step 1: Release while still instructor_only — triggers snapshot sync
-        const { error: releaseError } = await supabase
-          .from("gradebook_columns")
-          .update({ released: true })
-          .eq("id", column_id);
-        if (releaseError) throw releaseError;
-
-        // Step 2: Clear instructor_only — column now behaves normally; triggers recalc for calculated columns
-        const { error: clearError } = await supabase
-          .from("gradebook_columns")
-          .update({ instructor_only: false })
-          .eq("id", column_id);
-        if (clearError) throw clearError;
+        // Atomic: release + clear instructor_only in a single transaction
+        const { error } = await supabase.rpc("release_instructor_only_gradebook_column", {
+          p_column_id: column_id
+        });
+        if (error) throw error;
       } else {
         const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
         if (error) throw error;

@@ -12191,6 +12191,10 @@ export type Database = {
         Args: { p_repository_ids: number[] };
         Returns: Json;
       };
+      release_instructor_only_gradebook_column: {
+        Args: { p_column_id: number };
+        Returns: undefined;
+      };
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };
         Returns: number;

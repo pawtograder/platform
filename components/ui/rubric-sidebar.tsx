@@ -1765,7 +1765,7 @@ function AssignToStudentPart({
       const { error } = await supabase.rpc("patch_submission_review_rubric_part_assignment", {
         p_submission_review_id: review.id,
         p_rubric_part_id: part.id,
-        p_student_profile_id: studentId
+        p_student_profile_id: studentId as string
       });
 
       if (error) {

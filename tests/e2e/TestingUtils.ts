@@ -2465,7 +2465,7 @@ export async function createAssignmentsAndGradebookColumns({
           score_expression,
           dependencies: finalDependencies ? finalDependencies : null,
           released,
-          instructor_only,
+          instructor_only: score_expression ? instructor_only : false,
           sort_order
         })
         .select("id, name, slug, max_score, score_expression, sort_order")

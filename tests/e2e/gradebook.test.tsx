@@ -601,10 +601,13 @@ test.describe("Gradebook Page - Comprehensive", () => {
     expect(pubBefore?.score).toBeNull();
 
     const studentClient = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
-    await studentClient.auth.signInWithPassword({
+    const { error: signInError } = await studentClient.auth.signInWithPassword({
       email: students[0].email,
       password: students[0].password
     });
+    if (signInError) {
+      throw new Error(`Student sign-in failed: ${signInError.message}`);
+    }
     const { data: studCol, error: studColErr } = await studentClient
       .from("gradebook_columns")
       .select("id")
