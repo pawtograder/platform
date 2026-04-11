@@ -544,12 +544,7 @@ function AddColumnDialog() {
                 </Box>
                 <Box>
                   <Label htmlFor="scoreExpression">Score Expression</Label>
-                  <Textarea
-                    id="scoreExpression"
-                    {...scoreExpressionRegister}
-                    placeholder="Score Expression"
-                    rows={4}
-                  />
+                  <Textarea id="scoreExpression" {...scoreExpressionRegister} placeholder="Score Expression" rows={4} />
                   {errors.scoreExpression && (
                     <Text color="red.500" fontSize="sm">
                       {errors.scoreExpression.message as string}

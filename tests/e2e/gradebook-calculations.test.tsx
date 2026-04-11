@@ -127,10 +127,7 @@ async function setScore(class_id: number, column_slug: string, student_id: strin
 /** Set score_override on a PRIVATE row. */
 async function setOverride(class_id: number, column_slug: string, student_id: string, score_override: number) {
   const rowId = await getRowId(class_id, column_slug, student_id, true);
-  const { error } = await supabase
-    .from("gradebook_column_students")
-    .update({ score_override })
-    .eq("id", rowId);
+  const { error } = await supabase.from("gradebook_column_students").update({ score_override }).eq("id", rowId);
   if (error) throw new Error(`setOverride failed for ${column_slug}: ${error.message}`);
 }
 
@@ -301,9 +298,27 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     course = await createClass({ name: "Calc Test — Weighted Average" });
     const suffix = Math.random().toString(36).slice(2, 6);
     const users = await createUsersInClass([
-      { name: "Alice Avg", email: `alice-avg-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Bob Avg", email: `bob-avg-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Instr Avg", email: `instr-avg-${suffix}@pawtograder.net`, role: "instructor", class_id: course.id, useMagicLink: true }
+      {
+        name: "Alice Avg",
+        email: `alice-avg-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Bob Avg",
+        email: `bob-avg-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Instr Avg",
+        email: `instr-avg-${suffix}@pawtograder.net`,
+        role: "instructor",
+        class_id: course.id,
+        useMagicLink: true
+      }
     ]);
     alice = users[0];
     bob = users[1];
@@ -313,7 +328,13 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     await createColumn({ class_id: course.id, name: "HW 1", slug: "leaf-hw1", max_score: 100, sort_order: 1 });
     await createColumn({ class_id: course.id, name: "HW 2", slug: "leaf-hw2", max_score: 100, sort_order: 2 });
     await createColumn({ class_id: course.id, name: "HW 3", slug: "leaf-hw3", max_score: 100, sort_order: 3 });
-    await createColumn({ class_id: course.id, name: "Participation", slug: "leaf-part", max_score: 100, sort_order: 4 });
+    await createColumn({
+      class_id: course.id,
+      name: "Participation",
+      slug: "leaf-part",
+      max_score: 100,
+      sort_order: 4
+    });
 
     // Wait for student rows to be created by the insert trigger
     for (const student of [alice, bob]) {
@@ -372,21 +393,60 @@ test.describe("Fixture 1: Weighted Average Course", () => {
   test("baseline: student public scores are null before any release", async () => {
     // Before any column is released, public (student-visible) rows of manual columns
     // should have null scores. This proves release is required to populate them.
-    await waitForNullScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "leaf-hw1", is_private: false });
-    await waitForNullScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "leaf-part", is_private: false });
-    await waitForNullScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "leaf-hw1", is_private: false });
+    await waitForNullScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "leaf-hw1",
+      is_private: false
+    });
+    await waitForNullScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "leaf-part",
+      is_private: false
+    });
+    await waitForNullScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "leaf-hw1",
+      is_private: false
+    });
   });
 
   test("instructor sees correct private calculated scores", async () => {
     // Alice hw-avg = 100*(80+90+100)/300 = 90
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-hw-avg", is_private: true, expected: 90 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: true,
+      expected: 90
+    });
     // Alice final = 90*0.7 + 70*0.3 = 63 + 21 = 84
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-final", is_private: true, expected: 84 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-final",
+      is_private: true,
+      expected: 84
+    });
 
     // Bob hw-avg = 100*(60+80+70)/300 = 70
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-hw-avg", is_private: true, expected: 70 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: true,
+      expected: 70
+    });
     // Bob final = 70*0.7 + 90*0.3 = 49 + 27 = 76
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-final", is_private: true, expected: 76 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-final",
+      is_private: true,
+      expected: 76
+    });
   });
 
   test("release hw1 + participation: student sees partial hw average", async () => {
@@ -397,18 +457,54 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     // calc-hw-avg public = mean of [hw1_only]:
     //   Alice: 100*80/100 = 80
     //   Bob:   100*60/100 = 60
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 80 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 60 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 80
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 60
+    });
 
     // calc-final public = hw_avg*0.7 + part*0.3:
     //   Alice: 80*0.7 + 70*0.3 = 56 + 21 = 77
     //   Bob:   60*0.7 + 90*0.3 = 42 + 27 = 69
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-final", is_private: false, expected: 77 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-final", is_private: false, expected: 69 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 77
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 69
+    });
 
     // Instructor private scores unchanged
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-hw-avg", is_private: true, expected: 90 });
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-final", is_private: true, expected: 84 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: true,
+      expected: 90
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-final",
+      is_private: true,
+      expected: 84
+    });
   });
 
   test("release hw2: student hw average updates", async () => {
@@ -417,14 +513,38 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     // Public mean now includes hw1 + hw2:
     //   Alice: 100*(80+90)/200 = 85
     //   Bob:   100*(60+80)/200 = 70
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 85 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 70 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 85
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 70
+    });
 
     // Final updates:
     //   Alice: 85*0.7 + 70*0.3 = 59.5 + 21 = 80.5
     //   Bob:   70*0.7 + 90*0.3 = 49 + 27 = 76
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-final", is_private: false, expected: 80.5 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-final", is_private: false, expected: 76 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 80.5
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 76
+    });
   });
 
   test("unrelease hw1: student average drops to hw2-only", async () => {
@@ -433,18 +553,54 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     // Public mean now includes only hw2 (hw1 cleared, hw3 never released):
     //   Alice: 100*90/100 = 90
     //   Bob:   100*80/100 = 80
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 90 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 80 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 90
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 80
+    });
 
     // Final:
     //   Alice: 90*0.7 + 70*0.3 = 63 + 21 = 84
     //   Bob:   80*0.7 + 90*0.3 = 56 + 27 = 83
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-final", is_private: false, expected: 84 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-final", is_private: false, expected: 83 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 84
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 83
+    });
 
     // Instructor private scores unchanged through all releases
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-final", is_private: true, expected: 84 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-final", is_private: true, expected: 76 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-final",
+      is_private: true,
+      expected: 84
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-final",
+      is_private: true,
+      expected: 76
+    });
   });
 
   test("release all three HW: student matches instructor hw average", async () => {
@@ -454,11 +610,35 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     // All three HW now released:
     //   Alice: 100*(80+90+100)/300 = 90  →  final = 90*0.7+70*0.3 = 84
     //   Bob:   100*(60+80+70)/300  = 70  →  final = 70*0.7+90*0.3 = 76
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 90 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-hw-avg", is_private: false, expected: 70 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 90
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-hw-avg",
+      is_private: false,
+      expected: 70
+    });
 
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-final", is_private: false, expected: 84 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-final", is_private: false, expected: 76 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 84
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-final",
+      is_private: false,
+      expected: 76
+    });
   });
 
   test("student UI shows released grades", async ({ page }) => {
@@ -516,19 +696,61 @@ test.describe("Fixture 2: Topic Max Score", () => {
     course = await createClass({ name: "Calc Test — Topic Max" });
     const suffix = Math.random().toString(36).slice(2, 6);
     const users = await createUsersInClass([
-      { name: "Alice Tmax", email: `alice-tmax-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Bob Tmax", email: `bob-tmax-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Instr Tmax", email: `instr-tmax-${suffix}@pawtograder.net`, role: "instructor", class_id: course.id, useMagicLink: true }
+      {
+        name: "Alice Tmax",
+        email: `alice-tmax-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Bob Tmax",
+        email: `bob-tmax-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Instr Tmax",
+        email: `instr-tmax-${suffix}@pawtograder.net`,
+        role: "instructor",
+        class_id: course.id,
+        useMagicLink: true
+      }
     ]);
     alice = users[0];
     bob = users[1];
     instructor = users[2];
 
     // Create manual attempt columns
-    await createColumn({ class_id: course.id, name: "Quiz: Classes Attempt 1", slug: "classes-1", max_score: 4, sort_order: 1 });
-    await createColumn({ class_id: course.id, name: "Quiz: Classes Attempt 2", slug: "classes-2", max_score: 4, sort_order: 2 });
-    await createColumn({ class_id: course.id, name: "Quiz: Lists Attempt 1", slug: "lists-1", max_score: 4, sort_order: 3 });
-    await createColumn({ class_id: course.id, name: "Quiz: Lists Attempt 2", slug: "lists-2", max_score: 4, sort_order: 4 });
+    await createColumn({
+      class_id: course.id,
+      name: "Quiz: Classes Attempt 1",
+      slug: "classes-1",
+      max_score: 4,
+      sort_order: 1
+    });
+    await createColumn({
+      class_id: course.id,
+      name: "Quiz: Classes Attempt 2",
+      slug: "classes-2",
+      max_score: 4,
+      sort_order: 2
+    });
+    await createColumn({
+      class_id: course.id,
+      name: "Quiz: Lists Attempt 1",
+      slug: "lists-1",
+      max_score: 4,
+      sort_order: 3
+    });
+    await createColumn({
+      class_id: course.id,
+      name: "Quiz: Lists Attempt 2",
+      slug: "lists-2",
+      max_score: 4,
+      sort_order: 4
+    });
 
     for (const student of [alice, bob]) {
       for (const slug of ["classes-1", "classes-2", "lists-1", "lists-2"]) {
@@ -595,14 +817,50 @@ test.describe("Fixture 2: Topic Max Score", () => {
 
   test("instructor sees correct topic max scores", async () => {
     // Alice: max(3,4)=4, max(2,3)=3, avg=(4+3)/2=3.5
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-classes", is_private: true, expected: 4 });
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-lists", is_private: true, expected: 3 });
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-avg", is_private: true, expected: 3.5 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: true,
+      expected: 4
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-lists",
+      is_private: true,
+      expected: 3
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: true,
+      expected: 3.5
+    });
 
     // Bob: max(2,1)=2, max(4,4)=4, avg=(2+4)/2=3
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-classes", is_private: true, expected: 2 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-lists", is_private: true, expected: 4 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-avg", is_private: true, expected: 3 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: true,
+      expected: 2
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-lists",
+      is_private: true,
+      expected: 4
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: true,
+      expected: 3
+    });
   });
 
   test("release attempt 1 only: student topic max uses single attempt", async () => {
@@ -612,20 +870,56 @@ test.describe("Fixture 2: Topic Max Score", () => {
     // Student topic-classes: max of [classes-1_only] since classes-2 is unreleased
     //   Alice: max(3) = 3
     //   Bob:   max(2) = 2
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-classes", is_private: false, expected: 3 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-classes", is_private: false, expected: 2 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: false,
+      expected: 3
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: false,
+      expected: 2
+    });
 
     // Student topic-lists: max of [lists-1_only]
     //   Alice: max(2) = 2
     //   Bob:   max(4) = 4
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-lists", is_private: false, expected: 2 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-lists", is_private: false, expected: 4 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-lists",
+      is_private: false,
+      expected: 2
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-lists",
+      is_private: false,
+      expected: 4
+    });
 
     // Student topic-avg: (classes_max + lists_max) / 2
     //   Alice: (3+2)/2 = 2.5
     //   Bob:   (2+4)/2 = 3
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-avg", is_private: false, expected: 2.5 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-avg", is_private: false, expected: 3 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: false,
+      expected: 2.5
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: false,
+      expected: 3
+    });
   });
 
   test("release attempt 2 (higher for Alice): student topic max updates", async () => {
@@ -633,16 +927,52 @@ test.describe("Fixture 2: Topic Max Score", () => {
     await releaseColumn(course.id, "lists-2");
 
     // Student topic-classes: max(3, 4) = 4 for Alice, max(2, 1) = 2 for Bob
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-classes", is_private: false, expected: 4 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-classes", is_private: false, expected: 2 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: false,
+      expected: 4
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: false,
+      expected: 2
+    });
 
     // Student topic-lists: max(2, 3) = 3 for Alice, max(4, 4) = 4 for Bob
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-lists", is_private: false, expected: 3 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-lists", is_private: false, expected: 4 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-lists",
+      is_private: false,
+      expected: 3
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-lists",
+      is_private: false,
+      expected: 4
+    });
 
     // Student topic-avg: (4+3)/2=3.5 Alice, (2+4)/2=3 Bob — matches instructor
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-avg", is_private: false, expected: 3.5 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-avg", is_private: false, expected: 3 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: false,
+      expected: 3.5
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: false,
+      expected: 3
+    });
   });
 
   test("unrelease attempt 1: student topic max falls to attempt 2 only", async () => {
@@ -651,18 +981,54 @@ test.describe("Fixture 2: Topic Max Score", () => {
     // Student topic-classes: max of [classes-2 only]
     //   Alice: max(4) = 4 (still highest)
     //   Bob:   max(1) = 1 (lost attempt-1 which was higher)
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-classes", is_private: false, expected: 4 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-classes", is_private: false, expected: 1 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: false,
+      expected: 4
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: false,
+      expected: 1
+    });
 
     // Bob topic-avg changes: (1+4)/2 = 2.5
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-avg", is_private: false, expected: 2.5 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: false,
+      expected: 2.5
+    });
 
     // Alice topic-avg unchanged: (4+3)/2 = 3.5
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "topic-avg", is_private: false, expected: 3.5 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: false,
+      expected: 3.5
+    });
 
     // Instructor private scores unchanged throughout
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-classes", is_private: true, expected: 2 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "topic-avg", is_private: true, expected: 3 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-classes",
+      is_private: true,
+      expected: 2
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "topic-avg",
+      is_private: true,
+      expected: 3
+    });
   });
 });
 
@@ -704,9 +1070,27 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
     course = await createClass({ name: "Calc Test — Countif" });
     const suffix = Math.random().toString(36).slice(2, 6);
     const users = await createUsersInClass([
-      { name: "Alice Count", email: `alice-cnt-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Bob Count", email: `bob-cnt-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Instr Count", email: `instr-cnt-${suffix}@pawtograder.net`, role: "instructor", class_id: course.id, useMagicLink: true }
+      {
+        name: "Alice Count",
+        email: `alice-cnt-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Bob Count",
+        email: `bob-cnt-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Instr Count",
+        email: `instr-cnt-${suffix}@pawtograder.net`,
+        role: "instructor",
+        class_id: course.id,
+        useMagicLink: true
+      }
     ]);
     alice = users[0];
     bob = users[1];
@@ -790,18 +1174,54 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
 
   test("instructor sees correct countif values", async () => {
     // Alice: labs with score>0 → lab1,lab2,lab4 → 3
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-lab-count", is_private: true, expected: 3 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: true,
+      expected: 3
+    });
     // Alice: skills==2 → skillA, skillC → 2
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-meets-count", is_private: true, expected: 2 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-meets-count",
+      is_private: true,
+      expected: 2
+    });
     // Alice: skills==1 → skillB → 1
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-approach-count", is_private: true, expected: 1 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-approach-count",
+      is_private: true,
+      expected: 1
+    });
 
     // Bob: labs with score>0 → lab1,lab3 → 2
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-lab-count", is_private: true, expected: 2 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: true,
+      expected: 2
+    });
     // Bob: skills==2 → skillB → 1
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-meets-count", is_private: true, expected: 1 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-meets-count",
+      is_private: true,
+      expected: 1
+    });
     // Bob: skills==1 → skillC → 1
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-approach-count", is_private: true, expected: 1 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-approach-count",
+      is_private: true,
+      expected: 1
+    });
   });
 
   test("release labs 1-3: student lab count reflects released labs only", async () => {
@@ -812,8 +1232,20 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
     // Public lab-count: countif over [lab1, lab2, lab3] (lab4 unreleased → null, skipped)
     //   Alice: scores [1, 1, 0] → score>0 matches 2 (lab1, lab2)
     //   Bob:   scores [1, 0, 1] → score>0 matches 2 (lab1, lab3)
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-lab-count", is_private: false, expected: 2 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-lab-count", is_private: false, expected: 2 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: false,
+      expected: 2
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: false,
+      expected: 2
+    });
   });
 
   test("release lab 4: Alice lab count increases", async () => {
@@ -822,8 +1254,20 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
     // Now all labs released:
     //   Alice: [1,1,0,1] → 3
     //   Bob:   [1,0,1,0] → 2
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-lab-count", is_private: false, expected: 3 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-lab-count", is_private: false, expected: 2 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: false,
+      expected: 3
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: false,
+      expected: 2
+    });
   });
 
   test("unrelease lab 1: student lab count drops", async () => {
@@ -832,12 +1276,36 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
     // Labs released: lab2, lab3, lab4 (lab1 cleared)
     //   Alice: [null,1,0,1] → score>0 matches 2 (lab2, lab4)
     //   Bob:   [null,0,1,0] → score>0 matches 1 (lab3)
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-lab-count", is_private: false, expected: 2 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-lab-count", is_private: false, expected: 1 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: false,
+      expected: 2
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: false,
+      expected: 1
+    });
 
     // Instructor unchanged
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-lab-count", is_private: true, expected: 3 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-lab-count", is_private: true, expected: 2 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: true,
+      expected: 3
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-lab-count",
+      is_private: true,
+      expected: 2
+    });
   });
 
   test("release skills: student sees correct skill counts", async () => {
@@ -848,10 +1316,34 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
     // All skills released — student matches instructor
     //   Alice: meets=2 (skillA=2, skillC=2), approach=1 (skillB=1)
     //   Bob:   meets=1 (skillB=2), approach=1 (skillC=1)
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-meets-count", is_private: false, expected: 2 });
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-approach-count", is_private: false, expected: 1 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-meets-count", is_private: false, expected: 1 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-approach-count", is_private: false, expected: 1 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-meets-count",
+      is_private: false,
+      expected: 2
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-approach-count",
+      is_private: false,
+      expected: 1
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-meets-count",
+      is_private: false,
+      expected: 1
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-approach-count",
+      is_private: false,
+      expected: 1
+    });
   });
 });
 
@@ -888,9 +1380,27 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
     course = await createClass({ name: "Calc Test — Instructor Only" });
     const suffix = Math.random().toString(36).slice(2, 6);
     const users = await createUsersInClass([
-      { name: "Alice IO", email: `alice-io-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Bob IO", email: `bob-io-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Instr IO", email: `instr-io-${suffix}@pawtograder.net`, role: "instructor", class_id: course.id, useMagicLink: true }
+      {
+        name: "Alice IO",
+        email: `alice-io-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Bob IO",
+        email: `bob-io-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Instr IO",
+        email: `instr-io-${suffix}@pawtograder.net`,
+        role: "instructor",
+        class_id: course.id,
+        useMagicLink: true
+      }
     ]);
     alice = users[0];
     bob = users[1];
@@ -942,9 +1452,21 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
 
   test("instructor sees calculated curved total", async () => {
     // Alice: 85 + 10 = 95
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "curved-total", is_private: true, expected: 95 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "curved-total",
+      is_private: true,
+      expected: 95
+    });
     // Bob: 70 + 15 = 85
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "curved-total", is_private: true, expected: 85 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "curved-total",
+      is_private: true,
+      expected: 85
+    });
   });
 
   test("student cannot see instructor-only columns via RLS before release", async () => {
@@ -986,8 +1508,20 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
     // After release, public row gets a frozen copy of the private row.
     //   Alice: curve-adj public.score = 10 (snapshot)
     //   Bob:   curve-adj public.score = 15 (snapshot)
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "curve-adj", is_private: false, expected: 10 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "curve-adj", is_private: false, expected: 15 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "curve-adj",
+      is_private: false,
+      expected: 10
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "curve-adj",
+      is_private: false,
+      expected: 15
+    });
 
     // Student can now see the column via RLS
     const studentClient = await createStudentClient(alice);
@@ -1015,10 +1549,22 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
     await setScore(course.id, "curve-adj", alice.private_profile_id, 18);
 
     // Private row updated
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "curve-adj", is_private: true, expected: 18 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "curve-adj",
+      is_private: true,
+      expected: 18
+    });
 
     // Instructor's curved-total recalculates: 85+18 = 103
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "curved-total", is_private: true, expected: 103 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "curved-total",
+      is_private: true,
+      expected: 103
+    });
 
     // Student's curve-adj public row is FROZEN at 10 (snapshot from release time)
     // The sync trigger skips instructor-only columns after initial release.
@@ -1044,8 +1590,20 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
     // gets a one-time copy of the private row (which now has the recalculated 103).
     //   Alice: private curved-total=103 → public=103
     //   Bob:   private curved-total=85  → public=85
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "curved-total", is_private: false, expected: 103 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "curved-total", is_private: false, expected: 85 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "curved-total",
+      is_private: false,
+      expected: 103
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "curved-total",
+      is_private: false,
+      expected: 85
+    });
   });
 
   test("unrelease hides column from student again", async () => {
@@ -1113,9 +1671,27 @@ test.describe("Fixture 5: Score Override Precedence", () => {
     course = await createClass({ name: "Calc Test — Override" });
     const suffix = Math.random().toString(36).slice(2, 6);
     const users = await createUsersInClass([
-      { name: "Alice Ovr", email: `alice-ovr-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Bob Ovr", email: `bob-ovr-${suffix}@pawtograder.net`, role: "student", class_id: course.id, useMagicLink: true },
-      { name: "Instr Ovr", email: `instr-ovr-${suffix}@pawtograder.net`, role: "instructor", class_id: course.id, useMagicLink: true }
+      {
+        name: "Alice Ovr",
+        email: `alice-ovr-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Bob Ovr",
+        email: `bob-ovr-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id,
+        useMagicLink: true
+      },
+      {
+        name: "Instr Ovr",
+        email: `instr-ovr-${suffix}@pawtograder.net`,
+        role: "instructor",
+        class_id: course.id,
+        useMagicLink: true
+      }
     ]);
     alice = users[0];
     bob = users[1];
@@ -1171,14 +1747,38 @@ test.describe("Fixture 5: Score Override Precedence", () => {
 
   test("baseline: instructor sees correct calculated values (no overrides)", async () => {
     // Alice: quiz-avg = 100*(80+90)/200 = 85
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-quiz-avg", is_private: true, expected: 85 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-quiz-avg",
+      is_private: true,
+      expected: 85
+    });
     // Alice: bonus = 85*0.9 + 10 = 76.5 + 10 = 86.5
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-bonus", is_private: true, expected: 86.5 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-bonus",
+      is_private: true,
+      expected: 86.5
+    });
 
     // Bob: quiz-avg = 100*(60+40)/200 = 50
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-quiz-avg", is_private: true, expected: 50 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-quiz-avg",
+      is_private: true,
+      expected: 50
+    });
     // Bob: bonus = 50*0.9 + 10 = 45 + 10 = 55
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-bonus", is_private: true, expected: 55 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-bonus",
+      is_private: true,
+      expected: 55
+    });
   });
 
   test("override on manual column propagates through calculation chain", async () => {
@@ -1188,13 +1788,37 @@ test.describe("Fixture 5: Score Override Precedence", () => {
     // The mean function sees score_override ?? score for quiz-1.
     // quiz-1 effective=100, quiz-2 effective=90
     // quiz-avg = 100*(100+90)/200 = 95
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-quiz-avg", is_private: true, expected: 95 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-quiz-avg",
+      is_private: true,
+      expected: 95
+    });
     // bonus = 95*0.9 + 10 = 85.5 + 10 = 95.5
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-bonus", is_private: true, expected: 95.5 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-bonus",
+      is_private: true,
+      expected: 95.5
+    });
 
     // Bob unchanged
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-quiz-avg", is_private: true, expected: 50 });
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-bonus", is_private: true, expected: 55 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-quiz-avg",
+      is_private: true,
+      expected: 50
+    });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-bonus",
+      is_private: true,
+      expected: 55
+    });
   });
 
   test("override on calculated column: student sees override after release", async () => {
@@ -1202,14 +1826,26 @@ test.describe("Fixture 5: Score Override Precedence", () => {
     // trigger (line 230-231 of instructor_only migration) requires BOTH old and new
     // is_recalculating=false. If we set score_override while the processor is mid-flight,
     // the sync to the public row is silently skipped. Wait for recalculation to settle first.
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-quiz-avg", is_private: true, expected: 50 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-quiz-avg",
+      is_private: true,
+      expected: 50
+    });
     await kickRecalculation(course.id);
 
     // Now safe to set override — the row's is_recalculating should be false.
     await setOverride(course.id, "calc-quiz-avg", bob.private_profile_id, 80);
 
     // Dependent calc-bonus recalculates using the override: 80*0.9+10 = 82
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-bonus", is_private: true, expected: 82 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-bonus",
+      is_private: true,
+      expected: 82
+    });
 
     // Release all manual columns so public calculations are non-null
     await releaseColumn(course.id, "quiz-1");
@@ -1218,19 +1854,43 @@ test.describe("Fixture 5: Score Override Precedence", () => {
     // For non-instructor-only calculated columns, score_override syncs to public.
     // Bob's public calc-quiz-avg gets score_override=80 via
     // sync_private_gradebook_column_student_fields_for_calculated_columns trigger.
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-quiz-avg", is_private: false, expected: 80 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-quiz-avg",
+      is_private: false,
+      expected: 80
+    });
 
     // Bob's public calc-bonus: the processor calculates the public row independently.
     // The public calc-quiz-avg has score_override=80, so expressions see 80.
     // Public bonus = 80*0.9+10 = 82
-    await waitForScore({ class_id: course.id, student_id: bob.private_profile_id, column_slug: "calc-bonus", is_private: false, expected: 82 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: bob.private_profile_id,
+      column_slug: "calc-bonus",
+      is_private: false,
+      expected: 82
+    });
 
     // Alice public (quiz-1 had override 100):
     // Manual quiz-1 release syncs: public.score = override ?? score = 100.
     // Public quiz-avg = mean([100, 90]) = 95
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-quiz-avg", is_private: false, expected: 95 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-quiz-avg",
+      is_private: false,
+      expected: 95
+    });
     // Public bonus = 95*0.9+10 = 95.5
-    await waitForScore({ class_id: course.id, student_id: alice.private_profile_id, column_slug: "calc-bonus", is_private: false, expected: 95.5 });
+    await waitForScore({
+      class_id: course.id,
+      student_id: alice.private_profile_id,
+      column_slug: "calc-bonus",
+      is_private: false,
+      expected: 95.5
+    });
   });
 
   test("student UI reflects overridden values", async ({ page }) => {
