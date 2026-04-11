@@ -2193,7 +2193,7 @@ function StudentDetailDialog() {
             </Text>
             {view && (
               <GradebookWhatIfProvider private_profile_id={view}>
-                <WhatIf private_profile_id={view} />
+                <WhatIf private_profile_id={view} whatIfEnabled={true} />
               </GradebookWhatIfProvider>
             )}
           </Dialog.Body>

@@ -2,11 +2,13 @@ import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import type { Page } from "@playwright/test";
 import dotenv from "dotenv";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import {
   createAssignmentsAndGradebookColumns,
   createClass,
   createUsersInClass,
   loginAsUser,
+  setCourseFeature,
   TestingUser
 } from "./TestingUtils";
 
@@ -70,6 +72,8 @@ test.describe("Gradebook What-If", () => {
       manualGradedColumnSlugs: ["participation"],
       groupConfig: "individual"
     });
+
+    await setCourseFeature(course.id, COURSE_FEATURES.GRADEBOOK_WHAT_IF, true);
   });
 
   test("enables editing for manual what-if cards", async ({ page }) => {

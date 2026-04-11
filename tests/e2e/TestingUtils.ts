@@ -136,6 +136,36 @@ export async function createClass({
     return classData;
   });
 }
+
+/** Admin/service-role: merge one `{ name, enabled }` into `classes.features` (for E2E). */
+export async function setCourseFeature(classId: number, name: string, enabled: boolean): Promise<void> {
+  type FeatureRow = { name: string; enabled: boolean };
+  const { data: row, error: fetchError } = await supabase.from("classes").select("features").eq("id", classId).single();
+  if (fetchError) {
+    throw new Error(`setCourseFeature: ${fetchError.message}`);
+  }
+  const raw = row?.features;
+  let list: FeatureRow[] = [];
+  if (raw !== null && Array.isArray(raw)) {
+    list = raw as FeatureRow[];
+  }
+  let found = false;
+  const next = list.map((f) => {
+    if (f.name === name) {
+      found = true;
+      return { name, enabled };
+    }
+    return f;
+  });
+  if (!found) {
+    next.push({ name, enabled });
+  }
+  const { error: updError } = await supabase.from("classes").update({ features: next }).eq("id", classId);
+  if (updError) {
+    throw new Error(`setCourseFeature: ${updError.message}`);
+  }
+}
+
 let sectionIdx = 1;
 export async function createClassSection({
   class_id,

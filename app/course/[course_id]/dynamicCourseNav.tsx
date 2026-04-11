@@ -35,6 +35,7 @@ import {
   FiMenu,
   FiMessageSquare,
   FiSettings,
+  FiSliders,
   FiStar,
   FiUsers
 } from "react-icons/fi";
@@ -132,6 +133,12 @@ const LinkItems = (courseID: number) => [
         icon: FiUsers,
         instructors_only: true,
         target: `/course/${courseID}/manage/course/enrollments`
+      },
+      {
+        name: "Feature flags",
+        icon: FiSliders,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/feature-flags`
       },
       {
         name: "Lab Sections",
