@@ -26,16 +26,23 @@ export type ExpressionContextForCommonFunctions = {
 type ImportMap = Record<string, (...args: never[]) => unknown>;
 
 function isGradebookExpressionValue(value: unknown): value is GradebookExpressionValue {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
   return (
-    typeof value === "object" &&
-    value !== null &&
-    "score" in value &&
-    "score_override" in value &&
-    "is_droppable" in value &&
-    "is_excused" in value &&
-    "is_missing" in value &&
-    "max_score" in value &&
-    "column_slug" in value
+    "score" in v &&
+    (typeof v.score === "number" || v.score === null) &&
+    "score_override" in v &&
+    (typeof v.score_override === "number" || v.score_override === null) &&
+    "is_droppable" in v &&
+    typeof v.is_droppable === "boolean" &&
+    "is_excused" in v &&
+    typeof v.is_excused === "boolean" &&
+    "max_score" in v &&
+    typeof v.max_score === "number" &&
+    "column_slug" in v &&
+    typeof v.column_slug === "string" &&
+    "is_private" in v &&
+    typeof v.is_private === "boolean"
   );
 }
 
