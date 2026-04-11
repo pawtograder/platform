@@ -1,5 +1,7 @@
 "use client";
 
+import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
+import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hours-discussion-browser";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
@@ -8,19 +10,21 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import Markdown from "@/components/ui/markdown";
 import {
+  useHelpQueues,
   useHelpRequests,
   useHelpRequestStudents,
   useHelpRequestTemplates,
-  useHelpQueues,
   useActiveHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import {
   Assignment,
   HelpRequest,
   HelpRequestLocationType,
-  HelpRequestTemplate,
   HelpRequestMessage,
+  HelpRequestTemplate,
   HelpRequestWithStudentCount,
   Submission,
   SubmissionFile
@@ -29,13 +33,12 @@ import { Box, Button, Fieldset, Heading, IconButton, Input, Stack, Text, Textare
 import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
+import { formatInTimeZone } from "date-fns-tz";
 import { X } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
-import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
-import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hours-discussion-browser";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
@@ -50,6 +53,7 @@ export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { timeZone } = useTimeZone();
   const { course } = useCourseController();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
@@ -89,24 +93,14 @@ export default function HelpRequestForm() {
       resource: "help_requests",
       action: "create",
       onMutationError: (error) => {
+        const isRls =
+          error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "42501";
         toaster.error({
-          title: "Error",
-          description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
+          title: isRls ? "Permission issue" : "Could not create help request",
+          description: isRls
+            ? "You don't have permission to create this help request with these settings. Try making the request public instead of private, or contact your instructor."
+            : getStudentFacingErrorMessage(error)
         });
-
-        // Check if it's an RLS violation
-        if (error && typeof error === "object" && "code" in error && error.code === "42501") {
-          toaster.error({
-            title: "Permission Error",
-            description:
-              "You don't have permission to create this help request. This might be due to database security policies. Please try making the request public instead of private, or contact your instructor."
-          });
-        } else {
-          toaster.error({
-            title: "Error",
-            description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
-          });
-        }
       }
     }
   });
@@ -283,8 +277,8 @@ export default function HelpRequestForm() {
       setUserActiveRequests(activeRequestsWithCount);
     } catch (error) {
       toaster.error({
-        title: "Error",
-        description: "Error in processing user requests from realtime data: " + (error as Error).message
+        title: "Could not load your help request history",
+        description: getStudentFacingErrorMessage(error)
       });
     }
   }, [private_profile_id, course_id, allHelpRequests, allHelpRequestStudents]);
@@ -515,13 +509,12 @@ export default function HelpRequestForm() {
                     class_id: Number.parseInt(course_id as string)
                   });
                 } catch (error) {
+                  const msg = getStudentFacingErrorMessage(error);
                   toaster.error({
-                    title: "Error",
-                    description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
+                    title: "Could not add everyone to the request",
+                    description: `We could not add a classmate to this help request: ${msg}`
                   });
-                  throw new Error(
-                    `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
-                  );
+                  throw new Error(`Failed to create student associations: ${msg}`);
                 }
               }
 
@@ -598,13 +591,12 @@ export default function HelpRequestForm() {
                     line_number: ref.line_number
                   });
                 } catch (error) {
+                  const msg = getStudentFacingErrorMessage(error);
                   toaster.error({
-                    title: "Error",
-                    description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                    title: "Could not attach code reference",
+                    description: msg
                   });
-                  throw new Error(
-                    `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                  );
+                  throw new Error(`Failed to create file reference: ${msg}`);
                 }
               }
             }
@@ -635,8 +627,8 @@ export default function HelpRequestForm() {
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
           } catch (error) {
             toaster.error({
-              title: "Error",
-              description: error instanceof Error ? error.message : "Failed to complete help request creation"
+              title: "Could not complete help request",
+              description: getStudentFacingErrorMessage(error)
             });
           }
         };
@@ -673,7 +665,14 @@ export default function HelpRequestForm() {
 
   // Show loading state if queries are still loading
   if (query?.error) {
-    return <div>Error: {query.error.message}</div>;
+    return (
+      <Box textAlign="center" py={8}>
+        <Text color="red.500">{getStudentFacingErrorMessage(query.error)}</Text>
+        <Button mt={4} onClick={() => window.location.reload()}>
+          Refresh page
+        </Button>
+      </Box>
+    );
   }
   if (!query || isLoadingQueues) {
     return (
@@ -949,7 +948,7 @@ export default function HelpRequestForm() {
                     .map(
                       (assignment) =>
                         ({
-                          label: `${assignment.title} (Due: ${assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"})`,
+                          label: `${assignment.title} (Due: ${assignment.due_date ? formatInTimeZone(new Date(assignment.due_date), timeZone, "MMM d, yyyy (zzz)") : "No due date"})`,
                           value: assignment.id!.toString()
                         }) as SelectOption
                     ) ?? []
@@ -991,7 +990,7 @@ export default function HelpRequestForm() {
                         submissions?.data?.map(
                           (submission: Submission) =>
                             ({
-                              label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
+                              label: `${submission.repository} (${formatInTimeZone(new Date(submission.created_at), timeZone, "MMM d, yyyy (zzz)")}) - Run #${submission.run_number}`,
                               value: submission.id.toString()
                             }) as SelectOption
                         ) ?? []
@@ -1204,7 +1203,7 @@ export default function HelpRequestForm() {
                       options={userPreviousRequests.map(
                         (req) =>
                           ({
-                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${new Date(req.resolved_at!).toLocaleDateString()})`,
+                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${formatInTimeZone(new Date(req.resolved_at!), timeZone, "MMM d, yyyy (zzz)")})`,
                             value: req.id.toString()
                           }) as SelectOption
                       )}

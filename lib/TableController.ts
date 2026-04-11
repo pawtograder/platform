@@ -167,11 +167,14 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
   // Survey related tables
   surveys: ["staff"], // Survey metadata (staff-only management)
+  survey_series: [], // No realtime broadcasts; staff manage via surveys
   survey_responses: ["staff"], // Response data only to staff
   survey_assignments: ["staff"], // Assignment data only to staff
 
   // Leaderboard table - broadcasts to all class members
-  assignment_leaderboard: ["staff", "students"]
+  assignment_leaderboard: ["staff", "students"],
+  // No unified realtime broadcast today; load via TableController like other static course metadata.
+  gradebooks: []
 };
 
 /**
@@ -478,7 +481,18 @@ export function useTableControllerValueById<
 
   return value;
 }
-export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller?: TableController<T>): boolean {
+export function useIsTableControllerReady<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T> | undefined | null,
+  ResultOne = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(controller?: TableController<T, Query, IDType, ResultOne>): boolean {
   const [ready, setReady] = useState(controller?.ready ?? false);
   useEffect(() => {
     if (!controller) {
@@ -1469,8 +1483,8 @@ export default class TableController<
     const newCount = currentCount + 1;
     TableController._controllerCounts.set(tableName, newCount);
 
-    // Only log creation if there are more than 4 live controllers for this table
-    if (newCount > 4) {
+    // Only log creation if there are more than 10 live controllers for this table
+    if (newCount > 10) {
       // eslint-disable-next-line no-console
       console.log(
         `⚠️ TableController created for "${tableName}" (count: ${newCount} - potential leak!)`,

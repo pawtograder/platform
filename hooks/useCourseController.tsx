@@ -98,15 +98,23 @@ export function useAllStudentProfiles() {
     return ret;
   }, [allProfiles, allTags]);
 }
-export function useGradersAndInstructors() {
+export type GraderInstructorProfile = UserProfile & { userEmail: string | null };
+
+export function useGradersAndInstructors(): GraderInstructorProfile[] {
   const { userRolesWithProfiles: controller } = useCourseController();
   const filter = useCallback(
     (r: UserRoleWithPrivateProfileAndUser) => r.role === "grader" || r.role === "instructor",
     []
   );
   const roles = useListTableControllerValues(controller, filter);
-  const profiles = useMemo(() => roles.map((r) => r.profiles), [roles]);
-  return profiles;
+  return useMemo(
+    () =>
+      roles.map((r) => ({
+        ...r.profiles,
+        userEmail: r.users?.email ?? null
+      })),
+    [roles]
+  );
 }
 
 export function useIsDroppedStudent(private_profile_id: string | undefined | null) {
@@ -352,6 +360,38 @@ export function useClassSections() {
   return classSections;
 }
 
+/**
+ * Hook to get all survey series for the course with real-time updates (cached on course controller)
+ */
+export function useSurveySeries() {
+  const controller = useCourseController();
+  const series = useTableControllerTableValues(controller.surveySeries);
+  const isLoading = !useIsTableControllerReady(controller.surveySeries);
+  const refetch = useCallback(() => {
+    void controller.surveySeries.refetchAll();
+  }, [controller]);
+  return { series, isLoading, refetch };
+}
+
+/**
+ * Hook to get surveys in a specific series (cached on course controller's surveys TableController)
+ */
+export function useSurveysInSeries(seriesId: string | undefined) {
+  const controller = useCourseController();
+  const predicate = useCallback(
+    (survey: Database["public"]["Tables"]["surveys"]["Row"]) => survey.series_id === seriesId && !survey.deleted_at,
+    [seriesId]
+  );
+  const rawSurveys = useListTableControllerValues(controller.surveys, predicate);
+  const surveys = useMemo(
+    () => [...rawSurveys].sort((a, b) => (a.series_ordinal ?? 0) - (b.series_ordinal ?? 0)),
+    [rawSurveys]
+  );
+  const isLoading = !useIsTableControllerReady(controller.surveys);
+
+  return { surveys, isLoading };
+}
+
 export type UpdateCallback<T> = (data: T) => void;
 export type Unsubscribe = () => void;
 export type UserProfileWithPrivateProfile = UserProfile & {
@@ -381,11 +421,17 @@ export class CourseController {
   private _labSectionLeaders?: TableController<"lab_section_leaders">;
   private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
-  private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
+  private _userRolesWithProfiles?: TableController<
+    "user_roles",
+    "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+  >;
   private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
   private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
   private _assignments?: TableController<"assignments">;
-  private _assignmentGroupsWithMembers?: TableController<"assignment_groups", "*, assignment_groups_members(*)">;
+  private _assignmentGroupsWithMembers?: TableController<
+    "assignment_groups",
+    "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+  >;
   private _repositories?: TableController<"repositories">;
   private _notifications?: TableController<"notifications">;
   private _gradebookColumns?: TableController<"gradebook_columns">;
@@ -397,6 +443,7 @@ export class CourseController {
   private _discordMessages?: TableController<"discord_messages">;
   private _livePolls?: TableController<"live_polls">;
   private _surveys?: TableController<"surveys">;
+  private _surveySeries?: TableController<"survey_series">;
 
   private _initialData?: CourseControllerInitialData;
 
@@ -425,7 +472,7 @@ export class CourseController {
     // Create profiles and userRolesWithProfiles immediately
     // These are accessed frequently and should be ready
     void this.profiles; // Triggers lazy creation
-    if (this.isStaff) {
+    if (this.canViewFullClassUserRoles) {
       void this.userRolesWithProfiles; // Triggers lazy creation
     }
     // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
@@ -449,6 +496,7 @@ export class CourseController {
     }
     void this.livePolls; // Triggers lazy creation
     void this.surveys; // Triggers lazy creation
+    void this.surveySeries; // Triggers lazy creation
 
     // Clear initialData to free memory after all eager controllers are initialized
     this._initialData = undefined;
@@ -614,23 +662,25 @@ export class CourseController {
     return this._classSections;
   }
 
-  get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
+  get userRolesWithProfiles(): TableController<
+    "user_roles",
+    "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+  > {
     if (!this._userRolesWithProfiles) {
-      let query = this.client
-        .from("user_roles")
-        .select("*, profiles!private_profile_id(*), users(*)")
-        .eq("class_id", this.courseId);
-      if (!this.isStaff) {
+      const staffSelect =
+        "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)";
+      let query = this.client.from("user_roles").select(staffSelect).eq("class_id", this.courseId);
+      if (!this.canViewFullClassUserRoles) {
         query = query.eq("user_id", this._userId);
       }
       this._userRolesWithProfiles = new TableController({
         client: this.client,
         table: "user_roles",
         query,
-        selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
+        selectForSingleRow: staffSelect,
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.userRolesWithProfiles,
-        autoFetchMissingRows: this.isStaff
+        autoFetchMissingRows: this.canViewFullClassUserRoles
       });
     }
     return this._userRolesWithProfiles;
@@ -697,16 +747,20 @@ export class CourseController {
     return this._assignments;
   }
 
-  get assignmentGroupsWithMembers(): TableController<"assignment_groups", "*, assignment_groups_members(*)"> {
+  get assignmentGroupsWithMembers(): TableController<
+    "assignment_groups",
+    "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+  > {
     if (!this._assignmentGroupsWithMembers) {
       this._assignmentGroupsWithMembers = new TableController({
         client: this.client,
         table: "assignment_groups",
         query: this.client
           .from("assignment_groups")
-          .select("*, assignment_groups_members(*)")
+          .select("*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)")
           .eq("class_id", this.courseId),
-        selectForSingleRow: "*, assignment_groups_members(*)",
+        selectForSingleRow:
+          "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)",
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.assignmentGroupsWithMembers
       });
@@ -918,6 +972,19 @@ export class CourseController {
     return this._surveys;
   }
 
+  get surveySeries(): TableController<"survey_series"> {
+    if (!this._surveySeries) {
+      this._surveySeries = new TableController({
+        client: this.client,
+        table: "survey_series",
+        query: this.client.from("survey_series").select("*").eq("class_id", this.courseId).order("name"),
+        classRealTimeController: this.classRealTimeController,
+        realtimeFilter: { class_id: this.courseId }
+      });
+    }
+    return this._surveySeries;
+  }
+
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
   private genericData: { [key in string]: Map<number, unknown> } = {};
   private genericDataListSubscribers: { [key in string]: UpdateCallback<unknown>[] } = {};
@@ -1115,6 +1182,14 @@ export class CourseController {
     return this.role === "instructor" || this.role === "grader";
   }
 
+  /**
+   * Full class roster in `user_roles` (matches `fetchCourseControllerData` / SSR `isStaff` for queries).
+   * Platform admins are not `isStaff` in the course sense but still receive the unfiltered query on the server.
+   */
+  private get canViewFullClassUserRoles(): boolean {
+    return this.role === "instructor" || this.role === "grader" || this.role === "admin";
+  }
+
   getUserRole(user_id: string) {
     const result = this.userRolesWithProfiles.list();
     return result.data.find((role) => role.user_id === user_id);
@@ -1297,11 +1372,17 @@ export class CourseController {
       | TableController<"lab_sections">
       | TableController<"class_sections">
       | TableController<"lab_section_meetings">
-      | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
+      | TableController<
+          "user_roles",
+          "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+        >
       | TableController<"student_deadline_extensions">
       | TableController<"assignment_due_date_exceptions">
       | TableController<"assignments">
-      | TableController<"assignment_groups", "*, assignment_groups_members(*)">
+      | TableController<
+          "assignment_groups",
+          "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+        >
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
     if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
@@ -1349,6 +1430,7 @@ export class CourseController {
     this._discordMessages = undefined;
     this._livePolls?.close();
     this._surveys?.close();
+    this._surveySeries?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1475,6 +1557,13 @@ export function CourseControllerProvider({
   const [courseController, setCourseController] = useState<CourseController | null>(null);
   const { user } = useAuthState();
   const userId = user?.id;
+
+  // Use ref for initialData so it doesn't trigger effect re-runs.
+  // initialData is SSR-provided and gets a new object reference on every server render,
+  // which would otherwise cause unnecessary CourseController/ClassRealTimeController recreation.
+  const initialDataRef = useRef(initialData);
+  initialDataRef.current = initialData;
+
   // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
     if (userId) {
@@ -1486,7 +1575,14 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      const _courseController = new CourseController(role, course_id, client, realTimeController, userId, initialData);
+      const _courseController = new CourseController(
+        role,
+        course_id,
+        client,
+        realTimeController,
+        userId,
+        initialDataRef.current
+      );
       setCourseController(_courseController);
       const start = async () => {
         try {
@@ -1517,7 +1613,7 @@ export function CourseControllerProvider({
         realTimeController.close();
       };
     }
-  }, [course_id, profile_id, role, userId, initialData]);
+  }, [course_id, profile_id, role, userId]);
 
   if (!courseController || !userId) {
     return (

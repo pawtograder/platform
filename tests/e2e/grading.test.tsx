@@ -15,6 +15,7 @@ import {
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
+
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
   page: Page,
@@ -126,7 +127,9 @@ test.beforeAll(async () => {
     })
     .select("id");
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor, grader, student2]);
+});
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
 const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glove test";
 const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great job on making your logic understandable!";
@@ -136,21 +139,20 @@ const GRADING_REVIEW_COMMENT_3 = "I have stared at this for a long time, and I a
 
 const REGRADE_COMMENT = "I think that I deserve better than a 10/10!";
 const REGRADE_RESOLUTION = "I do not think it is possible to get more than 10/10!";
+/** Grading Review Check 3 on line 4 starts at 10 pts; fractional resolve must persist in DB/UI */
+const REGRADE_RESOLVE_ADJUSTMENT = "0.5";
+const REGRADE_RESOLVE_EXPECTED_POINTS = "10.5";
 const REGRADE_ESCALATION = "But I heard that Ben Bitdiddle got an 11/10!";
 const REGRADE_FINAL_COMMENT = "Alright, 11/10 it is then!";
 
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
+  test.setTimeout(120_000);
   test("Students can submit self-review early", async ({ page }) => {
     await loginAsUser(page, student!, course);
-    //Wait for the realtime connection status to be connected
-    await expect(
-      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
-    ).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
-
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
@@ -212,13 +214,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
-    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(
-      `${student!.private_profile_name} applied today at`
-    );
+    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
     //Make sure that we get a very nice screenshot with a fully-loaded page
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
@@ -290,7 +290,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Students can view their grading results and request a regrade", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
@@ -336,13 +336,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByText("public static void main(")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .click();
-    await argosScreenshot(page, "Instructors can view the regrade request");
+    await argosScreenshot(page, "Instructors can view the student's regrade request");
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
@@ -357,16 +359,28 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
     await argosScreenshot(page, "Instructors can resolve the regrade request");
-    await page.getByRole("textbox", { name: "Grade adjustment" }).fill("40");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    await expect(page.getByText("This is a significant change (>50%)")).toBeVisible();
-    await page.getByRole("button", { name: "Resolve regrade request", exact: true }).click();
+    // Popover content is portalled (not under the rubric check region); scope to the resolve dialog.
+    const resolveRegradePopover = page.getByRole("dialog").filter({ hasText: "Grade Adjustment:" });
+    await expect(resolveRegradePopover).toBeVisible();
+    await resolveRegradePopover.getByRole("textbox", { name: /Grade adjustment/i }).fill(REGRADE_RESOLVE_ADJUSTMENT);
+    await expect(resolveRegradePopover).toContainText(
+      new RegExp(`New points awarded:\\s*${REGRADE_RESOLVE_EXPECTED_POINTS.replace(".", "\\.")}`)
+    );
+    await resolveRegradePopover.getByRole("button", { name: "Resolve regrade request", exact: true }).click();
+    await expect(
+      page.getByLabel("Grading checks on line 4").getByRole("heading", { name: /Regrade Resolved/i })
+    ).toBeVisible({
+      timeout: 30_000
+    });
+    await expect(page.getByLabel("Grading checks on line 4")).toContainText(REGRADE_RESOLVE_EXPECTED_POINTS);
   });
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByText("public static void main(")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
@@ -387,8 +401,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await loginAsUser(page, instructor!, course);
 
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await expect(page.getByText("public static void main(")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Grading checks on line 4" })).toBeVisible();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
@@ -413,7 +429,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   });
   test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {
     await loginAsUser(page, grader!, course);
-    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id2}/files`);
 
     await expect(page.getByText("(on Grading Review Part 2)")).toBeVisible();

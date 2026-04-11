@@ -13,7 +13,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Box, Button, Flex, Heading, HStack, Icon, Link, Stack, Text, VStack } from "@chakra-ui/react";
 import { redirect, useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 import { useOfficeHoursSchedule } from "@/hooks/useCalendarEvents";
 import { format, parseISO, isAfter, isSameDay, isWithinInterval } from "date-fns";
 import { BsCalendar, BsClock } from "react-icons/bs";

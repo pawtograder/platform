@@ -41,7 +41,12 @@ import {
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import dynamic from "next/dynamic";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  clearRubricUnsavedChangesFlag,
+  RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE,
+  setRubricUnsavedChangesFlag
+} from "@/lib/rubricUnsavedChanges";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
@@ -183,6 +188,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
       const yamlCheck: Omit<YmlRubricChecksType, "data"> & { data?: Json | null } = {
         id: check.id,
         name: check.name,
+        kpi_category: valOrUndefined(check.kpi_category) || null,
         description: valOrUndefined(check.description),
         file: valOrUndefined(check.file),
         is_annotation: check.is_annotation,
@@ -228,6 +234,8 @@ function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): YmlRubricP
     data: valOrUndefined(part.data),
     description: valOrUndefined(part.description),
     name: part.name,
+    is_individual_grading: part.is_individual_grading || undefined,
+    is_assign_to_student: part.is_assign_to_student || undefined,
     criteria: hydratedRubricCriteriaToYamlRubric(part.rubric_criteria)
   }));
 }
@@ -252,6 +260,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
   return checks.map((check, index) => ({
     id: check.id || -1,
     name: check.name,
+    kpi_category: valOrNull(check.kpi_category),
     description: valOrNull(check.description),
     ordinal: index,
     rubric_id: 0,
@@ -318,6 +327,13 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
       "Duplicate check ids in YAML. If you intend to copy a check, simply remove the ID on the copy, and a new ID will be generated for the new check upon saving."
     );
   }
+  for (const part of parts) {
+    if (part.is_individual_grading && part.is_assign_to_student) {
+      throw new Error(
+        `Part "${part.name}" cannot have both is_individual_grading and is_assign_to_student enabled. Choose one mode.`
+      );
+    }
+  }
   return parts.map((part, index) => ({
     id: part.id || -1,
     name: part.name,
@@ -328,6 +344,8 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
     created_at: "",
     data: part.data,
     assignment_id: 0,
+    is_individual_grading: part.is_individual_grading ?? false,
+    is_assign_to_student: part.is_assign_to_student ?? false,
     rubric_criteria: YamlCriteriaToHydratedCriteria(part.id || -1, part.criteria)
   }));
 }
@@ -532,6 +550,73 @@ function InnerRubricPage() {
       {} as Record<string, boolean>
     )
   );
+  const hasAnyUnsavedChanges = useMemo(
+    () => hasUnsavedChanges || Object.values(unsavedStatusPerTab).some(Boolean),
+    [hasUnsavedChanges, unsavedStatusPerTab]
+  );
+  const hasAnyUnsavedChangesRef = useRef(hasAnyUnsavedChanges);
+  const shouldSkipNextPopStateWarningRef = useRef(false);
+  const isRubricFlagOwnerRef = useRef(false);
+  const rubricFlagOwnerIdRef = useRef(`rubric-editor-${Math.random().toString(36).slice(2)}`);
+  const [rubricPageRootElement, setRubricPageRootElement] = useState<HTMLDivElement | null>(null);
+  const [isRubricPageInstanceVisible, setIsRubricPageInstanceVisible] = useState<boolean>(false);
+  const rubricUnsavedChangesOwnerStorageKey = useMemo(() => {
+    if (!assignment_id) return null;
+    return `pawtograder:rubric-unsaved-changes-owner:${assignment_id}`;
+  }, [assignment_id]);
+  const computeRubricPageInstanceVisibility = useCallback(() => {
+    if (!rubricPageRootElement) return false;
+    const computedStyle = window.getComputedStyle(rubricPageRootElement);
+    return (
+      rubricPageRootElement.getClientRects().length > 0 &&
+      computedStyle.display !== "none" &&
+      computedStyle.visibility !== "hidden"
+    );
+  }, [rubricPageRootElement]);
+  const syncRubricUnsavedChangesFlagOwner = useCallback(
+    (visibilityOverride?: boolean) => {
+      if (!assignment_id || !rubricUnsavedChangesOwnerStorageKey) return;
+      const isVisible = visibilityOverride ?? isRubricPageInstanceVisible;
+      const ownerId = rubricFlagOwnerIdRef.current;
+
+      if (isVisible) {
+        try {
+          window.sessionStorage.setItem(rubricUnsavedChangesOwnerStorageKey, ownerId);
+        } catch {
+          // Ignore restricted storage environments.
+        }
+        setRubricUnsavedChangesFlag(assignment_id, hasAnyUnsavedChangesRef.current);
+        isRubricFlagOwnerRef.current = true;
+        return;
+      }
+
+      if (!isRubricFlagOwnerRef.current) return;
+      let currentOwnerId: string | null = null;
+      try {
+        currentOwnerId = window.sessionStorage.getItem(rubricUnsavedChangesOwnerStorageKey);
+      } catch {
+        // Ignore restricted storage environments.
+      }
+      if (currentOwnerId && currentOwnerId !== ownerId) {
+        isRubricFlagOwnerRef.current = false;
+        return;
+      }
+      clearRubricUnsavedChangesFlag(assignment_id);
+      try {
+        window.sessionStorage.removeItem(rubricUnsavedChangesOwnerStorageKey);
+      } catch {
+        // Ignore restricted storage environments.
+      }
+      isRubricFlagOwnerRef.current = false;
+    },
+    [assignment_id, isRubricPageInstanceVisible, rubricUnsavedChangesOwnerStorageKey]
+  );
+
+  useLayoutEffect(() => {
+    hasAnyUnsavedChangesRef.current = hasAnyUnsavedChanges;
+    syncRubricUnsavedChangesFlagOwner();
+  }, [hasAnyUnsavedChanges, syncRubricUnsavedChangesFlagOwner]);
+
   const [stashedEditorStates, setStashedEditorStates] = useState<
     Record<
       string,
@@ -876,6 +961,132 @@ function InnerRubricPage() {
     }
   }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id]);
 
+  useEffect(() => {
+    if (!rubricPageRootElement) return;
+
+    const handleVisibilityChange = () => {
+      const isVisible = computeRubricPageInstanceVisibility();
+      setIsRubricPageInstanceVisible((previousVisibility) => {
+        if (previousVisibility === isVisible) return previousVisibility;
+        // Keep ownership state in sync immediately when visibility flips.
+        syncRubricUnsavedChangesFlagOwner(isVisible);
+        return isVisible;
+      });
+    };
+
+    handleVisibilityChange();
+
+    let resizeObserver: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => handleVisibilityChange());
+      resizeObserver.observe(rubricPageRootElement);
+    }
+
+    let intersectionObserver: IntersectionObserver | undefined;
+    if (typeof IntersectionObserver !== "undefined") {
+      intersectionObserver = new IntersectionObserver(() => handleVisibilityChange(), {
+        threshold: [0, 0.01]
+      });
+      intersectionObserver.observe(rubricPageRootElement);
+    }
+
+    window.addEventListener("resize", handleVisibilityChange);
+    return () => {
+      resizeObserver?.disconnect();
+      intersectionObserver?.disconnect();
+      window.removeEventListener("resize", handleVisibilityChange);
+    };
+  }, [computeRubricPageInstanceVisibility, rubricPageRootElement, syncRubricUnsavedChangesFlagOwner]);
+
+  useEffect(
+    () => () => {
+      if (!assignment_id || !rubricUnsavedChangesOwnerStorageKey || !isRubricFlagOwnerRef.current) return;
+      let currentOwnerId: string | null = null;
+      try {
+        currentOwnerId = window.sessionStorage.getItem(rubricUnsavedChangesOwnerStorageKey);
+      } catch {
+        // Ignore restricted storage environments.
+      }
+      if (currentOwnerId && currentOwnerId !== rubricFlagOwnerIdRef.current) {
+        isRubricFlagOwnerRef.current = false;
+        return;
+      }
+      clearRubricUnsavedChangesFlag(assignment_id);
+      try {
+        window.sessionStorage.removeItem(rubricUnsavedChangesOwnerStorageKey);
+      } catch {
+        // Ignore restricted storage environments.
+      }
+      isRubricFlagOwnerRef.current = false;
+    },
+    [assignment_id, rubricUnsavedChangesOwnerStorageKey]
+  );
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isRubricPageInstanceVisible) return;
+      if (!hasAnyUnsavedChangesRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    const handlePopState = () => {
+      if (!isRubricPageInstanceVisible) return;
+      if (shouldSkipNextPopStateWarningRef.current) {
+        shouldSkipNextPopStateWarningRef.current = false;
+        return;
+      }
+      if (!hasAnyUnsavedChangesRef.current) return;
+
+      const shouldLeave = window.confirm(RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE);
+      if (shouldLeave) return;
+
+      shouldSkipNextPopStateWarningRef.current = true;
+      window.history.go(1);
+    };
+
+    const handleDocumentClick = (event: MouseEvent) => {
+      if (!isRubricPageInstanceVisible) return;
+      if (!hasAnyUnsavedChangesRef.current || event.defaultPrevented) return;
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      if (anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+
+      const currentUrl = new URL(window.location.href);
+      const nextUrl = new URL(href, window.location.href);
+      const isSameDocumentLocation =
+        currentUrl.origin === nextUrl.origin &&
+        currentUrl.pathname === nextUrl.pathname &&
+        currentUrl.search === nextUrl.search;
+
+      if (isSameDocumentLocation) return;
+
+      const shouldLeave = window.confirm(RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE);
+      if (shouldLeave) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("popstate", handlePopState);
+    document.addEventListener("click", handleDocumentClick, true);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handlePopState);
+      document.removeEventListener("click", handleDocumentClick, true);
+    };
+  }, [isRubricPageInstanceVisible]);
+
   const updatePartIfChanged = useCallback(
     async (part: HydratedRubricPart, existingPart: HydratedRubricPart) => {
       if (part.id !== existingPart.id) {
@@ -1116,7 +1327,9 @@ function InnerRubricPage() {
           data: partData.data,
           class_id: assignmentDetails.class_id,
           rubric_id: currentEffectiveRubricId,
-          assignment_id: assignmentDetails.id
+          assignment_id: assignmentDetails.id,
+          is_individual_grading: partData.is_individual_grading ?? false,
+          is_assign_to_student: partData.is_assign_to_student ?? false
         };
         const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
         if (!createdPart.data.id) throw new Error("Failed to create part");
@@ -1243,7 +1456,8 @@ function InnerRubricPage() {
           rubric_criteria_id: checkData.rubric_criteria_id,
           student_visibility: checkData.student_visibility || "always",
           assignment_id: assignmentDetails.id,
-          rubric_id: currentEffectiveRubricId
+          rubric_id: currentEffectiveRubricId,
+          kpi_category: checkData.kpi_category
         };
         const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
         if (!createdCheck.data.id) throw new Error("Failed to create check");
@@ -1302,7 +1516,7 @@ function InnerRubricPage() {
   }
 
   return (
-    <Flex w="100%" minW="0" direction="column">
+    <Flex ref={setRubricPageRootElement} w="100%" minW="0" direction="column">
       <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
         <Toaster />
         <VStack align="start">

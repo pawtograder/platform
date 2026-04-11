@@ -10,6 +10,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import SurveyForm from "./form";
 import { Box } from "@chakra-ui/react";
 import { FieldValues } from "react-hook-form";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { PostgrestError } from "@supabase/supabase-js";
 import { TZDate } from "@date-fns/tz";
@@ -21,9 +22,14 @@ type SurveyFormData = {
   json: string;
   status: "draft" | "published";
   due_date?: string;
+  available_at?: string;
+  assignment_id?: number | null;
   allow_response_editing: boolean;
   assigned_to_all: boolean;
   assigned_students?: string[];
+  series_id?: string | null;
+  series_ordinal?: number | null;
+  analytics_config?: SurveyAnalyticsConfig | null;
 };
 
 type SurveyStatus = Tables<"surveys">["status"]; // "draft" | "published" | "closed"
@@ -85,7 +91,10 @@ export default function NewSurveyPage() {
       due_date: "",
       allow_response_editing: false,
       assigned_to_all: true,
-      assigned_students: []
+      assigned_students: [],
+      series_id: null,
+      series_ordinal: null,
+      analytics_config: null
     }
   });
 
@@ -191,6 +200,12 @@ export default function NewSurveyPage() {
 
             const assignedStudents = assignmentData?.map((a) => a.profile_id) || [];
 
+            // Convert available_at from ISO string to datetime-local format
+            let availableAtFormatted = "";
+            if (data.available_at) {
+              availableAtFormatted = formatInTimeZone(new Date(data.available_at), timezone, "yyyy-MM-dd'T'HH:mm");
+            }
+
             // Load the draft data into the form
             const formData = {
               title: data.title || "",
@@ -198,6 +213,8 @@ export default function NewSurveyPage() {
               json: data.json || "",
               status: data.status || "draft",
               due_date: dueDateFormatted,
+              available_at: availableAtFormatted,
+              assignment_id: data.assignment_id ?? null,
               allow_response_editing: Boolean(data.allow_response_editing),
               assigned_to_all: data.assigned_to_all !== undefined ? data.assigned_to_all : true,
               assigned_students: assignedStudents
@@ -286,9 +303,14 @@ export default function NewSurveyPage() {
           status: finalStatus,
           allow_response_editing: values.allow_response_editing?.checked ?? Boolean(values.allow_response_editing),
           due_date: convertDueDateToISO(values.due_date as string),
+          available_at: convertDueDateToISO(values.available_at as string),
+          assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
           validation_errors: validationErrors,
           assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          series_id: values.series_id ? values.series_id : null,
+          series_ordinal: values.series_ordinal != null ? Number(values.series_ordinal) : null,
+          analytics_config: values.analytics_config ?? null
         };
 
         const result = await supabase
@@ -316,8 +338,13 @@ export default function NewSurveyPage() {
           created_at: new Date().toISOString(),
           allow_response_editing: Boolean(values.allow_response_editing?.checked ?? values.allow_response_editing),
           due_date: convertDueDateToISO(values.due_date as string),
+          available_at: convertDueDateToISO(values.available_at as string),
+          assignment_id: values.assignment_id ? Number(values.assignment_id) : null,
           validation_errors: validationErrors,
-          assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all)
+          assigned_to_all: values.assigned_to_all?.checked ?? Boolean(values.assigned_to_all),
+          series_id: values.series_id ? values.series_id : null,
+          series_ordinal: values.series_ordinal != null ? Number(values.series_ordinal) : null,
+          analytics_config: values.analytics_config ?? null
         };
 
         const result = await supabase.from("surveys").insert(insertPayload).select("id, survey_id").single();
@@ -430,6 +457,20 @@ export default function NewSurveyPage() {
             });
             return;
           }
+        }
+      }
+
+      // Validate available_at is before due_date
+      if (values.available_at && values.due_date) {
+        const availableAtISO = convertDueDateToISO(values.available_at as string);
+        const dueDateISO = convertDueDateToISO(values.due_date as string);
+        if (availableAtISO && dueDateISO && new Date(availableAtISO) >= new Date(dueDateISO)) {
+          toaster.create({
+            title: "Invalid Dates",
+            description: "The 'Available At' date must be before the due date.",
+            type: "error"
+          });
+          return;
         }
       }
 

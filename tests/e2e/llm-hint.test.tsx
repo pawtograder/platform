@@ -20,6 +20,7 @@ let assignment: (Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricC
 let submission_id: number | undefined;
 let grader_result_test_id: number | undefined;
 let grader_result_test_id_openai: number | undefined;
+let grader_result_test_id_openrouter: number | undefined;
 
 test.beforeAll(async () => {
   if (!process.env.OPENAI_API_KEY_e2e_test) {
@@ -77,7 +78,7 @@ test.beforeAll(async () => {
     .from("grader_result_tests")
     .select("id")
     .eq("grader_result_id", graderResult.id)
-    .limit(1);
+    .order("id", { ascending: true });
 
   if (graderResultTests && graderResultTests.length > 0) {
     grader_result_test_id = graderResultTests[0].id;
@@ -143,9 +144,58 @@ test.beforeAll(async () => {
         .update({ extra_data: openaiPromptData })
         .eq("id", grader_result_test_id_openai);
     }
+
+    // Create OpenRouter grader result test when OPENROUTER_API_KEY_e2e_test is set
+    if (process.env.OPENROUTER_API_KEY_e2e_test) {
+      if (graderResultTests && graderResultTests.length > 2) {
+        grader_result_test_id_openrouter = graderResultTests[2].id;
+      } else {
+        const { data: openrouterTest } = await supabase
+          .from("grader_result_tests")
+          .insert({
+            score: 3,
+            max_score: 5,
+            name: "OpenRouter test",
+            name_format: "text",
+            output: "This test uses OpenRouter for hints",
+            output_format: "markdown",
+            class_id: course.id,
+            student_id: student.private_profile_id,
+            grader_result_id: graderResult.id,
+            is_released: true
+          })
+          .select("id")
+          .single();
+
+        if (openrouterTest) {
+          grader_result_test_id_openrouter = openrouterTest.id;
+        }
+      }
+
+      if (grader_result_test_id_openrouter) {
+        const openrouterPromptData = {
+          llm: {
+            prompt:
+              "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+            model: "openai/gpt-4o-mini",
+            account: "e2e_test",
+            provider: "openrouter",
+            temperature: 1,
+            max_tokens: 100
+          }
+        };
+
+        await supabase
+          .from("grader_result_tests")
+          .update({ extra_data: openrouterPromptData })
+          .eq("id", grader_result_test_id_openrouter);
+      }
+    }
   }
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
+});
 // Helper function to call the LLM hint API with authentication
 async function callLLMHintAPI(
   request: {
@@ -255,5 +305,17 @@ test.describe("LLM Hint API", () => {
       throw new Error("Test data not available");
     }
     await assertSuccessfullHinting({ student, grader_result_test_id: grader_result_test_id_openai, request });
+  });
+
+  test("should work with openrouter", async ({ request }) => {
+    test.skip(!process.env.OPENROUTER_API_KEY_e2e_test, "OPENROUTER_API_KEY_e2e_test is not set");
+    if (!student || !grader_result_test_id_openrouter) {
+      throw new Error("Test data not available");
+    }
+    await assertSuccessfullHinting({
+      student,
+      grader_result_test_id: grader_result_test_id_openrouter,
+      request
+    });
   });
 });

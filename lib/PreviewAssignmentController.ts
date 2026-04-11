@@ -33,10 +33,12 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
       description: part.description,
       ordinal: part.ordinal,
       data: part.data ?? null,
-      rubric_id: hydrated.id, // Use parent rubric's ID
+      rubric_id: hydrated.id,
       class_id: hydrated.class_id,
       assignment_id: hydrated.assignment_id,
-      created_at: part.created_at
+      created_at: part.created_at,
+      is_individual_grading: part.is_individual_grading ?? false,
+      is_assign_to_student: part.is_assign_to_student ?? false
     });
 
     for (const crit of part.rubric_criteria) {
@@ -79,6 +81,7 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
           rubric_criteria_id: crit.id,
           class_id: hydrated.class_id,
           assignment_id: hydrated.assignment_id,
+          kpi_category: check.kpi_category,
           created_at: check.created_at
         });
       }

@@ -281,7 +281,6 @@ class AssignmentsDependencySource extends DependencySourceBase {
     // Gather target students in this batch
     const students = new Set<string>(keys.map((key) => key.student_id));
 
-    // Query optimized view that returns one row per student per assignment with scores by review round
     type ReviewsByRoundRow = {
       assignment_id: number;
       class_id: number;
@@ -289,6 +288,8 @@ class AssignmentsDependencySource extends DependencySourceBase {
       assignment_slug: string | null;
       scores_by_round_private: Record<string, number | null> | null;
       scores_by_round_public: Record<string, number | null> | null;
+      individual_scores: Partial<Record<string, number>> | null;
+      per_student_grading_totals: Partial<Record<string, number>> | null;
     };
 
     const allRows: ReviewsByRoundRow[] = [];
@@ -300,7 +301,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
       let query = supabase
         .from("submissions_with_reviews_by_round_for_assignment")
         .select(
-          "assignment_id, class_id, student_private_profile_id, assignment_slug, scores_by_round_private, scores_by_round_public"
+          "assignment_id, class_id, student_private_profile_id, assignment_slug, scores_by_round_private, scores_by_round_public, individual_scores, per_student_grading_totals"
         )
         .in("assignment_id", assignmentIds);
       // Only filter by students when the set is reasonably small to avoid exceeding IN limits
@@ -336,6 +337,28 @@ class AssignmentsDependencySource extends DependencySourceBase {
       if (row.scores_by_round_public) {
         for (const [round, score] of Object.entries(row.scores_by_round_public)) {
           publicByRound[round] = score === null ? undefined : (score as number);
+        }
+      }
+      // Prefer per_student_grading_totals (shared hand + autograde + tweak + individual slice).
+      // Else fall back to individual_scores (legacy slice only) when present.
+      const profileId = row.student_private_profile_id;
+      const combined = row.per_student_grading_totals?.[profileId];
+      if (combined !== undefined && combined !== null) {
+        const studentScore = Number(combined);
+        if (!Number.isNaN(studentScore)) {
+          privateByRound["grading-review"] = studentScore;
+          if (publicByRound["grading-review"] !== undefined) {
+            publicByRound["grading-review"] = studentScore;
+          }
+        }
+      } else if (row.individual_scores && profileId in row.individual_scores) {
+        const raw = row.individual_scores[profileId];
+        const studentScore = raw !== undefined && raw !== null ? Number(raw) : NaN;
+        if (!Number.isNaN(studentScore)) {
+          privateByRound["grading-review"] = studentScore;
+          if (publicByRound["grading-review"] !== undefined) {
+            publicByRound["grading-review"] = studentScore;
+          }
         }
       }
       results.push({

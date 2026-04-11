@@ -25,6 +25,23 @@ Sentry.init({
   replaysSessionSampleRate: 0,
   replaysOnErrorSampleRate: 0,
   beforeSend(event) {
+    // Filter React hydration mismatch errors — typically caused by browser extensions
+    // (Grammarly, Google Translate, ad blockers, etc.) modifying the DOM before React hydrates.
+    // In production React minifies these to error codes #418, #423, #425.
+    if (
+      event.exception?.values?.some((e) => {
+        const v = e.value ?? "";
+        return (
+          v.includes("Hydration failed") ||
+          v.includes("There was an error while hydrating") ||
+          v.includes("Text content does not match server-rendered HTML") ||
+          /Minified React error #(418|423|425)/.test(v)
+        );
+      })
+    ) {
+      return null;
+    }
+
     // Check for plain objects captured as exceptions (e.g., Supabase PostgrestError)
     // When Sentry.captureException() receives a plain object like {code, details, hint, message},
     // it creates a synthetic exception with the original data in event.extra.__serialized__
@@ -36,6 +53,17 @@ Sentry.init({
 
       // Filter JWT expired errors (PGRST303) - these are expected when sessions expire
       if (serializedCode === "PGRST303" || serializedMessage.includes("JWT expired")) {
+        return null;
+      }
+
+      // Filter specific "Bad Request" errors that are expected noise
+      // Avoid filtering tunnel endpoint errors (invalid envelope format/header)
+      if (serializedMessage.includes("Bad Request") && !serializedMessage.includes("invalid envelope")) {
+        return null;
+      }
+
+      // Filter MetaMask connection errors
+      if (serializedMessage.includes("Failed to connect to MetaMask")) {
         return null;
       }
 

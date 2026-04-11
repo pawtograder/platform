@@ -1,5 +1,6 @@
 "use client";
 
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { PopConfirm } from "@/components/ui/popconfirm";
@@ -84,8 +85,12 @@ export default function StudentExtensionsTable() {
               <Table.Cell>{studentName(row.student_id)}</Table.Cell>
               <Table.Cell>{row.hours}</Table.Cell>
               <Table.Cell>{row.includes_lab ? "Yes" : "No"}</Table.Cell>
-              <Table.Cell>{new Date(row.created_at).toLocaleString()}</Table.Cell>
-              <Table.Cell>{new Date(row.updated_at).toLocaleString()}</Table.Cell>
+              <Table.Cell>
+                <TimeZoneAwareDate date={row.created_at} format="compact" />
+              </Table.Cell>
+              <Table.Cell>
+                <TimeZoneAwareDate date={row.updated_at} format="compact" />
+              </Table.Cell>
               <Table.Cell>
                 <HStack gap={2}>
                   <Button size="xs" variant="ghost" onClick={() => editOpen.openModal(row)}>

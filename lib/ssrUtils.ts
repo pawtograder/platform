@@ -21,7 +21,7 @@ import type {
   Submission,
   Tag,
   UserProfile,
-  UserRoleWithPrivateProfileAndUser
+  UserRoleWithPrivateProfileGroupMembershipsAndUser
 } from "@/utils/supabase/DatabaseTypes";
 
 type UserRoleData = Pick<
@@ -35,7 +35,7 @@ type UserRoleData = Pick<
  */
 export type CourseControllerInitialData = {
   profiles?: UserProfile[];
-  userRolesWithProfiles?: UserRoleWithPrivateProfileAndUser[];
+  userRolesWithProfiles?: UserRoleWithPrivateProfileGroupMembershipsAndUser[];
   discussionThreadTeasers?: DiscussionThread[];
   tags?: Tag[];
   labSections?: LabSection[];
@@ -47,6 +47,7 @@ export type CourseControllerInitialData = {
   assignmentGroupsWithMembers?: Array<
     Database["public"]["Tables"]["assignment_groups"]["Row"] & {
       assignment_groups_members: Database["public"]["Tables"]["assignment_groups_members"]["Row"][];
+      mentor: { name: string | null } | null;
     }
   >;
   discussionTopics?: DiscussionTopic[];
@@ -289,10 +290,12 @@ export async function fetchCourseControllerData(
 
     // User roles with profiles and users
     isStaff
-      ? fetchAllPages<UserRoleWithPrivateProfileAndUser>(
+      ? fetchAllPages<UserRoleWithPrivateProfileGroupMembershipsAndUser>(
           userRolesClient
             .from("user_roles")
-            .select("*, profiles!private_profile_id(*), users(*)")
+            .select(
+              "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+            )
             .eq("class_id", course_id)
         )
       : Promise.resolve(undefined),
@@ -341,11 +344,12 @@ export async function fetchCourseControllerData(
     fetchAllPages<
       Database["public"]["Tables"]["assignment_groups"]["Row"] & {
         assignment_groups_members: Database["public"]["Tables"]["assignment_groups_members"]["Row"][];
+        mentor: { name: string | null } | null;
       }
     >(
       assignmentGroupsClient
         .from("assignment_groups")
-        .select("*, assignment_groups_members(*)")
+        .select("*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)")
         .eq("class_id", course_id)
     ),
 

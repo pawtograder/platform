@@ -73,6 +73,7 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   // Survey operations
   surveys: { maxInsertsPerSecond: 5, description: "Survey creation", batchSize: 10 },
   survey_templates: { maxInsertsPerSecond: 10, description: "Survey template creation", batchSize: 20 },
+  survey_assignments: { maxInsertsPerSecond: 50, description: "Survey assignments to students", batchSize: 100 },
   survey_responses: { maxInsertsPerSecond: 20, description: "Survey response creation", batchSize: 100 }
 };
 // Performance tracking

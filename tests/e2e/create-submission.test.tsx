@@ -120,6 +120,9 @@ test.beforeAll(async () => {
     name: "Create Submission Assignment Not Graded"
   });
 });
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student]);
+});
 test.describe("Create submission", () => {
   test("If the deadline is in the future, the student can create a submission", async ({ page }) => {
     const submission = await insertSubmissionViaAPI({
@@ -227,7 +230,7 @@ test.describe("Create submission", () => {
       throw new Error(`Failed to load submission files: ${submissionFilesError?.message}`);
     }
     const { combined_hash, file_hashes } = computeCombinedHashFromSubmissionFiles(
-      submissionFiles.map((f) => ({ name: f.name, contents: f.contents }))
+      submissionFiles.map((f) => ({ name: f.name, contents: f.contents ?? "" }))
     );
 
     // Store as a handout version for multiple assignments.

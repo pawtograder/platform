@@ -33,22 +33,71 @@ function sha256Hex(buf: Uint8Array): string {
   return hash.digest("hex");
 }
 
-function computeCombinedFileHash(files: { name: string; contents: Buffer }[]): {
-  file_hashes: Record<string, string>;
-  combined_hash: string;
-} {
-  const file_hashes: Record<string, string> = {};
-  for (const f of files) {
-    file_hashes[f.name] = sha256Hex(f.contents);
-  }
+/** Combined empty-submission hash from per-file SHA-256 hex strings (sorted by path). */
+function combinedHashFromPerFileHexHashes(file_hashes: Record<string, string>): string {
   const combinedInput = Object.keys(file_hashes)
     .sort()
     .map((name) => `${name}\0${file_hashes[name]}\n`)
     .join("");
-  return {
-    file_hashes,
-    combined_hash: sha256Hex(Buffer.from(combinedInput, "utf-8"))
-  };
+  return sha256Hex(Buffer.from(combinedInput, "utf-8"));
+}
+
+/**
+ * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
+ * no leading/trailing slashes. Preserves safe subpaths for display names.
+ */
+function getSafeRelativePath(name: string): string {
+  const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const segments = normalized.split("/").filter((s) => s.length > 0);
+  const resolved: string[] = [];
+  for (const seg of segments) {
+    if (seg === ".") continue;
+    if (seg === "..") {
+      if (resolved.length > 0) resolved.pop();
+      continue;
+    }
+    resolved.push(seg);
+  }
+  const result = resolved.join("/");
+  if (result === "") return "unnamed";
+  return result;
+}
+
+/** Map Unicode whitespace (e.g. U+202F in macOS screenshot names) to ASCII space per segment. */
+function normalizeFilenameWhitespace(resolvedRelativePath: string): string {
+  return resolvedRelativePath
+    .split("/")
+    .map((seg) => {
+      let out = "";
+      for (const ch of seg.normalize("NFC")) {
+        out += /\p{White_Space}/u.test(ch) ? " " : ch;
+      }
+      return out.replace(/ +/g, " ").trim();
+    })
+    .join("/");
+}
+
+/**
+ * Per-segment sanitization for Supabase Storage object keys (file name restrictions in docs).
+ * Replaces any character outside the allowed set with underscore.
+ */
+function sanitizeSegmentForSupabaseStorage(seg: string): string {
+  const normalized = seg.normalize("NFC");
+  const allowed = new Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-',!*$&@=;:+?() ");
+  let out = "";
+  for (const ch of normalized) {
+    if (allowed.has(ch)) out += ch;
+    else if (/\p{White_Space}/u.test(ch)) out += " ";
+    else out += "_";
+  }
+  const trimmed = out.replace(/ +/g, " ").trim();
+  const collapsed = trimmed.replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return collapsed.length > 0 ? collapsed : "unnamed";
+}
+
+function sanitizePathForSupabaseStorageObjectKey(resolvedRelativePath: string): string {
+  if (resolvedRelativePath === "") return "unnamed";
+  return resolvedRelativePath.split("/").map(sanitizeSegmentForSupabaseStorage).join("/");
 }
 
 async function safeCleanupRejectedSubmission(params: {
@@ -72,6 +121,32 @@ async function safeCleanupRejectedSubmission(params: {
     .eq("submission_id", submissionId);
   if (reviewsErr) {
     throw new Error(`Cleanup failed (delete submission_reviews): submission_id=${submissionId}: ${reviewsErr.message}`);
+  }
+
+  // Delete binary blobs from storage before removing submission_files rows (same order as duplicate-submission cleanup).
+  const { data: binaryFileRows, error: binarySelectErr } = await adminSupabase
+    .from("submission_files")
+    .select("storage_key")
+    .eq("submission_id", submissionId)
+    .eq("is_binary", true);
+  if (binarySelectErr) {
+    throw new Error(
+      `Cleanup failed (select binary submission_files): submission_id=${submissionId}: ${binarySelectErr.message}`
+    );
+  }
+  const storageKeysToRemove = (binaryFileRows ?? [])
+    .map((row) => row.storage_key)
+    .filter((k): k is string => k != null && k.length > 0);
+  if (storageKeysToRemove.length > 0) {
+    const { error: storageRemoveErr } = await adminSupabase.storage
+      .from("submission-files")
+      .remove(storageKeysToRemove);
+    if (storageRemoveErr) {
+      Sentry.captureException(storageRemoveErr);
+      throw new Error(
+        `Cleanup failed (remove submission-files storage): submission_id=${submissionId}: ${storageRemoveErr.message}`
+      );
+    }
   }
 
   // Remove files (these are the only child rows we definitely created in this path).
@@ -523,7 +598,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
-    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*))")
+    .select(
+      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*), classes(time_zone))"
+    )
     .eq("repository", repository)
     .maybeSingle();
   if (repoError) {
@@ -613,6 +690,34 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       if (!workflow_ref.includes(`.github/workflows/grade.yml`)) {
         throw new Error(`Invalid workflow, got ${workflow_ref}`);
       }
+      // Helper to fetch user roles by GitHub username and class ID (works with or without check run)
+      const fetchUserRolesForActor = async (
+        classId: number | null
+      ): Promise<Database["public"]["Tables"]["user_roles"]["Row"] | undefined> => {
+        if (classId == null || isPawtograderTriggered) return undefined;
+        const { data: user, error: userError } = await adminSupabase
+          .from("users")
+          .select("user_id")
+          .ilike("github_username", decoded.actor)
+          .maybeSingle();
+        if (userError) {
+          Sentry.captureException(userError, scope);
+          throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
+        }
+        if (!user) return undefined;
+        const { data: userRolesData, error: userRolesError } = await adminSupabase
+          .from("user_roles")
+          .select("*")
+          .eq("user_id", user.user_id)
+          .eq("class_id", Number(classId))
+          .maybeSingle();
+        if (userRolesError) {
+          Sentry.captureException(userRolesError, scope);
+          throw new UserVisibleError(`Failed to lookup user role: ${userRolesError.message}`);
+        }
+        return userRolesData ?? undefined;
+      };
+
       // Fetch check run with retry logic for race conditions
       const fetchCheckRun = async () => {
         const { data: initialCheckRun, error: checkRunError } = await adminSupabase
@@ -631,50 +736,67 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
         if (!initialCheckRun) {
           scope?.setTag("check_run_db_found", "false");
-          throw new UserVisibleError(
-            `No push record found for ${repository}@${sha}. The webhook may not have processed yet. Please try again.`
-          );
+          throw new Error("CHECK_RUN_NOT_FOUND_YET");
         }
 
-        // Fetch the role of the user who triggered the workflow (decoded.actor = GitHub username)
-        let userRoles: Database["public"]["Tables"]["user_roles"]["Row"] | undefined;
         const classId = initialCheckRun.class_id ?? repoData.assignments.class_id;
-        if (classId && !isPawtograderTriggered) {
-          const { data: user, error: userError } = await adminSupabase
-            .from("users")
-            .select("user_id")
-            .ilike("github_username", decoded.actor)
-            .maybeSingle();
-          if (userError) {
-            Sentry.captureException(userError, scope);
-            throw new UserVisibleError(`Failed to lookup user: ${userError.message}`);
-          }
-          if (user) {
-            const { data: userRolesData, error: userRolesError } = await adminSupabase
-              .from("user_roles")
-              .select("*")
-              .eq("user_id", user.user_id)
-              .eq("class_id", classId)
-              .maybeSingle();
-            if (userRolesError) {
-              Sentry.captureException(userRolesError, scope);
-              throw new UserVisibleError(`Failed to lookup user role: ${userRolesError.message}`);
-            }
-            userRoles = userRolesData ?? undefined;
-          }
-        }
-
-        return { ...initialCheckRun, user_roles: userRoles };
+        const userRoles = await fetchUserRolesForActor(classId as number);
+        return { ...initialCheckRun, user_roles: userRoles, hasRealCheckRun: true };
       };
 
-      const checkRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
-      const timeZone = checkRun.classes.time_zone || "America/New_York";
-      const isRegressionRerun = Boolean(checkRun.is_regression_rerun && checkRun.target_submission_id);
-      const rerunTargetSubmissionId = checkRun.target_submission_id ?? null;
+      const CHECK_RUN_NOT_FOUND_MSG = "CHECK_RUN_NOT_FOUND_YET";
+      let rawCheckRun: Awaited<ReturnType<typeof fetchCheckRun>> | null;
+      try {
+        rawCheckRun = await retryWithExponentialBackoff(fetchCheckRun, 5, 1000);
+      } catch (err) {
+        if (err instanceof Error && err.message === CHECK_RUN_NOT_FOUND_MSG) {
+          rawCheckRun = null;
+        } else {
+          throw err;
+        }
+      }
 
-      // Check if this is a NOT-GRADED submission
+      // Fallback when no push record exists: construct minimal check run data from alternative sources
+      let checkRun: NonNullable<Awaited<ReturnType<typeof fetchCheckRun>>>;
+      if (rawCheckRun) {
+        checkRun = rawCheckRun;
+      } else {
+        scope?.setTag("submission_without_check_run", "true");
+        Sentry.addBreadcrumb({
+          message: "Creating submission without check run record",
+          level: "warning",
+          data: { repository, sha }
+        });
+        const classId = repoData.assignments.class_id as number;
+        const userRoles = await fetchUserRolesForActor(classId);
+        const timeZoneFromClass = (repoData.assignments as { classes?: { time_zone?: string } | null })?.classes
+          ?.time_zone;
+        checkRun = {
+          id: null,
+          class_id: classId,
+          assignment_group_id: repoData.assignment_group_id,
+          profile_id: repoData.profile_id,
+          check_run_id: null,
+          repository_id: repoData.id,
+          sha,
+          auto_promote_result: null,
+          triggered_by: null,
+          classes: { time_zone: timeZoneFromClass ?? "America/New_York" },
+          user_roles: userRoles,
+          hasRealCheckRun: false
+        } as unknown as NonNullable<Awaited<ReturnType<typeof fetchCheckRun>>> & { hasRealCheckRun: boolean };
+      }
+
+      const timeZone = checkRun.classes?.time_zone || "America/New_York";
+      const hasRealCheckRun = (checkRun as { hasRealCheckRun?: boolean }).hasRealCheckRun ?? true;
+      const isRegressionRerun =
+        hasRealCheckRun && Boolean(checkRun.is_regression_rerun && checkRun.target_submission_id);
+      const rerunTargetSubmissionId = hasRealCheckRun ? (checkRun.target_submission_id ?? null) : null;
+
+      // Check if this is a NOT-GRADED submission (only when we have a real check run with commit message)
       const isNotGradedSubmission =
-        (checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) || false;
+        (hasRealCheckRun && checkRun.commit_message && checkRun.commit_message.toUpperCase().includes("#NOT-GRADED")) ||
+        false;
 
       scope?.setTag("time_zone", timeZone);
       scope?.setTag("is_not_graded", isNotGradedSubmission.toString());
@@ -731,8 +853,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         //Convert to course time zone for display purposes
         const finalDueDateInCourseTimeZone = new TZDate(finalDueDateResult, timeZone);
         console.log(`Final due date in course time zone: ${finalDueDateInCourseTimeZone.toLocaleString()}`);
-        // Use push timestamp (when webhook received the push) for late detection, not current time
-        const pushTime = checkRun?.created_at ? new TZDate(checkRun.created_at, timeZone) : TZDate.tz(timeZone);
+        // Use push timestamp (when webhook received the push) for late detection when available; otherwise use current time
+        const pushTime =
+          hasRealCheckRun && checkRun.created_at ? new TZDate(checkRun.created_at, timeZone) : TZDate.tz(timeZone);
 
         if (isAfter(pushTime, finalDueDate)) {
           // Check if this is a NOT-GRADED submission and if the assignment allows it
@@ -986,7 +1109,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       console.log(`Created submission ${submission_id} for repository ${repository}`);
-      if (checkRun && !isE2ERun && !isRegressionRerun) {
+      if (checkRun?.id && !isE2ERun && !isRegressionRerun) {
         await adminSupabase
           .from("repository_check_runs")
           .update({
@@ -1206,28 +1329,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             ".otf": "font/otf"
           };
 
-          const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB per file
-
-          /**
-           * Returns a sanitized relative path: no ".." or "." segments, no backslashes,
-           * no leading/trailing slashes. Preserves safe subpaths for storage keys and DB name.
-           */
-          function getSafePath(name: string): string {
-            const normalized = name.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-            const segments = normalized.split("/").filter((s) => s.length > 0);
-            const resolved: string[] = [];
-            for (const seg of segments) {
-              if (seg === ".") continue;
-              if (seg === "..") {
-                if (resolved.length > 0) resolved.pop();
-                continue;
-              }
-              resolved.push(seg);
-            }
-            const result = resolved.join("/");
-            if (result === "") return "unnamed";
-            return result;
-          }
+          const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file
 
           function getFileExtension(name: string): string {
             const lastDot = name.lastIndexOf(".");
@@ -1238,102 +1340,100 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             return BINARY_EXTENSIONS.has(getFileExtension(name));
           }
 
-          const submittedFilesWithContents = await Promise.all(
-            submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
-              const contents = await file.buffer();
-              const name = stripTopDir(file.path);
-              return { name, contents, binary: isBinaryFile(name) };
-            })
-          );
-          // Compute combined hash for empty submission detection (before any file insert)
-          const { combined_hash: submissionCombinedHash } = computeCombinedFileHash(submittedFilesWithContents);
+          // One in-flight file buffer at a time (zipball is already fully buffered by GitHub).
+          // Parallel Promise.all here used to multiply peak RAM by the number / size of files.
+          if (submission_id === undefined) {
+            throw new UserVisibleError("Internal error: submission id missing while saving files", 500);
+          }
+          const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
+          const file_hashes: Record<string, string> = {};
+          const usedBinaryStorageRelPaths = new Set<string>();
 
-          // Enforce 15 MB per-file size limit
-          for (const file of submittedFilesWithContents) {
-            if (file.contents.length > MAX_FILE_SIZE) {
+          for (const zipEntry of submittedFiles) {
+            const name = stripTopDir(zipEntry.path);
+            const contents = await zipEntry.buffer();
+
+            if (contents.length > MAX_FILE_SIZE) {
               throw new UserVisibleError(
-                `File "${file.name}" exceeds the 15 MB size limit (${(file.contents.length / (1024 * 1024)).toFixed(1)} MB).`,
+                `File "${name}" exceeds the 50 MB size limit (${(contents.length / (1024 * 1024)).toFixed(1)} MB).`,
                 400
               );
             }
-          }
 
-          // Separate text and binary files
-          const textFiles = submittedFilesWithContents.filter((f) => !f.binary);
-          const binaryFiles = submittedFilesWithContents.filter((f) => f.binary);
+            file_hashes[name] = sha256Hex(contents);
 
-          // Insert text files as before (inline contents)
-          if (textFiles.length > 0) {
-            const { error: textFileError } = await adminSupabase.from("submission_files").insert(
-              textFiles.map((file) => ({
+            if (isBinaryFile(name)) {
+              const logicalPath = normalizeFilenameWhitespace(getSafeRelativePath(name));
+              let storageRelPath = sanitizePathForSupabaseStorageObjectKey(logicalPath);
+              if (usedBinaryStorageRelPaths.has(storageRelPath)) {
+                const extDup = getFileExtension(storageRelPath);
+                const base = extDup.length > 0 ? storageRelPath.slice(0, -extDup.length) : storageRelPath;
+                let n = 2;
+                while (usedBinaryStorageRelPaths.has(`${base}__${n}${extDup}`)) n++;
+                storageRelPath = `${base}__${n}${extDup}`;
+              }
+              usedBinaryStorageRelPaths.add(storageRelPath);
+
+              const ext = getFileExtension(logicalPath);
+              const mimeType = MIME_TYPES[ext] || "application/octet-stream";
+              const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${storageRelPath}`;
+
+              const { error: storageError } = await adminSupabase.storage
+                .from("submission-files")
+                .upload(storageKey, contents, {
+                  contentType: mimeType,
+                  upsert: true
+                });
+              if (storageError) {
+                Sentry.captureException(storageError, scope);
+                throw new UserVisibleError(
+                  `Internal error: Failed to upload binary file "${logicalPath}" to storage: ${storageError.message}`
+                );
+              }
+
+              const { error: dbError } = await adminSupabase.from("submission_files").insert({
                 submission_id: submission_id,
-                name: file.name,
+                name: logicalPath,
                 profile_id: repoData.profile_id,
                 assignment_group_id: repoData.assignment_group_id,
-                contents: file.contents.toString("utf-8"),
+                contents: null,
+                class_id: repoData.assignments.class_id!,
+                is_binary: true,
+                file_size: contents.length,
+                mime_type: mimeType,
+                storage_key: storageKey
+              });
+              if (dbError) {
+                const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
+                if (removeErr.error) {
+                  Sentry.captureException(removeErr.error, scope);
+                }
+                Sentry.captureException(dbError, scope);
+                throw new UserVisibleError(
+                  `Internal error: Failed to insert binary file record for "${logicalPath}": ${dbError.message}`
+                );
+              }
+            } else {
+              const { error: textFileError } = await adminSupabase.from("submission_files").insert({
+                submission_id: submission_id,
+                name: name,
+                profile_id: repoData.profile_id,
+                assignment_group_id: repoData.assignment_group_id,
+                contents: contents.toString("utf-8"),
                 class_id: repoData.assignments.class_id!,
                 is_binary: false,
-                file_size: file.contents.length
-              }))
-            );
-            if (textFileError) {
-              Sentry.captureException(textFileError, scope);
-              throw new UserVisibleError(
-                `Internal error: Failed to insert text submission files: ${textFileError.message}`
-              );
+                file_size: contents.length
+              });
+              if (textFileError) {
+                Sentry.captureException(textFileError, scope);
+                throw new UserVisibleError(
+                  `Internal error: Failed to insert text submission file "${name}": ${textFileError.message}`
+                );
+              }
             }
           }
 
-          // Insert binary files: store content in Supabase Storage, metadata in DB (parallelized)
-          if (binaryFiles.length > 0) {
-            const storageProfileKey = repoData.profile_id || repoData.assignment_group_id;
-            await Promise.all(
-              binaryFiles.map(async (file) => {
-                const safePath = getSafePath(file.name);
-                const ext = getFileExtension(safePath);
-                const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-                const storageKey = `classes/${repoData.assignments.class_id}/profiles/${storageProfileKey}/submissions/${submission_id}/files/${safePath}`;
-
-                // Upload to Supabase Storage
-                const { error: storageError } = await adminSupabase.storage
-                  .from("submission-files")
-                  .upload(storageKey, file.contents, {
-                    contentType: mimeType,
-                    upsert: true
-                  });
-                if (storageError) {
-                  Sentry.captureException(storageError, scope);
-                  throw new UserVisibleError(
-                    `Internal error: Failed to upload binary file "${safePath}" to storage: ${storageError.message}`
-                  );
-                }
-
-                // Insert DB record (no inline contents for binary)
-                const { error: dbError } = await adminSupabase.from("submission_files").insert({
-                  submission_id: submission_id,
-                  name: safePath,
-                  profile_id: repoData.profile_id,
-                  assignment_group_id: repoData.assignment_group_id,
-                  contents: null,
-                  class_id: repoData.assignments.class_id!,
-                  is_binary: true,
-                  file_size: file.contents.length,
-                  mime_type: mimeType,
-                  storage_key: storageKey
-                });
-                if (dbError) {
-                  const removeErr = await adminSupabase.storage.from("submission-files").remove([storageKey]);
-                  if (removeErr.error) {
-                    Sentry.captureException(removeErr.error, scope);
-                  }
-                  Sentry.captureException(dbError, scope);
-                  throw new UserVisibleError(
-                    `Internal error: Failed to insert binary file record for "${safePath}": ${dbError.message}`
-                  );
-                }
-              })
-            );
-          }
+          const submissionCombinedHash = combinedHashFromPerFileHexHashes(file_hashes);
 
           // Empty submission detection:
           // If the submitted expected files match ANY recorded handout version for the assignment,

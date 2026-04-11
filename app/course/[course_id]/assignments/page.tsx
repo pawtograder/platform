@@ -1,6 +1,7 @@
 "use client";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
 import useAuthState from "@/hooks/useAuthState";
@@ -13,7 +14,6 @@ import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { UserIdentity } from "@supabase/supabase-js";
 import { addHours, differenceInHours } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaCheckCircle } from "react-icons/fa";
@@ -44,6 +44,23 @@ export type AssignmentsForStudentDashboard = Omit<
 > & {
   id: number;
 };
+
+function formatLatestSubmissionLabel(assignment: AssignmentsForStudentDashboard): string {
+  if (!assignment.submission_id) {
+    return "Have not submitted yet";
+  }
+  const ordinal = assignment.submission_ordinal ?? 0;
+  const gradingComplete =
+    assignment.grading_submission_review_completed_at != null &&
+    assignment.grading_total_score != null &&
+    assignment.total_points != null;
+  if (gradingComplete) {
+    return `#${ordinal} (${assignment.grading_total_score}/${assignment.total_points})`;
+  }
+  const agScore = assignment.grader_result_score ?? 0;
+  const agMax = assignment.grader_result_max_score ?? 0;
+  return `#${ordinal} (${agScore}/${agMax})`;
+}
 
 export default function StudentPage() {
   const { identities } = useIdentity();
@@ -112,19 +129,16 @@ export default function StudentPage() {
         name: assignment.title!,
         type: "assignment",
         due_date: modifiedDueDate,
-        due_date_component: (
-          <>
-            {modifiedDueDate &&
-              formatInTimeZone(modifiedDueDate, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}
-          </>
+        due_date_component: modifiedDueDate ? (
+          <TimeZoneAwareDate date={modifiedDueDate} format="MMM d, h:mm a" />
+        ) : (
+          <>-</>
         ),
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
         is_repo_ready: assignment.is_github_ready ?? false,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
-        submission_text: !assignment.submission_id
-          ? "Have not submitted yet"
-          : `#${assignment.submission_ordinal} (${assignment.grader_result_score || 0}/${assignment.grader_result_max_score || 0})`,
+        submission_text: formatLatestSubmissionLabel(assignment),
         submission_link: assignment.submission_id
           ? `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.submission_id}`
           : undefined,

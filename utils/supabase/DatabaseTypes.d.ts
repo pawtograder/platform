@@ -2,6 +2,9 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database, Json } from "./SupabaseTypes";
 export type { Json };
 
+export type IndividualScores = Partial<Record<string, number>>;
+export type RubricPartStudentAssignments = Partial<Record<string, string | null>>;
+
 export type GradebookColumnExternalData = {
   source: "csv";
   fileName: string;
@@ -27,7 +30,7 @@ export type GraderResultTestExtraData = {
     result?: string;
     model?: string;
     account?: string;
-    provider?: "openai" | "azure" | "anthropic";
+    provider?: "openai" | "azure" | "anthropic" | "openrouter";
     temperature?: number;
     max_tokens?: number;
     rate_limit?: LLMRateLimitConfig;
@@ -88,6 +91,14 @@ export type AssignmentGroupWithMembersInvitationsAndJoinRequests = GetResult<
   Database["public"]["Tables"]["assignment_groups"]["Relationships"],
   "*, assignment_groups_members(*), assignment_group_invitations(*), assignment_group_join_request(*)"
 >;
+/** Matches CourseController.assignmentGroupsWithMembers / TableController select (no invitations). */
+export type AssignmentGroupWithMembersAndMentor = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignment_groups"]["Row"],
+  "assignment_groups",
+  Database["public"]["Tables"]["assignment_groups"]["Relationships"],
+  "*, assignment_groups_members(*), mentor:profiles!assignment_groups_mentor_profile_id_fkey(name)"
+>;
 export type Notification = GetResult<
   Database["public"],
   Database["public"]["Tables"]["notifications"]["Row"],
@@ -144,6 +155,14 @@ export type UserRoleWithPrivateProfileAndUser = GetResult<
   "user_roles",
   Database["public"]["Tables"]["user_roles"]["Relationships"],
   "*, profiles!private_profile_id(*), users(*)"
+>;
+/** Staff roster row including group memberships on the private profile (instructor group management). */
+export type UserRoleWithPrivateProfileGroupMembershipsAndUser = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["user_roles"]["Row"],
+  "user_roles",
+  Database["public"]["Tables"]["user_roles"]["Relationships"],
+  "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
 >;
 export type UserRoleWithCourse = GetResult<
   Database["public"],
@@ -718,7 +737,15 @@ export type RubricPartsDataType = Json;
 
 export type YmlRubricType = Omit<
   HydratedRubric,
-  "id" | "description" | "rubric_parts" | "class_id" | "created_at" | "assignment_id" | "review_round" | "is_private"
+  | "id"
+  | "description"
+  | "rubric_parts"
+  | "class_id"
+  | "created_at"
+  | "assignment_id"
+  | "review_round"
+  | "is_private"
+  | "cap_score_to_assignment_points"
 > & {
   parts: YmlRubricPartType[];
   description?: string;
@@ -726,11 +753,22 @@ export type YmlRubricType = Omit<
 };
 export type YmlRubricPartType = Omit<
   HydratedRubricPart,
-  "id" | "rubric_criteria" | "description" | "ordinal" | "class_id" | "created_at" | "rubric_id" | "assignment_id"
+  | "id"
+  | "rubric_criteria"
+  | "description"
+  | "ordinal"
+  | "class_id"
+  | "created_at"
+  | "rubric_id"
+  | "assignment_id"
+  | "is_individual_grading"
+  | "is_assign_to_student"
 > & {
   criteria: YmlRubricCriteriaType[];
   id?: number;
   description?: string;
+  is_individual_grading?: boolean;
+  is_assign_to_student?: boolean;
 };
 export type YmlRubricCriteriaType = Omit<
   HydratedRubricCriteria,
@@ -773,6 +811,7 @@ export type YmlRubricChecksType = Omit<
   | "artifact"
   | "annotation_target"
   | "data"
+  | "kpi_category"
 > & {
   id?: number;
   description?: string;
@@ -781,6 +820,7 @@ export type YmlRubricChecksType = Omit<
   max_annotations?: number;
   annotation_target?: "file" | "artifact";
   data?: RubricChecksDataType;
+  kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
 };
 
 export type AssignmentDueDateException = GetResult<
