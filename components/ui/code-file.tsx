@@ -48,8 +48,7 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
   const [draftUseMonaco, setDraftUseMonaco] = useState<boolean | null>(null);
 
   const useMonacoGradingEditor = preferences?.grading.useMonacoEditor;
-  const effectiveDraft =
-    draftUseMonaco ?? useMonacoGradingEditor ?? DEFAULT_USER_PREFERENCES.grading.useMonacoEditor;
+  const effectiveDraft = draftUseMonaco ?? useMonacoGradingEditor ?? DEFAULT_USER_PREFERENCES.grading.useMonacoEditor;
 
   const handleSavePreference = useCallback(async () => {
     try {
