@@ -5,8 +5,8 @@ import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { RubricCheck, RubricCriteria, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { useEffect, useRef, useMemo, useState } from "react";
 import type { Monaco } from "@monaco-editor/react";
-import type { editor } from "monaco-editor";
-import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import type { IDisposable, editor } from "monaco-editor";
+import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file-shared";
 import { RubricQuickPick } from "./rubric-quick-pick";
 
 export type RubricContextMenuAction = {
@@ -41,7 +41,7 @@ export function MonacoRubricContextMenu({
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
   const existingComments = useSubmissionFileComments({ file_id: file?.id ?? 0 });
   
-  const disposablesRef = useRef<editor.IDisposable[]>([]);
+  const disposablesRef = useRef<IDisposable[]>([]);
   const lastMousePositionRef = useRef<{ top: number; left: number } | null>(null);
   const [quickPickState, setQuickPickState] = useState<{
     isOpen: boolean;

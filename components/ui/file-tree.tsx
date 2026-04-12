@@ -137,7 +137,7 @@ function FileTreeItem({
           fontWeight={isActive ? "semibold" : "normal"}
           color={isActive ? "fg.info" : "fg.default"}
           flex={1}
-          noOfLines={1}
+          lineClamp={1}
         >
           {node.name}
         </Text>

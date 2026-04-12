@@ -257,10 +257,10 @@ export function CommandPalette({
                     <VStack align="stretch" gap={0} flex={1} minW={0}>
                       {item.type === "file" ? (
                         <>
-                          <Text fontSize="sm" fontWeight={isSelected ? "semibold" : "normal"} noOfLines={1}>
+                          <Text fontSize="sm" fontWeight={isSelected ? "semibold" : "normal"} lineClamp={1}>
                             {highlightText(item.file.name, item.matches)}
                           </Text>
-                          <Text fontSize="xs" color="fg.muted" noOfLines={1}>
+                          <Text fontSize="xs" color="fg.muted" lineClamp={1}>
                             {item.file.name}
                           </Text>
                         </>
