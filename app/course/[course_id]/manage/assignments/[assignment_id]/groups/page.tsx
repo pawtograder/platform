@@ -1,9 +1,14 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
-import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
+
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import {
+  Assignment,
+  AssignmentGroupWithMembersAndMentor,
+  UserRoleWithPrivateProfileGroupMembershipsAndUser
+} from "@/utils/supabase/DatabaseTypes";
+import { useCourseController, useGradersAndInstructors } from "@/hooks/useCourseController";
+import { useIsTableControllerReady, useListTableControllerValues } from "@/lib/TableController";
 import {
   Box,
   Button,
@@ -22,29 +27,55 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useInvalidate, useList, useShow } from "@refinedev/core";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { FaArrowRight, FaEdit, FaRegTimesCircle, FaDownload } from "react-icons/fa";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
-import {
-  GroupCreateData,
-  GroupManagementProvider,
-  StudentMoveData,
-  useGroupManagement
-} from "./GroupManagementContext";
+import { findGroupForProfileOnAssignment } from "./groupMembershipUtils";
+import { GroupCreateData, GroupManagementProvider, useGroupManagement } from "./GroupManagementContext";
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 import * as Sentry from "@sentry/nextjs";
 
+const UTF8_BOM = "\uFEFF";
+
 /**
- * Helper function to download CSV data
+ * RFC-style CSV cell escaping; blocks formula injection in Excel/Sheets.
+ */
+function escapeCSVCell(value: string): string {
+  const stringValue = value;
+  const trimmed = stringValue.trimStart();
+  if (["=", "+", "-", "@"].includes(trimmed[0] ?? "")) {
+    return `"'${stringValue.replace(/"/g, '""')}"`;
+  }
+  if (
+    stringValue.includes(",") ||
+    stringValue.includes('"') ||
+    stringValue.includes("\n") ||
+    stringValue.includes("\r")
+  ) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  return stringValue;
+}
+
+function formatNameEmailLabel(name: string | null | undefined, email: string | null | undefined): string {
+  const displayName = (name ?? "").trim() || "Unknown";
+  const e = (email ?? "").trim();
+  if (!e) {
+    return displayName;
+  }
+  return `${displayName} <${e}>`;
+}
+
+/**
+ * Helper function to download CSV data (UTF-8 BOM for Excel)
  */
 function downloadCSV(csvContent: string, filename: string) {
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob([UTF8_BOM + csvContent], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   const url = URL.createObjectURL(blob);
   link.setAttribute("href", url);
@@ -56,36 +87,29 @@ function downloadCSV(csvContent: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export type RolesWithProfilesAndGroupMemberships = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["user_roles"]["Row"],
-  "user_roles",
-  Database["public"]["Tables"]["user_roles"]["Relationships"],
-  "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"
->;
+export type RolesWithProfilesAndGroupMemberships = UserRoleWithPrivateProfileGroupMembershipsAndUser;
 
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
-  const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
-    resource: "assignment_groups",
-    meta: { select: "*, assignment_groups_members(*)" },
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
-    pagination: { pageSize: 1000 }
-    // liveMode: "auto"
-  });
-  const { data: profiles } = useList<RolesWithProfilesAndGroupMemberships>({
-    resource: "user_roles",
-    meta: {
-      select: "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "role", operator: "eq", value: "student" },
-      { field: "profiles.assignment_groups_members.assignment_id", operator: "eq", value: assignment.id }
-    ],
-    pagination: { pageSize: 1000 }
-    // liveMode: "auto"
-  });
-  const groupsData = groups?.data;
+  const courseController = useCourseController();
+  const { assignmentGroupsWithMembers, userRolesWithProfiles } = courseController;
+
+  const groupsPredicate = useCallback(
+    (g: AssignmentGroupWithMembersAndMentor) => g.assignment_id === assignment.id,
+    [assignment.id]
+  );
+  const groupsUnsorted = useListTableControllerValues(assignmentGroupsWithMembers, groupsPredicate);
+  const groupsData = useMemo(() => [...groupsUnsorted].sort((a, b) => a.name.localeCompare(b.name)), [groupsUnsorted]);
+
+  const studentPredicate = useCallback(
+    (r: RolesWithProfilesAndGroupMemberships) => r.role === "student" && !r.disabled,
+    []
+  );
+  const profiles = useListTableControllerValues(userRolesWithProfiles, studentPredicate);
+
+  const groupsReady = useIsTableControllerReady(assignmentGroupsWithMembers);
+  const rolesReady = useIsTableControllerReady(userRolesWithProfiles);
+  const dataReady = groupsReady && rolesReady;
+
   const [loading, setLoading] = useState<boolean>(false);
   const [groupViewOn, setGroupViewOn] = useState<boolean>(false);
   const {
@@ -93,170 +117,103 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     movesToFulfill,
     clearGroupsToCreate,
     clearMovesToFulfill,
+    retainOnlyFailedMovesAndGroups,
     removeGroupToCreate,
     removeMoveToFulfill
   } = useGroupManagement();
-  const invalidate = useInvalidate();
   const { tags } = useTags();
   const supabase = createClient();
 
   /**
-   * Submits changes to all students
+   * Publish all staged changes in a single RPC call.
    */
   const publishChanges = async () => {
-    // move students where staged
-
-    await Promise.all(
-      movesToFulfill.map(async (move) => {
-        await updateGroupForStudent(move);
-      })
-    );
-    // create groups where staged
-    await Promise.all(
-      groupsToCreate.map(async (group) => {
-        await createGroupWithStudents(group);
-      })
-    );
-    // clear context
-    clearGroupsToCreate();
-    clearMovesToFulfill();
-    invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
-    invalidate({ resource: "user_roles", invalidates: ["list"] });
-  };
-
-  /**
-   * Create a new group for this assignment and add all students specified
-   */
-  const createGroupWithStudents = async (group: GroupCreateData) => {
+    setLoading(true);
     try {
-      const { id } = await assignmentGroupInstructorCreateGroup(
-        {
-          name: group.name,
-          course_id: course_id,
-          assignment_id: assignment.id
-        },
-        supabase
-      );
+      const { data, error } = await (supabase.rpc as CallableFunction)("publish_assignment_group_changes", {
+        p_class_id: course_id,
+        p_assignment_id: assignment.id,
+        p_groups_to_create: groupsToCreate.map((g) => ({ name: g.name, member_ids: g.member_ids })),
+        p_moves_to_fulfill: movesToFulfill.map((m) => ({
+          profile_id: m.profile_id,
+          old_group_id: m.old_group_id,
+          new_group_id: m.new_group_id
+        }))
+      });
 
-      // Use Promise.allSettled to collect all results
-      const results = await Promise.allSettled(
-        group.member_ids.map(async (member_id) => {
-          await assignmentGroupInstructorMoveStudent(
-            {
-              new_assignment_group_id: id || null,
-              old_assignment_group_id: null,
-              profile_id: member_id,
-              class_id: course_id
-            },
-            supabase
-          );
-          return member_id;
-        })
-      );
+      if (error) throw error;
 
-      // Categorize results
-      const successes = results.filter((r) => r.status === "fulfilled");
-      const failures = results.filter((r) => r.status === "rejected");
+      const result = data as {
+        groups_created: number;
+        members_added: number;
+        members_moved: number;
+        groups_dissolved: number;
+        syncs_enqueued: number;
+        errors: { error: string; profile_id?: string; group_name?: string }[];
+      };
 
-      // Show consolidated toast based on results
-      if (failures.length === 0) {
-        // All succeeded
-        toaster.create({
-          title: "New group created",
-          description: `All ${successes.length} student(s) added successfully`,
-          type: "success"
-        });
-      } else if (successes.length === 0) {
-        // All failed
-        const failedIds = group.member_ids
-          .map((member_id) => {
-            const profile = profiles?.data?.find(
-              (prof: { private_profile_id: string }) => prof.private_profile_id === member_id
-            );
-            return profile?.profiles?.name || member_id;
-          })
-          .join(", ");
-
-        toaster.create({
-          title: "Error creating group",
-          description: `Failed to add ${failures.length} student(s): ${failedIds}`,
-          type: "error"
+      if (result.errors.length > 0) {
+        result.errors.forEach((e) => {
+          Sentry.captureMessage(`Group publish error: ${e.error}`, {
+            level: "error",
+            extra: e
+          });
+          console.error("Group publish error:", e);
         });
 
-        // Log detailed errors
-        results.forEach((result, idx) => {
-          if (result.status === "rejected") {
-            Sentry.captureException(result.reason);
-            console.error(`Failed to move student ${group.member_ids[idx]}:`, result.reason);
-          }
-        });
-      } else {
-        // Partial success - collect failed member IDs by matching results array indices
-        const failedMemberIds = results
-          .map((result, idx) => (result.status === "rejected" ? group.member_ids[idx] : null))
-          .filter((id) => id !== null) as string[];
-
-        const failedNames = failedMemberIds
-          .map((member_id) => {
-            const profile = profiles?.data?.find(
-              (prof: { private_profile_id: string }) => prof.private_profile_id === member_id
-            );
-            return profile?.profiles?.name || member_id;
-          })
-          .join(", ");
-
         toaster.create({
-          title: "Group created with partial success",
-          description: `${successes.length} student(s) added, ${failures.length} failed: ${failedNames}`,
+          title: "Published with errors",
+          description: `${result.groups_created} groups created, ${result.members_moved + result.members_added} students moved, ${result.errors.length} error(s)`,
           type: "warning"
         });
 
-        // Log detailed errors
-        results.forEach((result, idx) => {
-          if (result.status === "rejected") {
-            Sentry.captureException(result.reason);
-            console.error(`Failed to move student ${group.member_ids[idx]}:`, result.reason);
-          }
+        const failedProfileIds = new Set(
+          result.errors
+            .filter((e): e is { error: string; profile_id: string } => !!e.profile_id)
+            .map((e) => e.profile_id)
+        );
+        const failedGroupNames = new Set(
+          result.errors
+            .filter((e): e is { error: string; group_name: string } => !!e.group_name)
+            .map((e) => e.group_name)
+        );
+        retainOnlyFailedMovesAndGroups(failedProfileIds, failedGroupNames);
+      } else {
+        const parts: string[] = [];
+        if (result.groups_created > 0) parts.push(`${result.groups_created} group(s) created`);
+        if (result.members_added > 0) parts.push(`${result.members_added} member(s) added`);
+        if (result.members_moved > 0) parts.push(`${result.members_moved} student(s) moved`);
+        if (result.groups_dissolved > 0) parts.push(`${result.groups_dissolved} group(s) dissolved`);
+        if (result.syncs_enqueued > 0) parts.push(`${result.syncs_enqueued} permission sync(s) queued`);
+
+        toaster.create({
+          title: "Changes published",
+          description: parts.join(", ") || "No changes needed",
+          type: "success"
         });
+
+        clearGroupsToCreate();
+        clearMovesToFulfill();
       }
     } catch (e) {
       console.error(e);
+      Sentry.captureException(e);
       toaster.create({
-        title: "Error creating group",
-        description: e instanceof Error ? e.message : "Unknown error",
-        type: "error"
-      });
-    }
-  };
-
-  /**
-   * Move student to the desired group
-   */
-  const updateGroupForStudent = async (move: StudentMoveData) => {
-    try {
-      setLoading(true);
-      await assignmentGroupInstructorMoveStudent(
-        {
-          new_assignment_group_id: move.new_group_id,
-          old_assignment_group_id: move.old_group_id,
-          profile_id: move.profile_id,
-          class_id: course_id
-        },
-        supabase
-      );
-      toaster.create({ title: "Student moved", description: "", type: "success" });
-    } catch (e) {
-      console.error(e);
-      toaster.create({
-        title: "Error moving student",
+        title: "Error publishing changes",
         description: e instanceof Error ? e.message : "Unknown error",
         type: "error"
       });
     } finally {
+      try {
+        await Promise.all([
+          courseController.assignmentGroupsWithMembers.refetchAll(),
+          courseController.userRolesWithProfiles.refetchAll()
+        ]);
+      } catch (refetchErr) {
+        Sentry.captureException(refetchErr);
+      }
       setLoading(false);
     }
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
   };
 
   const tagDisplay = (group: GroupCreateData) => {
@@ -270,7 +227,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     }
   };
 
-  if (!groupsData || !assignment) {
+  if (!dataReady || !assignment) {
     return (
       <Box>
         <Skeleton height="100px" />
@@ -339,7 +296,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                             <Table.Cell>
                               {group.member_ids.map((member_id, key) => {
                                 return (
-                                  profiles?.data?.find((prof: { private_profile_id: string }) => {
+                                  profiles.find((prof) => {
                                     return prof.private_profile_id == member_id;
                                   })?.profiles.name + (key < group.member_ids.length - 1 ? ", " : "")
                                 );
@@ -385,7 +342,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                           <Table.Row key={move.profile_id}>
                             <Table.Cell>
                               {
-                                profiles?.data?.find((prof: { private_profile_id: string }) => {
+                                profiles.find((prof) => {
                                   return prof.private_profile_id == move.profile_id;
                                 })?.profiles.name
                               }
@@ -492,7 +449,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         <BulkModifyGroup
           groups={groupsData}
           assignment={assignment}
-          profiles={profiles?.data as RolesWithProfilesAndGroupMemberships[]}
+          profiles={profiles}
           trigger={
             <Button size="sm" variant="outline">
               Tweak a Group
@@ -501,9 +458,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         />
       </Flex>
       {groupViewOn ? (
-        <TableByGroups assignment={assignment} profiles={profiles?.data} groupsData={groupsData} />
+        <TableByGroups assignment={assignment} profiles={profiles} groupsData={groupsData} />
       ) : (
-        <TableByStudents assignment={assignment} groupsData={groupsData} profiles={profiles?.data} loading={loading} />
+        <TableByStudents assignment={assignment} groupsData={groupsData} profiles={profiles} loading={loading} />
       )}
     </Box>
   );
@@ -520,52 +477,64 @@ function TableByGroups({
 }: {
   assignment: Assignment;
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
-  groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  groupsData: AssignmentGroupWithMembersAndMentor[];
 }) {
   const { modProfiles, movesToFulfill } = useGroupManagement();
+  const graders = useGradersAndInstructors();
+  const { assignmentGroupsWithMembers } = useCourseController();
+  const [updatingMentorGroupId, setUpdatingMentorGroupId] = useState<number | null>(null);
+
+  const updateMentor = async (groupId: number, mentorProfileId: string | null) => {
+    setUpdatingMentorGroupId(groupId);
+    try {
+      await assignmentGroupsWithMembers.update(groupId, { mentor_profile_id: mentorProfileId });
+      toaster.create({ title: "Mentor updated", type: "success" });
+    } catch (e) {
+      Sentry.captureException(e);
+      toaster.create({
+        title: "Error updating mentor",
+        description: e instanceof Error ? e.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setUpdatingMentorGroupId(null);
+    }
+  };
 
   /**
-   * Export groups data to CSV
+   * Export groups data to CSV: GroupName, StudentNames (Name <email> per member, comma-separated), MentorName.
    */
   const exportToCSV = () => {
-    const headers = ["Group", "Members", "Status"];
+    const headers = ["GroupName", "StudentNames", "MentorName"];
     const rows: string[][] = [];
 
-    groupsData.forEach((group) => {
-      const memberNames = group.assignment_groups_members
+    const sortedGroups = [...groupsData].sort((a, b) => a.name.localeCompare(b.name));
+
+    sortedGroups.forEach((group) => {
+      const studentLabels = group.assignment_groups_members
         .map((member) => {
-          const profile = profiles?.find((p) => p.private_profile_id === member.profile_id);
-          return profile?.profiles.name || member.profile_id;
+          const row = profiles?.find((p) => p.private_profile_id === member.profile_id);
+          return formatNameEmailLabel(row?.profiles.name, row?.users?.email ?? null);
         })
-        .join(", ");
+        .sort((a, b) => a.localeCompare(b));
 
-      let status = "OK";
-      if (assignment.min_group_size !== null && group.assignment_groups_members.length < assignment.min_group_size) {
-        status = `Too small (min: ${assignment.min_group_size})`;
-      } else if (
-        assignment.max_group_size !== null &&
-        group.assignment_groups_members.length > assignment.max_group_size
-      ) {
-        status = `Too large (max: ${assignment.max_group_size})`;
-      }
+      const mentor = group.mentor_profile_id ? graders.find((g) => g.id === group.mentor_profile_id) : undefined;
+      const mentorLabel = mentor ? formatNameEmailLabel(mentor.name, mentor.userEmail) : "";
 
-      rows.push([group.name, memberNames, status]);
+      rows.push([group.name, studentLabels.join(", "), mentorLabel]);
     });
 
-    // Add ungrouped students
-    const ungroupedProfiles = profiles?.filter((profile) => profile.profiles.assignment_groups_members.length === 0);
+    const ungroupedProfiles = profiles
+      ?.filter((profile) => !findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id))
+      .slice()
+      .sort((a, b) => (a.profiles.name ?? "").localeCompare(b.profiles.name ?? ""));
     ungroupedProfiles?.forEach((profile) => {
-      rows.push(["(Ungrouped)", profile.profiles.name || "Unknown", "Not in a group"]);
+      rows.push(["(Ungrouped)", formatNameEmailLabel(profile.profiles.name, profile.users?.email ?? null), ""]);
     });
 
-    // Convert to CSV format
-    const csvRows = [
-      headers.join(","),
-      ...rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
-    ];
-    const csvContent = csvRows.join("\n");
+    const csvContent = [headers.join(","), ...rows.map((row) => row.map(escapeCSVCell).join(","))].join("\n");
 
-    downloadCSV(csvContent, `groups_export_${new Date().toISOString().split("T")[0]}.csv`);
+    downloadCSV(csvContent, `assignment_groups_${new Date().toISOString().split("T")[0]}.csv`);
   };
 
   /**
@@ -620,6 +589,7 @@ function TableByGroups({
           <Table.Row>
             <Table.ColumnHeader>Group</Table.ColumnHeader>
             <Table.ColumnHeader>Members</Table.ColumnHeader>
+            <Table.ColumnHeader>Mentor</Table.ColumnHeader>
             <Table.ColumnHeader>Actions</Table.ColumnHeader>
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
@@ -677,6 +647,23 @@ function TableByGroups({
                   {newProfilesForGroup(group.id)}
                 </Table.Cell>
                 <Table.Cell>
+                  <NativeSelect.Root size="sm" disabled={updatingMentorGroupId === group.id}>
+                    <NativeSelect.Field
+                      value={group.mentor_profile_id ?? ""}
+                      onChange={(e) => {
+                        updateMentor(group.id, e.target.value || null);
+                      }}
+                    >
+                      <option value="">No mentor</option>
+                      {graders.map((grader) => (
+                        <option key={grader.id} value={grader.id}>
+                          {grader.name}
+                        </option>
+                      ))}
+                    </NativeSelect.Field>
+                  </NativeSelect.Root>
+                </Table.Cell>
+                <Table.Cell>
                   <BulkModifyGroup
                     groups={groupsData}
                     assignment={assignment}
@@ -701,9 +688,9 @@ function TableByGroups({
       <TableByStudents
         assignment={assignment}
         groupsData={groupsData}
-        profiles={profiles?.filter((profile) => {
-          return profile.profiles.assignment_groups_members.length === 0;
-        })}
+        profiles={profiles?.filter(
+          (profile) => !findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id)
+        )}
         loading={false}
       />
     </Flex>
@@ -721,7 +708,7 @@ function TableByStudents({
   loading
 }: {
   assignment: Assignment;
-  groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  groupsData: AssignmentGroupWithMembersAndMentor[];
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   loading: boolean;
 }) {
@@ -729,18 +716,18 @@ function TableByStudents({
   const [groupId, setGroupId] = useState<string | undefined>(undefined);
 
   /**
-   * Export students data to CSV
+   * Export students data to CSV (Student as Name <email>, group, validation status).
    */
   const exportToCSV = () => {
     const headers = ["Student", "Group", "Status"];
     const rows: string[][] = [];
 
-    profiles?.forEach((profile) => {
-      const groupID =
-        profile.profiles.assignment_groups_members.length > 0
-          ? profile.profiles.assignment_groups_members[0].assignment_group_id
-          : undefined;
-      const group = groupsData?.find((g) => g.id === groupID);
+    const sortedProfiles = profiles
+      ? [...profiles].sort((a, b) => (a.profiles.name ?? "").localeCompare(b.profiles.name ?? ""))
+      : [];
+
+    sortedProfiles.forEach((profile) => {
+      const group = findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id);
 
       let status = "OK";
       if (assignment.group_config === "groups" && !group) {
@@ -759,15 +746,14 @@ function TableByStudents({
         status = `Group too large (max: ${assignment.max_group_size})`;
       }
 
-      rows.push([profile.profiles.name || "Unknown", group ? group.name : "no group", status]);
+      rows.push([
+        formatNameEmailLabel(profile.profiles.name, profile.users?.email ?? null),
+        group ? group.name : "no group",
+        status
+      ]);
     });
 
-    // Convert to CSV format
-    const csvRows = [
-      headers.join(","),
-      ...rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(","))
-    ];
-    const csvContent = csvRows.join("\n");
+    const csvContent = [headers.join(","), ...rows.map((row) => row.map(escapeCSVCell).join(","))].join("\n");
 
     downloadCSV(csvContent, `students_export_${new Date().toISOString().split("T")[0]}.csv`);
   };
@@ -810,11 +796,7 @@ function TableByStudents({
         </Table.Header>
         <Table.Body>
           {profiles?.map((profile) => {
-            const groupID =
-              profile.profiles.assignment_groups_members.length > 0
-                ? profile.profiles.assignment_groups_members[0].assignment_group_id
-                : undefined;
-            const group = groupsData?.find((group) => group.id === groupID);
+            const group = findGroupForProfileOnAssignment(groupsData, assignment.id, profile.private_profile_id);
             let errorMessage;
             let error = false;
             if (assignment.group_config === "groups" && !group) {
@@ -910,12 +892,12 @@ function TableByStudents({
 
                               <NativeSelect.Root disabled={loading}>
                                 <NativeSelect.Field
-                                  value={groupId ?? group?.id}
+                                  value={groupId ?? group?.id ?? ""}
                                   onChange={(e) => {
                                     setGroupId(e.target.value);
                                   }}
                                 >
-                                  <option value={undefined}>(No group)</option>
+                                  <option value="">(No group)</option>
                                   {groupsData?.map((group) => (
                                     <option key={group.id} value={group.id}>
                                       {group.name}
@@ -940,22 +922,34 @@ function TableByStudents({
                                   <Button
                                     colorPalette={"green"}
                                     onClick={() => {
-                                      if (group?.id == Number(groupId)) {
-                                        toaster.error({
-                                          title: "Failed to stage changes",
-                                          description: "Cannot move student to a group they are already in"
-                                        });
-                                      } else {
-                                        addMovesToFulfill([
-                                          {
-                                            profile_id: profile.private_profile_id,
-                                            old_group_id:
-                                              profile.profiles.assignment_groups_members.length > 0
-                                                ? profile.profiles.assignment_groups_members[0].assignment_group_id
-                                                : null,
-                                            new_group_id: Number(groupId)
-                                          }
-                                        ]);
+                                      {
+                                        const raw = groupId ?? "";
+                                        const newGroupId =
+                                          raw === "" || raw === "undefined"
+                                            ? null
+                                            : (() => {
+                                                const n = Number(raw);
+                                                return Number.isFinite(n) ? n : null;
+                                              })();
+                                        if (newGroupId !== null && group?.id === newGroupId) {
+                                          toaster.error({
+                                            title: "Failed to stage changes",
+                                            description: "Cannot move student to a group they are already in"
+                                          });
+                                        } else {
+                                          addMovesToFulfill([
+                                            {
+                                              profile_id: profile.private_profile_id,
+                                              old_group_id:
+                                                findGroupForProfileOnAssignment(
+                                                  groupsData,
+                                                  assignment.id,
+                                                  profile.private_profile_id
+                                                )?.id ?? null,
+                                              new_group_id: newGroupId
+                                            }
+                                          ]);
+                                        }
                                       }
                                       setGroupId(undefined);
                                     }}

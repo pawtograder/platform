@@ -89,14 +89,16 @@ export function DiscussionPostSummary({
   return (
     <Box minWidth={"fit-content"} width="auto">
       <Flex borderWidth="1px" divideX="1px" borderRadius="l3" bg="bg" _hover={{ bg: "bg.subtle" }}>
-        <Stack p="6" flex="1">
+        <Stack p="6" flex="1" minW={0} w="100%">
           <Badge variant="surface" alignSelf="flex-start" colorPalette={topic.color}>
             {topic.topic}
             {getIcon()}
           </Badge>
-          <Text textStyle="lg" fontWeight="semibold" mt="2">
-            {thread.subject}
-          </Text>
+          <Box w="100%">
+            <Text textStyle="lg" fontWeight="semibold" mt="2" truncate display="block" w="100%">
+              {thread.subject}
+            </Text>
+          </Box>
           <Markdown
             components={{
               a: ({ children }) => {

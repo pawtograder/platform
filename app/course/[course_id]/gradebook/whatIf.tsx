@@ -74,6 +74,7 @@ function WhatIfScoreCell({
           minW="5em"
           autoFocus
           type="number"
+          step="any"
           value={whatIfVal?.what_if === undefined ? "" : whatIfVal.what_if}
           onChange={(e) => {
             const v = e.target.value === "" ? undefined : Number(e.target.value.trim());
@@ -125,15 +126,17 @@ function WhatIfScoreCell({
   }
   if (isShowingWhatIf) {
     if (whatIfVal?.what_if !== null && whatIfVal?.what_if !== undefined) {
-      scoreToShow = Math.round(whatIfVal?.what_if ?? 0);
+      scoreToShow = whatIfVal.what_if;
     } else {
       scoreToShow = "0";
     }
   }
   return (
     <HStack flexShrink={0} minW="fit-content" gap={0} pr={2}>
-      {studentGrade?.score_override != null && (
-        <Tooltip content="This value is overridden by an instructor, and does not reflect the calculated value. If you have a concern, please contact the instructor.">
+      {studentGrade?.score_override != null && studentGrade?.released && (
+        <Tooltip
+          content={`This value is overridden by an instructor, and does not reflect the calculated value. If you have a concern, please contact the instructor.${studentGrade?.score_override_note ? ` Note from instructor: ${studentGrade.score_override_note}` : ""}`}
+        >
           <Float placement="top-end" offset={2}>
             <Icon as={FaPencil} color="fg.warning" size="xs" />
           </Float>

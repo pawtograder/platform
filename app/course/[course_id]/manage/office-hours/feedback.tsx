@@ -138,174 +138,178 @@ export default function HelpRequestFeedbackComponent() {
   }
 
   return (
-    <VStack spaceY={6} align="stretch">
-      <Card.Root>
-        <Card.Header>
-          <Heading size="lg">Help Request Feedback</Heading>
-          <Text mt={2}>Student feedback helps improve the office hours experience</Text>
-        </Card.Header>
-        <Card.Body>
-          <HStack wrap="wrap" spaceX={6} spaceY={4}>
-            <VStack align="start" spaceY={1}>
-              <Text fontSize="2xl" fontWeight="bold">
-                {stats.total}
-              </Text>
-              <Text fontSize="sm">Total Feedback</Text>
-            </VStack>
-            <VStack align="start" spaceY={1}>
-              <HStack>
-                <Icon as={BsHandThumbsUp} color="green" />
-                <Text fontSize="2xl" fontWeight="bold" color="green">
-                  {stats.positive} ({stats.positivePercentage}%)
-                </Text>
-              </HStack>
-              <Text fontSize="sm">Positive</Text>
-            </VStack>
-            <VStack align="start" spaceY={1}>
-              <HStack>
-                <Icon as={BsHandThumbsDown} color="red" />
-                <Text fontSize="2xl" fontWeight="bold" color="red">
-                  {stats.negative} ({100 - stats.positivePercentage}%)
-                </Text>
-              </HStack>
-              <Text fontSize="sm">Negative</Text>
-            </VStack>
-            <VStack align="start" spaceY={1}>
-              <HStack>
-                <Icon as={BsChatText} />
+    <Box height="100%" display="flex" flexDirection="column" overflow="hidden">
+      <VStack spaceY={6} align="stretch" flexShrink={0}>
+        <Card.Root>
+          <Card.Header>
+            <Heading size="lg">Help Request Feedback</Heading>
+            <Text mt={2}>Student feedback helps improve the office hours experience</Text>
+          </Card.Header>
+          <Card.Body>
+            <HStack wrap="wrap" spaceX={6} spaceY={4}>
+              <VStack align="start" spaceY={1}>
                 <Text fontSize="2xl" fontWeight="bold">
-                  {stats.withComments} ({stats.commentsPercentage}%)
+                  {stats.total}
                 </Text>
-              </HStack>
-              <Text fontSize="sm">With Comments</Text>
-            </VStack>
-          </HStack>
-        </Card.Body>
-      </Card.Root>
+                <Text fontSize="sm">Total Feedback</Text>
+              </VStack>
+              <VStack align="start" spaceY={1}>
+                <HStack>
+                  <Icon as={BsHandThumbsUp} color="green" />
+                  <Text fontSize="2xl" fontWeight="bold" color="green">
+                    {stats.positive} ({stats.positivePercentage}%)
+                  </Text>
+                </HStack>
+                <Text fontSize="sm">Positive</Text>
+              </VStack>
+              <VStack align="start" spaceY={1}>
+                <HStack>
+                  <Icon as={BsHandThumbsDown} color="red" />
+                  <Text fontSize="2xl" fontWeight="bold" color="red">
+                    {stats.negative} ({100 - stats.positivePercentage}%)
+                  </Text>
+                </HStack>
+                <Text fontSize="sm">Negative</Text>
+              </VStack>
+              <VStack align="start" spaceY={1}>
+                <HStack>
+                  <Icon as={BsChatText} />
+                  <Text fontSize="2xl" fontWeight="bold">
+                    {stats.withComments} ({stats.commentsPercentage}%)
+                  </Text>
+                </HStack>
+                <Text fontSize="sm">With Comments</Text>
+              </VStack>
+            </HStack>
+          </Card.Body>
+        </Card.Root>
 
-      <Card.Root>
-        <Card.Body>
-          <HStack spaceX={4} wrap="wrap">
-            <Box minW="300px">
-              <HStack>
-                <Icon as={BsSearch} />
-                <Input
-                  placeholder="Search by comment or student name..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  size="sm"
-                />
-              </HStack>
-            </Box>
-            <Box minW="200px">
-              <HStack>
-                <Icon as={BsFilter} />
-                <Select
-                  options={ratingFilterOptions}
-                  value={ratingFilterOptions.find((opt) => opt.value === filterRating)}
-                  onChange={(option: { value: string; label: string } | null) => {
-                    const value = option?.value || "all";
-                    if (value === "all" || value === "positive" || value === "negative") {
-                      setFilterRating(value);
-                    }
-                  }}
-                  placeholder="Filter by rating..."
-                  size="sm"
-                />
-              </HStack>
-            </Box>
-          </HStack>
-        </Card.Body>
-      </Card.Root>
+        <Card.Root>
+          <Card.Body>
+            <HStack spaceX={4} wrap="wrap">
+              <Box minW="300px">
+                <HStack>
+                  <Icon as={BsSearch} />
+                  <Input
+                    placeholder="Search by comment or student name..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    size="sm"
+                  />
+                </HStack>
+              </Box>
+              <Box minW="200px">
+                <HStack>
+                  <Icon as={BsFilter} />
+                  <Select
+                    options={ratingFilterOptions}
+                    value={ratingFilterOptions.find((opt) => opt.value === filterRating)}
+                    onChange={(option: { value: string; label: string } | null) => {
+                      const value = option?.value || "all";
+                      if (value === "all" || value === "positive" || value === "negative") {
+                        setFilterRating(value);
+                      }
+                    }}
+                    placeholder="Filter by rating..."
+                    size="sm"
+                  />
+                </HStack>
+              </Box>
+            </HStack>
+          </Card.Body>
+        </Card.Root>
+      </VStack>
 
-      <VStack spaceY={4} align="stretch">
-        {filteredFeedback.length === 0 ? (
-          <EmptyState.Root>
-            <EmptyState.Content>
-              <EmptyState.Indicator>
-                <Icon as={BsExclamationCircle} />
-              </EmptyState.Indicator>
-              <EmptyState.Title>No Matching Feedback</EmptyState.Title>
-              <EmptyState.Description>
-                No feedback matches your current search and filter criteria.
-              </EmptyState.Description>
-            </EmptyState.Content>
-          </EmptyState.Root>
-        ) : (
-          filteredFeedback.map((feedback) => (
-            <Card.Root key={feedback.id}>
-              <Card.Body>
-                <VStack align="stretch" spaceY={3}>
-                  <HStack justify="space-between" align="start">
-                    <HStack spaceX={3}>
-                      <Badge
-                        colorPalette={feedback.thumbs_up ? "green" : "red"}
-                        size="lg"
-                        display="flex"
-                        alignItems="center"
-                        gap={1}
-                      >
-                        <Icon
-                          as={feedback.thumbs_up ? BsHandThumbsUp : BsHandThumbsDown}
-                          color={feedback.thumbs_up ? "green" : "red"}
-                        />
-                      </Badge>
+      <Box flex="1" minH="0" overflowY="auto" mt={6}>
+        <VStack spaceY={4} align="stretch">
+          {filteredFeedback.length === 0 ? (
+            <EmptyState.Root>
+              <EmptyState.Content>
+                <EmptyState.Indicator>
+                  <Icon as={BsExclamationCircle} />
+                </EmptyState.Indicator>
+                <EmptyState.Title>No Matching Feedback</EmptyState.Title>
+                <EmptyState.Description>
+                  No feedback matches your current search and filter criteria.
+                </EmptyState.Description>
+              </EmptyState.Content>
+            </EmptyState.Root>
+          ) : (
+            filteredFeedback.map((feedback) => (
+              <Card.Root key={feedback.id}>
+                <Card.Body>
+                  <VStack align="stretch" spaceY={3}>
+                    <HStack justify="space-between" align="start">
+                      <HStack spaceX={3}>
+                        <Badge
+                          colorPalette={feedback.thumbs_up ? "green" : "red"}
+                          size="lg"
+                          display="flex"
+                          alignItems="center"
+                          gap={1}
+                        >
+                          <Icon
+                            as={feedback.thumbs_up ? BsHandThumbsUp : BsHandThumbsDown}
+                            color={feedback.thumbs_up ? "green" : "red"}
+                          />
+                        </Badge>
+                        <HStack>
+                          <Icon as={BsPersonFill} />
+                          <Text fontWeight="medium">
+                            {feedback.student_profile?.name ||
+                              feedback.student_profile?.sortable_name ||
+                              "Unknown Student"}
+                          </Text>
+                        </HStack>
+                      </HStack>
                       <HStack>
-                        <Icon as={BsPersonFill} />
-                        <Text fontWeight="medium">
-                          {feedback.student_profile?.name ||
-                            feedback.student_profile?.sortable_name ||
-                            "Unknown Student"}
+                        <Icon as={BsCalendarEvent} />
+                        <Text fontSize="sm">
+                          {formatDistanceToNow(new Date(feedback.created_at), { addSuffix: true })}
                         </Text>
                       </HStack>
                     </HStack>
-                    <HStack>
-                      <Icon as={BsCalendarEvent} />
-                      <Text fontSize="sm">
-                        {formatDistanceToNow(new Date(feedback.created_at), { addSuffix: true })}
-                      </Text>
-                    </HStack>
-                  </HStack>
 
-                  {feedback.comment && (
-                    <Box>
-                      <Text fontWeight="medium" mb={2}>
-                        Comment:
-                      </Text>
-                      <Box p={3} borderRadius="md">
-                        <Text>{feedback.comment}</Text>
-                      </Box>
-                    </Box>
-                  )}
-
-                  {feedback.help_request && (
-                    <Box>
-                      <Separator />
-                      <Text fontSize="sm" fontWeight="medium" mt={3} mb={2}>
-                        Help Request Context:
-                      </Text>
-                      <VStack align="start" spaceY={2}>
-                        <Text fontSize="sm">
-                          <strong>Status:</strong> {feedback.help_request.status}
+                    {feedback.comment && (
+                      <Box>
+                        <Text fontWeight="medium" mb={2}>
+                          Comment:
                         </Text>
-                        <Link
-                          href={`/course/${classId}/manage/office-hours/request/${feedback.help_request.id}`}
-                          style={{ textDecoration: "none" }}
-                        >
-                          <HStack fontSize="sm" cursor="pointer">
-                            <Icon as={BsBoxArrowUpRight} />
-                            <Text>View Help Request</Text>
-                          </HStack>
-                        </Link>
-                      </VStack>
-                    </Box>
-                  )}
-                </VStack>
-              </Card.Body>
-            </Card.Root>
-          ))
-        )}
-      </VStack>
-    </VStack>
+                        <Box p={3} borderRadius="md">
+                          <Text>{feedback.comment}</Text>
+                        </Box>
+                      </Box>
+                    )}
+
+                    {feedback.help_request && (
+                      <Box>
+                        <Separator />
+                        <Text fontSize="sm" fontWeight="medium" mt={3} mb={2}>
+                          Help Request Context:
+                        </Text>
+                        <VStack align="start" spaceY={2}>
+                          <Text fontSize="sm">
+                            <strong>Status:</strong> {feedback.help_request.status}
+                          </Text>
+                          <Link
+                            href={`/course/${classId}/manage/office-hours/request/${feedback.help_request.id}`}
+                            style={{ textDecoration: "none" }}
+                          >
+                            <HStack fontSize="sm" cursor="pointer">
+                              <Icon as={BsBoxArrowUpRight} />
+                              <Text>View Help Request</Text>
+                            </HStack>
+                          </Link>
+                        </VStack>
+                      </Box>
+                    )}
+                  </VStack>
+                </Card.Body>
+              </Card.Root>
+            ))
+          )}
+        </VStack>
+      </Box>
+    </Box>
   );
 }

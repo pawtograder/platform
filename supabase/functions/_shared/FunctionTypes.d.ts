@@ -1,5 +1,23 @@
 import { Database, Json } from "./SupabaseTypes.d.ts";
 
+/** Extra data for grader result tests; matches GraderResultTestExtraData in utils/supabase/DatabaseTypes.d.ts */
+export type GraderResultTestExtraData = {
+  llm?: {
+    prompt: string;
+    result?: string;
+    model?: string;
+    account?: string;
+    provider?: "openai" | "azure" | "anthropic" | "openrouter";
+    temperature?: number;
+    max_tokens?: number;
+    rate_limit?: { cooldown?: number; assignment_total?: number; class_total?: number };
+    type: "v1";
+  };
+  hide_score?: string;
+  icon?: string;
+  pyret_repl?: { initial_code?: string; initial_interactions?: string[]; repl_contents?: string };
+};
+
 export type Autograder = Database["public"]["Tables"]["autograder"]["Row"];
 export type AutograderRegressionTest = Database["public"]["Tables"]["autograder_regression_test"]["Row"];
 export type AutograderWithAssignments = Autograder & {
@@ -40,8 +58,8 @@ export type AutograderFeedback = {
     hidden_output_format?: OutputFormat;
     part?: string;
     hide_until_released?: boolean;
-    extra_data?: Json;
-    hidden_extra_data?: Json;
+    extra_data?: GraderResultTestExtraData;
+    hidden_extra_data?: GraderResultTestExtraData;
   }[];
   artifacts?: {
     name: string;
@@ -215,6 +233,8 @@ export type AutograderTriggerGradingWorkflowRequest = {
 export type AutograderRerunGraderRequest = {
   submission_ids: number[];
   class_id: number;
+  grader_sha?: string;
+  auto_promote?: boolean;
 };
 
 export type CheckRunStatus = {
@@ -264,6 +284,8 @@ export type AutograderCreateReposForStudentRequest = {
   class_id?: number; // Optional: if provided, only create repos for this specific class
   assignment_id?: number; // Optional: if provided, only create repos for this specific assignment
   sync_all_permissions?: boolean; // Optional: if true, sync permissions for all existing repos
+  /** When true with assignment_id, allow an individual test repo even for groups-only assignments (instructor Test Assignment). */
+  for_test_assignment?: boolean;
 };
 
 export type AssignmentDeleteRequest = {

@@ -2,13 +2,14 @@
 
 import { CommitHistoryDialog } from "@/app/course/[course_id]/assignments/[assignment_id]/commitHistory";
 import CreateStudentReposButton from "@/app/course/[course_id]/assignments/createStudentReposButton";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
-import { format } from "date-fns";
 import { useParams } from "next/navigation";
+
 export default function TestAssignmentPage() {
   const { course_id, assignment_id } = useParams();
   const { data: assignment } = useOne<Assignment>({
@@ -19,7 +20,8 @@ export default function TestAssignmentPage() {
   const { data: submissions } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
-      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+      select:
+        "*, grader_results!grader_results_submission_id_fkey(*), submission_reviews!submissions_grading_review_id_fkey(*)"
     },
     sorters: [
       {
@@ -64,7 +66,7 @@ export default function TestAssignmentPage() {
           </Text>
         </Box>
       ) : (
-        <CreateStudentReposButton assignmentId={Number.parseInt(assignment_id as string)} />
+        <CreateStudentReposButton assignmentId={Number.parseInt(assignment_id as string)} forTestAssignment />
       )}
       <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
         <Heading size="md">Submission History</Heading>
@@ -94,7 +96,7 @@ export default function TestAssignmentPage() {
                 </Table.Cell>
                 <Table.Cell>
                   <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {format(new Date(submission.created_at), "MMM d h:mm aaa")}
+                    <TimeZoneAwareDate date={submission.created_at} format="MMM d, h:mm a" />
                   </Link>
                 </Table.Cell>
                 <Table.Cell>

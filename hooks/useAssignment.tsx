@@ -355,6 +355,23 @@ export function useRegradeRequestsBySubmission(submission_id: number | null | un
   return useListTableControllerValues(controller.regradeRequests, findRegradeRequestsPredicate);
 }
 
+/**
+ * Returns all leaderboard entries for the current assignment, sorted by autograder score descending.
+ * Uses the TableController for real-time updates.
+ */
+export function useLeaderboard() {
+  const controller = useAssignmentController();
+  return useTableControllerTableValues(controller.leaderboard);
+}
+
+/**
+ * Returns a single leaderboard entry by its ID.
+ */
+export function useLeaderboardEntry(id: number | null | undefined) {
+  const controller = useAssignmentController();
+  return useTableControllerValueById(controller.leaderboard, id);
+}
+
 export class AssignmentController {
   private _assignment?: AssignmentWithRubricsAndReferences;
   private _client: SupabaseClient<Database>;
@@ -365,6 +382,7 @@ export class AssignmentController {
   readonly regradeRequests: TableController<"submission_regrade_requests">;
   readonly submissions: TableController<"submissions">;
   readonly assignmentGroups: TableController<"assignment_groups">;
+  readonly leaderboard: TableController<"assignment_leaderboard">;
 
   // Rubric table controllers
   readonly rubricsController: TableController<"rubrics">;
@@ -372,6 +390,10 @@ export class AssignmentController {
   readonly rubricCriteriaController: TableController<"rubric_criteria">;
   readonly rubricChecksController: TableController<"rubric_checks">;
   readonly rubricCheckReferencesController: TableController<"rubric_check_references">;
+
+  // Error pin table controllers
+  readonly errorPins: TableController<"error_pins">;
+  readonly errorPinRules: TableController<"error_pin_rules">;
 
   private _reviewAssignmentRubricPartsByReviewAssignmentId: Map<
     number,
@@ -429,6 +451,19 @@ export class AssignmentController {
       realtimeFilter: { assignment_id }
     });
 
+    // Initialize leaderboard controller - filtered by assignment_id, sorted by score descending
+    this.leaderboard = new TableController({
+      query: client
+        .from("assignment_leaderboard")
+        .select("*")
+        .eq("assignment_id", assignment_id)
+        .order("autograder_score", { ascending: false }),
+      client: client,
+      table: "assignment_leaderboard",
+      classRealTimeController,
+      realtimeFilter: { assignment_id }
+    });
+
     // Initialize rubric table controllers - each filtered by assignment_id
     this.rubricsController = new TableController({
       query: client.from("rubrics").select("*").eq("assignment_id", assignment_id),
@@ -474,12 +509,36 @@ export class AssignmentController {
       realtimeFilter: { assignment_id },
       initialData: initialData?.rubricCheckReferences
     });
+
+    // Initialize error pin table controllers
+    this.errorPins = new TableController({
+      query: client.from("error_pins").select("*").eq("assignment_id", assignment_id),
+      client: client,
+      table: "error_pins",
+      classRealTimeController,
+      realtimeFilter: { assignment_id }
+    });
+
+    // Filter error_pin_rules to only include rules for pins belonging to this assignment
+    // Use inner join on error_pins to filter by assignment_id
+    // The join acts as a filter - PostgREST requires the joined table in select when using !inner
+    // @ts-expect-error - The join changes the return type to include error_pins data, but the functionality works correctly
+    this.errorPinRules = new TableController({
+      query: client
+        .from("error_pin_rules")
+        .select("*,error_pins!inner(assignment_id)")
+        .eq("error_pins.assignment_id", assignment_id),
+      client: client,
+      table: "error_pin_rules",
+      classRealTimeController
+    });
   }
   close() {
     this.reviewAssignments.close();
     this.regradeRequests.close();
     this.submissions.close();
     this.assignmentGroups.close();
+    this.leaderboard.close();
 
     if (this._allReviewAssignments) {
       this._allReviewAssignments.close();
@@ -491,6 +550,10 @@ export class AssignmentController {
     this.rubricCriteriaController.close();
     this.rubricChecksController.close();
     this.rubricCheckReferencesController.close();
+
+    // Close error pin table controllers
+    this.errorPins.close();
+    this.errorPinRules.close();
 
     for (const controller of this._reviewAssignmentRubricPartsByReviewAssignmentId.values()) {
       controller.close();
@@ -596,36 +659,54 @@ export function AssignmentProvider({
   initialData?: AssignmentControllerInitialData;
 }) {
   const params = useParams();
-  const controller = useRef<AssignmentController | null>(null);
   const courseController = useCourseController();
+  const [controller, setController] = useState<AssignmentController | null>(null);
   const [ready, setReady] = useState(false);
   const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
 
-  if (controller.current === null) {
-    controller.current = new AssignmentController({
-      client: createClient(),
-      assignment_id: initial_assignment_id ?? Number(params.assignment_id),
-      classRealTimeController: courseController.classRealTimeController,
-      initialData
-    });
+  // Use ref for initialData so it doesn't trigger effect re-runs
+  // (it's SSR-provided data that should only be used on first creation)
+  const initialDataRef = useRef(initialData);
+  initialDataRef.current = initialData;
+
+  // Clear stale controller synchronously during render when assignment_id changes,
+  // so AssignmentControllerCreator never sees a controller built for a different assignment.
+  // React will re-render immediately with null before committing the stale pair.
+  const [prevAssignmentId, setPrevAssignmentId] = useState(assignment_id);
+  if (assignment_id !== prevAssignmentId) {
+    setPrevAssignmentId(assignment_id);
+    setController(null);
     setReady(false);
   }
+
   useEffect(() => {
+    if (!assignment_id || isNaN(assignment_id)) return;
+
+    const ctrl = new AssignmentController({
+      client: createClient(),
+      assignment_id,
+      classRealTimeController: courseController.classRealTimeController,
+      initialData: initialDataRef.current
+    });
+    setController(ctrl);
+    setReady(false);
+
     return () => {
-      if (controller.current) {
-        controller.current.close();
-        controller.current = null;
-      }
+      ctrl.close(); // Closure captures exact instance — no ref ambiguity
     };
-  }, []);
+  }, [assignment_id, courseController.classRealTimeController]);
 
   if (!assignment_id || isNaN(assignment_id)) {
     return <Text>Error: Invalid Assignment ID.</Text>;
   }
 
+  if (!controller) {
+    return null;
+  }
+
   return (
-    <AssignmentContext.Provider value={{ assignmentController: controller.current }}>
-      <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller.current} />
+    <AssignmentContext.Provider value={{ assignmentController: controller }}>
+      <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller} />
       {ready && children}
     </AssignmentContext.Provider>
   );
@@ -663,6 +744,8 @@ function AssignmentControllerCreator({
 
   // Wait for all table controllers to be ready
   useEffect(() => {
+    let cancelled = false;
+    setTableControllersReady(false);
     const promises = [
       controller.reviewAssignments.readyPromise,
       controller.regradeRequests.readyPromise,
@@ -672,11 +755,15 @@ function AssignmentControllerCreator({
       controller.rubricChecksController.readyPromise,
       controller.rubricCheckReferencesController.readyPromise,
       controller.submissions.readyPromise,
-      controller.assignmentGroups.readyPromise
+      controller.assignmentGroups.readyPromise,
+      controller.leaderboard.readyPromise
     ];
     Promise.all(promises).then(() => {
-      setTableControllersReady(true);
+      if (!cancelled) setTableControllersReady(true);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [controller]);
 
   // Set assignment base data

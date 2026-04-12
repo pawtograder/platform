@@ -854,7 +854,8 @@ export default function EnrollmentsTable() {
       handleSingleCheckboxChange,
       cancelInvitation,
       classSections,
-      labSections
+      labSections,
+      setSisSyncOptOut
     ]
   );
 

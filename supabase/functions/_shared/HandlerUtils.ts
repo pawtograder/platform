@@ -1,5 +1,5 @@
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "./SupabaseTypes.d.ts";
 
@@ -59,6 +59,17 @@ export function tagApiCall(
   scope?.setTag("api_operation", operation);
   if (resource) scope?.setTag("api_resource", resource);
 }
+/**
+ * Check if the request is authenticated with the service role key.
+ * This allows scripts and internal services to call edge functions without user context.
+ */
+export function isServiceRoleRequest(authHeader: string | null): boolean {
+  if (!authHeader) return false;
+  const token = authHeader.replace("Bearer ", "");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  return token === serviceRoleKey;
+}
+
 export async function assertUserIsInstructor(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
@@ -96,6 +107,30 @@ export async function assertUserIsInstructor(courseId: number, authHeader: strin
     throw new SecurityError("User is not an instructor for this course");
   }
   return { supabase, enrollment };
+}
+
+/**
+ * Assert that the user is an instructor OR the request is from service role.
+ * Use this for functions that need to be callable both by instructors in the UI
+ * and by admin scripts using the service role key.
+ */
+export async function assertUserIsInstructorOrServiceRole(courseId: number, authHeader: string | null) {
+  if (!authHeader) {
+    throw new SecurityError("Authorization header required");
+  }
+
+  // Allow service role requests (for scripts and internal services)
+  if (isServiceRoleRequest(authHeader)) {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    return { supabase: adminSupabase, enrollment: null, isServiceRole: true };
+  }
+
+  // Otherwise, check for instructor role
+  const result = await assertUserIsInstructor(courseId, authHeader);
+  return { ...result, isServiceRole: false };
 }
 export async function assertUserIsInstructorOrGrader(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
@@ -170,7 +205,6 @@ export async function wrapRequestHandler(
   const scope = new Sentry.Scope();
   scope.setTag("URL", req.url);
   scope.setTag("Method", req.method);
-  scope.setTag("Headers", JSON.stringify(Object.fromEntries(req.headers)));
   try {
     let data = await handler(req, scope);
     if (!data) {
@@ -205,26 +239,30 @@ export async function wrapRequestHandler(
         JSON.stringify({
           error: {
             recoverable: false,
-            message: "Security Error",
-            details: "This request has been reported to the staff"
-          }
-        }),
-        {
-          headers: genericErrorHeaders
-        }
-      );
-    }
-    if (e instanceof UserVisibleError) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            recoverable: e.status >= 500,
-            message: "Internal Server Error",
+            message: e.details,
             details: e.details
           }
         }),
         {
-          headers: genericErrorHeaders
+          headers: genericErrorHeaders,
+          status: e.status
+        }
+      );
+    }
+    if (e instanceof UserVisibleError) {
+      // Surface the actual message to clients; the previous "Internal Server Error" title
+      // was shown in UIs that only display `error.message`, hiding `details`.
+      return new Response(
+        JSON.stringify({
+          error: {
+            recoverable: e.status >= 500,
+            message: e.details,
+            details: e.details
+          }
+        }),
+        {
+          headers: genericErrorHeaders,
+          status: e.status
         }
       );
     }
@@ -238,7 +276,8 @@ export async function wrapRequestHandler(
           }
         }),
         {
-          headers: genericErrorHeaders
+          headers: genericErrorHeaders,
+          status: e.status
         }
       );
     }
@@ -247,12 +286,13 @@ export async function wrapRequestHandler(
         JSON.stringify({
           error: {
             recoverable: true,
-            message: "Illegal Argument",
+            message: e.details,
             details: e.details
           }
         }),
         {
-          headers: genericErrorHeaders
+          headers: genericErrorHeaders,
+          status: e.status
         }
       );
     }

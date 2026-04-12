@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {
   CheckRunStatus,
@@ -10,14 +10,80 @@ import {
   OutputVisibility,
   RepositoryCheckRun
 } from "../_shared/FunctionTypes.d.ts";
-import { resolveRef, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
+import {
+  resolveRef,
+  validateOIDCTokenOrAllowE2E,
+  END_TO_END_REPO_PREFIX,
+  SecondaryRateLimitError,
+  PrimaryRateLimitError
+} from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
+import {
+  fetchDefaultGradeTargetStudentProfileId,
+  fetchRubricCheckIdsRequiringTargetStudentProfileId
+} from "../_shared/rubricCommentTargetStudentProfileId.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 type GraderResultErrors = Database["public"]["Tables"]["grader_results"]["Row"]["errors"];
 
 const RESET_WINDOW_MS = 60_000;
+
+function detectRateLimitType(error: unknown): {
+  type: "secondary" | "primary" | "extreme" | null;
+  retryAfter?: number;
+  installationId?: string;
+} {
+  const err = error as {
+    status?: number;
+    name?: string;
+    message?: string;
+    response?: {
+      status?: number;
+      headers?: Record<string, string>;
+    };
+  };
+  const status = err?.status ?? err?.response?.status;
+  const headers = err?.response?.headers;
+
+  // Handle AggregateError from Octokit - "API rate limit exceeded for installation ID XYZ"
+  if (
+    err?.name === "AggregateError" ||
+    (err?.message && err.message.toLowerCase().includes("api rate limit exceeded for installation id"))
+  ) {
+    const installationMatch = err.message?.match(/installation id (\d+)/i);
+    const installationId = installationMatch ? installationMatch[1] : undefined;
+    return { type: "secondary", retryAfter: 60, installationId };
+  }
+
+  if (error instanceof SecondaryRateLimitError) {
+    return { type: "secondary", retryAfter: error.retryAfter };
+  }
+  if (error instanceof PrimaryRateLimitError) {
+    return { type: "primary", retryAfter: error.retryAfter };
+  }
+
+  if (status === 403 || status === 429) {
+    const retryAfter = headers?.["retry-after"] ? parseInt(headers["retry-after"], 10) : undefined;
+    const remaining = headers?.["x-ratelimit-remaining"];
+    if (remaining === "0") {
+      return { type: "primary", retryAfter: retryAfter ?? 60 };
+    }
+    if (
+      err?.message?.toLowerCase().includes("secondary rate limit") ||
+      err?.message?.toLowerCase().includes("abuse detection")
+    ) {
+      return { type: "secondary", retryAfter: retryAfter ?? 60 };
+    }
+    const retryAfterVal = retryAfter ?? 60;
+    if (retryAfterVal >= 300 || status === 429) {
+      return { type: "extreme", retryAfter: retryAfterVal };
+    }
+    return { type: "secondary", retryAfter: retryAfterVal };
+  }
+
+  return { type: null };
+}
 
 async function insertComments({
   adminSupabase,
@@ -82,6 +148,29 @@ async function insertComments({
       }
     }
   }
+
+  const rubricCheckIdsFromPayload = comments
+    .map((c) => c.rubric_check_id)
+    .filter((id): id is number => typeof id === "number");
+  const individualRubricCheckIds = await fetchRubricCheckIdsRequiringTargetStudentProfileId(
+    adminSupabase,
+    rubricCheckIdsFromPayload
+  );
+  let defaultIndividualTarget: string | null = null;
+  if (individualRubricCheckIds.size > 0) {
+    defaultIndividualTarget = await fetchDefaultGradeTargetStudentProfileId(adminSupabase, submission_id);
+    if (!defaultIndividualTarget) {
+      throw new UserVisibleError(
+        "Could not resolve a student target for individual rubric comments on this submission.",
+        400
+      );
+    }
+  }
+  const targetFieldForCheck = (rubricCheckId: number | null | undefined) =>
+    rubricCheckId != null && individualRubricCheckIds.has(rubricCheckId)
+      ? { target_student_profile_id: defaultIndividualTarget! }
+      : {};
+
   const submissionLineComments = comments.filter((eachComment) => "line" in eachComment);
   if (submissionLineComments.length > 0) {
     const fileMap = new Map<string, string>();
@@ -116,7 +205,8 @@ async function insertComments({
         eventually_visible: true,
         submission_review_id: grading_review_id,
         class_id,
-        author: profileMap.get(eachComment.author.name)
+        author: profileMap.get(eachComment.author.name),
+        ...targetFieldForCheck(eachComment.rubric_check_id)
       }))
     );
     if (submissionFileCommentsError) {
@@ -160,7 +250,8 @@ async function insertComments({
         author: profileMap.get(eachComment.author.name),
         released: eachComment.released,
         eventually_visible: true,
-        submission_review_id: grading_review_id
+        submission_review_id: grading_review_id,
+        ...targetFieldForCheck(eachComment.rubric_check_id)
       }))
     );
     if (submissionArtifactCommentsError) {
@@ -185,7 +276,8 @@ async function insertComments({
         author: profileMap.get(eachComment.author.name),
         released: eachComment.released,
         eventually_visible: true,
-        submission_review_id: grading_review_id
+        submission_review_id: grading_review_id,
+        ...targetFieldForCheck(eachComment.rubric_check_id)
       }))
     );
     if (submissionCommentsError) {
@@ -328,7 +420,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   if (!token) {
     throw new UserVisibleError("No token provided", 400);
   }
-  const decoded = await validateOIDCToken(token);
+  const decoded = await validateOIDCTokenOrAllowE2E(token);
+  const isE2ERun = decoded.repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
   // Find the corresponding submission
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
@@ -347,6 +440,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   let assignment_group_id: number | null = null;
   let grading_review_id: number | null = null;
   let checkRun: RepositoryCheckRun | null = null;
+  let isRegressionRerun = false;
+  let rerunTargetSubmissionId: number | null = null;
+  let autoPromoteResult = false;
   async function recordWorkflowRunError({ name, data, is_private }: { name: string; data: Json; is_private: boolean }) {
     if (!class_id) {
       throw new SecurityError(
@@ -398,7 +494,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
   } else {
     const { data: submission, error: submissionError } = await adminSupabase
       .from("submissions")
-      .select("*, repository_check_runs(*)")
+      .select("*, repository_check_runs!submissions_repository_check_run_id_fkey(*)")
       .eq("repository", repository)
       .eq("sha", sha)
       .eq("run_attempt", Number.parseInt(decoded.run_attempt))
@@ -410,16 +506,74 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to load submission: ${submissionError.message}`);
     }
     if (!submission) {
-      throw new SecurityError(`Submission not found: ${repository} ${sha} ${decoded.run_id}`);
+      const { data: repositoryRow } = await adminSupabase
+        .from("repositories")
+        .select("id")
+        .eq("repository", repository)
+        .maybeSingle();
+      if (!repositoryRow) {
+        throw new SecurityError(`Repository not found: ${repository}`);
+      }
+
+      const { data: rerunCheckRun, error: rerunCheckRunError } = await adminSupabase
+        .from("repository_check_runs")
+        .select("*")
+        .eq("repository_id", repositoryRow.id)
+        .eq("sha", sha)
+        .eq("is_regression_rerun", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (rerunCheckRunError) {
+        console.error(rerunCheckRunError);
+        Sentry.captureException(rerunCheckRunError, scope);
+        throw new UserVisibleError(`Internal error: Failed to load rerun check run: ${rerunCheckRunError.message}`);
+      }
+      if (!rerunCheckRun?.target_submission_id) {
+        throw new SecurityError(`Submission not found: ${repository} ${sha} ${decoded.run_id}`);
+      }
+
+      const { data: targetSubmission, error: targetSubmissionError } = await adminSupabase
+        .from("submissions")
+        .select("*")
+        .eq("id", rerunCheckRun.target_submission_id)
+        .maybeSingle();
+      if (targetSubmissionError) {
+        console.error(targetSubmissionError);
+        Sentry.captureException(targetSubmissionError, scope);
+        throw new UserVisibleError(
+          `Internal error: Failed to load target submission: ${targetSubmissionError.message}`
+        );
+      }
+      if (!targetSubmission) {
+        throw new SecurityError(`Target submission not found: ${rerunCheckRun.target_submission_id}`);
+      }
+
+      isRegressionRerun = true;
+      rerunTargetSubmissionId = rerunCheckRun.target_submission_id;
+      autoPromoteResult = rerunCheckRun.auto_promote_result ?? false;
+      scope?.setTag("is_regression_rerun", "true");
+      scope?.setTag("rerun_target_submission_id", rerunTargetSubmissionId.toString());
+      scope?.setTag("auto_promote_result", autoPromoteResult.toString());
+
+      class_id = targetSubmission.class_id;
+      submission_id = autoPromoteResult ? targetSubmission.id : null;
+      profile_id = targetSubmission.profile_id;
+      assignment_group_id = targetSubmission.assignment_group_id;
+      grading_review_id = targetSubmission.grading_review_id;
+      assignment_id = targetSubmission.assignment_id;
+      checkRun = rerunCheckRun as RepositoryCheckRun;
+      repository_id = targetSubmission.repository_id;
+    } else {
+      class_id = submission.class_id;
+      submission_id = submission.id;
+      profile_id = submission.profile_id;
+      assignment_group_id = submission.assignment_group_id;
+      grading_review_id = submission.grading_review_id;
+      assignment_id = submission.assignment_id;
+      checkRun = submission.repository_check_runs as RepositoryCheckRun;
+      repository_id = submission.repository_id;
     }
-    class_id = submission.class_id;
-    submission_id = submission.id;
-    profile_id = submission.profile_id;
-    assignment_group_id = submission.assignment_group_id;
-    grading_review_id = submission.grading_review_id;
-    assignment_id = submission.assignment_id;
-    checkRun = submission.repository_check_runs as RepositoryCheckRun;
-    repository_id = submission.repository_id;
   }
   scope?.setTag("class_id", class_id?.toString() || "(null)");
   scope?.setTag("assignment_id", assignment_id?.toString() || "(null)");
@@ -435,6 +589,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);
     } catch (e) {
       console.error(e);
+      const rt = detectRateLimitType(e);
+      if (rt.type) {
+        // Log rate limit errors with proper fingerprinting to prevent notification storms
+        Sentry.withScope((errorScope) => {
+          errorScope.setFingerprint(["github-rate-limit", rt.type!, "submit-feedback", "resolveRef"]);
+          errorScope.setTag("rate_limit_type", rt.type);
+          errorScope.setTag("github_api_method", "resolveRef");
+          if (rt.installationId) {
+            errorScope.setContext("rate_limit_installation", {
+              installation_id: rt.installationId,
+              note: "Installation ID excluded from fingerprint to prevent notification storms"
+            });
+          }
+          Sentry.captureException(e, errorScope);
+        });
+        console.warn(`GitHub rate limit (${rt.type}) hit during resolveRef for action SHA`);
+      } else {
+        Sentry.captureException(e, scope);
+      }
     }
     const score =
       requestBody.feedback.score ||
@@ -444,6 +617,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
     const max_score =
       requestBody.feedback.max_score ||
       requestBody.feedback.tests.reduce((acc, test) => acc + (test.max_score || 0), 0);
+    const rerunForSubmissionId = isRegressionRerun && !autoPromoteResult ? (rerunTargetSubmissionId ?? null) : null;
     const baseGraderResultPayload = {
       submission_id: submission_id ?? null,
       profile_id: profile_id ?? null,
@@ -458,7 +632,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       lint_passed: requestBody.feedback.lint.status === "pass",
       execution_time: requestBody.execution_time ?? null,
       autograder_regression_test: autograder_regression_test_id ?? null,
-      grader_action_sha: action_sha ?? null
+      grader_action_sha: action_sha ?? null,
+      rerun_for_submission_id: rerunForSubmissionId
     } satisfies Omit<Database["public"]["Tables"]["grader_results"]["Insert"], "errors">;
 
     const graderResultPayload: Database["public"]["Tables"]["grader_results"]["Insert"] = {
@@ -470,6 +645,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
 
     let resultID = insertResponse.data;
     let reusedExistingResult = false;
+    const allowStaleOverwrite = isRegressionRerun && autoPromoteResult;
 
     if (insertResponse.error) {
       if (isConflictError(insertResponse) && submission_id != null) {
@@ -492,7 +668,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           throw new UserVisibleError("Internal error: Existing grader result timestamp missing");
         }
 
-        if (Date.now() - existingCreatedAt > RESET_WINDOW_MS) {
+        if (!allowStaleOverwrite && Date.now() - existingCreatedAt > RESET_WINDOW_MS) {
           throw new SecurityError("Request to rewrite submission feedback is too old");
         }
 
@@ -612,7 +788,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
           );
         }
       }
-      if (requestBody.feedback.artifacts) {
+      if (requestBody.feedback.artifacts && submission_id) {
         // Prepare artifact uploads
         const { error: artifactError, data: artifactIDs } = await adminSupabase
           .from("submission_artifacts")
@@ -621,7 +797,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
               class_id: class_id,
               profile_id: profile_id,
               assignment_group_id,
-              submission_id: submission_id!,
+              submission_id: submission_id,
               autograder_regression_test_id,
               name: artifact.name,
               data: artifact.data as Json
@@ -698,9 +874,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
       throw new UserVisibleError(`Internal error: Failed to insert feedback: ${(e as Error).message}`);
     }
 
-    // Update the check run status to completed
-    // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
-    if (submission_id) {
+    // Update the repository_check_runs status to completed (DB state only)
+    if (submission_id && !isRegressionRerun && !isE2ERun) {
       if (checkRun) {
         const newStatus: CheckRunStatus = {
           ...(checkRun.status as CheckRunStatus),
@@ -712,20 +887,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
             status: newStatus
           })
           .eq("id", checkRun.id);
-        await updateCheckRun({
-          owner: repository.split("/")[0],
-          repo: repository.split("/")[1],
-          check_run_id: checkRun.check_run_id,
-          status: "completed",
-          conclusion: "success",
-          details_url: `https://${Deno.env.get("APP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
-          output: {
-            title: "Grading complete",
-            summary: "Pawtograder has finished grading the submission",
-            text: `Autograder score: ${score} / ${max_score}. See more details in Pawtograder.`
-          }
-        });
       }
+    }
+    if (submission_id) {
       return {
         is_ok: true,
         message: `Submission ${submission_id} registered`,
@@ -735,10 +899,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
         supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""
       };
     } else {
+      const detailsUrl = isRegressionRerun
+        ? `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/manage/assignments/${assignment_id}/rerun-autograder`
+        : `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/manage/assignments/${assignment_id}/autograder/regression-test-run/${resultID}`;
+      const message = isRegressionRerun
+        ? `Rerun result ${resultID.id} registered`
+        : `Regression test run ${resultID.id} registered`;
       return {
         is_ok: true,
-        message: `Regression test run ${resultID} registered`,
-        details_url: `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/manage/assignments/${assignment_id}/autograder/regression-test-run/${resultID}`,
+        message,
+        details_url: detailsUrl,
         artifacts: artifactUploadLinks,
         supabase_url: Deno.env.get("SUPABASE_URL") || "",
         supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || ""

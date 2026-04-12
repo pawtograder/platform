@@ -3,10 +3,23 @@
 import { useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
+import { hasRubricUnsavedChangesFlag, RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE } from "@/lib/rubricUnsavedChanges";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import React, { useState } from "react";
-import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
+import React, { useCallback, useState } from "react";
+import {
+  FaCalendar,
+  FaChartBar,
+  FaCode,
+  FaEdit,
+  FaHome,
+  FaPen,
+  FaPlay,
+  FaPooStorm,
+  FaSearch,
+  FaShieldAlt,
+  FaUsers
+} from "react-icons/fa";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
@@ -63,6 +76,18 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Manage Regrade Requests",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
     icon: FaPooStorm
+  },
+  {
+    label: "Security Audit",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/security`,
+    icon: FaShieldAlt,
+    instructorsOnly: true
+  },
+  {
+    label: "Test Insights",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/test-insights`,
+    icon: FaChartBar,
+    instructorsOnly: "graderOrInstructor"
   }
 ];
 
@@ -82,6 +107,15 @@ export function ManageAssignmentNav({
   const pathname = usePathname();
   const [selectedPage, setSelectedPage] = useState<string>("");
   const router = useRouter();
+  const confirmRubricNavigation = useCallback(
+    (nextHref: string) => {
+      if (!pathname.includes("/rubric")) return true;
+      if (pathname === nextHref) return true;
+      if (!hasRubricUnsavedChangesFlag(String(assignment_id))) return true;
+      return window.confirm(RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE);
+    },
+    [assignment_id, pathname]
+  );
 
   return (
     <>
@@ -132,6 +166,7 @@ export function ManageAssignmentNav({
           <Select
             onChange={(e) => {
               if (e) {
+                if (!confirmRubricNavigation(e.value)) return;
                 setSelectedPage(e.value);
                 router.replace(e.value);
               }

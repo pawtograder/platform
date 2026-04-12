@@ -367,6 +367,7 @@ export default function NewDiscussionThread() {
                         style={{ minWidth: "100%", width: "100%" }}
                         onChange={field.onChange}
                         value={field.value}
+                        enableFilePicker={true}
                       />
                     );
                   }}

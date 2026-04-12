@@ -19,8 +19,8 @@ type GradrResultTestWithGraderResults = GetResult<
   ` id,
         extra_data,
         class_id,
-        grader_results!inner (
-          submissions!inner (
+        grader_results!grader_result_tests_grader_result_id_fkey!inner (
+          submissions!grader_results_submission_id_fkey!inner (
             id,
             class_id,
             assignment_id,
@@ -118,7 +118,7 @@ async function getChatModel({
   account
 }: {
   model: string;
-  provider: "openai" | "azure" | "anthropic";
+  provider: "openai" | "azure" | "anthropic" | "openrouter";
   temperature?: number;
   maxTokens?: number;
   maxRetries?: number;
@@ -152,7 +152,7 @@ async function getChatModel({
     } else {
       return new AzureChatOpenAI({
         model,
-        temperature: temperature || 0.85,
+        temperature: temperature ?? 0.85,
         maxTokens: maxTokens,
         maxRetries: maxRetries || 2,
         azureOpenAIApiKey: process.env[key_env_name],
@@ -169,7 +169,7 @@ async function getChatModel({
     return new ChatOpenAI({
       model,
       apiKey: process.env[key_env_name],
-      temperature: temperature || 0.85,
+      temperature: temperature ?? 0.85,
       maxTokens: maxTokens,
       maxRetries: maxRetries || 2
     });
@@ -181,12 +181,28 @@ async function getChatModel({
     return new ChatAnthropic({
       model,
       apiKey: process.env[key_env_name],
-      temperature: temperature || 0.85,
+      temperature: temperature ?? 0.85,
+      maxTokens: maxTokens,
+      maxRetries: maxRetries || 2
+    });
+  } else if (provider === "openrouter") {
+    const key_env_name = account ? `OPENROUTER_API_KEY_${account}` : "OPENROUTER_API_KEY";
+    if (!process.env[key_env_name]) {
+      throw new UserVisibleError(`OpenRouter API key is required, must set env var ${key_env_name}`, 500);
+    }
+    return new ChatOpenAI({
+      model,
+      apiKey: process.env[key_env_name],
+      configuration: { baseURL: "https://openrouter.ai/api/v1" },
+      temperature: temperature ?? 0.85,
       maxTokens: maxTokens,
       maxRetries: maxRetries || 2
     });
   }
-  throw new UserVisibleError(`Invalid provider: ${provider}. Supported providers are: openai, azure, anthropic`, 400);
+  throw new UserVisibleError(
+    `Invalid provider: ${provider}. Supported providers are: openai, azure, anthropic, openrouter`,
+    400
+  );
 }
 
 async function getPrompt(input: GraderResultTestExtraData["llm"]) {
@@ -306,8 +322,8 @@ export async function POST(request: NextRequest) {
         id,
         extra_data,
         class_id,
-        grader_results!inner (
-          submissions!inner (
+        grader_results!grader_result_tests_grader_result_id_fkey!inner (
+          submissions!grader_results_submission_id_fkey!inner (
             id,
             class_id,
             assignment_id,
@@ -355,8 +371,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const modelName = extraData.llm.model || process.env.OPENAI_MODEL || "gpt-4o-mini";
     const providerName = extraData.llm.provider || "openai";
+    const modelName =
+      extraData.llm.model ||
+      (providerName === "openrouter" ? "openai/gpt-4o-mini" : process.env.OPENAI_MODEL || "gpt-4o-mini");
     const accountName = extraData.llm.account;
 
     const chatModel = await getChatModel({
@@ -419,11 +437,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store the result in the database
+    // Store the result in the database (extraData.llm is defined after the guard above)
+    const llm = extraData!.llm!;
     const updatedExtraData: GraderResultTestExtraData = {
       ...extraData,
       llm: {
-        ...extraData.llm,
+        ...llm,
         result: resultText
       }
     };
@@ -463,7 +482,7 @@ export async function POST(request: NextRequest) {
       output_tokens: outputTokens,
       tags: {
         type: "grader_result_test_hint",
-        hint_type: extraData.llm.type || "v1"
+        hint_type: llm.type || "v1"
       }
     });
 

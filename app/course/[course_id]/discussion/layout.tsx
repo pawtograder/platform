@@ -62,7 +62,7 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
         discussionBaseHref={discussionBaseHref}
         currentThread={currentThread}
       />
-      <Box flex="1" minH="0" overflow="auto" px={{ base: 3, md: 6 }} py={{ base: 3, md: 6 }}>
+      <Box flex="1" minH="0" overflow="auto" px={{ base: 3, md: 6 }} pt={{ base: 3, md: 6 }} pb="80px">
         {threadId ? (
           <Flex direction="row" gap={{ base: 3, lg: 6 }} align="stretch">
             <Box

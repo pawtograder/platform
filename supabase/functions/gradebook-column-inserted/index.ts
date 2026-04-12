@@ -1,6 +1,6 @@
 // Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { all, create } from "npm:mathjs";
 import { minimatch } from "npm:minimatch";
@@ -173,6 +173,39 @@ Deno.serve(async (req) => {
         });
       }
       updated++;
+
+      // After updating dependencies, enqueue recalculation for all student rows
+      // of this column. This handles the race where scores were set on the new
+      // dependent column BEFORE the dependencies were updated — those scores
+      // would have been excluded from the calculation.
+      const { data: studentRows, error: studentRowsError } = await admin
+        .from("gradebook_column_students")
+        .select("class_id, gradebook_id, student_id, is_private")
+        .eq("gradebook_column_id", col.id);
+      if (studentRowsError) {
+        return new Response(JSON.stringify({ error: `Failed to load rows for column ${col.id}` }), {
+          headers: { "Content-Type": "application/json" },
+          status: 500
+        });
+      }
+
+      const { error: enqueueError } = await admin.rpc("enqueue_gradebook_row_recalculation_batch", {
+        p_rows:
+          studentRows?.map((r) => ({
+            class_id: r.class_id,
+            gradebook_id: r.gradebook_id,
+            student_id: r.student_id,
+            is_private: r.is_private,
+            source: "deps_update",
+            source_column_id: null
+          })) ?? []
+      });
+      if (enqueueError) {
+        return new Response(JSON.stringify({ error: `Failed to enqueue recalculation for column ${col.id}` }), {
+          headers: { "Content-Type": "application/json" },
+          status: 500
+        });
+      }
     }
   }
 

@@ -1,5 +1,5 @@
 "use client";
-import { Box, VStack, HStack, Text, Button } from "@chakra-ui/react";
+import { Box, VStack, Text, Button } from "@chakra-ui/react";
 import { RubricContextMenuAction } from "./monaco-rubric-context-menu";
 
 export type RubricQuickPickProps = {
@@ -11,28 +11,13 @@ export type RubricQuickPickProps = {
   position?: { top: number; left: number };
 };
 
-export function RubricQuickPick({
-  isOpen,
-  title,
-  items,
-  onSelect,
-  onClose,
-  position
-}: RubricQuickPickProps) {
+export function RubricQuickPick({ isOpen, title, items, onSelect, onClose, position }: RubricQuickPickProps) {
   if (!isOpen) return null;
 
   return (
     <>
       {/* Backdrop */}
-      <Box
-        position="fixed"
-        top={0}
-        left={0}
-        right={0}
-        bottom={0}
-        zIndex={999}
-        onClick={onClose}
-      />
+      <Box position="fixed" top={0} left={0} right={0} bottom={0} zIndex={999} onClick={onClose} />
       {/* Quick pick menu - centered at mouse position */}
       <Box
         position="fixed"
@@ -56,7 +41,7 @@ export function RubricQuickPick({
               {title}
             </Text>
           </Box>
-          {items.map((action, index) => (
+          {items.map((action) => (
             <Button
               key={action.id}
               variant="ghost"

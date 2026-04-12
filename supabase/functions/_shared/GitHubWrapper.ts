@@ -1,11 +1,12 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Redis } from "./Redis.ts";
-import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
-import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createAppAuth } from "npm:@octokit/auth-app";
+import { throttling } from "npm:@octokit/plugin-throttling";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
-import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
+import { App, Endpoints, Octokit, RequestError } from "npm:octokit";
 import * as Sentry from "npm:@sentry/deno";
+import { SecurityError } from "./HandlerUtils.ts";
 
 // Structured error used to signal Octokit secondary rate limit back to callers
 export class SecondaryRateLimitError extends Error {
@@ -71,11 +72,13 @@ async function retryWithBackoff<T>(
     } catch (error: unknown) {
       lastError = error as Error;
 
-      // Check if this is a 404 error that we should retry
+      // Check if this is an error we should retry (404 or "Git Repository is empty")
       const is404 = error instanceof RequestError && error.status === 404;
+      const isGitRepoEmpty = error instanceof Error && error.message?.toLowerCase().includes("git repository is empty");
+      const shouldRetry = is404 || isGitRepoEmpty;
 
-      if (!is404 || attempt === maxRetries) {
-        // Don't retry for non-404 errors or if we've exhausted retries
+      if (!shouldRetry || attempt === maxRetries) {
+        // Don't retry for non-retryable errors or if we've exhausted retries
         if (attempt > 0) {
           scope?.setContext("retry_failed", {
             final_attempt: attempt + 1,
@@ -88,7 +91,7 @@ async function retryWithBackoff<T>(
             tags: {
               operation: "github_api_retry_failed",
               attempts: attempt + 1,
-              error_type: is404 ? "404_not_found" : "other"
+              error_type: is404 ? "404_not_found" : isGitRepoEmpty ? "git_repo_empty" : "other"
             }
           });
         }
@@ -101,23 +104,25 @@ async function retryWithBackoff<T>(
       scope?.setContext("retry_attempt", {
         attempt: attempt + 1,
         next_delay_ms: delayMs,
-        error_status: 404,
+        error_status: error instanceof RequestError ? error.status : "unknown",
+        error_reason: is404 ? "404" : "git_repo_empty",
         operation: "github_api_retry"
       });
 
       Sentry.addBreadcrumb({
-        message: `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`,
+        message: `GitHub API ${is404 ? "404" : "Git Repository is empty"} error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`,
         level: "warning",
         data: {
           attempt: attempt + 1,
           delay_ms: delayMs,
-          error_status: 404,
+          error_status: error instanceof RequestError ? error.status : "unknown",
+          error_reason: is404 ? "404" : "git_repo_empty",
           error_message: error instanceof Error ? error.message : String(error)
         }
       });
 
       console.log(
-        `GitHub API 404 error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1}):`,
+        `GitHub API ${is404 ? "404" : "Git Repository is empty"} error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1}):`,
         error instanceof Error ? error.message : String(error)
       );
 
@@ -130,6 +135,66 @@ async function retryWithBackoff<T>(
 }
 
 const createContentLimiters = new Map<string, Bottleneck>();
+
+function buildRedisBottleneck(
+  id: string,
+  opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
+  clearDatastore: boolean
+): Bottleneck {
+  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL")!;
+  const host = upstashUrl.replace("https://", "");
+  const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN")!;
+  return new Bottleneck({
+    id,
+    ...opts,
+    datastore: "ioredis",
+    timeout: 600000,
+    clearDatastore,
+    clientOptions: { host, password, username: "default", tls: {}, port: 6379 },
+    Redis
+  });
+}
+
+function withSettingsKeyRecovery(
+  limiter: Bottleneck,
+  id: string,
+  opts: { reservoir: number; maxConcurrent: number; reservoirRefreshAmount: number; reservoirRefreshInterval: number },
+  cache: Map<string, Bottleneck>,
+  cacheKey: string
+): void {
+  limiter.on("error", (err: Error) => {
+    if (!String(err).includes("SETTINGS_KEY_NOT_FOUND")) {
+      console.error(`[rate-limiter] ${id}:`, err);
+      return;
+    }
+    if (cache.get(cacheKey) !== limiter) {
+      return;
+    }
+    console.warn(`[rate-limiter] Settings keys missing for ${id}, reinitializing`);
+    const rotateMessage = `[${id}] SETTINGS_KEY_ROTATED after SETTINGS_KEY_NOT_FOUND; retry via getCreateContentLimiter`;
+    const fresh = buildRedisBottleneck(id, opts, true);
+    withSettingsKeyRecovery(fresh, id, opts, cache, cacheKey);
+    cache.set(cacheKey, fresh);
+    void limiter
+      .stop({
+        dropWaitingJobs: true,
+        dropErrorMessage: rotateMessage,
+        enqueueErrorMessage: rotateMessage
+      })
+      .then(() => {
+        limiter.disconnect();
+      })
+      .catch((e: unknown) => {
+        console.error(`[rate-limiter] stop/disconnect after SETTINGS_KEY rotation failed for ${id}:`, e);
+        try {
+          limiter.disconnect();
+        } catch {
+          /* ignore */
+        }
+      });
+  });
+}
+
 /**
  * GitHub limits the number of content-creating requests per organization per-minute and per-hour
  * This includes repository creation and organization invitations (same rate limit bucket)
@@ -140,41 +205,16 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   const key = org || "unknown";
   const existing = createContentLimiters.get(key);
   if (existing) return existing;
+  const id = `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
+  const opts = { reservoir: 50, maxConcurrent: 50, reservoirRefreshAmount: 50, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
-  const upstashUrl = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const upstashToken = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (upstashUrl && upstashToken) {
-    const host = upstashUrl.replace("https://", "");
-    const password = upstashToken;
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 50,
-      reservoirRefreshAmount: 50,
-      reservoirRefreshInterval: 60_000,
-      maxConcurrent: 50,
-      datastore: "ioredis",
-      timeout: 600000, // 10 minutes
-      clearDatastore: false,
-      clientOptions: {
-        host,
-        password,
-        username: "default",
-        tls: {},
-        port: 6379
-      },
-      Redis
-    });
-    limiter.on("error", (err: Error) => console.error(err));
+  if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+    limiter = buildRedisBottleneck(id, opts, false);
+    withSettingsKeyRecovery(limiter, id, opts, createContentLimiters, key);
   } else {
     console.log("No Upstash URL or token found, using local limiter");
     Sentry.captureMessage("No Upstash URL or token found, using local limiter");
-    limiter = new Bottleneck({
-      id: `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`,
-      reservoir: 10,
-      maxConcurrent: 10,
-      reservoirRefreshAmount: 10,
-      reservoirRefreshInterval: 60_000
-    });
+    limiter = new Bottleneck({ id, ...opts });
   }
   createContentLimiters.set(key, limiter);
   return limiter;
@@ -621,6 +661,57 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
   return verified as GitHubOIDCToken;
 }
 
+// E2E testing constants and helper
+export const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
+// Read END_TO_END_SECRET strictly - no fallback to prevent security bypass
+const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET");
+// Explicit opt-in flag for E2E testing
+const E2E_ENABLE = Deno.env.get("E2E_ENABLE") === "true";
+
+/**
+ * Validates an OIDC token, or allows E2E test tokens that use the special prefix.
+ * For E2E runs, we don't validate the signature but check that the secret matches.
+ *
+ * SECURITY: E2E bypass is only enabled if both E2E_ENABLE=true and END_TO_END_SECRET
+ * are explicitly set. This prevents accidental use in production.
+ */
+export async function validateOIDCTokenOrAllowE2E(token: string): Promise<GitHubOIDCToken> {
+  const decoded = decode(token);
+  const payload = decoded[1] as GitHubOIDCToken;
+  if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
+    // Fail closed: require explicit opt-in and secret configuration
+    if (!E2E_ENABLE) {
+      console.error(
+        "E2E token detected but E2E_ENABLE is not set to 'true'. " +
+          "E2E bypass is disabled for security. Set E2E_ENABLE=true and END_TO_END_SECRET to enable."
+      );
+      throw new SecurityError(
+        "E2E testing is not enabled. E2E bypass requires explicit opt-in via E2E_ENABLE=true and END_TO_END_SECRET environment variables."
+      );
+    }
+    if (!END_TO_END_SECRET || END_TO_END_SECRET.trim() === "") {
+      console.error(
+        "E2E token detected but END_TO_END_SECRET is missing or empty. " +
+          "E2E bypass requires a non-empty secret to prevent unauthorized access."
+      );
+      throw new SecurityError(
+        "E2E testing secret is not configured. END_TO_END_SECRET must be set to a non-empty value to enable E2E bypass."
+      );
+    }
+
+    const header = decoded[0] as {
+      alg: string;
+      typ: string;
+      kid: string;
+    };
+    if (header.kid !== END_TO_END_SECRET) {
+      throw new SecurityError("E2E repo provided, but secret is incorrect");
+    }
+    return payload;
+  }
+  return await validateOIDCToken(token);
+}
+
 export async function getRepos(org: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_repos");
   scope?.setTag("org", org);
@@ -678,20 +769,40 @@ export async function createRepo(
     );
     console.log(JSON.stringify(resp.headers, null, 2));
     scope?.setTag("github_operation", "create_repo_request_done");
-    //Disable squash merging, make template
+    // Enable squash merging; set template flag when applicable
     scope?.setTag("github_operation", "patch_repo_settings");
     await retryWithBackoff(
       () =>
         octokit.request("PATCH /repos/{owner}/{repo}", {
           owner: org,
           repo: repoName,
-          allow_squash_merge: false,
+          allow_squash_merge: true,
           is_template: is_template_repo ? true : false
         }),
       3, // maxRetries
       1000, // baseDelayMs
       scope
     );
+    // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+    scope?.setTag("github_operation", "enable_actions");
+    try {
+      await retryWithBackoff(
+        () =>
+          octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+            owner: org,
+            repo: repoName,
+            enabled: true,
+            allowed_actions: "all"
+          }),
+        3,
+        1000,
+        scope
+      );
+    } catch (actionsErr) {
+      console.error("Error enabling GitHub Actions", actionsErr);
+      scope?.setTag("enable_actions_failed", "true");
+      Sentry.captureException(actionsErr, scope);
+    }
     //Get the head SHA
     scope?.setTag("github_operation", "get_head_sha");
     scope?.setTag("ref", "heads/main");
@@ -701,11 +812,23 @@ export async function createRepo(
           owner: org,
           repo: repoName
         }),
-      3, // maxRetries
-      1000, // baseDelayMs
+      5, // maxRetries
+      3000, // baseDelayMs
       scope
     );
     scope?.setTag("head_sha", heads.data.object.sha);
+
+    // Create branch protection ruleset to prevent force pushes
+    scope?.setTag("github_operation", "create_branch_protection_ruleset");
+    try {
+      await createBranchProtectionRuleset(org, repoName, scope);
+    } catch (rulesetError) {
+      // Log but don't fail repo creation if ruleset creation fails
+      console.error("Error creating branch protection ruleset", rulesetError);
+      scope?.setTag("ruleset_creation_failed", "true");
+      Sentry.captureException(rulesetError, scope);
+    }
+
     return heads.data.object.sha as string;
   } catch (e) {
     console.error("Error creating repo", e);
@@ -725,6 +848,45 @@ export async function createRepo(
           scope
         );
         scope?.setTag("head_sha", heads.data.object.sha);
+        // Match settings we apply on fresh creates (e.g. squash merge).
+        try {
+          await retryWithBackoff(
+            () =>
+              octokit.request("PATCH /repos/{owner}/{repo}", {
+                owner: org,
+                repo: repoName,
+                allow_squash_merge: true,
+                is_template: is_template_repo ? true : false
+              }),
+            3,
+            1000,
+            scope
+          );
+        } catch (patchErr) {
+          console.error("Error patching repo settings for pre-existing repo", patchErr);
+          scope?.setTag("patch_existing_repo_settings_failed", "true");
+          Sentry.captureException(patchErr, scope);
+        }
+        // Enable GitHub Actions (workaround for GitHub bug where Actions isn't always enabled on template-generated repos)
+        scope?.setTag("github_operation", "enable_actions");
+        try {
+          await retryWithBackoff(
+            () =>
+              octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+                owner: org,
+                repo: repoName,
+                enabled: true,
+                allowed_actions: "all"
+              }),
+            3,
+            1000,
+            scope
+          );
+        } catch (actionsErr) {
+          console.error("Error enabling GitHub Actions for pre-existing repo", actionsErr);
+          scope?.setTag("enable_actions_failed", "true");
+          Sentry.captureException(actionsErr, scope);
+        }
         return heads.data.object.sha as string;
       } else {
         throw e;
@@ -732,6 +894,109 @@ export async function createRepo(
     } else {
       throw e;
     }
+  }
+}
+
+/**
+ * Checks if a RequestError indicates a duplicate ruleset (by ID/name or "already exists" message)
+ */
+function checkIfDuplicateRulesetError(e: RequestError): boolean {
+  // Check error message for duplicate indicators
+  const message = e.message?.toLowerCase() || "";
+  if (message.includes("already exists") || message.includes("duplicate") || message.includes("name already")) {
+    return true;
+  }
+
+  // Check response.errors array for duplicate indicators
+  const errors = e.response?.data?.errors;
+  if (Array.isArray(errors)) {
+    for (const error of errors) {
+      const errorMessage =
+        typeof error === "string" ? error.toLowerCase() : (error?.message || error?.field || "").toLowerCase();
+
+      if (
+        errorMessage.includes("already exists") ||
+        errorMessage.includes("duplicate") ||
+        errorMessage.includes("name already") ||
+        errorMessage.includes("id already")
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // Check response.data.message for duplicate indicators
+  const responseMessage = e.response?.data?.message?.toLowerCase() || "";
+  if (
+    responseMessage.includes("already exists") ||
+    responseMessage.includes("duplicate") ||
+    responseMessage.includes("name already")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Creates a branch protection ruleset to prevent force pushes on the default branch
+ * Uses GitHub's repository rulesets API (newer approach)
+ */
+export async function createBranchProtectionRuleset(
+  org: string,
+  repoName: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  scope?.setTag("github_operation", "create_branch_protection_ruleset");
+  scope?.setTag("org", org);
+  scope?.setTag("repo_name", repoName);
+
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new UserVisibleError("No GitHub installation found for organization " + org);
+  }
+
+  try {
+    await retryWithBackoff(
+      () =>
+        octokit.request("POST /repos/{owner}/{repo}/rulesets", {
+          owner: org,
+          repo: repoName,
+          name: "Protect main branch",
+          target: "branch",
+          enforcement: "active",
+          bypass_actors: [],
+          conditions: {
+            ref_name: {
+              include: ["~DEFAULT_BRANCH"],
+              exclude: []
+            }
+          },
+          rules: [
+            {
+              type: "non_fast_forward"
+            }
+          ]
+        }),
+      3, // maxRetries
+      1000, // baseDelayMs
+      scope
+    );
+    scope?.setTag("ruleset_created", "true");
+  } catch (e) {
+    if (e instanceof RequestError) {
+      // Only suppress if this is explicitly a duplicate ruleset error
+      if (e.status === 422 || e.status === 409) {
+        const isDuplicateRuleset = checkIfDuplicateRulesetError(e);
+        if (isDuplicateRuleset) {
+          scope?.setTag("ruleset_already_exists", "true");
+          console.log(`Branch protection ruleset may already exist for ${org}/${repoName}`);
+          return;
+        }
+        // If it's 422/409 but not a duplicate error, rethrow so callers can handle it
+      }
+    }
+    throw e;
   }
 }
 async function listFilesInRepoDirectory(
@@ -1293,14 +1558,17 @@ export async function syncRepoPermissions(
       permission: "maintain"
     });
   }
-  const desiredUsersNotInOrg = githubUsernames.filter((u) => !allOrgMembers?.includes(u));
-  console.log(`${org}/${repo} desired users not in org: ${desiredUsersNotInOrg.join(", ")}`);
+  const desiredUsersNotInCachedOrg = githubUsernames.filter((u) => !allOrgMembers?.includes(u));
+  console.log(`${org}/${repo} desired users not in cached org members: ${desiredUsersNotInCachedOrg.join(", ")}`);
   //The API for PUT /repos/{owner}/{repo}/collaborators/{username} REQUIRES the username, can't be user id.
   //So, if a student changes their username, we won't be able to sync their repo permissions here because
   //we have the old username on file. But, we can find those becuase they won't be in the org members list.
 
-  // Update usernames for users who may have changed their GitHub username
-  if (desiredUsersNotInOrg.length > 0) {
+  // For users not in cached org members, verify their membership individually with fresh API calls.
+  // This handles the race condition where a user joins the org after the cache was populated.
+  const verifiedOrgMembers = new Set(allOrgMembers?.map((u) => u.toLowerCase()) || []);
+
+  if (desiredUsersNotInCachedOrg.length > 0) {
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -1311,26 +1579,67 @@ export async function syncRepoPermissions(
       maxConcurrent: 20
     });
 
-    // Use Promise.all with the limiter to update usernames in parallel
-    const updateResults = await Promise.all(
-      desiredUsersNotInOrg.map((oldUsername) =>
-        limiter.schedule(() => updateGitHubUsernameForUser(oldUsername, octokit, adminSupabase, scope))
+    // For each user not in cached org, check if they're actually in the org now (fresh API call)
+    // and also handle potential username changes
+    const verificationResults = await Promise.all(
+      desiredUsersNotInCachedOrg.map((username) =>
+        limiter.schedule(async () => {
+          // First, try to verify current membership with fresh API call
+          try {
+            await octokit.request("GET /orgs/{org}/members/{username}", {
+              org,
+              username
+            });
+            // User IS in org - they were just not in the stale cache
+            scope?.addBreadcrumb({
+              category: "github",
+              message: `${username} verified as org member (was not in cache)`,
+              level: "info"
+            });
+            return { username, isInOrg: true, newUsername: null };
+          } catch (membershipError: unknown) {
+            const err = membershipError as { status?: number };
+            if (err.status === 404 || err.status === 302) {
+              // User is NOT in org - might be a username change
+              const result = await updateGitHubUsernameForUser(username, octokit, adminSupabase, scope);
+              if (result.newUsername) {
+                // Username changed - verify new username is in org
+                try {
+                  await octokit.request("GET /orgs/{org}/members/{username}", {
+                    org,
+                    username: result.newUsername
+                  });
+                  return { username, isInOrg: true, newUsername: result.newUsername };
+                } catch {
+                  return { username, isInOrg: false, newUsername: result.newUsername };
+                }
+              }
+              return { username, isInOrg: false, newUsername: null };
+            }
+            throw membershipError;
+          }
+        })
       )
     );
 
-    // Update our local githubUsernames array to use those new names
-    for (const { oldUsername, newUsername } of updateResults) {
+    // Update githubUsernames array with new usernames and track verified members
+    for (const { username, isInOrg, newUsername } of verificationResults) {
       if (newUsername) {
-        const index = githubUsernames.indexOf(oldUsername);
+        const index = githubUsernames.indexOf(username);
         if (index !== -1) {
           githubUsernames[index] = newUsername;
         }
+        if (isInOrg) {
+          verifiedOrgMembers.add(newUsername.toLowerCase());
+        }
+      } else if (isInOrg) {
+        verifiedOrgMembers.add(username.toLowerCase());
       }
     }
   }
 
   const newAccess = githubUsernames.filter(
-    (u) => !existingUsernames.includes(u) && allOrgMembers?.includes(u) // && !existingInvitations.some((i) => i.invitee?.login === u)
+    (u) => !existingUsernames.includes(u) && verifiedOrgMembers.has(u.toLowerCase())
   );
   const removeAccess = existingUsernames.filter(
     (u) =>

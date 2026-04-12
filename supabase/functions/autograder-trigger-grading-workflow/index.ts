@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AutograderTriggerGradingWorkflowRequest } from "../_shared/FunctionTypes.d.ts";
@@ -17,7 +17,7 @@ export async function handleRequest(req: Request, scope: Sentry.Scope) {
   );
   const { data: repoData } = await supabase
     .from("repositories")
-    .select("*, repository_check_runs(*)")
+    .select("*, repository_check_runs!repository_check_run_repository_id_fkey(*)")
     .eq("repository", repository)
     .eq("repository_check_runs.sha", sha)
     .single();

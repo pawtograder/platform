@@ -109,7 +109,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       value: Tag;
     }>
   >([]);
-  const [assignmentMode, setAssignmentMode] = useState<"by_submission" | "by_rubric_part">("by_submission");
+  const [assignmentMode, setAssignmentMode] = useState<
+    "by_submission" | "by_rubric_part" | "by_lab_leaders" | "by_group_mentors"
+  >("by_submission");
   const [selectedRubricPartsForFilter, setSelectedRubricPartsForFilter] = useState<
     MultiValue<{
       label: string;
@@ -165,23 +167,49 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   // Map of assignment_group_id -> member profile ids
   const [groupMembersByGroupId, setGroupMembersByGroupId] = useState<Map<number, string[]>>(new Map());
+  // Map of assignment_group_id -> mentor_profile_id (for grading by group mentors)
+  const [groupMentorByGroupId, setGroupMentorByGroupId] = useState<Map<number, string>>(new Map());
   useEffect(() => {
-    const buildMap = (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
-      const map = new Map<number, string[]>();
+    const buildMap = (
+      rows: Array<{
+        id: number;
+        mentor_profile_id?: string | null;
+        assignment_groups_members?: { profile_id: string }[];
+      }>
+    ) => {
+      const memberMap = new Map<number, string[]>();
+      const mentorMap = new Map<number, string>();
       for (const row of rows) {
         const members = row.assignment_groups_members?.map((m) => m.profile_id) ?? [];
-        map.set(row.id, members);
+        memberMap.set(row.id, members);
+        if (row.mentor_profile_id) {
+          mentorMap.set(row.id, row.mentor_profile_id);
+        }
       }
-      return map;
+      return { memberMap, mentorMap };
     };
     const { data, unsubscribe } = courseController.assignmentGroupsWithMembers.list(
-      (rows: Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>) => {
-        setGroupMembersByGroupId(buildMap(rows));
+      (
+        rows: Array<{
+          id: number;
+          mentor_profile_id?: string | null;
+          assignment_groups_members?: { profile_id: string }[];
+        }>
+      ) => {
+        const { memberMap, mentorMap } = buildMap(rows);
+        setGroupMembersByGroupId(memberMap);
+        setGroupMentorByGroupId(mentorMap);
       }
     );
-    setGroupMembersByGroupId(
-      buildMap(data as Array<{ id: number; assignment_groups_members?: { profile_id: string }[] }>)
+    const { memberMap, mentorMap } = buildMap(
+      data as Array<{
+        id: number;
+        mentor_profile_id?: string | null;
+        assignment_groups_members?: { profile_id: string }[];
+      }>
     );
+    setGroupMembersByGroupId(memberMap);
+    setGroupMentorByGroupId(mentorMap);
     return unsubscribe;
   }, [courseController]);
 
@@ -292,6 +320,45 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   }, [gradingConflictsController]);
   const gradingConflicts = useTableControllerTableValues(gradingConflictsController);
   const gradersAndInstructors = useGradersAndInstructors();
+
+  // Lab section leaders data
+  const labSectionLeaders = useTableControllerTableValues(courseController.labSectionLeaders);
+
+  // Map of lab_section_id -> array of leader UserRoleWithConflictsAndName
+  const labSectionLeadersMap = useMemo(() => {
+    const map = new Map<number, UserRoleWithConflictsAndName[]>();
+    if (!labSectionLeaders || !userRoles || !gradingConflicts) return map;
+
+    // Build a map of profile_id -> UserRoleWithConflictsAndName for quick lookup
+    const userRolesMap = new Map<string, UserRoleWithConflictsAndName>();
+    for (const userRole of userRoles) {
+      if (userRole.role === "grader" || userRole.role === "instructor") {
+        const enriched: UserRoleWithConflictsAndName = {
+          ...(userRole as unknown as UserRoleWithConflictsAndName),
+          profiles: {
+            ...(userRole.profiles as unknown as UserRoleWithConflictsAndName["profiles"]),
+            name: (userRole.profiles as unknown as UserRoleWithConflictsAndName["profiles"]).name,
+            grading_conflicts: gradingConflicts.filter((gc) => gc.grader_profile_id === userRole.private_profile_id)
+          }
+        };
+        userRolesMap.set(userRole.private_profile_id, enriched);
+      }
+    }
+
+    // Group leaders by lab_section_id, ensuring no duplicates per section
+    for (const leader of labSectionLeaders) {
+      const leaderUserRole = userRolesMap.get(leader.profile_id);
+      if (leaderUserRole) {
+        const existing = map.get(leader.lab_section_id) || [];
+        // Only add if this leader is not already in the array for this section
+        if (!existing.some((l) => l.private_profile_id === leaderUserRole.private_profile_id)) {
+          map.set(leader.lab_section_id, [...existing, leaderUserRole]);
+        }
+      }
+    }
+
+    return map;
+  }, [labSectionLeaders, userRoles, gradingConflicts]);
 
   // Reference/exclusion rubric and assignments (loaded table-by-table)
   const [referenceRubrics, setReferenceRubrics] = useState<RubricWithParts[] | undefined>(undefined);
@@ -746,14 +813,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    * Generates reviews based on the initial selected information and grading conflicts.
    */
   const generateReviews = () => {
-    const users = finalSelectedUsers();
-    if (users.length === 0) {
-      toaster.create({
-        title: `Warning: No ${role}`,
-        description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
-      });
-      return;
-    } else if (!submissionsToDo) {
+    if (!submissionsToDo) {
       toaster.create({
         title: `Warning: No submissions`,
         description: `Could not find any submissions to grade this assignment`
@@ -768,7 +828,139 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       return;
     }
 
+    // Validation for group mentors mode
+    if (assignmentMode === "by_group_mentors") {
+      const submissionsWithoutMentor: SubmissionWithGrading[] = [];
+      const submissionsWithoutGroup: SubmissionWithGrading[] = [];
+
+      for (const submission of submissionsToDo) {
+        if (!submission.assignment_group_id) {
+          submissionsWithoutGroup.push(submission);
+          continue;
+        }
+        const mentorId = groupMentorByGroupId.get(submission.assignment_group_id);
+        if (!mentorId) {
+          submissionsWithoutMentor.push(submission);
+        }
+      }
+
+      if (submissionsWithoutGroup.length > 0) {
+        toaster.create({
+          title: "Warning: Submissions without groups",
+          description: `${submissionsWithoutGroup.length} submission(s) are not associated with any group. These will be skipped.`,
+          type: "warning"
+        });
+      }
+
+      if (submissionsWithoutMentor.length > 0) {
+        toaster.create({
+          title: "Warning: Groups without mentors",
+          description: `${submissionsWithoutMentor.length} submission(s) are from groups without assigned mentors. These will be skipped.`,
+          type: "warning"
+        });
+      }
+    }
+
+    // Validation for lab leaders mode
+    if (assignmentMode === "by_lab_leaders") {
+      const studentsWithoutLab: SubmissionWithGrading[] = [];
+      const leaderlessLabSections = new Set<number>();
+
+      for (const submission of submissionsToDo) {
+        // Get student's lab section
+        const memberIds =
+          submission.assignment_groups?.assignment_groups_members?.map((m) => m.profile_id) ||
+          (submission.profile_id ? [submission.profile_id] : []);
+
+        let hasLabSection = false;
+
+        for (const memberId of memberIds) {
+          const memberRole = userRoles.find((ur) => ur.private_profile_id === memberId);
+          if (memberRole?.lab_section_id) {
+            hasLabSection = true;
+
+            // Check if this lab section has leaders
+            const leaders = labSectionLeadersMap.get(memberRole.lab_section_id);
+            if (!leaders || leaders.length === 0) {
+              leaderlessLabSections.add(memberRole.lab_section_id);
+            }
+            break; // Use first member's lab section
+          }
+        }
+
+        if (!hasLabSection) {
+          studentsWithoutLab.push(submission);
+        }
+      }
+
+      // Check for leaderless lab sections - error upfront
+      if (leaderlessLabSections.size > 0) {
+        const labSectionNames = Array.from(leaderlessLabSections)
+          .map((id) => labSections.find((ls) => ls.id === id)?.name || `Lab Section ${id}`)
+          .join(", ");
+        toaster.error({
+          title: "Cannot assign: Lab sections without leaders",
+          description: `The following lab sections have students with submissions but no assigned leaders: ${labSectionNames}. Please assign leaders to these lab sections before proceeding.`
+        });
+        return;
+      }
+
+      // Check for students without lab sections - warning
+      if (studentsWithoutLab.length > 0) {
+        toaster.create({
+          title: "Warning: Students without lab sections",
+          description: `${studentsWithoutLab.length} submission(s) are from students not assigned to any lab section. These will be skipped during assignment.`,
+          type: "warning"
+        });
+      }
+    } else if (assignmentMode !== "by_group_mentors") {
+      // Normal mode validation (skip for group mentors which have their own validation above)
+      const users = finalSelectedUsers();
+      if (users.length === 0) {
+        toaster.create({
+          title: `Warning: No ${role}`,
+          description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
+        });
+        return;
+      }
+    }
+
     setIsGeneratingReviews(true);
+
+    // Handle lab leaders mode separately
+    if (assignmentMode === "by_lab_leaders") {
+      const result = generateReviewsByLabLeaders();
+      setDraftReviews(result.draftAssignments);
+      setIsGeneratingReviews(false);
+      return;
+    }
+
+    // Handle group mentors mode separately
+    if (assignmentMode === "by_group_mentors") {
+      const result = generateReviewsByGroupMentors();
+      if (result.skippedSubmissions.length > 0) {
+        toaster.create({
+          title: `Skipped ${result.skippedSubmissions.length} submissions`,
+          description: `These submissions were skipped due to missing groups, mentors, or grading conflicts.`,
+          type: "warning"
+        });
+      }
+      setDraftReviews(result.draftAssignments);
+      setIsGeneratingReviews(false);
+      return;
+    }
+
+    // Normal assignment modes (by_submission or by_rubric_part)
+    const users = finalSelectedUsers();
+    if (users.length === 0) {
+      toaster.create({
+        title: `Warning: No ${role}`,
+        description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
+      });
+      setIsGeneratingReviews(false);
+      return;
+    }
+
     const historicalWorkload = new Map<string, number>();
     const graderPreferences = buildGraderPreferenceMap();
     const graderExclusions = buildGraderExclusionMap();
@@ -928,6 +1120,224 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     setIsGeneratingReviews(false);
   };
 
+  /**
+   * Generates review assignments by assigning each submission to all lab leaders of the student's lab section.
+   * Skips submissions from students without lab sections.
+   */
+  const generateReviewsByLabLeaders = (): {
+    draftAssignments: DraftReviewAssignment[];
+    skippedSubmissions: SubmissionWithGrading[];
+  } => {
+    const draftAssignments: DraftReviewAssignment[] = [];
+    const skippedSubmissions: SubmissionWithGrading[] = [];
+    // Track seen (submission_id, assignee_profile_id, rubric_part_id) combinations to prevent duplicates
+    const seenAssignments = new Set<string>();
+
+    if (!submissionsToDo) {
+      return { draftAssignments, skippedSubmissions };
+    }
+
+    // Treat empty selection as selecting all parts
+    const isAllPartsSelected =
+      selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === (rubricParts?.length || 0);
+
+    for (const submission of submissionsToDo) {
+      // Get all group members or just the single submitter
+      const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+        { profile_id: submission.profile_id }
+      ];
+
+      // Find lab section for any group member
+      let labSectionId: number | null = null;
+      for (const member of groupMembers) {
+        if (member.profile_id) {
+          const memberRole = userRoles.find((ur) => ur.private_profile_id === member.profile_id);
+          if (memberRole?.lab_section_id) {
+            labSectionId = memberRole.lab_section_id;
+            break; // Use first member's lab section
+          }
+        }
+      }
+
+      // Skip if no lab section found
+      if (!labSectionId) {
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Get all leaders for this lab section
+      const leaders = labSectionLeadersMap.get(labSectionId) || [];
+
+      // Skip if no leaders (should have been caught in validation, but double-check)
+      if (leaders.length === 0) {
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Build submitters list
+      const submitters: UserRoleWithConflictsAndName[] = [];
+      for (const member of groupMembers) {
+        if (member.profile_id) {
+          const memberUserRole = userRoles.find((item) => item.private_profile_id === member.profile_id) as unknown as
+            | UserRoleWithConflictsAndName
+            | undefined;
+          if (memberUserRole) {
+            submitters.push(memberUserRole);
+          }
+        }
+      }
+
+      // Create an assignment for EACH leader (respecting grading conflicts)
+      for (const leader of leaders) {
+        // Check for conflicts
+        const hasConflict = leader.profiles?.grading_conflicts?.some((conflict) => {
+          return (
+            conflict.student_profile_id === submission.profile_id ||
+            groupMembers.some((member) => member.profile_id === conflict.student_profile_id)
+          );
+        });
+
+        // Skip this leader if there's a conflict
+        if (hasConflict) {
+          continue;
+        }
+
+        // Create assignments for each selected rubric part (or whole rubric)
+        if (isAllPartsSelected) {
+          // Create unique key for this assignment (null part represented as 'null')
+          const assignmentKey = `${submission.id}:${leader.private_profile_id}:null`;
+          if (!seenAssignments.has(assignmentKey)) {
+            seenAssignments.add(assignmentKey);
+            draftAssignments.push({
+              assignee: leader,
+              submitters: submitters,
+              submission: submission,
+              part: undefined
+            });
+          }
+        } else {
+          for (const part of selectedRubricPartsForFilter) {
+            // Create unique key for this assignment
+            const assignmentKey = `${submission.id}:${leader.private_profile_id}:${part.value.id}`;
+            if (!seenAssignments.has(assignmentKey)) {
+              seenAssignments.add(assignmentKey);
+              draftAssignments.push({
+                assignee: leader,
+                submitters: submitters,
+                submission: submission,
+                part: part.value
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return { draftAssignments, skippedSubmissions };
+  };
+
+  const generateReviewsByGroupMentors = (): {
+    draftAssignments: DraftReviewAssignment[];
+    skippedSubmissions: SubmissionWithGrading[];
+  } => {
+    const draftAssignments: DraftReviewAssignment[] = [];
+    const skippedSubmissions: SubmissionWithGrading[] = [];
+    const seenAssignments = new Set<string>();
+
+    if (!submissionsToDo) {
+      return { draftAssignments, skippedSubmissions };
+    }
+
+    // Treat empty selection as selecting all parts
+    const isAllPartsSelected =
+      selectedRubricPartsForFilter.length === 0 || selectedRubricPartsForFilter.length === (rubricParts?.length || 0);
+
+    for (const submission of submissionsToDo) {
+      // Get the assignment group for this submission
+      const groupId = submission.assignment_group_id;
+
+      if (!groupId) {
+        // No group - skip
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Get the mentor for this group
+      const mentorProfileId = groupMentorByGroupId.get(groupId);
+      if (!mentorProfileId) {
+        // No mentor assigned to this group - skip
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Find the mentor's UserRoleWithConflictsAndName
+      const mentor = courseStaff.find((s) => s.private_profile_id === mentorProfileId);
+      if (!mentor) {
+        // Mentor not found in course staff
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Build submitters list
+      const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+        { profile_id: submission.profile_id }
+      ];
+      const submitters: UserRoleWithConflictsAndName[] = [];
+      for (const member of groupMembers) {
+        if (member.profile_id) {
+          const memberUserRole = userRoles.find((item) => item.private_profile_id === member.profile_id) as unknown as
+            | UserRoleWithConflictsAndName
+            | undefined;
+          if (memberUserRole) {
+            submitters.push(memberUserRole);
+          }
+        }
+      }
+
+      // Check for grading conflicts
+      const hasConflict = mentor.profiles?.grading_conflicts?.some((conflict) => {
+        return (
+          conflict.student_profile_id === submission.profile_id ||
+          groupMembers.some((member) => member.profile_id === conflict.student_profile_id)
+        );
+      });
+
+      if (hasConflict) {
+        skippedSubmissions.push(submission);
+        continue;
+      }
+
+      // Create assignments
+      if (isAllPartsSelected) {
+        const assignmentKey = `${submission.id}:${mentor.private_profile_id}:null`;
+        if (!seenAssignments.has(assignmentKey)) {
+          seenAssignments.add(assignmentKey);
+          draftAssignments.push({
+            assignee: mentor,
+            submitters: submitters,
+            submission: submission,
+            part: undefined
+          });
+        }
+      } else {
+        for (const part of selectedRubricPartsForFilter) {
+          const assignmentKey = `${submission.id}:${mentor.private_profile_id}:${part.value.id}`;
+          if (!seenAssignments.has(assignmentKey)) {
+            seenAssignments.add(assignmentKey);
+            draftAssignments.push({
+              assignee: mentor,
+              submitters: submitters,
+              submission: submission,
+              part: part.value
+            });
+          }
+        }
+      }
+    }
+
+    return { draftAssignments, skippedSubmissions };
+  };
+
   const generateReviewsBySubmission = (
     users: UserRoleWithConflictsAndName[],
     submissionsToDo: SubmissionWithGrading[],
@@ -937,6 +1347,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     const result = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload, graderPreferences, 1).solve();
     if (result.error) {
       toaster.error({ title: "Error drafting reviews", description: result.error });
+    }
+    if (!result.success || !result.assignments) {
+      return [];
     }
 
     // Treat empty selection as selecting all parts
@@ -991,6 +1404,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       if (result.error) {
         toaster.error({ title: "Error drafting reviews", description: result.error });
       }
+      if (!result.success || !result.assignments) {
+        return [];
+      }
       returnResult.push(toReview(result, selectedParts[x]));
     }
     return returnResult.reduce((prev, cur) => {
@@ -1037,47 +1453,49 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const toReview = useCallback(
     (result: AssignmentResult, part?: RubricPart) => {
       const reviewAssignments: DraftReviewAssignment[] = [];
-      result.assignments?.entries().forEach((entry) => {
-        const user: UserRoleWithConflictsAndName = entry[0];
-        const submissions: SubmissionWithGrading[] = entry[1];
-        submissions.forEach((submission) => {
-          // Get all group members or just the single submitter
-          const groupMembers = submission.assignment_groups?.assignment_groups_members || [
-            { profile_id: submission.profile_id }
-          ];
+      Array.from(result.assignments?.entries() || []).forEach(
+        (entry: [UserRoleWithConflictsAndName, SubmissionWithGrading[]]) => {
+          const user: UserRoleWithConflictsAndName = entry[0];
+          const submissions: SubmissionWithGrading[] = entry[1];
+          submissions.forEach((submission) => {
+            // Get all group members or just the single submitter
+            const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+              { profile_id: submission.profile_id }
+            ];
 
-          // Find UserRoleWithConflictsAndName for each group member
-          const submitters: UserRoleWithConflictsAndName[] = [];
-          for (const member of groupMembers) {
-            const memberUserRole = userRoles.find(
-              (item) => item.private_profile_id === member.profile_id
-            ) as unknown as UserRoleWithConflictsAndName | undefined;
-            if (!memberUserRole) {
+            // Find UserRoleWithConflictsAndName for each group member
+            const submitters: UserRoleWithConflictsAndName[] = [];
+            for (const member of groupMembers) {
+              const memberUserRole = userRoles.find(
+                (item) => item.private_profile_id === member.profile_id
+              ) as unknown as UserRoleWithConflictsAndName | undefined;
+              if (!memberUserRole) {
+                toaster.error({
+                  title: "Error drafting reviews",
+                  description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+                });
+                return;
+              }
+              submitters.push(memberUserRole);
+            }
+
+            if (submitters.length === 0) {
               toaster.error({
                 title: "Error drafting reviews",
-                description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+                description: `No valid submitters found for submission #${submission.id}`
               });
               return;
             }
-            submitters.push(memberUserRole);
-          }
 
-          if (submitters.length === 0) {
-            toaster.error({
-              title: "Error drafting reviews",
-              description: `No valid submitters found for submission #${submission.id}`
+            reviewAssignments.push({
+              assignee: user,
+              submitters: submitters,
+              submission: submission,
+              part: part
             });
-            return;
-          }
-
-          reviewAssignments.push({
-            assignee: user,
-            submitters: submitters,
-            submission: submission,
-            part: part
           });
-        });
-      });
+        }
+      );
       return reviewAssignments;
     },
     [userRoles]
@@ -1294,22 +1712,41 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                       ? "Assign by submission"
                       : assignmentMode === "by_rubric_part"
                         ? "Assign by rubric part"
-                        : "Filter by rubric parts",
+                        : assignmentMode === "by_lab_leaders"
+                          ? "Assign to lab leaders"
+                          : assignmentMode === "by_group_mentors"
+                            ? "Assign to group mentors"
+                            : "Filter by rubric parts",
                   value: assignmentMode
                 }}
                 onChange={(e) => {
                   if (e?.value) {
-                    setAssignmentMode(e.value as "by_submission" | "by_rubric_part");
+                    const newMode = e.value as
+                      | "by_submission"
+                      | "by_rubric_part"
+                      | "by_lab_leaders"
+                      | "by_group_mentors";
+                    setAssignmentMode(newMode);
+                    if (newMode === "by_group_mentors" || newMode === "by_lab_leaders") {
+                      setSelectedTags([]);
+                      setSelectedUsers([]);
+                      setNumGradersToSelect(0);
+                    }
                   }
                 }}
                 options={[
                   { label: "By submission", value: "by_submission" },
-                  { label: "By rubric part", value: "by_rubric_part" }
+                  { label: "By rubric part", value: "by_rubric_part" },
+                  { label: "Assign to lab leaders", value: "by_lab_leaders" },
+                  { label: "Assign to group mentors", value: "by_group_mentors" }
                 ]}
               />
               <Field.HelperText>
                 {assignmentMode === "by_submission" && "Submissions are split between graders first"}
                 {assignmentMode === "by_rubric_part" && "Rubric parts are split between graders first"}
+                {assignmentMode === "by_lab_leaders" &&
+                  "Each submission is assigned to all lab leaders of the student's lab section"}
+                {assignmentMode === "by_group_mentors" && "Each group's submission is assigned to the group's mentor"}
               </Field.HelperText>
             </Field.Root>
             <Field.Root>
@@ -1410,123 +1847,245 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               <Field.HelperText>Only include submissions from students with these tags</Field.HelperText>
             </Field.Root>
             <Alert status="info">
-              {submissionsToDo && submissionsToDo.length > 0
-                ? `There are ${submissionsToDo.length} active submissions that match your criteria and are unassigned for at least one selected rubric part. Choose who to assign them to below.`
-                : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`}
+              {assignmentMode === "by_lab_leaders"
+                ? submissionsToDo && submissionsToDo.length > 0
+                  ? `There are ${submissionsToDo.length} active submissions that match your criteria. Each submission will be assigned to all lab leaders of the student's lab section.`
+                  : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`
+                : assignmentMode === "by_group_mentors"
+                  ? submissionsToDo && submissionsToDo.length > 0
+                    ? `There are ${submissionsToDo.length} active submissions that match your criteria. Each group's submission will be assigned to the group's mentor.`
+                    : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`
+                  : submissionsToDo && submissionsToDo.length > 0
+                    ? `There are ${submissionsToDo.length} active submissions that match your criteria and are unassigned for at least one selected rubric part. Choose who to assign them to below.`
+                    : `No submissions match your criteria or all submissions have been assigned for all selected rubric parts.`}
             </Alert>
           </VStack>
         </Fieldset.Content>
       </Fieldset.Root>
 
       {/* Assignee Selection Section */}
-      <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
-        <Fieldset.Legend>
-          <Heading size="md">Assignee Selection</Heading>
-        </Fieldset.Legend>
-        <Fieldset.Content m={0}>
-          <VStack align="flex-start" maxW={"lg"} gap={1}>
-            <Field.Root>
-              <Field.Label>Select role to assign reviews to</Field.Label>
-              <Select
-                onChange={(e) => {
-                  if (e?.value) {
-                    setRole(e.value.toString());
+      {assignmentMode === "by_lab_leaders" || assignmentMode === "by_group_mentors" ? (
+        <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
+          <Fieldset.Legend>
+            <Heading size="md">Assignee Selection</Heading>
+          </Fieldset.Legend>
+          <Fieldset.Content m={0}>
+            <VStack align="flex-start" maxW={"lg"} gap={1}>
+              <Alert status="info">
+                {assignmentMode === "by_group_mentors"
+                  ? "Each group's submission will be automatically assigned to the group's mentor. No manual grader selection is needed."
+                  : "Submissions will be automatically assigned to all lab leaders of each student's lab section. No manual grader selection is needed."}
+              </Alert>
+              <Field.Root>
+                <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
+                <Input
+                  type="datetime-local"
+                  value={
+                    dueDate
+                      ? new Date(dueDate)
+                          .toLocaleString("sv-SE", {
+                            timeZone: course.time_zone ?? "America/New_York"
+                          })
+                          .replace(" ", "T")
+                      : ""
                   }
-                }}
-                value={{ label: role, value: role }}
-                options={[
-                  { label: "Instructors", value: "Instructors" },
-                  { label: "Graders", value: "Graders" },
-                  { label: "Instructors and graders", value: "Instructors and graders" }
-                ]}
-              />
-            </Field.Root>
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value) {
+                      // Treat inputted date as course timezone regardless of user location
+                      const [date, time] = value.split("T");
+                      const [year, month, day] = date.split("-");
+                      const [hour, minute] = time.split(":");
 
-            <Field.Root>
-              <Field.Label>Filter {role.toLowerCase()} by tag</Field.Label>
-              <Select
-                isMulti={true}
-                onChange={(e) => {
-                  setSelectedTags(e);
-                }}
-                value={selectedTags}
-                options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
-                components={{
-                  Option: ({ data, ...props }) => (
-                    <Box
-                      key={data.value.id}
-                      {...props.innerProps}
-                      p="4px 8px"
-                      cursor="pointer"
-                      _hover={{ bg: "gray.100" }}
-                    >
-                      {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
-                    </Box>
-                  ),
-                  MultiValue: ({ data, ...props }) => (
-                    <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer">
-                      {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
-                    </Box>
-                  )
-                }}
-              />
-              <Field.HelperText>Only assign work to {role.toLowerCase()} with one of these tags</Field.HelperText>
-            </Field.Root>
+                      // Create TZDate with these exact values in course timezone
+                      const tzDate = new TZDate(
+                        parseInt(year),
+                        parseInt(month) - 1,
+                        parseInt(day),
+                        parseInt(hour),
+                        parseInt(minute),
+                        0,
+                        0,
+                        course.time_zone ?? "America/New_York"
+                      );
+                      setDueDate(tzDate.toISOString());
+                    } else {
+                      setDueDate("");
+                    }
+                  }}
+                />
+              </Field.Root>
+            </VStack>
+          </Fieldset.Content>
+        </Fieldset.Root>
+      ) : (
+        <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
+          <Fieldset.Legend>
+            <Heading size="md">Assignee Selection</Heading>
+          </Fieldset.Legend>
+          <Fieldset.Content m={0}>
+            <VStack align="flex-start" maxW={"lg"} gap={1}>
+              <Field.Root>
+                <Field.Label>Select role to assign reviews to</Field.Label>
+                <Select
+                  onChange={(e) => {
+                    if (e?.value) {
+                      setRole(e.value.toString());
+                    }
+                  }}
+                  value={{ label: role, value: role }}
+                  options={[
+                    { label: "Instructors", value: "Instructors" },
+                    { label: "Graders", value: "Graders" },
+                    { label: "Instructors and graders", value: "Instructors and graders" }
+                  ]}
+                />
+              </Field.Root>
 
-            <Field.Root>
-              <Field.Label>Number of {role.toLowerCase()} to select</Field.Label>
-              <Input
-                type="number"
-                min={1}
-                max={selectedGraders().length}
-                value={numGradersToSelect || ""}
-                onChange={(e) => {
-                  const value = parseInt(e.target.value);
-                  if (!isNaN(value) && value > 0) {
-                    setNumGradersToSelect(Math.min(value, selectedGraders().length));
-                  }
-                }}
-                placeholder={`Max ${selectedGraders().length}`}
-              />
-              <Field.HelperText>
-                Select how many {role.toLowerCase()} to randomly choose from {selectedGraders().length} available.
-                Defaults to all available {role.toLowerCase()}.
-              </Field.HelperText>
-            </Field.Root>
+              <Field.Root>
+                <Field.Label>Filter {role.toLowerCase()} by tag</Field.Label>
+                <Select
+                  isMulti={true}
+                  onChange={(e) => {
+                    setSelectedTags(e);
+                  }}
+                  value={selectedTags}
+                  options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
+                  components={{
+                    Option: ({ data, ...props }) => (
+                      <Box
+                        key={data.value.id}
+                        {...props.innerProps}
+                        p="4px 8px"
+                        cursor="pointer"
+                        _hover={{ bg: "gray.100" }}
+                      >
+                        {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                      </Box>
+                    ),
+                    MultiValue: ({ data, ...props }) => (
+                      <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer">
+                        {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                      </Box>
+                    )
+                  }}
+                />
+                <Field.HelperText>Only assign work to {role.toLowerCase()} with one of these tags</Field.HelperText>
+              </Field.Root>
 
-            <Field.Root>
-              <Field.Label>Select specific {role.toLowerCase()} to assign work to</Field.Label>
-              <Select
-                isMulti={true}
-                onChange={(e) => {
-                  setSelectedUsers(e);
-                }}
-                value={sortedSelectedUsers}
-                options={selectedGraders()
-                  .map((user) => ({
-                    label: user.profiles.name,
-                    value: user
-                  }))
-                  .sort((a, b) => a.label.localeCompare(b.label))}
-                components={{
-                  MultiValue: ({ data, removeProps, ...props }) => {
-                    const allValues = props.selectProps.value as typeof selectedUsers;
-                    const currentIndex = allValues.findIndex(
-                      (item) => item.value.private_profile_id === data.value.private_profile_id
-                    );
+              <Field.Root>
+                <Field.Label>Number of {role.toLowerCase()} to select</Field.Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={selectedGraders().length}
+                  value={numGradersToSelect || ""}
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value);
+                    if (!isNaN(value) && value > 0) {
+                      setNumGradersToSelect(Math.min(value, selectedGraders().length));
+                    }
+                  }}
+                  placeholder={`Max ${selectedGraders().length}`}
+                />
+                <Field.HelperText>
+                  Select how many {role.toLowerCase()} to randomly choose from {selectedGraders().length} available.
+                  Defaults to all available {role.toLowerCase()}.
+                </Field.HelperText>
+              </Field.Root>
 
-                    // If more than 10 selected and not expanded, only show first 9 and a "+X more" indicator
-                    if (allValues.length > 10 && !isGraderListExpanded) {
-                      if (currentIndex < 9) {
-                        return (
+              <Field.Root>
+                <Field.Label>Select specific {role.toLowerCase()} to assign work to</Field.Label>
+                <Select
+                  isMulti={true}
+                  onChange={(e) => {
+                    setSelectedUsers(e);
+                  }}
+                  value={sortedSelectedUsers}
+                  options={selectedGraders()
+                    .map((user) => ({
+                      label: user.profiles.name,
+                      value: user
+                    }))
+                    .sort((a, b) => a.label.localeCompare(b.label))}
+                  components={{
+                    MultiValue: ({ data, removeProps, ...props }) => {
+                      const allValues = props.selectProps.value as typeof selectedUsers;
+                      const currentIndex = allValues.findIndex(
+                        (item) => item.value.private_profile_id === data.value.private_profile_id
+                      );
+
+                      // If more than 10 selected and not expanded, only show first 9 and a "+X more" indicator
+                      if (allValues.length > 10 && !isGraderListExpanded) {
+                        if (currentIndex < 9) {
+                          return (
+                            <Box
+                              key={data.value.private_profile_id}
+                              display="inline-flex"
+                              alignItems="center"
+                              bg="bg.subtle"
+                              borderRadius="md"
+                              m={1}
+                              p={1}
+                              fontSize="sm"
+                            >
+                              {data.label}
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                minH="auto"
+                                h="18px"
+                                w="18px"
+                                p={0}
+                                onClick={(e) => removeProps.onClick?.(e as unknown as React.MouseEvent<HTMLDivElement>)}
+                                onMouseDown={(e) =>
+                                  removeProps.onMouseDown?.(e as unknown as React.MouseEvent<HTMLDivElement>)
+                                }
+                                onTouchEnd={(e) =>
+                                  removeProps.onTouchEnd?.(e as unknown as React.TouchEvent<HTMLDivElement>)
+                                }
+                              >
+                                ×
+                              </Button>
+                            </Box>
+                          );
+                        } else if (currentIndex === 9) {
+                          return (
+                            <Box
+                              key="more-indicator"
+                              display="inline-flex"
+                              alignItems="center"
+                              bg="bg.info"
+                              borderRadius="md"
+                              p={1}
+                              m={1}
+                              fontSize="sm"
+                              fontWeight="medium"
+                              cursor="pointer"
+                              _hover={{ bg: "blue.200" }}
+                              onClick={() => setIsGraderListExpanded(true)}
+                            >
+                              +{allValues.length - 9} more
+                            </Box>
+                          );
+                        } else {
+                          return null;
+                        }
+                      }
+
+                      // Default behavior: show all items (either ≤10 items or expanded view)
+                      const isLastItem = currentIndex === allValues.length - 1;
+
+                      return (
+                        <>
                           <Box
                             key={data.value.private_profile_id}
                             display="inline-flex"
                             alignItems="center"
                             bg="bg.subtle"
                             borderRadius="md"
-                            m={1}
                             p={1}
+                            m={1}
                             fontSize="sm"
                           >
                             {data.label}
@@ -1537,6 +2096,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                               h="18px"
                               w="18px"
                               p={0}
+                              ml={1}
                               onClick={(e) => removeProps.onClick?.(e as unknown as React.MouseEvent<HTMLDivElement>)}
                               onMouseDown={(e) =>
                                 removeProps.onMouseDown?.(e as unknown as React.MouseEvent<HTMLDivElement>)
@@ -1548,293 +2108,248 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                               ×
                             </Button>
                           </Box>
-                        );
-                      } else if (currentIndex === 9) {
-                        return (
-                          <Box
-                            key="more-indicator"
-                            display="inline-flex"
-                            alignItems="center"
-                            bg="bg.info"
-                            borderRadius="md"
-                            p={1}
-                            m={1}
-                            fontSize="sm"
-                            fontWeight="medium"
-                            cursor="pointer"
-                            _hover={{ bg: "blue.200" }}
-                            onClick={() => setIsGraderListExpanded(true)}
-                          >
-                            +{allValues.length - 9} more
-                          </Box>
-                        );
-                      } else {
-                        return null;
-                      }
+                          {/* Show "Show less" button only when expanded and this is the last item and there are >10 total */}
+                          {isLastItem && isGraderListExpanded && allValues.length > 10 && (
+                            <Box
+                              key="show-less-indicator"
+                              display="inline-flex"
+                              alignItems="center"
+                              bg="gray.200"
+                              borderRadius="md"
+                              px={2}
+                              py={1}
+                              fontSize="sm"
+                              fontWeight="medium"
+                              cursor="pointer"
+                              _hover={{ bg: "gray.300" }}
+                              onClick={() => setIsGraderListExpanded(false)}
+                            >
+                              Show less
+                            </Box>
+                          )}
+                        </>
+                      );
                     }
+                  }}
+                />
+                <Field.HelperText>
+                  {sortedSelectedUsers.length} out of {selectedGraders().length} available {role.toLowerCase()}{" "}
+                  selected.
+                  {sortedSelectedUsers.length === 0
+                    ? ` All available ${role.toLowerCase()} will be assigned work.`
+                    : ` These ${sortedSelectedUsers.length} ${role.toLowerCase()} will be assigned work.`}
+                </Field.HelperText>
+              </Field.Root>
 
-                    // Default behavior: show all items (either ≤10 items or expanded view)
-                    const isLastItem = currentIndex === allValues.length - 1;
+              <Separator my={2} />
 
-                    return (
-                      <>
-                        <Box
-                          key={data.value.private_profile_id}
-                          display="inline-flex"
-                          alignItems="center"
-                          bg="bg.subtle"
-                          borderRadius="md"
-                          p={1}
-                          m={1}
-                          fontSize="sm"
-                        >
-                          {data.label}
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            minH="auto"
-                            h="18px"
-                            w="18px"
-                            p={0}
-                            ml={1}
-                            onClick={(e) => removeProps.onClick?.(e as unknown as React.MouseEvent<HTMLDivElement>)}
-                            onMouseDown={(e) =>
-                              removeProps.onMouseDown?.(e as unknown as React.MouseEvent<HTMLDivElement>)
-                            }
-                            onTouchEnd={(e) =>
-                              removeProps.onTouchEnd?.(e as unknown as React.TouchEvent<HTMLDivElement>)
-                            }
-                          >
-                            ×
-                          </Button>
-                        </Box>
-                        {/* Show "Show less" button only when expanded and this is the last item and there are >10 total */}
-                        {isLastItem && isGraderListExpanded && allValues.length > 10 && (
-                          <Box
-                            key="show-less-indicator"
-                            display="inline-flex"
-                            alignItems="center"
-                            bg="gray.200"
-                            borderRadius="md"
-                            px={2}
-                            py={1}
-                            fontSize="sm"
-                            fontWeight="medium"
-                            cursor="pointer"
-                            _hover={{ bg: "gray.300" }}
-                            onClick={() => setIsGraderListExpanded(false)}
-                          >
-                            Show less
-                          </Box>
-                        )}
-                      </>
-                    );
-                  }
-                }}
-              />
-              <Field.HelperText>
-                {sortedSelectedUsers.length} out of {selectedGraders().length} available {role.toLowerCase()} selected.
-                {sortedSelectedUsers.length === 0
-                  ? ` All available ${role.toLowerCase()} will be assigned work.`
-                  : ` These ${sortedSelectedUsers.length} ${role.toLowerCase()} will be assigned work.`}
-              </Field.HelperText>
-            </Field.Root>
+              {/* Grader Assignment Rules Section */}
+              <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
+                <Fieldset.Legend>
+                  <Heading size="md">Grader Assignment Rules</Heading>
+                </Fieldset.Legend>
+                <Fieldset.Content m={0}>
+                  <VStack align="flex-start" maxW={"2xl"} gap={3}>
+                    {/* Preferences Subsection */}
+                    <Box w="100%">
+                      <VStack align="flex-start" gap={2}>
+                        <Heading size="sm">Strict Grader Preferences</Heading>
+                        <Text fontSize="sm" color="text.muted" mb={1}>
+                          Force specific student-grader pairings (overrides all load balancing)
+                        </Text>
 
-            <Separator my={2} />
-
-            {/* Grader Assignment Rules Section */}
-            <Fieldset.Root borderColor="border.emphasized" borderWidth={1} borderRadius="md" p={2}>
-              <Fieldset.Legend>
-                <Heading size="md">Grader Assignment Rules</Heading>
-              </Fieldset.Legend>
-              <Fieldset.Content m={0}>
-                <VStack align="flex-start" maxW={"2xl"} gap={3}>
-                  {/* Preferences Subsection */}
-                  <Box w="100%">
-                    <VStack align="flex-start" gap={2}>
-                      <Heading size="sm">Strict Grader Preferences</Heading>
-                      <Text fontSize="sm" color="text.muted" mb={1}>
-                        Force specific student-grader pairings (overrides all load balancing)
-                      </Text>
-
-                      <Field.Root w="100%">
-                        <Field.Label>Copy grader assignments from</Field.Label>
-                        <Select
-                          value={
-                            selectedReferenceAssignment
-                              ? {
-                                  label: selectedReferenceAssignment.title,
-                                  value: selectedReferenceAssignment
-                                }
-                              : undefined
-                          }
-                          onChange={(e) => {
-                            setSelectedReferenceAssignment(e?.value);
-                            setSelectedReferenceRubric(undefined); // Reset rubric when assignment changes
-                          }}
-                          options={allAssignments.map((assign) => ({ label: assign.title, value: assign }))}
-                          isClearable
-                          placeholder="Select an assignment to copy from..."
-                        />
-                        <Field.HelperText>
-                          Students will be assigned to the exact same graders from the selected assignment. Choose
-                          current assignment to copy from a different rubric.
-                        </Field.HelperText>
-                      </Field.Root>
-
-                      {selectedReferenceAssignment && (
                         <Field.Root w="100%">
-                          <Field.Label>Specific rubric to copy from</Field.Label>
+                          <Field.Label>Copy grader assignments from</Field.Label>
                           <Select
                             value={
-                              selectedReferenceRubric
+                              selectedReferenceAssignment
                                 ? {
-                                    label: selectedReferenceRubric.name,
-                                    value: selectedReferenceRubric
+                                    label: selectedReferenceAssignment.title,
+                                    value: selectedReferenceAssignment
                                   }
                                 : undefined
                             }
-                            onChange={(e) => setSelectedReferenceRubric(e?.value)}
-                            options={(referenceRubrics || []).map((rubric) => ({ label: rubric.name, value: rubric }))}
+                            onChange={(e) => {
+                              setSelectedReferenceAssignment(e?.value);
+                              setSelectedReferenceRubric(undefined); // Reset rubric when assignment changes
+                            }}
+                            options={allAssignments.map((assign) => ({ label: assign.title, value: assign }))}
                             isClearable
-                            placeholder="All rubrics (recommended)"
+                            placeholder="Select an assignment to copy from..."
                           />
                           <Field.HelperText>
-                            Optional: Narrow down to a specific rubric. Example: Copy from &quot;grading review&quot;
-                            when assigning &quot;code walk review&quot;.
+                            Students will be assigned to the exact same graders from the selected assignment. Choose
+                            current assignment to copy from a different rubric.
                           </Field.HelperText>
                         </Field.Root>
-                      )}
-                    </VStack>
-                  </Box>
 
-                  <Separator w="100%" />
+                        {selectedReferenceAssignment && (
+                          <Field.Root w="100%">
+                            <Field.Label>Specific rubric to copy from</Field.Label>
+                            <Select
+                              value={
+                                selectedReferenceRubric
+                                  ? {
+                                      label: selectedReferenceRubric.name,
+                                      value: selectedReferenceRubric
+                                    }
+                                  : undefined
+                              }
+                              onChange={(e) => setSelectedReferenceRubric(e?.value)}
+                              options={(referenceRubrics || []).map((rubric) => ({
+                                label: rubric.name,
+                                value: rubric
+                              }))}
+                              isClearable
+                              placeholder="All rubrics (recommended)"
+                            />
+                            <Field.HelperText>
+                              Optional: Narrow down to a specific rubric. Example: Copy from &quot;grading review&quot;
+                              when assigning &quot;code walk review&quot;.
+                            </Field.HelperText>
+                          </Field.Root>
+                        )}
+                      </VStack>
+                    </Box>
 
-                  {/* Exclusions Subsection */}
-                  <Box w="100%">
-                    <VStack align="flex-start" gap={2}>
-                      <Heading size="sm">Grader Exclusions</Heading>
-                      <Text fontSize="sm" color="text.muted" mb={1}>
-                        Prevent certain student-grader pairings (useful for meta-grading)
-                      </Text>
+                    <Separator w="100%" />
 
-                      <Field.Root w="100%">
-                        <Field.Label>Exclude grader assignments from</Field.Label>
-                        <Select
-                          value={
-                            selectedExclusionAssignment
-                              ? {
-                                  label: selectedExclusionAssignment.title,
-                                  value: selectedExclusionAssignment
-                                }
-                              : undefined
-                          }
-                          onChange={(e) => {
-                            setSelectedExclusionAssignment(e?.value);
-                            setSelectedExclusionRubric(undefined); // Reset rubric when assignment changes
-                          }}
-                          options={allAssignments.map((assign) => ({ label: assign.title, value: assign }))}
-                          isClearable
-                          placeholder="Select an assignment to exclude from..."
-                        />
-                        <Field.HelperText>
-                          Students will NOT be assigned to graders who reviewed their work on the selected assignment.
-                        </Field.HelperText>
-                      </Field.Root>
+                    {/* Exclusions Subsection */}
+                    <Box w="100%">
+                      <VStack align="flex-start" gap={2}>
+                        <Heading size="sm">Grader Exclusions</Heading>
+                        <Text fontSize="sm" color="text.muted" mb={1}>
+                          Prevent certain student-grader pairings (useful for meta-grading)
+                        </Text>
 
-                      {selectedExclusionAssignment && (
                         <Field.Root w="100%">
-                          <Field.Label>Specific rubric to exclude from</Field.Label>
+                          <Field.Label>Exclude grader assignments from</Field.Label>
                           <Select
                             value={
-                              selectedExclusionRubric
+                              selectedExclusionAssignment
                                 ? {
-                                    label: selectedExclusionRubric.name,
-                                    value: selectedExclusionRubric
+                                    label: selectedExclusionAssignment.title,
+                                    value: selectedExclusionAssignment
                                   }
                                 : undefined
                             }
-                            onChange={(e) => setSelectedExclusionRubric(e?.value)}
-                            options={(exclusionRubrics || []).map((rubric) => ({ label: rubric.name, value: rubric }))}
-                            placeholder="Select a rubric..."
+                            onChange={(e) => {
+                              setSelectedExclusionAssignment(e?.value);
+                              setSelectedExclusionRubric(undefined); // Reset rubric when assignment changes
+                            }}
+                            options={allAssignments.map((assign) => ({ label: assign.title, value: assign }))}
+                            isClearable
+                            placeholder="Select an assignment to exclude from..."
                           />
                           <Field.HelperText>
-                            Required: Choose which rubric&apos;s assignments to exclude. Example: Exclude &quot;grading
-                            review&quot; graders when assigning &quot;meta-grading review&quot;.
+                            Students will NOT be assigned to graders who reviewed their work on the selected assignment.
                           </Field.HelperText>
                         </Field.Root>
-                      )}
-                    </VStack>
-                  </Box>
-                </VStack>
-              </Fieldset.Content>
-            </Fieldset.Root>
 
-            <Separator my={1} />
+                        {selectedExclusionAssignment && (
+                          <Field.Root w="100%">
+                            <Field.Label>Specific rubric to exclude from</Field.Label>
+                            <Select
+                              value={
+                                selectedExclusionRubric
+                                  ? {
+                                      label: selectedExclusionRubric.name,
+                                      value: selectedExclusionRubric
+                                    }
+                                  : undefined
+                              }
+                              onChange={(e) => setSelectedExclusionRubric(e?.value)}
+                              options={(exclusionRubrics || []).map((rubric) => ({
+                                label: rubric.name,
+                                value: rubric
+                              }))}
+                              placeholder="Select a rubric..."
+                            />
+                            <Field.HelperText>
+                              Required: Choose which rubric&apos;s assignments to exclude. Example: Exclude
+                              &quot;grading review&quot; graders when assigning &quot;meta-grading review&quot;.
+                            </Field.HelperText>
+                          </Field.Root>
+                        )}
+                      </VStack>
+                    </Box>
+                  </VStack>
+                </Fieldset.Content>
+              </Fieldset.Root>
 
-            <Heading size="sm">Load Balancing & Due Date</Heading>
-            <Field.Root>
-              <Field.Label>Load balancing strategy</Field.Label>
-              <Select
-                value={
-                  baseOnAll
-                    ? { label: "Balance based on all assignments", value: true }
-                    : { label: "Balance based on new assignments", value: false }
-                }
-                onChange={(e) => {
-                  if (e) {
-                    setBaseOnAll(e?.value);
+              <Separator my={1} />
+
+              {(assignmentMode as string) !== "by_lab_leaders" && (assignmentMode as string) !== "by_group_mentors" && (
+                <>
+                  <Heading size="sm">Load Balancing & Due Date</Heading>
+                  <Field.Root>
+                    <Field.Label>Load balancing strategy</Field.Label>
+                    <Select
+                      value={
+                        baseOnAll
+                          ? { label: "Balance based on all assignments", value: true }
+                          : { label: "Balance based on new assignments", value: false }
+                      }
+                      onChange={(e) => {
+                        if (e) {
+                          setBaseOnAll(e?.value);
+                        }
+                      }}
+                      options={[
+                        { label: "Balance based on new assignments", value: false },
+                        { label: "Balance based on all assignments", value: true }
+                      ]}
+                    />
+                  </Field.Root>
+                </>
+              )}
+
+              {((assignmentMode as string) === "by_lab_leaders" ||
+                (assignmentMode as string) === "by_group_mentors") && <Heading size="sm">Due Date</Heading>}
+
+              <Field.Root>
+                <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
+                <Input
+                  type="datetime-local"
+                  value={
+                    dueDate
+                      ? new Date(dueDate)
+                          .toLocaleString("sv-SE", {
+                            timeZone: course.time_zone ?? "America/New_York"
+                          })
+                          .replace(" ", "T")
+                      : ""
                   }
-                }}
-                options={[
-                  { label: "Balance based on new assignments", value: false },
-                  { label: "Balance based on all assignments", value: true }
-                ]}
-              />
-            </Field.Root>
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value) {
+                      // Treat inputted date as course timezone regardless of user location
+                      const [date, time] = value.split("T");
+                      const [year, month, day] = date.split("-");
+                      const [hour, minute] = time.split(":");
 
-            <Field.Root>
-              <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
-              <Input
-                type="datetime-local"
-                value={
-                  dueDate
-                    ? new Date(dueDate)
-                        .toLocaleString("sv-SE", {
-                          timeZone: course.time_zone ?? "America/New_York"
-                        })
-                        .replace(" ", "T")
-                    : ""
-                }
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value) {
-                    // Treat inputted date as course timezone regardless of user location
-                    const [date, time] = value.split("T");
-                    const [year, month, day] = date.split("-");
-                    const [hour, minute] = time.split(":");
-
-                    // Create TZDate with these exact values in course timezone
-                    const tzDate = new TZDate(
-                      parseInt(year),
-                      parseInt(month) - 1,
-                      parseInt(day),
-                      parseInt(hour),
-                      parseInt(minute),
-                      0,
-                      0,
-                      course.time_zone ?? "America/New_York"
-                    );
-                    setDueDate(tzDate.toString());
-                  } else {
-                    setDueDate("");
-                  }
-                }}
-              />
-            </Field.Root>
-          </VStack>
-        </Fieldset.Content>
-      </Fieldset.Root>
+                      // Create TZDate with these exact values in course timezone
+                      const tzDate = new TZDate(
+                        parseInt(year),
+                        parseInt(month) - 1,
+                        parseInt(day),
+                        parseInt(hour),
+                        parseInt(minute),
+                        0,
+                        0,
+                        course.time_zone ?? "America/New_York"
+                      );
+                      setDueDate(tzDate.toISOString());
+                    } else {
+                      setDueDate("");
+                    }
+                  }}
+                />
+              </Field.Root>
+            </VStack>
+          </Fieldset.Content>
+        </Fieldset.Root>
+      )}
 
       {/* Action Buttons */}
       <VStack align="flex-start" gap={4}>
@@ -1845,7 +2360,14 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               onClick={generateReviews}
               variant="subtle"
               colorPalette="green"
-              disabled={!dueDate || !selectedRubric || !role || submissionsToDo?.length === 0}
+              disabled={
+                !dueDate ||
+                !selectedRubric ||
+                ((assignmentMode as string) !== "by_lab_leaders" &&
+                  (assignmentMode as string) !== "by_group_mentors" &&
+                  !role) ||
+                submissionsToDo?.length === 0
+              }
               loading={isGeneratingReviews}
             >
               Prepare Review Assignments
@@ -1888,7 +2410,19 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             <DragAndDropExample
               draftReviews={draftReviews}
               setDraftReviews={setDraftReviews}
-              courseStaffWithConflicts={finalSelectedUsers() ?? []}
+              courseStaffWithConflicts={
+                assignmentMode === "by_group_mentors"
+                  ? (() => {
+                      const seen = new Set<string>();
+                      return draftReviews
+                        .map((d) => d.assignee)
+                        .filter(
+                          (a): a is UserRoleWithConflictsAndName =>
+                            !!a && !seen.has(a.private_profile_id) && (seen.add(a.private_profile_id), true)
+                        );
+                    })()
+                  : (finalSelectedUsers() ?? [])
+              }
               currentReviewAssignments={currentReviewAssignments}
               selectedRubric={selectedRubric}
               allActiveSubmissions={allActiveSubmissions}

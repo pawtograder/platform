@@ -67,7 +67,9 @@ test.beforeAll(async () => {
     }
   }
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([instructor1, instructor2]);
+});
 test.describe("Lab Sections Page", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeEach(async ({ page }) => {
@@ -75,6 +77,7 @@ test.describe("Lab Sections Page", () => {
     await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
     await expect(page.getByRole("menuitem", { name: "Lab Sections" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Lab Sections" }).click();
+    await page.getByRole("link", { name: "Manage lab sections" }).click();
   });
   test("Instructors can view lab section contents", async ({ page }) => {
     // Check Lab Sections Page Contents

@@ -10,7 +10,7 @@
  * Usage: deno run --allow-env --allow-net PushChangesToRepoFromHandout.ts <repository_id_or_full_name>
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit } from "../_shared/GitHubWrapper.ts";

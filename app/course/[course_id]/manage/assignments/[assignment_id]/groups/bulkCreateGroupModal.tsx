@@ -1,9 +1,4 @@
-import {
-  Assignment,
-  AssignmentGroupWithMembersInvitationsAndJoinRequests,
-  Tag,
-  UserRole
-} from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentGroupWithMembersAndMentor, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Button,
@@ -17,7 +12,7 @@ import {
   Table
 } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
-import { useStudentRoster } from "@/hooks/useCourseController";
+import { useAllStudentRoles } from "@/hooks/useCourseController";
 import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
 import { MultiValue, Select } from "chakra-react-select";
@@ -25,17 +20,18 @@ import useTags from "@/hooks/useTags";
 import { useList } from "@refinedev/core";
 import TagDisplay from "@/components/ui/tag";
 
-export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
-  const students = useStudentRoster();
+export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersAndMentor[]) {
+  const studentRoles = useAllStudentRoles();
+  const profiles = useMemo(() => studentRoles.map((r) => r.profiles), [studentRoles]);
   const ungroupedProfiles = useMemo(() => {
     if (!groups) {
       return [];
     }
-    return students?.filter(
+    return profiles.filter(
       (p: { is_private_profile: boolean; id: string }) =>
         p.is_private_profile && !groups.some((g) => g.assignment_groups_members.some((m) => m.profile_id === p.id))
     );
-  }, [students, groups]);
+  }, [profiles, groups]);
   return ungroupedProfiles;
 }
 
@@ -43,7 +39,7 @@ export default function BulkCreateGroup({
   groups,
   assignment
 }: {
-  groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  groups: AssignmentGroupWithMembersAndMentor[];
   assignment: Assignment;
 }) {
   const [groupTextField, setGroupTextField] = useState<string>("");

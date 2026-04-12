@@ -1,8 +1,8 @@
 "use client";
 
-import { useSubmission, useSubmissionFileComments } from "@/hooks/useSubmission";
+import { useSubmissionFileComments } from "@/hooks/useSubmission";
 import { SubmissionFile } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Icon, Text, VStack } from "@chakra-ui/react";
+import { Box, HStack, Icon, Text, VStack } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { FaChevronDown, FaChevronRight, FaFile, FaFolder, FaFolderOpen } from "react-icons/fa";
 import { Badge } from "@chakra-ui/react";
@@ -78,7 +78,7 @@ function FileTreeItem({
   const hasChildren = node.children.size > 0;
   const isFile = node.type === "file";
   const isActive = node.file?.id === activeFileId;
-  const commentCount = node.file ? commentCounts.get(node.file.id) ?? 0 : 0;
+  const commentCount = node.file ? (commentCounts.get(node.file.id) ?? 0) : 0;
 
   const handleClick = () => {
     if (isFile && node.file) {
@@ -112,22 +112,11 @@ function FileTreeItem({
         minH="24px"
       >
         {hasChildren && (
-          <Icon
-            as={isCollapsed ? FaChevronRight : FaChevronDown}
-            boxSize={3}
-            color="fg.muted"
-            flexShrink={0}
-          />
+          <Icon as={isCollapsed ? FaChevronRight : FaChevronDown} boxSize={3} color="fg.muted" flexShrink={0} />
         )}
         {!hasChildren && <Box w="12px" />}
         <Icon
-          as={
-            isFile
-              ? FaFile
-              : isCollapsed
-                ? FaFolder
-                : FaFolderOpen
-          }
+          as={isFile ? FaFile : isCollapsed ? FaFolder : FaFolderOpen}
           boxSize={4}
           color={isFile ? "fg.muted" : "fg.info"}
           flexShrink={0}
@@ -137,7 +126,7 @@ function FileTreeItem({
           fontWeight={isActive ? "semibold" : "normal"}
           color={isActive ? "fg.info" : "fg.default"}
           flex={1}
-          noOfLines={1}
+          lineClamp={1}
         >
           {node.name}
         </Text>

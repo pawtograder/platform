@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { Button, HStack, VStack, Text, Input, Icon, Box } from "@chakra-ui/react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { createListCollection } from "@chakra-ui/react";
 import { SelectRoot, SelectTrigger, SelectValueText, SelectContent, SelectItem } from "@/components/ui/select";
 import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverHeader, PopoverBody } from "@/components/ui/popover";
@@ -15,7 +16,7 @@ import { toaster } from "@/components/ui/toaster";
 import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/utils/supabase/client";
 
-export default function CalendarSubscribeButton() {
+export default function CalendarSubscribeButton({ iconOnly = false }: { iconOnly?: boolean }) {
   const { course_id } = useParams();
   const { role } = useClassProfiles();
   const controller = useCourseController();
@@ -196,14 +197,24 @@ export default function CalendarSubscribeButton() {
     }
   };
 
+  const button = (
+    <Button size="xs" variant="outline" colorPalette="blue">
+      <Icon as={BsCalendar} {...(iconOnly ? {} : { mr: 1 })} />
+      {!iconOnly && "Subscribe"}
+    </Button>
+  );
+
   return (
     <PopoverRoot>
-      <PopoverTrigger asChild>
-        <Button size="xs" variant="outline" colorPalette="blue">
-          <Icon as={BsCalendar} mr={1} />
-          Subscribe
-        </Button>
-      </PopoverTrigger>
+      {iconOnly ? (
+        <Tooltip content="Subscribe to calendar">
+          <Box display="inline-block">
+            <PopoverTrigger asChild>{button}</PopoverTrigger>
+          </Box>
+        </Tooltip>
+      ) : (
+        <PopoverTrigger asChild>{button}</PopoverTrigger>
+      )}
       <PopoverContent width="400px">
         <PopoverHeader>Subscribe to Calendar</PopoverHeader>
         <PopoverBody>

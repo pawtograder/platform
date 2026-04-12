@@ -1,8 +1,12 @@
+export const dynamic = "force-dynamic";
+
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { termToTermText } from "@/components/ui/semesterText";
+import { fetchUserCoursesWithClasses } from "@/lib/ssr-platform-data";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Card, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { signOutAction } from "../actions";
 
@@ -15,14 +19,17 @@ export default async function ProtectedPage() {
     return redirect("/sign-in?redirect=/course");
   }
 
-  //list identities
-  const roles = await supabase
-    .from("user_roles")
-    .select("role, classes(*)")
-    .eq("user_id", claims.data?.claims.sub)
-    .eq("disabled", false);
+  const userId = claims.data.claims.sub;
+  const headerUserId = (await headers()).get("X-User-ID");
+  const effectiveUserId = headerUserId || userId;
+  const { data: roleRows, error: rolesError } = await fetchUserCoursesWithClasses(supabase, effectiveUserId);
+  if (rolesError) {
+    // eslint-disable-next-line no-console -- operational visibility when cache layer fails
+    console.error("course picker: user_roles fetch", rolesError);
+    throw new Error(`Failed to load your courses: ${rolesError}`);
+  }
 
-  const sortedRoles = roles.data?.sort((a, b) => {
+  const sortedRoles = roleRows?.sort((a, b) => {
     if (!a.classes.term || !b.classes.term) {
       return 0;
     }
@@ -44,7 +51,7 @@ export default async function ProtectedPage() {
         <Heading size="xl">Your courses</Heading>
         <Flex>
           <Stack gap="4" direction="row" wrap="wrap">
-            {sortedRoles!.map((role) => (
+            {(sortedRoles ?? []).map((role) => (
               <Link key={role.classes.id} href={`/course/${role.classes.id}`}>
                 <Card.Root key={role.classes.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
                   <Card.Body>

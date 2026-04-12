@@ -1,6 +1,7 @@
 "use client";
 
 import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useAssignmentDueDate,
@@ -12,11 +13,11 @@ import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { addHours, isAfter } from "date-fns";
-import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";
 import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster, Toaster } from "./toaster";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
@@ -36,7 +37,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + (b.tokens_consumed > 0 ? b.tokens_consumed : 0), 0);
+  const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + b.tokens_consumed, 0);
   const lateTokensAppliedToAssignment = lateTokens
     .filter((e) => e.assignment_id === assignment.id)
     .map((e) => e.tokens_consumed)
@@ -155,8 +156,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                   console.error(err);
                   toaster.create({
                     title: "Error consuming late token",
-                    description:
-                      "An error occurred while consuming the late token. Please try again, and reach out to your instructor if the problem persists.",
+                    description: `${getStudentFacingErrorMessage(err)} If this keeps happening, contact your instructor.`,
                     type: "error"
                   });
                 } finally {
@@ -175,7 +175,6 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 export function AssignmentDueDate({
   assignment,
   showLateTokenButton = false,
-  showTimeZone = false,
   showDue = false
 }: {
   assignment: Assignment;
@@ -185,7 +184,7 @@ export function AssignmentDueDate({
 }) {
   const { private_profile_id } = useClassProfiles();
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
-  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, {
+  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: private_profile_id,
     assignmentGroupId: ourAssignmentGroup?.id
   });
@@ -197,13 +196,8 @@ export function AssignmentDueDate({
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
         <Text minWidth={0} data-visual-test="blackout">
-          {formatInTimeZone(new TZDate(dueDate, time_zone), time_zone, "MMM d h:mm aaa")}
+          <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" />
         </Text>
-        {showTimeZone && (
-          <Text fontSize="sm" flexShrink={0}>
-            ({time_zone})
-          </Text>
-        )}
         {hoursExtended > 0 && (
           <Text>
             ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
@@ -216,15 +210,14 @@ export function AssignmentDueDate({
 }
 
 export function SelfReviewDueDate({
-  assignment,
-  showTimeZone = false
+  assignment
 }: {
   assignment: AssignmentsForStudentDashboard;
   showTimeZone?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
   const ourAssignmentGroup = useAssignmentGroupForUser({ assignment_id: assignment.id });
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(
+  const { dueDate, originalDueDate } = useAssignmentDueDate(
     { id: assignment.id, due_date: assignment.due_date!, minutes_due_after_lab: assignment.minutes_due_after_lab },
     {
       studentPrivateProfileId: private_profile_id,
@@ -237,13 +230,11 @@ export function SelfReviewDueDate({
   return (
     <HStack gap={1}>
       <Text>
-        {formatInTimeZone(
-          new TZDate(addHours(dueDate, assignment.self_review_deadline_offset ?? 0)),
-          time_zone || "America/New_York",
-          "MMM d h:mm aaa"
-        )}
+        <TimeZoneAwareDate
+          date={addHours(dueDate, assignment.self_review_deadline_offset ?? 0)}
+          format="MMM d, h:mm a"
+        />
       </Text>
-      {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
     </HStack>
   );
 }
