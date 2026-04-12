@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import dynamic from "next/dynamic";
 import { forwardRef, useCallback, useState } from "react";
 import { useUserPreferences } from "@/hooks/useUserPreferences";
+import { DEFAULT_USER_PREFERENCES } from "@/types/UserPreferences";
 import { toaster } from "./toaster";
 import { Skeleton } from "./skeleton";
 import {
@@ -47,7 +48,8 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
   const [draftUseMonaco, setDraftUseMonaco] = useState<boolean | null>(null);
 
   const useMonacoGradingEditor = preferences?.grading.useMonacoEditor;
-  const effectiveDraft = draftUseMonaco ?? useMonacoGradingEditor ?? true;
+  const effectiveDraft =
+    draftUseMonaco ?? useMonacoGradingEditor ?? DEFAULT_USER_PREFERENCES.grading.useMonacoEditor;
 
   const handleSavePreference = useCallback(async () => {
     try {
@@ -96,7 +98,7 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
             onCheckedChange={({ checked }) => setDraftUseMonaco(!!checked)}
             fontSize="sm"
           >
-            Use Monaco editor for submission code (grading)
+            Use new editor view for grading
           </Checkbox>
         </HStack>
         <Button

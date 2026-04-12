@@ -2147,11 +2147,11 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
           withEntireGroupRuns(
             segmentRubricSidebarParts(partsToDisplay, hasGroupMembers),
             hasGroupMembers && partsToDisplay.some((p) => p.is_individual_grading)
-          ).map((segment) => {
+          ).map((segment, segmentIndex) => {
             if (segment.type === "individual_run") {
               return (
                 <IndividualGradingRunBlock
-                  key={segment.parts.map((p) => p.id).join("-")}
+                  key={`${segmentIndex}-individual-${segment.parts.map((p) => p.id).join("-")}`}
                   parts={segment.parts}
                   groupMembers={resolvedGroupMembers}
                   assignmentId={assignmentController.assignment.id}
@@ -2163,7 +2163,7 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
             if (segment.type === "entire_group_run") {
               return (
                 <EntireGroupRubricBlock
-                  key={segment.parts.map((p) => p.id).join("-")}
+                  key={`${segmentIndex}-entire-group-${segment.parts.map((p) => p.id).join("-")}`}
                   parts={segment.parts}
                   assignmentId={assignmentController.assignment.id}
                   classId={assignmentController.assignment.class_id}
@@ -2175,7 +2175,7 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
             if (part.is_assign_to_student && hasGroupMembers) {
               return (
                 <AssignToStudentPart
-                  key={part.name + "-" + part.id}
+                  key={`${segmentIndex}-assign-${part.id}`}
                   part={part}
                   groupMembers={resolvedGroupMembers}
                   assignmentId={assignmentController.assignment.id}
@@ -2186,7 +2186,7 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
             }
             return (
               <RubricPart
-                key={part.name + "-" + part.id}
+                key={`${segmentIndex}-part-${part.id}`}
                 part={part}
                 assignmentId={assignmentController.assignment.id}
                 classId={assignmentController.assignment.class_id}

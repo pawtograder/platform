@@ -431,12 +431,18 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
           )}
         </Box>
         <VStack align="stretch" gap={2}>
-          {groupMemberIds.map((studentId) => {
+          {groupMemberIds.map((studentId, tweakRowIdx) => {
             const savedT = perT[studentId];
             const savedN = perN[studentId];
             const isEditing = editingStudentId === studentId;
             return (
-              <Box key={studentId} borderWidth="1px" borderRadius="md" p={2} borderColor="border.muted">
+              <Box
+                key={`${studentId}@dbg:SubmissionReviewScoreTweak:perStudentBox#${tweakRowIdx}`}
+                borderWidth="1px"
+                borderRadius="md"
+                p={2}
+                borderColor="border.muted"
+              >
                 <HStack justify="space-between" mb={1}>
                   <PersonName uid={studentId} />
                   {!isEditing && (
@@ -1483,8 +1489,8 @@ function ReviewStats() {
       {allGraders.size > 0 && (
         <DataListItem
           label="Other graders"
-          value={Array.from(allGraders).map((grader) => (
-            <PersonName size="2xs" key={grader} uid={grader} />
+          value={Array.from(allGraders).map((grader, graderIdx) => (
+            <PersonName size="2xs" key={`${grader}@dbg:GradingReviewMeta:otherGraders#${graderIdx}`} uid={grader} />
           ))}
         />
       )}
@@ -1708,7 +1714,7 @@ function PerStudentGradingTotalsDisplay({
         is on.
       </Text>
       <VStack align="stretch" gap={2}>
-        {entries.map(([profileId, totalScore]) => {
+        {entries.map(([profileId, totalScore], perStudentTotalsIdx) => {
           const isMe = profileId === private_profile_id;
           const rawInd = individualScores?.[profileId];
           const individualNum = typeof rawInd === "number" && Number.isFinite(rawInd) ? rawInd : 0;
@@ -1719,7 +1725,7 @@ function PerStudentGradingTotalsDisplay({
 
           return (
             <Box
-              key={profileId}
+              key={`${profileId}@dbg:PerStudentGradingTotalsDisplay:row#${perStudentTotalsIdx}`}
               w="100%"
               pb={2}
               borderBottomWidth="1px"
@@ -1776,10 +1782,14 @@ function IndividualScoresDisplay({ individualScores }: { individualScores: Indiv
         Individual Scores
       </Text>
       <VStack align="start" gap={1}>
-        {sortedEntries.map(([profileId, score]) => {
+        {sortedEntries.map(([profileId, score], individualScoresIdx) => {
           const isMe = profileId === private_profile_id;
           return (
-            <HStack key={profileId} w="100%" justifyContent="space-between">
+            <HStack
+              key={`${profileId}@dbg:IndividualScoresDisplay:row#${individualScoresIdx}`}
+              w="100%"
+              justifyContent="space-between"
+            >
               <HStack>
                 <PersonName uid={profileId} />
                 {isMe && !isGraderOrInstructor && (
@@ -1976,11 +1986,18 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 <HStack gap={1} flexWrap="wrap" alignItems="baseline">
                   <HStack gap={1}>
                     Group {assignmentGroupWithMembers.name} (
-                    {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                      <HStack key={member.profile_id} gap={1}>
-                        <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
+                    {assignmentGroupWithMembers.assignment_groups_members.map((member, groupMemberIdx) => (
+                      <HStack
+                        key={`${member.profile_id}@dbg:SubmissionsLayout:groupMember:hstack#${groupMemberIdx}`}
+                        gap={1}
+                      >
+                        <PersonName
+                          key={`${member.profile_id}@dbg:SubmissionsLayout:groupMember:PersonName#${groupMemberIdx}`}
+                          uid={member.profile_id}
+                          showAvatar={false}
+                        />
                         <StudentSummaryTrigger
-                          key={member.profile_id}
+                          key={`${member.profile_id}@dbg:SubmissionsLayout:groupMember:StudentSummaryTrigger#${groupMemberIdx}`}
                           student_id={member.profile_id}
                           course_id={parseInt(course_id as string, 10)}
                         />

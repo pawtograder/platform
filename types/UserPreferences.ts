@@ -15,7 +15,7 @@ export type UserPreferences = {
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   grading: {
-    useMonacoEditor: true
+    useMonacoEditor: false
   }
 };
 
