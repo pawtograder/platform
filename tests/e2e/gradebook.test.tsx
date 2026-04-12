@@ -987,7 +987,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await tableRegion.evaluate((el) => {
       el.scrollLeft = el.scrollWidth;
     });
-    await tableRegion.locator('button[aria-label="Column options"]').last().click();
+    // Scroll area order is not guaranteed to match visual order; target Participation explicitly
+    // (`.last()` would hit the rightmost column, e.g. instructor-only test column, not Participation).
+    const participationHeader = tableRegion.locator('[role="columnheader"]').filter({ hasText: /^Participation/ });
+    await participationHeader.getByRole("button", { name: "Column options" }).click();
     const releaseItem = page.getByRole("menuitem", { name: "Release Column", exact: true });
     await releaseItem.click();
 
@@ -1086,7 +1089,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await tableRegion2.evaluate((el) => {
       el.scrollLeft = el.scrollWidth;
     });
-    await tableRegion2.locator('button[aria-label="Column options"]').last().click();
+    const participationHeader2 = tableRegion2.locator('[role="columnheader"]').filter({ hasText: /^Participation/ });
+    await participationHeader2.getByRole("button", { name: "Column options" }).click();
     const unreleaseItem = page.getByRole("menuitem", { name: "Unrelease Column", exact: true });
     await unreleaseItem.click();
     //Wait for the column to unrelease
