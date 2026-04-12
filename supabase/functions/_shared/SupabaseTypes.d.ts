@@ -8377,8 +8377,8 @@ export type Database = {
           github_username: string | null;
           last_github_user_sync: string | null;
           name: string | null;
+          preferences: Json;
           sis_user_id: number | null;
-          use_monaco_grading_editor: boolean;
           user_id: string;
         };
         Insert: {
@@ -8391,8 +8391,8 @@ export type Database = {
           github_username?: string | null;
           last_github_user_sync?: string | null;
           name?: string | null;
+          preferences?: Json;
           sis_user_id?: number | null;
-          use_monaco_grading_editor?: boolean;
           user_id?: string;
         };
         Update: {
@@ -8405,8 +8405,8 @@ export type Database = {
           github_username?: string | null;
           last_github_user_sync?: string | null;
           name?: string | null;
+          preferences?: Json;
           sis_user_id?: number | null;
-          use_monaco_grading_editor?: boolean;
           user_id?: string;
         };
         Relationships: [];

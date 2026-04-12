@@ -4,7 +4,7 @@ import { Box, Button, Flex, HStack } from "@chakra-ui/react";
 import { Checkbox } from "@/components/ui/checkbox";
 import dynamic from "next/dynamic";
 import { forwardRef, useCallback, useState } from "react";
-import { useGradingMonacoEditorPreference } from "@/hooks/useGradingMonacoEditorPreference";
+import { useUserPreferences } from "@/hooks/useUserPreferences";
 import { toaster } from "./toaster";
 import { Skeleton } from "./skeleton";
 import {
@@ -38,14 +38,15 @@ const CodeFilePlain = dynamic(() => import("./code-file-plain"), {
 });
 
 const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
-  const { useMonacoGradingEditor, savePreference, isSaving } = useGradingMonacoEditorPreference();
+  const { preferences, updatePreferences, isSaving } = useUserPreferences();
   const [draftUseMonaco, setDraftUseMonaco] = useState<boolean | null>(null);
 
+  const useMonacoGradingEditor = preferences?.grading.useMonacoEditor;
   const effectiveDraft = draftUseMonaco ?? useMonacoGradingEditor ?? true;
 
   const handleSavePreference = useCallback(async () => {
     try {
-      await savePreference(effectiveDraft);
+      await updatePreferences({ grading: { useMonacoEditor: effectiveDraft } });
       setDraftUseMonaco(null);
       toaster.success({
         title: "Preference saved",
@@ -56,9 +57,9 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
     } catch {
       toaster.error({ title: "Could not save preference", description: "Try again in a moment." });
     }
-  }, [savePreference, effectiveDraft]);
+  }, [updatePreferences, effectiveDraft]);
 
-  if (useMonacoGradingEditor === undefined) {
+  if (preferences === undefined) {
     return <Skeleton height="620px" width="100%" />;
   }
 
