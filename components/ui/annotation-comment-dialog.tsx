@@ -86,7 +86,7 @@ export function AnnotationCommentDialog({
           }
         }
       };
-      
+
       // Try focusing after a short delay to ensure DOM is ready
       requestAnimationFrame(() => {
         setTimeout(focusInput, 100);
@@ -132,9 +132,7 @@ export function AnnotationCommentDialog({
       released,
       points,
       submission_review_id: submissionReviewId ?? null,
-      eventually_visible: rubricCheck
-        ? rubricCheck.student_visibility !== "never"
-        : eventuallyVisible,
+      eventually_visible: rubricCheck ? rubricCheck.student_visibility !== "never" : eventuallyVisible,
       regrade_request_id: null
     };
 
@@ -150,10 +148,10 @@ export function AnnotationCommentDialog({
       if (onSubmitted) {
         onSubmitted(created as SubmissionFileComment);
       }
-      
+
       // Scroll restoration is handled by the parent component via context
       // No need to restore here - parent will handle it when view zones update
-      
+
       onClose();
       toaster.success({ title: "Annotation added" });
     } catch (err) {
@@ -190,11 +188,7 @@ export function AnnotationCommentDialog({
                   <Text fontSize="sm" color="fg.muted">
                     {formatPoints({ check: rubricCheck, criteria, points })}
                   </Text>
-                  <StudentVisibilityIndicator
-                    check={rubricCheck}
-                    isApplied={true}
-                    isReleased={released}
-                  />
+                  <StudentVisibilityIndicator check={rubricCheck} isApplied={true} isReleased={released} />
                 </HStack>
               </Box>
             )}

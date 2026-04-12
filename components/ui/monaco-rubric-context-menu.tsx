@@ -40,7 +40,7 @@ export function MonacoRubricContextMenu({
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
   const existingComments = useSubmissionFileComments({ file_id: file?.id ?? 0 });
-  
+
   const disposablesRef = useRef<IDisposable[]>([]);
   const lastMousePositionRef = useRef<{ top: number; left: number } | null>(null);
   const [quickPickState, setQuickPickState] = useState<{
@@ -96,30 +96,32 @@ export function MonacoRubricContextMenu({
         const existingAnnotationsForCheck = existingComments.filter(
           (comment) => comment.rubric_check_id === check.id
         ).length;
-        const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
+        const atMax = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
 
         if (isRubricCheckDataWithOptions(check.data)) {
           // Create action for each sub-option
           check.data.options.forEach((subOption: RubricCheckSubOption, index: number) => {
-            actions.push({
-              id: `check-${check.id}-sub-${index}`,
-              label: `${criteria.is_additive ? "+" : "-"}${subOption.points} ${subOption.label}`,
-              criteria,
-              check,
-              subOption
-            });
+            if (!atMax) {
+              actions.push({
+                id: `check-${check.id}-sub-${index}`,
+                label: `${criteria.is_additive ? "+" : "-"}${subOption.points} ${subOption.label}`,
+                criteria,
+                check,
+                subOption
+              });
+            }
           });
         } else {
-          // Single check action
-          const pointsText = check.points
-            ? ` (${criteria.is_additive ? "+" : "-"}${check.points} pts)`
-            : "";
-          actions.push({
-            id: `check-${check.id}`,
-            label: `${check.name}${pointsText}`,
-            criteria,
-            check
-          });
+          if (!atMax) {
+            // Single check action
+            const pointsText = check.points ? ` (${criteria.is_additive ? "+" : "-"}${check.points} pts)` : "";
+            actions.push({
+              id: `check-${check.id}`,
+              label: `${check.name}${pointsText}`,
+              criteria,
+              check
+            });
+          }
         }
       });
     });
@@ -175,7 +177,7 @@ export function MonacoRubricContextMenu({
       }
     });
     disposablesRef.current.push(addCommentAction);
-    
+
     // Also listen to Monaco's context menu event to capture position
     const contextMenuDisposable = editor.onContextMenu((e) => {
       const browserEvent = e.event.browserEvent;
@@ -220,7 +222,7 @@ export function MonacoRubricContextMenu({
     let order = 1;
     actionsByCriteria.forEach((actions, criteriaId) => {
       const criteria = actions[0].criteria!;
-      
+
       // Create a submenu action that shows a quick pick
       const criteriaAction = editor.addAction({
         id: `rubric-criteria-${criteriaId}`,
@@ -229,22 +231,22 @@ export function MonacoRubricContextMenu({
         contextMenuOrder: order++,
         run: () => {
           const { startLine, endLine } = getSelectionLines();
-          
+
           // If only one action, apply it directly
           if (actions.length === 1) {
             onSelectCheck(actions[0], startLine, endLine);
             return;
           }
-          
+
           // Try to get current mouse position first (most accurate)
           // Fall back to last known position if not available
           let position = lastMousePositionRef.current || undefined;
-          
+
           // Debug: log position to help troubleshoot
           if (process.env.NODE_ENV === "development") {
             console.log("Quick pick position:", position, "Last mouse pos:", lastMousePositionRef.current);
           }
-          
+
           // If we have a position, use it; otherwise center on screen
           if (!position) {
             // Fallback: center on viewport
@@ -253,7 +255,7 @@ export function MonacoRubricContextMenu({
               left: window.innerWidth / 2
             };
           }
-          
+
           // Show custom quick pick
           setQuickPickState({
             isOpen: true,
@@ -281,7 +283,7 @@ export function MonacoRubricContextMenu({
         left: e.clientX
       };
     };
-    
+
     const handleContextMenu = (e: MouseEvent) => {
       // Capture position when context menu is triggered
       lastMousePositionRef.current = {
@@ -289,12 +291,12 @@ export function MonacoRubricContextMenu({
         left: e.clientX
       };
     };
-    
+
     // Track mouse movement to always have a recent position
     document.addEventListener("mousemove", handleMouseMove, { passive: true });
     // Also capture on context menu (in case mouse hasn't moved)
     document.addEventListener("contextmenu", handleContextMenu, { passive: true });
-    
+
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("contextmenu", handleContextMenu);
@@ -306,13 +308,13 @@ export function MonacoRubricContextMenu({
     const selection = editor.getSelection();
     const startLine = selection?.startLineNumber ?? editor.getPosition()?.lineNumber ?? 1;
     const endLine = selection?.endLineNumber ?? editor.getPosition()?.lineNumber ?? 1;
-    
+
     // If comment is required, go directly to comment dialog
     if (action.check?.is_comment_required) {
       onSelectCheck(action, startLine, endLine);
       return;
     }
-    
+
     // If comment is not required, show "Apply" or "Apply with comment..." menu
     const position = lastMousePositionRef.current || undefined;
     setApplyQuickPickState({
@@ -323,12 +325,12 @@ export function MonacoRubricContextMenu({
       position
     });
   };
-  
+
   const handleApplyQuickPickSelect = (option: "apply" | "apply-with-comment") => {
     if (!applyQuickPickState.action) return;
-    
+
     const { action, startLine, endLine } = applyQuickPickState;
-    
+
     if (option === "apply") {
       // Immediately apply without showing comment dialog
       if (onImmediateApply) {
@@ -338,7 +340,7 @@ export function MonacoRubricContextMenu({
       // Show comment dialog
       onSelectCheck(action, startLine, endLine);
     }
-    
+
     setApplyQuickPickState({ ...applyQuickPickState, isOpen: false });
   };
 
@@ -358,8 +360,18 @@ export function MonacoRubricContextMenu({
           isOpen={applyQuickPickState.isOpen}
           title={`Apply ${applyQuickPickState.action.check?.name || "check"}?`}
           items={[
-            { id: "apply", label: "Apply", check: applyQuickPickState.action.check, criteria: applyQuickPickState.action.criteria },
-            { id: "apply-with-comment", label: "Apply with comment...", check: applyQuickPickState.action.check, criteria: applyQuickPickState.action.criteria }
+            {
+              id: "apply",
+              label: "Apply",
+              check: applyQuickPickState.action.check,
+              criteria: applyQuickPickState.action.criteria
+            },
+            {
+              id: "apply-with-comment",
+              label: "Apply with comment...",
+              check: applyQuickPickState.action.check,
+              criteria: applyQuickPickState.action.criteria
+            }
           ]}
           onSelect={(action) => {
             const option = action.id === "apply" ? "apply" : "apply-with-comment";

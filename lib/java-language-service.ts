@@ -44,17 +44,23 @@ export function buildSymbolIndex(files: JavaFileSymbols[]): SymbolIndex {
 }
 
 export function resolveType(
-  _word: string,
-  _file: JavaFileSymbols | undefined,
-  _index: SymbolIndex | null
+  word: string,
+  file: JavaFileSymbols | undefined,
+  index: SymbolIndex | null
 ): { fileId: number; line: number; column: number; name: string } | null {
+  void word;
+  void file;
+  void index;
   return null;
 }
 
 export function findReferences(
-  _symbol: JavaSymbol,
-  _index: SymbolIndex,
-  _files: { id: number; contents: string }[]
+  symbol: JavaSymbol,
+  index: SymbolIndex,
+  files: { id: number; contents: string }[]
 ): { fileId: number; line: number; column: number }[] {
+  void symbol;
+  void index;
+  void files;
   return [];
 }

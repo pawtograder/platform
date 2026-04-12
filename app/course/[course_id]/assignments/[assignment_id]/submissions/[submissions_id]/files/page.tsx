@@ -45,7 +45,6 @@ import {
   useSubmission,
   useSubmissionArtifactComments,
   useSubmissionController,
-  useSubmissionFileComments,
   useSubmissionMaybe,
   useSubmissionReview,
   useSubmissionReviewOrGradingReview,
@@ -85,69 +84,8 @@ import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-s
 import { format } from "date-fns";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
 import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 
-function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
-  const submission = useSubmission();
-  const comments = useSubmissionFileComments({});
-  const showCommentsFeature = true; //submission.released !== null || isGraderOrInstructor;
-  return (
-    <Box
-      maxH="250px"
-      overflowY="auto"
-      w="100%"
-      m={2}
-      css={{
-        "&::-webkit-scrollbar": {
-          width: "8px",
-          display: "block"
-        },
-        "&::-webkit-scrollbar-track": {
-          background: "#f1f1f1",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb": {
-          background: "#888",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb:hover": {
-          background: "#555"
-        }
-      }}
-    >
-      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
-        <Table.Header>
-          <Table.Row bg="bg.subtle">
-            <Table.ColumnHeader>File</Table.ColumnHeader>
-            {showCommentsFeature && <Table.ColumnHeader>Comments</Table.ColumnHeader>}
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {submission.submission_files.map((file, idx) => (
-            <Table.Row key={file.id}>
-              <Table.Cell>
-                <Link
-                  variant={curFile === idx ? "underline" : undefined}
-                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onSelect(file.id);
-                  }}
-                >
-                  {file.name}
-                </Link>
-              </Table.Cell>
-              {showCommentsFeature && (
-                <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>
-              )}
-            </Table.Row>
-          ))}
-        </Table.Body>
-      </Table.Root>
-    </Box>
-  );
-}
 function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSelect: (artifactId: number) => void }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -1024,7 +962,7 @@ export default function FilesView() {
     const hash = window.location.hash;
     if (!hash) return;
     const id = hash.startsWith("#") ? hash.slice(1) : hash;
-    
+
     // Try Monaco editor first (for #L42 format)
     if (id.startsWith("L") && codeFileRef.current) {
       const lineNumber = parseInt(id.slice(1), 10);
@@ -1035,7 +973,7 @@ export default function FilesView() {
         return;
       }
     }
-    
+
     // Fallback to DOM element scrolling
     requestAnimationFrame(() => {
       const el = document.getElementById(id);
@@ -1170,7 +1108,6 @@ export default function FilesView() {
   const isLoading = isLoadingSubmission || (!!reviewAssignment && currentSubmissionReview === undefined);
 
   // Resolve prop types
-  const filePickerDisplayIndex = curFileIndex === -1 ? 0 : curFileIndex;
   const artifactPickerDisplayIndex = curArtifactIndex === -1 ? 0 : curArtifactIndex;
   const finalActiveSubmissionReviewId =
     activeSubmissionReviewIdToUse === null ? undefined : activeSubmissionReviewIdToUse;
@@ -1254,16 +1191,6 @@ export default function FilesView() {
     const timeout = setTimeout(() => setIsSwitching(false), 150);
     return () => clearTimeout(timeout);
   }, [isSwitching]);
-
-  if (isLoading) {
-    return <Spinner />;
-  }
-
-  const submission = submissionData;
-
-  if (!submission) {
-    return <NotFound />;
-  }
 
   // Handle sidebar resize
   useEffect(() => {
@@ -1380,6 +1307,16 @@ export default function FilesView() {
       kind: s.kind
     }));
   }, [commandPaletteMode, selectedFileId, fileSymbols]);
+
+  if (isLoading) {
+    return <Spinner />;
+  }
+
+  const submission = submissionData;
+
+  if (!submission) {
+    return <NotFound />;
+  }
 
   return (
     <>
