@@ -274,7 +274,7 @@ const CodeFilePlain = forwardRef<CodeFileHandle, CodeFileProps>(
 
     const lines = useMemo(() => {
       if (!currentFile) return [];
-      return currentFile.contents.split(/\r?\n/);
+      return (currentFile.contents ?? "").split(/\r?\n/);
     }, [currentFile]);
 
     const commentsForCurrentFile = useMemo(() => {

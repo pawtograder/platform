@@ -24,7 +24,7 @@ import {
   DialogCloseTrigger
 } from "./dialog";
 import { StudentVisibilityIndicator } from "./rubric-sidebar";
-import { formatPoints } from "./code-file";
+import { formatPoints } from "./code-file-shared";
 
 export type AnnotationCommentDialogProps = {
   isOpen: boolean;

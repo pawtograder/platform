@@ -1,7 +1,7 @@
 "use client";
 
 import { CalendarEvent, useAllCalendarEvents } from "@/hooks/useCalendarEvents";
-import { Box, Button, Card, Flex, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Card, Flex, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import CalendarSubscribeButton from "./calendar-subscribe-button";
@@ -20,9 +20,9 @@ import {
   isSameDay
 } from "date-fns";
 import { useMemo, useState, useEffect, useRef } from "react";
-import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
-import { isUrl, CalendarColorPalette } from "./calendar-utils";
-import { useCalendarColorsFromEvents } from "./CalendarColorContext";
+import { BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
+import { isUrl, CalendarColorPalette, isEventCurrentlyHappening } from "./calendar-utils";
+import { useCalendarColorsFromEvents, getResolvedQueueName } from "./CalendarColorContext";
 import { useParams, useRouter } from "next/navigation";
 import { useHelpQueues, useHelpQueueAssignments, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useIsStudent, useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
@@ -243,7 +243,18 @@ function TimelineEventBlock({
 }: TimelineEventBlockProps) {
   const { top, height, left, width } = layout;
   const isOfficeHours = event.calendar_type === "office_hours";
-  const colors = getEventColor(event.queue_name, isOfficeHours);
+  const helpQueues = useHelpQueues();
+  const resolvedQueueName = isOfficeHours ? getResolvedQueueName(event, helpQueues) : event.queue_name;
+  const colors = getEventColor(resolvedQueueName, isOfficeHours);
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if event is active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
 
   const bgColor = colors.bg || (isOfficeHours ? "blue.subtle" : "orange.subtle");
   const bgDarkColor = colors.bgDark || (isOfficeHours ? "blue.muted" : "orange.muted");
@@ -252,9 +263,8 @@ function TimelineEventBlock({
 
   const isVeryShort = height < 35;
   const isShort = height >= 35 && height < 50;
-  const isTall = height >= 75;
   const padding = isVeryShort ? 1 : isShort ? 1.5 : 2;
-  const hasQueueBadge = !!event.queue_name;
+  const hasQueueBadge = !!resolvedQueueName;
   const contentPaddingRight = hasQueueBadge && !isVeryShort ? "50px" : undefined;
 
   return (
@@ -267,23 +277,29 @@ function TimelineEventBlock({
       bg={bgColor}
       _dark={{ bg: bgDarkColor }}
       borderRadius="md"
-      borderWidth="1px"
-      borderColor={borderColor}
+      borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+      borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="4px"
-      borderLeftColor={accentColor}
+      borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 4px 6px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
-      _hover={{ opacity: 0.95, boxShadow: "sm" }}
-      zIndex={1}
+      _hover={{
+        opacity: 0.95,
+        boxShadow: isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 4px 6px -1px rgba(0, 0, 0, 0.15)" : "sm"
+      }}
+      zIndex={isCurrentlyHappening ? 2 : 1}
       display="flex"
       flexDirection="column"
       boxSizing="border-box"
-      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
+      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${resolvedQueueName ? `\n${resolvedQueueName}` : ""}${event.location ? `\n📍 ${event.location}` : ""}${isCurrentlyHappening ? "\n🟢 Happening now!" : ""}`}
     >
-      {event.queue_name && !isVeryShort && (
+      {resolvedQueueName && !isVeryShort && (
         <QueueButton
-          queueName={event.queue_name}
+          queueName={resolvedQueueName}
           accentColor={accentColor}
           isVeryShort={isVeryShort}
           context={context}
@@ -342,6 +358,20 @@ function TimelineEventBlock({
           >
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
+          {event.location && (
+            <Text
+              fontSize="2xs"
+              color="fg.muted"
+              overflow="hidden"
+              textOverflow="ellipsis"
+              whiteSpace="nowrap"
+              lineHeight="1.2"
+              width="100%"
+              flexShrink={0}
+            >
+              📍 {event.location}
+            </Text>
+          )}
         </VStack>
       ) : (
         <VStack align="stretch" gap={0.5} flex={1} minH={0} overflow="hidden" width="100%" pr={contentPaddingRight}>
@@ -384,7 +414,6 @@ function TimelineEventBlock({
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
           {event.location &&
-            isTall &&
             (isUrl(event.location) ? (
               <Link
                 href={event.location}
@@ -475,6 +504,8 @@ interface CompactDayColumnProps {
   containerWidth?: number;
   eventLayouts?: Map<number, EventLayout>;
   showCurrentTime?: boolean;
+  helpQueues?: Array<{ id: number; name: string }>;
+  now?: Date;
 }
 
 // Compact timeline event block for week view
@@ -486,7 +517,18 @@ function CompactTimelineEventBlock({
 }: TimelineEventBlockProps) {
   const { top, height, left, width } = layout;
   const isOfficeHours = event.calendar_type === "office_hours";
-  const colors = getEventColor(event.queue_name, isOfficeHours);
+  const helpQueues = useHelpQueues();
+  const resolvedQueueName = isOfficeHours ? getResolvedQueueName(event, helpQueues) : event.queue_name;
+  const colors = getEventColor(resolvedQueueName, isOfficeHours);
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if event is active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
 
   const bgColor = colors.bg || (isOfficeHours ? "blue.subtle" : "orange.subtle");
   const bgDarkColor = colors.bgDark || (isOfficeHours ? "blue.muted" : "orange.muted");
@@ -496,7 +538,7 @@ function CompactTimelineEventBlock({
   const isVeryShort = height < 25;
   const isShort = height >= 25 && height < 40;
   const padding = isVeryShort ? 0.5 : isShort ? 1 : 1;
-  const hasQueueBadge = !!event.queue_name && !isVeryShort;
+  const hasQueueBadge = !!resolvedQueueName && !isVeryShort;
   const contentPaddingRight = hasQueueBadge ? "35px" : undefined;
 
   return (
@@ -509,23 +551,31 @@ function CompactTimelineEventBlock({
       bg={bgColor}
       _dark={{ bg: bgDarkColor }}
       borderRadius="sm"
-      borderWidth="1px"
-      borderColor={borderColor}
+      borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+      borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="3px"
-      borderLeftColor={accentColor}
+      borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
-      _hover={{ opacity: 0.95 }}
-      zIndex={1}
+      _hover={{
+        opacity: 0.95,
+        boxShadow: isCurrentlyHappening
+          ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.15)"
+          : undefined
+      }}
+      zIndex={isCurrentlyHappening ? 2 : 1}
       display="flex"
       flexDirection="column"
       boxSizing="border-box"
-      title={`${event.title}${event.organizer_name ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
+      title={`${event.title}${event.organizer_name ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${resolvedQueueName ? `\n${resolvedQueueName}` : ""}${event.location ? `\n📍 ${event.location}` : ""}${isCurrentlyHappening ? "\n🟢 Happening now!" : ""}`}
     >
-      {event.queue_name && !isVeryShort && (
+      {resolvedQueueName && !isVeryShort && (
         <QueueButton
-          queueName={event.queue_name}
+          queueName={resolvedQueueName}
           accentColor={accentColor}
           isVeryShort={isVeryShort}
           context={context}
@@ -683,7 +733,9 @@ function CompactDayColumn({
   useTimeline,
   containerWidth,
   eventLayouts,
-  showCurrentTime = false
+  showCurrentTime = false,
+  helpQueues,
+  now = new Date()
 }: CompactDayColumnProps) {
   const dayName = format(date, "EEE");
   const dayNumber = format(date, "d");
@@ -734,20 +786,24 @@ function CompactDayColumn({
             </Text>
           ) : (
             events.map((event) => {
-              const colors = getEventColor(event.queue_name, event.calendar_type === "office_hours");
+              const isOfficeHours = event.calendar_type === "office_hours";
+              const resolvedQueueName = isOfficeHours ? getResolvedQueueName(event, helpQueues) : event.queue_name;
+              const colors = getEventColor(resolvedQueueName, isOfficeHours);
               const start = parseISO(event.start_time);
               const end = parseISO(event.end_time);
               const accentColor = colors.accent || colors.border;
+              const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
 
               return (
                 <Box
                   key={event.id}
                   p={1.5}
                   borderRadius="sm"
-                  borderWidth="1px"
-                  borderColor={colors.border}
+                  borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+                  borderColor={isCurrentlyHappening ? "green.500" : colors.border}
                   borderLeftWidth="3px"
-                  borderLeftColor={accentColor}
+                  borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
+                  boxShadow={isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2)" : undefined}
                   bg={colors.bg}
                   _dark={{ bg: colors.bgDark }}
                   fontSize="2xs"
@@ -768,9 +824,9 @@ function CompactDayColumn({
                       📍 {event.location}
                     </Text>
                   )}
-                  {event.queue_name && (
+                  {resolvedQueueName && (
                     <QueueButton
-                      queueName={event.queue_name}
+                      queueName={resolvedQueueName}
                       accentColor={accentColor}
                       isVeryShort={false}
                       context="calendar-schedule-summary"
@@ -813,6 +869,14 @@ function EventsList({
   const containerRef = useRef<HTMLDivElement>(null);
   const weekContainerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
+  const helpQueues = useHelpQueues();
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if events are active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Update container width on resize - measure the scrollable container and account for padding/scrollbars
   useEffect(() => {
@@ -1034,6 +1098,25 @@ function EventsList({
     });
   }, [startDate, endDate, hasWeekendEvents]);
 
+  // Auto-scroll to current time when viewing today
+  // Must be called before any conditional returns (React hooks rules)
+  useEffect(() => {
+    if (containerRef.current && viewMode === "today" && offset === 0) {
+      // Wait for next tick to ensure DOM is fully rendered and sized
+      requestAnimationFrame(() => {
+        if (containerRef.current) {
+          const now = new Date();
+          const currentHour = now.getHours() + now.getMinutes() / 60;
+          if (currentHour >= START_HOUR && currentHour <= END_HOUR) {
+            // Show 2 hours before current time
+            const scrollTop = (currentHour - START_HOUR - 2) * HOUR_HEIGHT;
+            containerRef.current.scrollTop = Math.max(0, scrollTop);
+          }
+        }
+      });
+    }
+  }, [viewMode, offset, dayEvents.length, containerWidth]); // Re-run when events or container size changes
+
   if (events.length === 0) {
     return (
       <Box py={4} textAlign="center">
@@ -1124,6 +1207,8 @@ function EventsList({
                 containerWidth={weekDayColumnWidth}
                 eventLayouts={dayEventLayouts}
                 showCurrentTime={isViewingCurrentWeek}
+                helpQueues={helpQueues}
+                now={now}
               />
             );
           })}
@@ -1206,6 +1291,8 @@ function EventsList({
                       useTimeline={true}
                       containerWidth={dayColumnWidth}
                       eventLayouts={dayEventLayouts}
+                      helpQueues={helpQueues}
+                      now={now}
                     />
                   );
                 })}
@@ -1324,128 +1411,123 @@ export default function CalendarScheduleSummary() {
   }, [viewMode]);
 
   return (
-    <Card.Root width="100%">
-      <Card.Header pb={2}>
-        <Flex justify="space-between" align="center" wrap="wrap" gap={2}>
-          <HStack gap={2}>
-            <Icon as={BsCalendar} color="blue.500" />
-            <Heading size="sm">Schedule</Heading>
-          </HStack>
+    <Box position="relative" width="100%">
+      <Card.Root width="100%">
+        {/* Floating subscription button */}
+        <Box position="absolute" top={2} right={2} zIndex={10}>
+          <CalendarSubscribeButton iconOnly />
+        </Box>
 
-          <HStack gap={2}>
-            <CalendarSubscribeButton />
-          </HStack>
-        </Flex>
-      </Card.Header>
-
-      <Card.Body pt={0} ref={cardBodyRef}>
-        <VStack align="stretch" gap={3}>
-          {/* View mode tabs */}
-          <HStack gap={1} justify="center">
-            {(["today", "week", "month"] as ViewMode[]).map((mode) => (
-              <Button
-                key={mode}
-                size="xs"
-                variant={viewMode === mode ? "solid" : "ghost"}
-                colorPalette={viewMode === mode ? "blue" : "gray"}
-                onClick={() => handleViewChange(mode)}
-                textTransform="capitalize"
-              >
-                {mode}
-              </Button>
-            ))}
-          </HStack>
-
-          {/* Navigation and range label */}
-          <Flex justify="space-between" align="center">
-            <Button size="xs" variant="ghost" onClick={handlePrev} aria-label="Previous">
-              <Icon as={BsChevronLeft} />
-            </Button>
-
-            <HStack gap={2}>
-              <Text fontSize="sm" fontWeight="medium">
-                {rangeLabel}
-              </Text>
-              {offset !== 0 && (
-                <Button size="xs" variant="outline" onClick={handleReset}>
-                  {viewMode === "today" ? "Today" : viewMode === "week" ? "This Week" : "This Month"}
+        <Card.Body pt={0} ref={cardBodyRef}>
+          <VStack align="stretch" gap={0}>
+            {/* View mode tabs */}
+            <HStack gap={1} justify="center" mt={0}>
+              {(["today", "week", "month"] as ViewMode[]).map((mode) => (
+                <Button
+                  key={mode}
+                  size="xs"
+                  variant={viewMode === mode ? "solid" : "ghost"}
+                  colorPalette={viewMode === mode ? "blue" : "gray"}
+                  onClick={() => handleViewChange(mode)}
+                  textTransform="capitalize"
+                >
+                  {mode}
                 </Button>
-              )}
+              ))}
             </HStack>
 
-            <Button size="xs" variant="ghost" onClick={handleNext} aria-label="Next">
-              <Icon as={BsChevronRight} />
-            </Button>
-          </Flex>
+            {/* Navigation and range label */}
+            <Flex justify="space-between" align="center" gap={2}>
+              <Button size="xs" variant="ghost" onClick={handlePrev} aria-label="Previous">
+                <Icon as={BsChevronLeft} />
+              </Button>
 
-          {/* Legend */}
-          {stats.total > 0 && (
-            <HStack justify="center" wrap="wrap" gap={3} fontSize="xs">
-              {/* Office Hours Queues */}
-              {stats.uniqueQueues.map((queueName) => {
-                const colors = getOfficeHoursColor(queueName);
-                return (
-                  <HStack key={`queue-${queueName}`} gap={1}>
-                    <Box w={3} h={3} bg={colors.legend || colors.border} borderRadius="sm" />
-                    <Text color="fg.muted">{queueName}</Text>
+              <HStack gap={2}>
+                <Text fontSize="sm" fontWeight="medium">
+                  {rangeLabel}
+                </Text>
+                {offset !== 0 && (
+                  <Button size="xs" variant="outline" onClick={handleReset}>
+                    {viewMode === "today" ? "Today" : viewMode === "week" ? "This Week" : "This Month"}
+                  </Button>
+                )}
+              </HStack>
+
+              <Button size="xs" variant="ghost" onClick={handleNext} aria-label="Next">
+                <Icon as={BsChevronRight} />
+              </Button>
+            </Flex>
+
+            {/* Legend */}
+            {stats.total > 0 && (
+              <HStack justify="center" wrap="wrap" gap={2} fontSize="xs">
+                {/* Office Hours Queues */}
+                {stats.uniqueQueues.map((queueName) => {
+                  const colors = getOfficeHoursColor(queueName);
+                  return (
+                    <HStack key={`queue-${queueName}`} gap={1}>
+                      <Box w={3} h={3} bg={colors.legend || colors.border} borderRadius="sm" />
+                      <Text color="fg.muted">{queueName}</Text>
+                    </HStack>
+                  );
+                })}
+
+                {/* Assignments */}
+                {stats.assignmentsCount > 0 && (
+                  <HStack gap={1}>
+                    <Box w={3} h={3} bg="orange.500" borderRadius="sm" />
+                    <Text color="fg.muted">
+                      Assignments {stats.assignmentsCount > 1 && `(${stats.assignmentsCount})`}
+                    </Text>
                   </HStack>
-                );
-              })}
+                )}
 
-              {/* Assignments */}
-              {stats.assignmentsCount > 0 && (
-                <HStack gap={1}>
-                  <Box w={3} h={3} bg="orange.500" borderRadius="sm" />
-                  <Text color="fg.muted">
-                    Assignments {stats.assignmentsCount > 1 && `(${stats.assignmentsCount})`}
-                  </Text>
-                </HStack>
-              )}
+                {/* Lab Sections */}
+                {stats.labMeetingsCount > 0 && (
+                  <HStack gap={1}>
+                    <Box w={3} h={3} bg="green.500" borderRadius="sm" />
+                    <Text color="fg.muted">
+                      Lab Sections {stats.labMeetingsCount > 1 && `(${stats.labMeetingsCount})`}
+                    </Text>
+                  </HStack>
+                )}
 
-              {/* Lab Sections */}
-              {stats.labMeetingsCount > 0 && (
-                <HStack gap={1}>
-                  <Box w={3} h={3} bg="green.500" borderRadius="sm" />
-                  <Text color="fg.muted">
-                    Lab Sections {stats.labMeetingsCount > 1 && `(${stats.labMeetingsCount})`}
-                  </Text>
-                </HStack>
-              )}
+                {/* Other Events */}
+                {stats.otherEventsCount > 0 && (
+                  <HStack gap={1}>
+                    <Box w={3} h={3} bg="yellow.500" borderRadius="sm" />
+                    <Text color="fg.muted">Events {stats.otherEventsCount > 1 && `(${stats.otherEventsCount})`}</Text>
+                  </HStack>
+                )}
+              </HStack>
+            )}
 
-              {/* Other Events */}
-              {stats.otherEventsCount > 0 && (
-                <HStack gap={1}>
-                  <Box w={3} h={3} bg="yellow.500" borderRadius="sm" />
-                  <Text color="fg.muted">Events {stats.otherEventsCount > 1 && `(${stats.otherEventsCount})`}</Text>
-                </HStack>
-              )}
-            </HStack>
-          )}
-
-          {/* Events list */}
-          <Box
-            ref={scrollableContainerRef}
-            maxH="600px"
-            overflowY="auto"
-            overflowX="hidden"
-            width="100%"
-            minW={0}
-            boxSizing="border-box"
-          >
-            <EventsList
-              events={filteredEvents}
-              viewMode={viewMode}
-              emptyMessage={emptyMessage}
-              getEventColor={getEventColor}
-              startDate={startDate}
-              endDate={endDate}
-              containerRef={cardBodyRef}
-              scrollableContainerRef={scrollableContainerRef}
-              offset={offset}
-            />
-          </Box>
-        </VStack>
-      </Card.Body>
-    </Card.Root>
+            {/* Events list */}
+            <Box
+              ref={scrollableContainerRef}
+              maxH="600px"
+              overflowY="auto"
+              overflowX="hidden"
+              width="100%"
+              minW={0}
+              boxSizing="border-box"
+              mt={-0.5}
+            >
+              <EventsList
+                events={filteredEvents}
+                viewMode={viewMode}
+                emptyMessage={emptyMessage}
+                getEventColor={getEventColor}
+                startDate={startDate}
+                endDate={endDate}
+                containerRef={cardBodyRef}
+                scrollableContainerRef={scrollableContainerRef}
+                offset={offset}
+              />
+            </Box>
+          </VStack>
+        </Card.Body>
+      </Card.Root>
+    </Box>
   );
 }

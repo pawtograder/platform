@@ -653,13 +653,13 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
 
     // Parse Java files and build symbol index
     useEffect(() => {
-      const javaFiles = allFiles.filter((f) => f.name.endsWith(".java"));
+      const javaFiles = allFiles.filter((f) => f.name.endsWith(".java") && f.contents != null);
       if (javaFiles.length === 0) return;
 
       const parsedSymbols: JavaFileSymbols[] = [];
       for (const file of javaFiles) {
         try {
-          const parsed = parseJavaFile(file.contents, file.id, file.name);
+          const parsed = parseJavaFile(file.contents ?? "", file.id, file.name);
           parsedSymbols.push(parsed);
           fileSymbolsRef.current.set(file.id, parsed);
         } catch {
@@ -682,7 +682,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
         allFiles.forEach((f) => {
           if (!modelsRef.current.has(f.id)) {
             const language = getMonacoLanguage(f.name);
-            const model = monaco.editor.createModel(f.contents, language, monaco.Uri.parse(`file:///${f.name}`));
+            const model = monaco.editor.createModel(f.contents ?? "", language, monaco.Uri.parse(`file:///${f.name}`));
             modelsRef.current.set(f.id, model);
           }
         });
@@ -774,7 +774,7 @@ const CodeFileMonaco = forwardRef<CodeFileHandle, CodeFileProps>(
               const references = findReferences(
                 symbol,
                 symbolIndexRef.current,
-                allFiles.map((f) => ({ id: f.id, contents: f.contents }))
+                allFiles.map((f) => ({ id: f.id, contents: f.contents ?? "" }))
               );
 
               return references

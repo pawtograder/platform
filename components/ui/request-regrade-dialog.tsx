@@ -15,6 +15,7 @@ import { SubmissionArtifactComment, SubmissionComments, SubmissionFileComment } 
 import { Box, Button, Text, VStack } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { useCallback, useMemo, useState } from "react";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster } from "./toaster";
 import { Alert } from "@/components/ui/alert";
 import { format, formatDistanceToNow } from "date-fns";
@@ -92,7 +93,7 @@ export default function RequestRegradeDialog({
     } catch (error) {
       toaster.error({
         title: "Error Creating Regrade Request",
-        description: error instanceof Error ? error.message : "Unknown error occurred"
+        description: getStudentFacingErrorMessage(error)
       });
     }
   }, [comment, private_profile_id, createRegradeRequest, submissionController]);

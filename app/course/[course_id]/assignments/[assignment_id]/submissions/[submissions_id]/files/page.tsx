@@ -5,18 +5,17 @@ import CodeFile, {
   formatPoints,
   RubricCheckSelectOption,
   RubricCheckSubOptions,
-  RubricCriteriaSelectGroupOption,
-  type CodeFileHandle
+  RubricCriteriaSelectGroupOption
 } from "@/components/ui/code-file";
 import DownloadLink from "@/components/ui/download-link";
+import { GroupMemberSelectOption } from "@/components/ui/group-member-select-option";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
+import MarkdownFilePreview, { isMarkdownFile } from "@/components/ui/markdown-file-preview";
+import BinaryFilePreview from "@/components/ui/binary-file-preview";
 import MessageInput from "@/components/ui/message-input";
 import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
-import { FileTreeSidebar } from "@/components/ui/file-tree";
-import { CommandPalette } from "@/components/ui/command-palette";
-import { parseJavaFile, type JavaFileSymbols } from "@/lib/java-language-service";
 import {
   PopoverArrow,
   PopoverBody,
@@ -36,15 +35,21 @@ import {
   useRubricById,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric,
+  useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
+import {
+  computeRubricAnnotationTargetMetaFromParts,
+  effectiveAnnotationTargetStudentProfileId
+} from "@/hooks/useRubricAnnotationTargetMeta";
 import {
   useRubricCheck,
   useSubmission,
   useSubmissionArtifactComments,
   useSubmissionController,
+  useSubmissionFileComments,
   useSubmissionMaybe,
   useSubmissionReview,
   useSubmissionReviewOrGradingReview,
@@ -72,6 +77,8 @@ import {
   Heading,
   HStack,
   Icon,
+  NativeSelectField,
+  NativeSelectRoot,
   Separator,
   Spinner,
   Table,
@@ -86,6 +93,66 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 
+function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
+  const submission = useSubmission();
+  const comments = useSubmissionFileComments({});
+  const showCommentsFeature = true; //submission.released !== null || isGraderOrInstructor;
+  return (
+    <Box
+      maxH="250px"
+      overflowY="auto"
+      w="100%"
+      m={2}
+      css={{
+        "&::-webkit-scrollbar": {
+          width: "8px",
+          display: "block"
+        },
+        "&::-webkit-scrollbar-track": {
+          background: "#f1f1f1",
+          borderRadius: "4px"
+        },
+        "&::-webkit-scrollbar-thumb": {
+          background: "#888",
+          borderRadius: "4px"
+        },
+        "&::-webkit-scrollbar-thumb:hover": {
+          background: "#555"
+        }
+      }}
+    >
+      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
+        <Table.Header>
+          <Table.Row bg="bg.subtle">
+            <Table.ColumnHeader>File</Table.ColumnHeader>
+            {showCommentsFeature && <Table.ColumnHeader>Comments</Table.ColumnHeader>}
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {submission.submission_files.map((file, idx) => (
+            <Table.Row key={file.id}>
+              <Table.Cell>
+                <Link
+                  variant={curFile === idx ? "underline" : undefined}
+                  href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${file.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onSelect(file.id);
+                  }}
+                >
+                  {file.name}
+                </Link>
+              </Table.Cell>
+              {showCommentsFeature && (
+                <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>
+              )}
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table.Root>
+    </Box>
+  );
+}
 function ArtifactPicker({ curArtifact, onSelect }: { curArtifact: number; onSelect: (artifactId: number) => void }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -467,6 +534,14 @@ function ArtifactCheckPopover({
   const rubric = useRubricWithParts(reviewContext?.rubric_id);
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
+  const rubricParts = useRubricParts(reviewContext?.rubric_id ?? null);
+  const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
+    assignment_group_id: submission.assignment_group_id ?? undefined
+  });
+  const groupMembers = useMemo(
+    () => assignmentGroupWithMembers?.assignment_groups_members ?? [],
+    [assignmentGroupWithMembers]
+  );
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -476,6 +551,22 @@ function ArtifactCheckPopover({
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
+  const [pickedArtifactAnnotationStudentId, setPickedArtifactAnnotationStudentId] = useState<string | null>(null);
+
+  const artifactAnnotationTargetMeta = useMemo(
+    () =>
+      computeRubricAnnotationTargetMetaFromParts({
+        criteria: selectedCheckOption?.criteria ?? null,
+        parts: rubricParts ?? null,
+        members: groupMembers,
+        review: reviewContext ?? null
+      }),
+    [selectedCheckOption?.criteria, rubricParts, groupMembers, reviewContext]
+  );
+
+  useEffect(() => {
+    setPickedArtifactAnnotationStudentId(null);
+  }, [selectedCheckOption?.criteria?.id, selectedCheckOption?.check?.id]);
 
   useEffect(() => {
     if (isOpen && messageInputRef.current && selectedCheckOption) {
@@ -626,6 +717,25 @@ function ArtifactCheckPopover({
                     Visible to student when submission is released
                   </Checkbox>
                 )}
+                {selectedCheckOption.check && artifactAnnotationTargetMeta.mode === "individual" && (
+                  <NativeSelectRoot size="sm">
+                    <NativeSelectField
+                      aria-label="Group member this annotation is for"
+                      value={pickedArtifactAnnotationStudentId ?? ""}
+                      onChange={(e) => setPickedArtifactAnnotationStudentId(e.target.value || null)}
+                    >
+                      <option value="">Select group member…</option>
+                      {artifactAnnotationTargetMeta.members.map((m) => (
+                        <GroupMemberSelectOption key={m.profile_id} profileId={m.profile_id} />
+                      ))}
+                    </NativeSelectField>
+                  </NativeSelectRoot>
+                )}
+                {selectedCheckOption.check && artifactAnnotationTargetMeta.mode === "assign_blocked" && (
+                  <Text fontSize="sm" color="fg.error">
+                    {artifactAnnotationTargetMeta.reason}
+                  </Text>
+                )}
                 <MessageInput
                   textAreaRef={messageInputRef}
                   placeholder={
@@ -654,6 +764,15 @@ function ArtifactCheckPopover({
                       return;
                     }
 
+                    const targetEff = effectiveAnnotationTargetStudentProfileId(
+                      artifactAnnotationTargetMeta,
+                      pickedArtifactAnnotationStudentId
+                    );
+                    if (targetEff.error) {
+                      toaster.error({ title: "Cannot save annotation", description: targetEff.error });
+                      return;
+                    }
+
                     const values = {
                       comment: commentText,
                       rubric_check_id: selectedCheckOption.check?.id ?? null,
@@ -665,7 +784,8 @@ function ArtifactCheckPopover({
                       points: points ?? null,
                       submission_review_id: finalSubmissionReviewId ?? null,
                       eventually_visible: eventuallyVisible,
-                      regrade_request_id: null
+                      regrade_request_id: null,
+                      target_student_profile_id: targetEff.targetId
                     };
                     await submissionController.submission_artifact_comments.create(values);
                     setIsOpen(false);
@@ -706,14 +826,17 @@ function ArtifactWithComments({
   );
 }
 function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtifact; artifactKey: string }) {
-  const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [textContent, setTextContent] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadArtifact() {
+      if (artifact.data.format === "plaintext" || artifact.data.format === "markdown") {
+        setTextContent(null);
+      }
       const client = createClient();
       if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
         const data = await client.functions.invoke("submission-serve-artifact", {
@@ -723,20 +846,29 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
             artifactId: artifact.id
           })
         });
-        setSiteUrl(data.data.url);
+        if (isMounted) setSiteUrl(data.data.url);
       }
-      const data = await client.storage.from("submission-artifacts").download(artifactKey);
 
-      if (!isMounted) return; // Component unmounted, exit early
-
-      if (data.data) {
-        setArtifactData(data.data);
-      }
-      if (data.error && isMounted) {
-        toaster.error({
-          title: "Error processing ZIP file: " + data.error,
-          description: "Please try again."
-        });
+      if (artifact.data.format === "png") {
+        const { data: urlData, error: urlError } = await client.storage
+          .from("submission-artifacts")
+          .createSignedUrl(artifactKey, 60 * 60 * 24);
+        if (!isMounted) return;
+        if (urlError) {
+          toaster.error({ title: "Error loading artifact image", description: urlError.message });
+          return;
+        }
+        if (urlData) setSignedUrl(urlData.signedUrl);
+      } else if (artifact.data.format === "plaintext" || artifact.data.format === "markdown") {
+        const data = await client.storage.from("submission-artifacts").download(artifactKey);
+        if (!isMounted) return;
+        if (data.data) {
+          const text = await data.data.text();
+          if (isMounted) setTextContent(text);
+        }
+        if (data.error) {
+          toaster.error({ title: "Error loading artifact: " + data.error, description: "Please try again." });
+        }
       }
     }
 
@@ -754,29 +886,14 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
     artifact.id
   ]);
 
-  // Create object URL when artifactData changes and cleanup previous URL
-  useEffect(() => {
-    let newObjectUrl: string | null = null;
-    if (artifactData && artifact.data.format === "png") {
-      newObjectUrl = URL.createObjectURL(artifactData);
-      setObjectUrl(newObjectUrl);
-    }
-
-    return () => {
-      // Cleanup on unmount or when artifactData changes
-      if (newObjectUrl) {
-        URL.revokeObjectURL(newObjectUrl);
-      }
-    };
-  }, [artifactData, artifact.data?.format]);
-
   if (artifact.data.format === "png") {
-    if (objectUrl) {
+    if (signedUrl) {
       return (
         //eslint-disable-next-line @next/next/no-img-element
         <img
-          src={objectUrl}
+          src={signedUrl}
           alt={artifact.name}
+          loading="lazy"
           style={{
             maxWidth: "100%",
             height: "auto",
@@ -826,6 +943,44 @@ function RenderedArtifact({ artifact, artifactKey }: { artifact: SubmissionArtif
         return <Spinner />;
       }
     }
+  } else if (artifact.data.format === "plaintext") {
+    if (textContent !== null) {
+      return (
+        <Box
+          as="pre"
+          p={4}
+          overflowX="auto"
+          overflowY="auto"
+          maxH="70vh"
+          borderWidth="1px"
+          borderColor="border.emphasized"
+          borderRadius="md"
+          whiteSpace="pre-wrap"
+          wordBreak="break-word"
+          fontSize="sm"
+        >
+          {textContent}
+        </Box>
+      );
+    }
+    return <Spinner />;
+  } else if (artifact.data.format === "markdown") {
+    if (textContent !== null) {
+      return (
+        <Box
+          p={4}
+          overflowX="auto"
+          overflowY="auto"
+          maxH="70vh"
+          borderWidth="1px"
+          borderColor="border.emphasized"
+          borderRadius="md"
+        >
+          <Markdown>{textContent}</Markdown>
+        </Box>
+      );
+    }
+    return <Spinner />;
   } else {
     return <>No preview available for artifacts of type {artifact.data.format}.</>;
   }
@@ -903,14 +1058,7 @@ export default function FilesView() {
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [selectedArtifactId, setSelectedArtifactId] = useState<number | null>(null);
   const [isSwitching, setIsSwitching] = useState<boolean>(false);
-  const [sidebarWidth, setSidebarWidth] = useState(250);
-  const [isResizing, setIsResizing] = useState(false);
-  const [openFileIds, setOpenFileIds] = useState<number[]>([]);
-  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-  const [commandPaletteMode, setCommandPaletteMode] = useState<"file" | "symbol">("file");
-  const [fileSymbols, setFileSymbols] = useState<Map<number, JavaFileSymbols>>(new Map());
   const scrolledTargetsRef = useRef<Set<string>>(new Set());
-  const codeFileRef = useRef<CodeFileHandle>(null);
 
   const updateUrl = useCallback((next: { fileId?: number | null; artifactId?: number | null; hash?: string }) => {
     if (typeof window === "undefined") return;
@@ -962,19 +1110,6 @@ export default function FilesView() {
     const hash = window.location.hash;
     if (!hash) return;
     const id = hash.startsWith("#") ? hash.slice(1) : hash;
-
-    // Try Monaco editor first (for #L42 format)
-    if (id.startsWith("L") && codeFileRef.current) {
-      const lineNumber = parseInt(id.slice(1), 10);
-      if (!isNaN(lineNumber)) {
-        requestAnimationFrame(() => {
-          codeFileRef.current?.scrollToLine(lineNumber);
-        });
-        return;
-      }
-    }
-
-    // Fallback to DOM element scrolling
     requestAnimationFrame(() => {
       const el = document.getElementById(id);
       if (el) preciseScrollTo(el);
@@ -984,17 +1119,10 @@ export default function FilesView() {
   useEffect(() => {
     const fileIdParam = searchParams.get("file_id");
     const artifactIdParam = searchParams.get("artifact_id");
-    const fileId = fileIdParam ? Number(fileIdParam) : null;
-    setSelectedFileId(fileId);
+    setSelectedFileId(fileIdParam ? Number(fileIdParam) : null);
     setSelectedArtifactId(artifactIdParam ? Number(artifactIdParam) : null);
-    // Initialize open files with the selected file
-    if (fileId) {
-      setOpenFileIds((prev) => {
-        if (prev.includes(fileId)) return prev;
-        return [...prev, fileId];
-      });
-    }
     // Only run once on mount; subsequent changes are managed locally without navigation
+    // Scrolling is handled by the dedicated useEffect below
   }, [searchParams]);
 
   useEffect(() => {
@@ -1038,38 +1166,8 @@ export default function FilesView() {
         setSelectedFileId(id);
         setSelectedArtifactId(null);
       }
-      // Add to open files if not already open
-      setOpenFileIds((prev) => {
-        if (prev.includes(id)) return prev;
-        return [...prev, id];
-      });
     },
     [updateUrl, selectedFileId, selectedArtifactId]
-  );
-
-  const handleCloseFile = useCallback(
-    (id: number) => {
-      setOpenFileIds((prev) => {
-        const newOpen = prev.filter((fid) => fid !== id);
-        // If closing the active file, switch to another open file or first file
-        if (id === selectedFileId && newOpen.length > 0) {
-          const nextFileId = newOpen[newOpen.length - 1];
-          updateUrl({ fileId: nextFileId });
-          setSelectedFileId(nextFileId);
-        } else if (newOpen.length === 0 && submissionData?.submission_files) {
-          // All tabs closed, select first file
-          const firstFileId = submissionData.submission_files[0]?.id;
-          if (firstFileId) {
-            updateUrl({ fileId: firstFileId });
-            setSelectedFileId(firstFileId);
-            setOpenFileIds([firstFileId]);
-            return [firstFileId];
-          }
-        }
-        return newOpen;
-      });
-    },
-    [selectedFileId, submissionData, updateUrl]
   );
 
   const handleSelectArtifact = useCallback(
@@ -1085,29 +1183,61 @@ export default function FilesView() {
     [updateUrl, selectedArtifactId, selectedFileId]
   );
 
-  const curFileIndex =
-    submissionData?.submission_files.findIndex((file: SubmissionFile) => file.id === (selectedFileId ?? -1)) ?? -1;
+  const submissionFiles = submissionData?.submission_files ?? [];
+  const submissionArtifacts = submissionData?.submission_artifacts ?? [];
+  const normalizedSelectedFileId =
+    selectedFileId !== null && submissionFiles.some((file: SubmissionFile) => file.id === selectedFileId)
+      ? selectedFileId
+      : null;
+  const normalizedSelectedArtifactId =
+    selectedArtifactId !== null &&
+    submissionArtifacts.some((artifact: Tables<"submission_artifacts">) => artifact.id === selectedArtifactId)
+      ? selectedArtifactId
+      : null;
+
+  const defaultFileId = submissionFiles[0]?.id ?? null;
+  const defaultArtifactId = submissionArtifacts[0]?.id ?? null;
+  // Prefer file when both file_id and artifact_id are valid in the URL — checking
+  // artifact first would null out the file and then artifact suppression would null both.
+  const effectiveFileId =
+    normalizedSelectedFileId !== null
+      ? normalizedSelectedFileId
+      : normalizedSelectedArtifactId !== null
+        ? null
+        : defaultFileId !== null
+          ? defaultFileId
+          : null;
+  const effectiveArtifactId =
+    normalizedSelectedFileId !== null
+      ? null
+      : normalizedSelectedArtifactId !== null
+        ? normalizedSelectedArtifactId
+        : defaultFileId === null && defaultArtifactId !== null
+          ? defaultArtifactId
+          : null;
+
+  const curFileIndex = submissionFiles.findIndex((file: SubmissionFile) => file.id === (effectiveFileId ?? -1));
   const selectedFile =
     curFileIndex !== -1
-      ? submissionData?.submission_files[curFileIndex]
-      : submissionData?.submission_files && submissionData.submission_files.length > 0
-        ? submissionData.submission_files[0]
+      ? submissionFiles[curFileIndex]
+      : effectiveFileId !== null && submissionFiles.length > 0
+        ? submissionFiles[0]
         : undefined;
 
-  const curArtifactIndex =
-    submissionData?.submission_artifacts?.findIndex(
-      (artifact: Tables<"submission_artifacts">) => artifact.id === (selectedArtifactId ?? -1)
-    ) ?? -1;
+  const curArtifactIndex = submissionArtifacts.findIndex(
+    (artifact: Tables<"submission_artifacts">) => artifact.id === (effectiveArtifactId ?? -1)
+  );
   const selectedArtifact =
     curArtifactIndex !== -1
-      ? submissionData?.submission_artifacts?.[curArtifactIndex]
-      : submissionData?.submission_artifacts && submissionData.submission_artifacts.length > 0
-        ? submissionData.submission_artifacts[0]
+      ? submissionArtifacts[curArtifactIndex]
+      : effectiveArtifactId !== null && submissionArtifacts.length > 0
+        ? submissionArtifacts[0]
         : undefined;
 
   const isLoading = isLoadingSubmission || (!!reviewAssignment && currentSubmissionReview === undefined);
 
   // Resolve prop types
+  const filePickerDisplayIndex = curFileIndex === -1 ? 0 : curFileIndex;
   const artifactPickerDisplayIndex = curArtifactIndex === -1 ? 0 : curArtifactIndex;
   const finalActiveSubmissionReviewId =
     activeSubmissionReviewIdToUse === null ? undefined : activeSubmissionReviewIdToUse;
@@ -1115,41 +1245,96 @@ export default function FilesView() {
   // Scroll to line anchors when hash is present and relevant content is rendered
   useEffect(() => {
     scrollToHash();
-  }, [selectedFileId, selectedArtifactId, scrollToHash]);
+  }, [effectiveFileId, effectiveArtifactId, scrollToHash]);
+
+  // Scroll to top of file/artifact when navigating via URL params (file_id or artifact_id)
+  useEffect(() => {
+    if (isSwitching) return; // Wait until content is rendered
+    if (typeof window === "undefined") return;
+
+    // Only scroll if there's no hash (hash scrolling is handled separately)
+    const hash = window.location.hash;
+    if (hash) return;
+
+    // Determine which selector to use based on which ID is set (using !== null to handle 0 correctly)
+    const selector =
+      effectiveFileId !== null
+        ? `[data-file-id="${effectiveFileId}"]`
+        : effectiveArtifactId !== null
+          ? `[data-artifact-id="${effectiveArtifactId}"]`
+          : null;
+
+    if (!selector) return; // No valid ID to scroll to
+
+    // Scroll function that finds the element and scrolls to it
+    const scrollToTop = (element: HTMLElement) => {
+      const container = getScrollableAncestor(element);
+      if (container) {
+        // Scroll container so element is at the top
+        const containerRect = container.getBoundingClientRect();
+        const elRect = element.getBoundingClientRect();
+        const scrollTop = container.scrollTop + (elRect.top - containerRect.top);
+        container.scrollTo({ top: scrollTop, behavior: "auto" });
+      } else {
+        // Scroll window so element is at the top
+        const elTop = element.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({ top: elTop, behavior: "auto" });
+      }
+    };
+
+    // Retry logic to handle cases where element isn't rendered yet
+    let attempts = 0;
+    const maxAttempts = 60; // up to ~3s at 50ms intervals
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let rafId: number | null = null;
+    let scrollTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const tryScroll = () => {
+      const targetElement = document.querySelector(selector);
+      if (targetElement instanceof HTMLElement) {
+        // Element found, scroll to it
+        rafId = requestAnimationFrame(() => {
+          scrollTimeoutId = setTimeout(() => {
+            scrollToTop(targetElement);
+          }, 50);
+        });
+        return;
+      }
+
+      // Element not found yet, retry if we haven't exceeded max attempts
+      if (attempts++ < maxAttempts) {
+        timeoutId = setTimeout(tryScroll, 50);
+      }
+    };
+
+    // Start the retry loop
+    tryScroll();
+
+    // Cleanup function
+    return () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      if (scrollTimeoutId !== null) {
+        clearTimeout(scrollTimeoutId);
+      }
+    };
+  }, [isSwitching, effectiveFileId, effectiveArtifactId, getScrollableAncestor]);
 
   // After switching to a new file, wait for content to render and then scroll to the hash exactly once per file+hash
   useEffect(() => {
     if (isSwitching) return; // Still switching, wait until content area is shown
-    if (!selectedFileId) return; // Only applies to file views
+    if (!effectiveFileId) return; // Only applies to file views
     if (typeof window === "undefined") return;
     const hash = window.location.hash;
     if (!hash) return;
     const targetId = hash.startsWith("#") ? hash.slice(1) : hash;
-    const key = `${selectedFileId}:${targetId}`;
+    const key = `${effectiveFileId}:${targetId}`;
     if (scrolledTargetsRef.current.has(key)) return; // Already scrolled for this target on this file
 
-    // Try Monaco editor first (for #L42 format)
-    if (targetId.startsWith("L") && codeFileRef.current) {
-      const lineNumber = parseInt(targetId.slice(1), 10);
-      if (!isNaN(lineNumber)) {
-        let attempts = 0;
-        const maxAttempts = 60; // up to ~3s at 50ms
-        const tryScroll = () => {
-          if (codeFileRef.current) {
-            codeFileRef.current.scrollToLine(lineNumber);
-            scrolledTargetsRef.current.add(key);
-            return;
-          }
-          if (attempts++ < maxAttempts) {
-            setTimeout(tryScroll, 50);
-          }
-        };
-        tryScroll();
-        return;
-      }
-    }
-
-    // Fallback to DOM element scrolling
     let attempts = 0;
     const maxAttempts = 60; // up to ~3s at 50ms
     const tryScroll = () => {
@@ -1164,26 +1349,7 @@ export default function FilesView() {
       }
     };
     tryScroll();
-  }, [isSwitching, selectedFileId, preciseScrollTo]);
-
-  // Parse Java files for symbol outline
-  useEffect(() => {
-    if (!submissionData?.submission_files) return;
-
-    const javaFiles = submissionData.submission_files.filter((f) => f.name.endsWith(".java"));
-    const parsed = new Map<number, JavaFileSymbols>();
-
-    for (const file of javaFiles) {
-      try {
-        const symbols = parseJavaFile(file.contents, file.id, file.name);
-        parsed.set(file.id, symbols);
-      } catch (error) {
-        console.warn(`Failed to parse Java file ${file.name}:`, error);
-      }
-    }
-
-    setFileSymbols(parsed);
-  }, [submissionData?.submission_files]);
+  }, [isSwitching, effectiveFileId, preciseScrollTo]);
 
   // Briefly show a loading skeleton when switching files/artifacts
   useEffect(() => {
@@ -1191,122 +1357,6 @@ export default function FilesView() {
     const timeout = setTimeout(() => setIsSwitching(false), 150);
     return () => clearTimeout(timeout);
   }, [isSwitching]);
-
-  // Handle sidebar resize
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = e.clientX;
-      if (newWidth >= 150 && newWidth <= 600) {
-        setSidebarWidth(newWidth);
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizing]);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-      const modKey = isMac ? e.metaKey : e.ctrlKey;
-
-      // Cmd/Ctrl+P - Quick open file
-      if (modKey && e.key === "p" && !e.shiftKey) {
-        e.preventDefault();
-        setCommandPaletteMode("file");
-        setIsCommandPaletteOpen(true);
-        return;
-      }
-
-      // Cmd/Ctrl+Shift+O - Go to symbol
-      if (modKey && e.shiftKey && e.key === "O") {
-        e.preventDefault();
-        setCommandPaletteMode("symbol");
-        setIsCommandPaletteOpen(true);
-        return;
-      }
-
-      // Cmd/Ctrl+Tab - Cycle through open tabs
-      if (modKey && e.key === "Tab" && !e.shiftKey && openFileIds.length > 1) {
-        e.preventDefault();
-        const currentIndex = openFileIds.findIndex((id) => id === selectedFileId);
-        const nextIndex = (currentIndex + 1) % openFileIds.length;
-        const nextFileId = openFileIds[nextIndex];
-        if (nextFileId) {
-          handleSelectFile(nextFileId);
-        }
-        return;
-      }
-
-      // Cmd/Ctrl+Shift+Tab - Cycle backwards
-      if (modKey && e.shiftKey && e.key === "Tab" && openFileIds.length > 1) {
-        e.preventDefault();
-        const currentIndex = openFileIds.findIndex((id) => id === selectedFileId);
-        const prevIndex = currentIndex === 0 ? openFileIds.length - 1 : currentIndex - 1;
-        const prevFileId = openFileIds[prevIndex];
-        if (prevFileId) {
-          handleSelectFile(prevFileId);
-        }
-        return;
-      }
-
-      // Cmd/Ctrl+W - Close current tab
-      if (modKey && e.key === "w" && selectedFileId && openFileIds.length > 1) {
-        e.preventDefault();
-        handleCloseFile(selectedFileId);
-        return;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [openFileIds, selectedFileId, handleSelectFile, handleCloseFile]);
-
-  const handleCommandPaletteSelectFile = useCallback(
-    (fileId: number) => {
-      handleSelectFile(fileId);
-      setIsCommandPaletteOpen(false);
-    },
-    [handleSelectFile]
-  );
-
-  const handleCommandPaletteSelectSymbol = useCallback(
-    (fileId: number, line: number) => {
-      handleSelectFile(fileId);
-      setIsCommandPaletteOpen(false);
-      // Scroll to line after a brief delay to ensure file is loaded
-      setTimeout(() => {
-        codeFileRef.current?.scrollToLine(line);
-      }, 100);
-    },
-    [handleSelectFile]
-  );
-
-  // Get symbols for current file when in symbol mode
-  const currentFileSymbols = useMemo(() => {
-    if (commandPaletteMode !== "symbol" || !selectedFileId) return [];
-    const symbols = fileSymbols.get(selectedFileId);
-    if (!symbols) return [];
-
-    return symbols.symbols.map((s) => ({
-      name: s.name,
-      fileId: symbols.fileId,
-      line: s.line,
-      kind: s.kind
-    }));
-  }, [commandPaletteMode, selectedFileId, fileSymbols]);
 
   if (isLoading) {
     return <Spinner />;
@@ -1320,60 +1370,20 @@ export default function FilesView() {
 
   return (
     <>
-      {submission.submission_files && (
-        <CommandPalette
-          files={submission.submission_files}
-          isOpen={isCommandPaletteOpen}
-          onClose={() => setIsCommandPaletteOpen(false)}
-          onSelectFile={handleCommandPaletteSelectFile}
-          mode={commandPaletteMode}
-          symbols={currentFileSymbols}
-          onSelectSymbol={handleCommandPaletteSelectSymbol}
-        />
-      )}
-      <Flex pt={{ base: "sm", md: "0" }} h="calc(100vh - 200px)" direction={{ base: "column", md: "row" }}>
-        {/* File Tree Sidebar */}
-        {submission.submission_files && submission.submission_files.length > 0 && (
-          <>
-            <Box
-              w={{ base: "100%", md: `${sidebarWidth}px` }}
-              h={{ base: "200px", md: "100%" }}
-              position="relative"
-              flexShrink={0}
-            >
-              <FileTreeSidebar
-                files={submission.submission_files}
-                activeFileId={selectedFileId}
-                onFileSelect={handleSelectFile}
-              />
-            </Box>
-            {/* Resize handle */}
-            <Box
-              w="4px"
-              h="100%"
-              cursor="col-resize"
-              bg="transparent"
-              _hover={{ bg: "border.emphasized" }}
-              onMouseDown={() => setIsResizing(true)}
-              display={{ base: "none", md: "block" }}
-              flexShrink={0}
-            />
-          </>
-        )}
-        {/* Main content area */}
-        <Flex flex={1} direction="column" minW={0} overflow="hidden">
-          {/* Artifact picker (if artifacts exist) */}
+      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
+        <Box w={"100%"} minW={"100%"}>
+          <FilePicker curFile={filePickerDisplayIndex} onSelect={handleSelectFile} />
           {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
-            <Box mb={2}>
-              <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
-            </Box>
+            <ArtifactPicker curArtifact={artifactPickerDisplayIndex} onSelect={handleSelectArtifact} />
           )}
-          {/* Editor/Viewer area */}
-          <Box flex={1} overflow="auto">
-            {isSwitching ? (
-              <Skeleton height="70vh" width="100%" />
-            ) : selectedArtifact && selectedArtifactId !== null ? (
-              selectedArtifact.data !== null ? (
+        </Box>
+        <Separator orientation={{ base: "horizontal", md: "vertical" }} />
+        <Box w={"100%"}>
+          {isSwitching ? (
+            <Skeleton height="70vh" width="100%" />
+          ) : selectedArtifact ? (
+            <Box data-artifact-id={selectedArtifact.id} scrollMarginTop="80px">
+              {selectedArtifact.data !== null ? (
                 <ArtifactWithComments
                   key={selectedArtifact.id}
                   artifact={selectedArtifact as SubmissionArtifact}
@@ -1382,22 +1392,32 @@ export default function FilesView() {
                 />
               ) : (
                 <ArtifactView key={selectedArtifact.id} artifact={selectedArtifact as SubmissionArtifact} />
-              )
-            ) : selectedFile && submissionData?.submission_files ? (
-              <CodeFile
-                ref={codeFileRef}
-                key={selectedFile.id}
-                files={submissionData.submission_files}
-                activeFileId={selectedFileId}
-                onFileSelect={handleSelectFile}
-                openFileIds={openFileIds.length > 0 ? openFileIds : undefined}
-                onFileClose={handleCloseFile}
-              />
-            ) : (
-              <Text>Select a file or artifact to view.</Text>
-            )}
-          </Box>
-        </Flex>
+              )}
+            </Box>
+          ) : selectedFile ? (
+            <Box data-file-id={selectedFile.id} scrollMarginTop="80px">
+              {isMarkdownFile(selectedFile.name) && !selectedFile.is_binary ? (
+                <MarkdownFilePreview
+                  key={selectedFile.id}
+                  file={selectedFile}
+                  allFiles={submission.submission_files}
+                  onNavigateToFile={handleSelectFile}
+                />
+              ) : selectedFile.is_binary ? (
+                <BinaryFilePreview key={selectedFile.id} file={selectedFile} />
+              ) : (
+                <CodeFile
+                  key={selectedFile.id}
+                  files={submission.submission_files}
+                  activeFileId={selectedFileId}
+                  onFileSelect={handleSelectFile}
+                />
+              )}
+            </Box>
+          ) : (
+            <Text>Select a file or artifact to view.</Text>
+          )}
+        </Box>
       </Flex>
     </>
   );

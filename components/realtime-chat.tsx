@@ -7,14 +7,19 @@ import { toaster } from "@/components/ui/toaster";
 import { useChatScroll } from "@/hooks/use-chat-scroll";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useMessageNotifications } from "@/hooks/useMessageNotifications";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
 import {
   useHelpRequestMessages,
   useOfficeHoursController,
   useRealtimeChat,
+  useHelpRequest,
   type ChatMessage
 } from "@/hooks/useOfficeHoursRealtime";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
+import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import { useMeetingWindows } from "@/hooks/useMeetingWindows";
+import { BsCameraVideo, BsPersonVideo2 } from "react-icons/bs";
 import { useCreate } from "@refinedev/core";
 import { X } from "lucide-react";
 import { useParams } from "next/navigation";
@@ -114,6 +119,9 @@ export const RealtimeChat = ({
   const { course_id } = useParams();
   const moderationStatus = useModerationStatus(Number(course_id));
   const messages = useHelpRequestMessages(request_id);
+  const request = useHelpRequest(request_id);
+  const profiles = useAllProfilesForClass();
+  const { openMeetingWindow } = useMeetingWindows();
 
   // Get authenticated user and their profile
   const { user } = useAuthState();
@@ -137,6 +145,13 @@ export const RealtimeChat = ({
       classId: Number(course_id),
       enableChat: true
     });
+
+  // Enable message notifications for this chat
+  useMessageNotifications({
+    helpRequestId: request_id,
+    enabled: !readOnly,
+    titlePrefix: "New message"
+  });
 
   // Helper function to get timestamp from either message type
   const getMessageTimestamp = (msg: UnifiedMessage): string => {
@@ -229,11 +244,7 @@ export const RealtimeChat = ({
   const handleSendMessage = useCallback(
     async (message: string) => {
       if (!isConnected) {
-        toaster.error({
-          title: "Not connected to chat",
-          description: "Please wait for the chat to connect before sending messages."
-        });
-        return;
+        throw new Error("Please wait for the chat to connect before sending messages.");
       }
       if (!message.trim() || !sendMessage || moderationStatus.isBanned) return;
 
@@ -356,6 +367,49 @@ export const RealtimeChat = ({
           <Text fontSize="xs" color="fg.warning" textAlign="center">
             Reconnecting to chat...
           </Text>
+        </Box>
+      )}
+
+      {/* Video Call Banner */}
+      {request?.is_video_live && (
+        <Box
+          p={3}
+          bg="green.50"
+          borderBottom="1px"
+          borderColor="border.emphasized"
+          borderRadius={0}
+          borderTop="2px"
+          borderTopColor="green.500"
+        >
+          <HStack gap={3} flex="1" align="center" justify="space-between" wrap="wrap">
+            <HStack gap={2} flex="1" minW={0}>
+              <Icon as={BsPersonVideo2} boxSize={5} color="green.600" />
+              <Box flex="1" minW={0}>
+                <Text fontWeight="semibold" fontSize="sm" mb={0.5} color="green.900">
+                  Video call is active
+                </Text>
+                <Text fontSize="xs" color="green.700">
+                  {request.assignee
+                    ? `${profiles.find((p) => p.id === request.assignee)?.name || "Someone"} started a video call and is waiting for you`
+                    : "A video call has been started"}
+                </Text>
+              </Box>
+            </HStack>
+            <Button
+              size="sm"
+              colorPalette="green"
+              variant="solid"
+              onClick={() => {
+                if (request) {
+                  openMeetingWindow(request.class_id, request.id, request.help_queue);
+                }
+              }}
+              flexShrink={0}
+            >
+              <Icon as={BsCameraVideo} mr={1} />
+              Join Video Call
+            </Button>
+          </HStack>
         </Box>
       )}
 
@@ -494,6 +548,7 @@ export const RealtimeChat = ({
               uploadFolder="office-hours"
               ariaLabel="Type your message"
               defaultSingleLine={true}
+              inlineFileUpload={false}
             />
           </Box>
         </Box>

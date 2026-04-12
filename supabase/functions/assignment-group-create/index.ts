@@ -13,7 +13,8 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
       headers: { Authorization: req.headers.get("Authorization")! }
     }
   });
-  const { course_id, assignment_id, name, invitees } = (await req.json()) as AssignmentGroupCreateRequest;
+  const { course_id, assignment_id, name, invitees: rawInvitees } = (await req.json()) as AssignmentGroupCreateRequest;
+  const invitees = [...new Set(rawInvitees)];
   scope?.setTag("function", "assignment-group-create");
   scope?.setTag("course_id", course_id.toString());
   scope?.setTag("assignment_id", assignment_id.toString());
@@ -85,6 +86,46 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
     throw new IllegalArgumentError("A group with this name already exists for this assignment");
   }
 
+  if (invitees.length > 0) {
+    const { data: inviteeEnrollments, error: inviteeEnrollmentsError } = await adminSupabase
+      .from("user_roles")
+      .select("private_profile_id")
+      .eq("class_id", course_id)
+      .eq("role", "student")
+      .in("private_profile_id", invitees);
+    if (inviteeEnrollmentsError) {
+      console.error(inviteeEnrollmentsError);
+      Sentry.captureException(inviteeEnrollmentsError, scope);
+      const err = inviteeEnrollmentsError as { message?: string; details?: string; hint?: string; code?: string };
+      const parts = [err.message, err.details, err.hint, err.code].filter(Boolean);
+      throw new UserVisibleError(`Could not verify invitee enrollments for this course. ${parts.join(" — ")}`);
+    }
+    const enrolled = new Set((inviteeEnrollments ?? []).map((r) => r.private_profile_id));
+    if (enrolled.size !== invitees.length) {
+      throw new IllegalArgumentError(
+        "Every invited student must be enrolled in this course. Remove anyone who is not on the class roster, or ask them to enroll first."
+      );
+    }
+
+    const { data: inviteesInGroups, error: inviteesInGroupsError } = await adminSupabase
+      .from("assignment_groups_members")
+      .select("profile_id")
+      .eq("assignment_id", assignment_id)
+      .in("profile_id", invitees);
+    if (inviteesInGroupsError) {
+      console.error(inviteesInGroupsError);
+      Sentry.captureException(inviteesInGroupsError, scope);
+      const err = inviteesInGroupsError as { message?: string; details?: string; hint?: string; code?: string };
+      const parts = [err.message, err.details, err.hint, err.code].filter(Boolean);
+      throw new UserVisibleError(`Could not verify whether invitees are already in groups. ${parts.join(" — ")}`);
+    }
+    if (inviteesInGroups && inviteesInGroups.length > 0) {
+      throw new IllegalArgumentError(
+        "One or more students you invited are already in a group for this assignment. They must leave that group before they can join yours."
+      );
+    }
+  }
+
   const { data: assignment } = await adminSupabase.from("assignments").select("*").eq("id", assignment_id).single();
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found");
@@ -109,7 +150,14 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   if (newGroupError) {
     console.error(newGroupError);
     Sentry.captureException(newGroupError, scope);
-    throw new UserVisibleError("Failed to create group");
+    if (newGroupError.code === "23505") {
+      throw new IllegalArgumentError(
+        "That group name was just taken by someone else. Choose a different name and try again."
+      );
+    }
+    throw new UserVisibleError(
+      "We could not create the group in the database. Try again in a moment, or contact your instructor if this keeps happening."
+    );
   }
   //Enroll the user in the group
   const { error: enrollmentError } = await adminSupabase.from("assignment_groups_members").insert({
@@ -122,7 +170,12 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   if (enrollmentError) {
     console.error(enrollmentError);
     Sentry.captureException(enrollmentError, scope);
-    throw new UserVisibleError("Failed to enroll in group");
+    if (enrollmentError.code === "23505") {
+      throw new IllegalArgumentError("You are already in a group for this assignment.");
+    }
+    throw new UserVisibleError(
+      "We could not add you to the new group. Try again, or contact your instructor if this keeps happening."
+    );
   }
   //Add the invitees to the group
   const { error: inviteesError } = await adminSupabase.from("assignment_group_invitations").insert(
@@ -136,7 +189,14 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   if (inviteesError) {
     console.error(inviteesError);
     Sentry.captureException(inviteesError, scope);
-    throw new UserVisibleError("Failed to invite users to group");
+    if (inviteesError.code === "23505") {
+      throw new IllegalArgumentError(
+        "Could not invite one or more students: they may already have a pending invitation for this group, or there is a duplicate in your selection."
+      );
+    }
+    throw new UserVisibleError(
+      "We could not send one or more invitations. Ask each classmate to confirm they are not already in another group for this assignment, then try again."
+    );
   }
   console.log(
     `Created group ${newGroup.id} for ${trimmedName} in assignment ${assignment_id}, initial member ${profile_id}, invitations sent to ${invitees.join(", ")}`
@@ -153,7 +213,9 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   if (deactivateError) {
     console.error(deactivateError);
     Sentry.captureException(deactivateError, scope);
-    throw new UserVisibleError("Failed to deactivate submissions");
+    throw new UserVisibleError(
+      "Your group was created, but we could not update your earlier submissions. Contact your instructor so they can fix your account state."
+    );
   }
 
   //Enqueue async repo creation for the group
@@ -183,7 +245,9 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
   if (enqueueError) {
     console.error(enqueueError);
     Sentry.captureException(enqueueError, scope);
-    throw new UserVisibleError(`Error enqueueing repo creation: ${enqueueError.message}`);
+    throw new UserVisibleError(
+      "Your group was created, but we could not start creating the team GitHub repository. Your instructor may need to check the course GitHub connection or template repository. You can still try again from the assignment page in a few minutes."
+    );
   }
 
   console.log(`Enqueued repo creation for group ${newGroup.id}, message ID: ${messageId}`);

@@ -2,7 +2,7 @@
 
 import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { useHelpRequestMessages, useHelpRequestReadReceipts, useOfficeHoursController } from "./useOfficeHoursRealtime";
@@ -59,18 +59,59 @@ export function useRealtimeChat({
     );
   }, [allReadReceipts, messages, helpRequestId, private_profile_id]);
 
+  // Track if the effect has been cleaned up to avoid state updates after unmount
+  const cleanedUpRef = useRef(false);
+
   useEffect(() => {
-    const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, () => {});
+    cleanedUpRef.current = false;
+    let unsubscribe: (() => void) | null = null;
 
-    // Load messages for this help request if not already loaded
-    const helpRequestController = controller.loadMessagesForHelpRequest(helpRequestId);
+    // Async initialization to properly await channel subscription
+    const initializeChat = async () => {
+      try {
+        // Step 1: Ensure the channel is ready BEFORE subscribing
+        // This prevents the race condition where messages are missed between
+        // the refetch completing and the channel being fully subscribed
+        await controller.officeHoursRealTimeController.ensureHelpRequestChannelReady(helpRequestId);
 
-    // Proactively refetch messages once on mount/id change to backfill any rows
-    // created after controller initialization but before this subscription existed
-    helpRequestController.refetchAll();
+        if (cleanedUpRef.current) return;
+
+        // Step 2: Now subscribe to the channel (channel is already created)
+        unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, () => {});
+
+        // Step 3: Load messages for this help request
+        const helpRequestController = controller.loadMessagesForHelpRequest(helpRequestId);
+
+        // Step 4: Initial refetch to get current messages
+        // Now that the channel is subscribed, we won't miss any new messages
+        await helpRequestController.refetchAll();
+
+        if (cleanedUpRef.current) return;
+
+        // Step 5: Secondary refetch after a short delay to catch any messages
+        // that might have arrived during the subscription setup window
+        // This handles edge cases where a message was sent right as we were connecting
+        setTimeout(async () => {
+          if (cleanedUpRef.current) return;
+          try {
+            await helpRequestController.refetchAll();
+          } catch {
+            // Silently ignore errors on secondary refetch - not critical
+          }
+        }, 500);
+      } catch (error) {
+        // Log but don't throw - chat should degrade gracefully
+        console.error("Error initializing chat subscription:", error);
+      }
+    };
+
+    initializeChat();
 
     return () => {
-      unsubscribe();
+      cleanedUpRef.current = true;
+      if (unsubscribe) {
+        unsubscribe();
+      }
     };
   }, [helpRequestId, classId, controller]);
 

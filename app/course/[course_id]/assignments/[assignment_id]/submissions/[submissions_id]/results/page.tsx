@@ -39,6 +39,10 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useErrorPinMatches } from "@/hooks/useErrorPinMatches";
+import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
+import { AIHelpSubmissionErrorButton } from "@/components/ai-help/AIHelpSubmissionErrorButton";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
@@ -713,17 +717,82 @@ function PyretRepl({
   );
 }
 
-function GenericBuildError() {
+function GenericBuildError({
+  errorPinMatches,
+  buildOutput,
+  assignmentId,
+  classId,
+  submissionId
+}: {
+  errorPinMatches?: Map<number | null, import("@/hooks/useErrorPinMatches").ErrorPinMatch[]>;
+  buildOutput?: string;
+  assignmentId: number;
+  classId: number;
+  submissionId: number;
+}) {
+  // Get all matches (both submission-level and test-level) for build errors
+  const allMatches: import("@/hooks/useErrorPinMatches").ErrorPinMatch[] = [];
+  if (errorPinMatches) {
+    errorPinMatches.forEach((matches) => {
+      allMatches.push(...matches);
+    });
+  }
+  // Deduplicate by error_pin_id
+  const uniqueMatches = allMatches.filter(
+    (match, index, self) => index === self.findIndex((m) => m.error_pin_id === match.error_pin_id)
+  );
+
   return (
-    <Box mt={3} p={3} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
-      <Text fontWeight="bold" color="fg.error" fontSize="sm">
-        Error: Gradle build failed
-      </Text>
-      <Box mt={2} p={2} bg="bg.error" borderRadius="sm">
-        <Text color="fg.error">
-          The autograding script failed to build your code. Please inspect the output below for more details:
-        </Text>
+    <Box mt={3}>
+      <Box p={3} bg="bg.error" borderRadius="md" border="1px solid" borderColor="border.error">
+        <HStack justify="space-between">
+          <Text fontWeight="bold" color="fg.error" fontSize="sm">
+            Error: Gradle build failed
+          </Text>
+          {buildOutput && (
+            <AIHelpSubmissionErrorButton
+              errorType="build_error"
+              errorOutput={buildOutput}
+              assignmentId={assignmentId}
+              classId={classId}
+              submissionId={submissionId}
+            />
+          )}
+        </HStack>
+        <Box mt={2} p={2} bg="bg.error" borderRadius="sm">
+          <Text color="fg.error">
+            The autograding script failed to build your code. Please inspect the output below for more details:
+          </Text>
+        </Box>
       </Box>
+      {/* Show error pins very prominently for build errors */}
+      {uniqueMatches.length > 0 && (
+        <Box
+          mt={4}
+          p={4}
+          bg="blue.50"
+          borderRadius="lg"
+          border="2px solid"
+          borderColor="blue.400"
+          _dark={{ bg: "blue.900", borderColor: "blue.500" }}
+        >
+          <HStack gap={3} align="flex-start">
+            <Icon fontSize="2xl" color="blue.500" mt={1}>
+              <FaInfo />
+            </Icon>
+            <Box flex="1">
+              <Text fontWeight="bold" fontSize="lg" color="blue.700" _dark={{ color: "blue.200" }} mb={2}>
+                Troubleshooting Help Available
+              </Text>
+              <Text fontSize="md" color="blue.600" _dark={{ color: "blue.300" }} mb={3}>
+                Your build error matches common issues that have been discussed. Check out posts that instructors think
+                will help you:
+              </Text>
+              <ErrorPinCallout matches={uniqueMatches} linksOnly />
+            </Box>
+          </HStack>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -735,10 +804,11 @@ export default function GraderResults() {
     id: Number(submissions_id),
     meta: {
       select:
-        "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
+        "*, assignments(*), grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
     }
   });
   const isObfuscatedGradesMode = useObfuscatedGradesMode();
+  const { matches: errorPinMatches } = useErrorPinMatches(Number(submissions_id));
   const [showHiddenOutput, setShowHiddenOutput] = useState(!isObfuscatedGradesMode);
   useEffect(() => {
     setShowHiddenOutput(!isObfuscatedGradesMode);
@@ -752,9 +822,10 @@ export default function GraderResults() {
   }
   if (query.error) {
     return (
-      <Box>
-        Error loading grader results
-        {query.error.message}
+      <Box p={4}>
+        <Alert status="error" title="Could not load results">
+          {getStudentFacingErrorMessage(query.error)}
+        </Alert>
       </Box>
     );
   }
@@ -824,18 +895,19 @@ export default function GraderResults() {
             </Alert>
           ) : (
             <Alert title="Submission Processing Error" status="warning" p={4} mb={4}>
-              An error occurred while processing your submission, but no user-visible error details are available. Your
-              code has been submitted to{" "}
+              The autograder reported a problem, but the detailed message is only visible to course staff. Your code was
+              still pushed to{" "}
               <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>.
               <Box mt={4}>
                 <Text fontSize="sm">
-                  Please check{" "}
+                  Open{" "}
                   <Link
                     href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
                   >
-                    the GitHub Actions run for this submission
+                    the GitHub Actions run log
                   </Link>{" "}
-                  or contact your instructor for assistance.
+                  to see the full error output, or ask your instructor or TA—they can see the same details in
+                  Pawtograder and in GitHub.
                 </Text>
               </Box>
             </Alert>
@@ -903,9 +975,19 @@ export default function GraderResults() {
   );
   const hasBuildError = query.data.data.grader_results.lint_output === "Gradle build failed";
   const data = query.data.data;
+  // Get build output for AI analysis
+  const buildOutput = data.grader_results?.grader_result_output?.[0]?.output || data.grader_results?.lint_output || "";
   return (
     <Box>
-      {hasBuildError && <GenericBuildError />}
+      {hasBuildError && (
+        <GenericBuildError
+          errorPinMatches={errorPinMatches}
+          buildOutput={buildOutput}
+          assignmentId={data.assignment_id}
+          classId={data.class_id}
+          submissionId={data.id}
+        />
+      )}
       <Tabs.Root
         m={3}
         defaultValue={hasBuildError ? data.grader_results?.grader_result_output[0]?.visibility : "tests"}
@@ -929,6 +1011,12 @@ export default function GraderResults() {
         ))}
         {!hasBuildError && (
           <Tabs.Content value="tests">
+            {/* Show submission-level error pins (not tied to specific tests) */}
+            {errorPinMatches.has(null) && errorPinMatches.get(null)!.length > 0 && (
+              <Box mb={4}>
+                <ErrorPinCallout matches={errorPinMatches.get(null)!} />
+              </Box>
+            )}
             <Heading size="md">Lint Results: {data.grader_results?.lint_passed ? "Passed" : "Failed"}</Heading>
             {data.grader_results?.lint_output && (
               <Box borderWidth="1px" borderRadius="md" p={2}>
@@ -1033,14 +1121,37 @@ export default function GraderResults() {
                 };
                 const style = result.max_score === 0 ? "info" : result.score === result.max_score ? "success" : "error";
                 const showScore = result.max_score !== 0;
+                const isFailing = (result.max_score ?? 0) > 0 && (result.score ?? 0) < (result.max_score ?? 0);
+
+                const testMatches = errorPinMatches.get(result.id) || [];
 
                 return (
                   <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
                     <CardHeader bg={`bg.${style}`} p={2}>
-                      <Heading size="lg" color={`fg.${style}`}>
-                        {result.name} {showScore ? result.score + "/" + result.max_score : ""}
-                      </Heading>
+                      <HStack justify="space-between">
+                        <Heading size="lg" color={`fg.${style}`}>
+                          {result.name} {showScore ? result.score + "/" + result.max_score : ""}
+                        </Heading>
+                        {isFailing && result.output && (
+                          <AIHelpSubmissionErrorButton
+                            errorType="test_failure"
+                            testName={result.name}
+                            testPart={result.part}
+                            score={result.score ?? undefined}
+                            maxScore={result.max_score ?? undefined}
+                            errorOutput={result.output}
+                            assignmentId={data.assignment_id}
+                            classId={data.class_id}
+                            submissionId={data.id}
+                          />
+                        )}
+                      </HStack>
                     </CardHeader>
+                    {testMatches.length > 0 && (
+                      <Box px={4} pt={2}>
+                        <ErrorPinCallout matches={testMatches} />
+                      </Box>
+                    )}
                     {maybeWrappedResult(
                       <TestResultOutput
                         result={result}

@@ -18,7 +18,8 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
     class_id: hydrated.class_id,
     is_private: hydrated.is_private,
     review_round: hydrated.review_round,
-    created_at: hydrated.created_at
+    created_at: hydrated.created_at,
+    cap_score_to_assignment_points: hydrated.cap_score_to_assignment_points ?? false
   };
 
   const parts: RubricPart[] = [];
@@ -32,10 +33,12 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
       description: part.description,
       ordinal: part.ordinal,
       data: part.data ?? null,
-      rubric_id: hydrated.id, // Use parent rubric's ID
+      rubric_id: hydrated.id,
       class_id: hydrated.class_id,
       assignment_id: hydrated.assignment_id,
-      created_at: part.created_at
+      created_at: part.created_at,
+      is_individual_grading: part.is_individual_grading ?? false,
+      is_assign_to_student: part.is_assign_to_student ?? false
     });
 
     for (const crit of part.rubric_criteria) {
@@ -46,6 +49,7 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
         ordinal: crit.ordinal,
         data: crit.data ?? null,
         is_additive: crit.is_additive,
+        is_deduction_only: crit.is_deduction_only,
         total_points: crit.total_points,
         max_checks_per_submission: crit.max_checks_per_submission,
         min_checks_per_submission: crit.min_checks_per_submission,
@@ -77,6 +81,7 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
           rubric_criteria_id: crit.id,
           class_id: hydrated.class_id,
           assignment_id: hydrated.assignment_id,
+          kpi_category: check.kpi_category,
           created_at: check.created_at
         });
       }

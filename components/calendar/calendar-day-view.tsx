@@ -1,13 +1,14 @@
 "use client";
 
+import { CalendarEvent, useAllCalendarEvents, useDaySchedule } from "@/hooks/useCalendarEvents";
+import { useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
 import { Box, Button, Card, Heading, HStack, Icon, Link, Text, VStack } from "@chakra-ui/react";
-import { BsCalendar, BsChevronLeft, BsChevronRight, BsCameraVideo } from "react-icons/bs";
-import { useMemo, useState, useEffect, useRef } from "react";
-import { useDaySchedule, useAllCalendarEvents, CalendarEvent } from "@/hooks/useCalendarEvents";
 import { format, isSameDay } from "date-fns";
-import { isUrl, CalendarColorPalette } from "./calendar-utils";
-import { useCalendarColorsFromEvents } from "./CalendarColorContext";
-import { calculateEventLayouts, formatTime, EventLayout } from "./calendar-layout-utils";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BsCalendar, BsCameraVideo, BsChevronLeft, BsChevronRight } from "react-icons/bs";
+import { calculateEventLayouts, EventLayout, formatTime } from "./calendar-layout-utils";
+import { CalendarColorPalette, isEventCurrentlyHappening, isUrl } from "./calendar-utils";
+import { getResolvedQueueName, useCalendarColorsFromEvents } from "./CalendarColorContext";
 
 const HOUR_HEIGHT = 60; // pixels per hour
 const START_HOUR = 8; // 8 AM
@@ -23,7 +24,18 @@ interface EventBlockProps {
 
 function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
   const { top, height, left, width } = layout;
-  const colors = getOfficeHoursColor(event.queue_name);
+  const helpQueues = useHelpQueues();
+  const resolvedQueueName = getResolvedQueueName(event, helpQueues);
+  const colors = getOfficeHoursColor(resolvedQueueName);
+  const [now, setNow] = useState(new Date());
+
+  // Update current time every minute to check if event is active
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const isCurrentlyHappening = isEventCurrentlyHappening(event.start_time, event.end_time, now);
 
   // Ensure we have valid colors (fallback to semantic colors)
   const bgColor = colors.bg || "blue.subtle";
@@ -35,16 +47,14 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
   // Very short events (< 35px): Single line with name only, minimal padding
   // Short events (35-50px): Name and time stacked tightly
   // Normal events (50-75px): Name, time
-  // Tall events (> 75px): Full details including location
   const isVeryShort = height < 35;
   const isShort = height >= 35 && height < 50;
-  const isTall = height >= 75;
 
   // Adaptive padding: less padding for shorter events
   const padding = isVeryShort ? 1 : isShort ? 1.5 : 2;
 
   // Calculate right padding for queue badge
-  const hasQueueBadge = !!event.queue_name;
+  const hasQueueBadge = !!resolvedQueueName;
   const contentPaddingRight = hasQueueBadge && !isVeryShort ? "50px" : undefined;
 
   return (
@@ -57,25 +67,28 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
       bg={bgColor}
       _dark={{ bg: bgDarkColor }}
       borderRadius="md"
-      borderWidth="1px"
-      borderColor={borderColor}
+      borderWidth={isCurrentlyHappening ? "2px" : "1px"}
+      borderColor={isCurrentlyHappening ? "green.500" : borderColor}
       borderLeftWidth="4px"
-      borderLeftColor={accentColor}
+      borderLeftColor={isCurrentlyHappening ? "green.600" : accentColor}
+      boxShadow={
+        isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.2), 0 4px 6px -1px rgba(0, 0, 0, 0.1)" : undefined
+      }
       p={padding}
       overflow="hidden"
       cursor="default"
       _hover={{
         opacity: 0.95,
-        boxShadow: "sm"
+        boxShadow: isCurrentlyHappening ? "0 0 0 2px rgba(34, 197, 94, 0.3), 0 4px 6px -1px rgba(0, 0, 0, 0.15)" : "sm"
       }}
-      zIndex={1}
+      zIndex={isCurrentlyHappening ? 2 : 1}
       display="flex"
       flexDirection="column"
       boxSizing="border-box"
-      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${event.queue_name ? `\n${event.queue_name}` : ""}${event.location ? `\n📍 ${event.location}` : ""}`}
+      title={`${event.title}${event.organizer_name && event.uid?.startsWith("lab-meeting-") ? `\n👤 ${event.organizer_name}` : ""}\n${formatTime(event.start_time)} - ${formatTime(event.end_time)}${resolvedQueueName ? `\n${resolvedQueueName}` : ""}${event.location ? `\n📍 ${event.location}` : ""}${isCurrentlyHappening ? "\n🟢 Happening now!" : ""}`}
     >
       {/* Floating queue badge at top-right */}
-      {event.queue_name && !isVeryShort && (
+      {resolvedQueueName && !isVeryShort && (
         <Box
           position="absolute"
           top="4px"
@@ -92,9 +105,9 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
           textOverflow="ellipsis"
           whiteSpace="nowrap"
           lineHeight="1.2"
-          title={event.queue_name}
+          title={resolvedQueueName}
         >
-          {event.queue_name}
+          {resolvedQueueName}
         </Box>
       )}
 
@@ -209,7 +222,6 @@ function EventBlock({ event, layout, getOfficeHoursColor }: EventBlockProps) {
             {formatTime(event.start_time)} - {formatTime(event.end_time)}
           </Text>
           {event.location &&
-            isTall &&
             (isUrl(event.location) ? (
               <Link
                 href={event.location}
@@ -386,15 +398,17 @@ export default function CalendarDayView({ showTitle = true }: CalendarDayViewPro
   }, [events, containerWidth]);
 
   // Get unique queues for legend with event counts for the selected day
+  const helpQueues = useHelpQueues();
   const queueCounts = useMemo(() => {
     const counts = new Map<string, number>();
     events.forEach((event) => {
-      if (event.queue_name) {
-        counts.set(event.queue_name, (counts.get(event.queue_name) || 0) + 1);
+      const resolvedQueueName = getResolvedQueueName(event, helpQueues);
+      if (resolvedQueueName) {
+        counts.set(resolvedQueueName, (counts.get(resolvedQueueName) || 0) + 1);
       }
     });
     return counts;
-  }, [events]);
+  }, [events, helpQueues]);
 
   // Get unique queues for legend (in color assignment order, filtered to only show queues with events today)
   const uniqueQueues = useMemo(() => {

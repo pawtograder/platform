@@ -545,7 +545,7 @@ function SubmissionControllerCreator({
       select: `
         *,
         submission_files(*),
-        grader_results(*, grader_result_tests(*), grader_result_output(*)),
+        grader_results!grader_results_submission_id_fkey(*, grader_result_tests(*), grader_result_output(*)),
         submission_artifacts(*)
       `.trim()
     }
@@ -641,22 +641,30 @@ export function useAllCommentsForReview(review_id: number | undefined) {
   }, [ctx, fileComments, submissionComments, artifactComments, review_id]);
   return filteredComments;
 }
-export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
+export function useRubricCheckInstances(
+  check: RubricChecks,
+  review_id: number | undefined,
+  target_student_profile_id?: string | null
+) {
   const ctx = useContext(SubmissionContext);
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
   const artifactComments = useSubmissionArtifactComments({});
 
-  // Use useMemo to ensure the filtered result updates when comments change
   const filteredComments = useMemo(() => {
     if (!ctx || !review_id) {
       return [];
     }
     const comments = [...fileComments, ...submissionComments, ...artifactComments];
-    const filtered = comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
-
+    let filtered = comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
+    if (target_student_profile_id != null) {
+      filtered = filtered.filter(
+        (c) =>
+          (c as { target_student_profile_id?: string | null }).target_student_profile_id === target_student_profile_id
+      );
+    }
     return filtered;
-  }, [ctx, fileComments, submissionComments, artifactComments, check.id, review_id]);
+  }, [ctx, fileComments, submissionComments, artifactComments, check.id, review_id, target_student_profile_id]);
 
   return filteredComments;
 }
@@ -664,42 +672,61 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
 export function useRubricCriteriaInstances({
   criteria,
   review_id,
-  rubric_id
+  rubric_id,
+  target_student_profile_id
 }: {
   criteria?: RubricCriteria;
   review_id?: number;
   rubric_id?: number;
+  target_student_profile_id?: string | null;
 }) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
+  const artifactComments = useSubmissionArtifactComments({});
   const allChecks = useAllRubricChecks();
 
-  // Use useMemo to ensure the filtered result updates when comments change
   const filteredComments = useMemo(() => {
     if (!review_id) {
       return [];
     }
-    const comments = [...fileComments, ...submissionComments];
+    const comments = [...fileComments, ...submissionComments, ...artifactComments];
+    let filtered: typeof comments;
     if (criteria) {
-      return comments.filter(
+      filtered = comments.filter(
         (eachComment) =>
           eachComment.submission_review_id === review_id &&
           allChecks.find(
             (eachCheck) => eachCheck.rubric_criteria_id === criteria?.id && eachCheck.id === eachComment.rubric_check_id
           )
       );
-    }
-    if (rubric_id) {
-      return comments.filter(
+    } else if (rubric_id) {
+      filtered = comments.filter(
         (eachComment) =>
           eachComment.submission_review_id === review_id &&
           allChecks.find(
             (eachCheck) => eachCheck.id === eachComment.rubric_check_id && eachCheck.rubric_id === rubric_id
           )
       );
+    } else {
+      throw new Error("Either criteria or rubric_id must be provided");
     }
-    throw new Error("Either criteria or rubric_id must be provided");
-  }, [fileComments, submissionComments, review_id, criteria, rubric_id, allChecks]);
+    if (target_student_profile_id != null) {
+      filtered = filtered.filter(
+        (c) =>
+          (c as { target_student_profile_id?: string | null }).target_student_profile_id === target_student_profile_id
+      );
+    }
+    return filtered;
+  }, [
+    fileComments,
+    submissionComments,
+    artifactComments,
+    review_id,
+    criteria,
+    rubric_id,
+    allChecks,
+    target_student_profile_id
+  ]);
 
   return filteredComments;
 }

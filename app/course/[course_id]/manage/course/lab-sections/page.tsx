@@ -27,16 +27,28 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
-import { format } from "date-fns";
-import { useParams } from "next/navigation";
+import { format, parse } from "date-fns";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaCalendar, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import { useCourseController } from "@/hooks/useCourseController";
-import { useIsTableControllerReady, useTableControllerTableValues } from "@/lib/TableController";
+import {
+  useIsTableControllerReady,
+  useTableControllerTableValues,
+  useListTableControllerValues
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Select, MultiValue } from "chakra-react-select";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable
+} from "@tanstack/react-table";
 
 interface CreateLabSectionData {
   name: string;
@@ -50,6 +62,7 @@ interface CreateLabSectionData {
 
 interface EditLabSectionData extends CreateLabSectionData {
   id: number;
+  sis_crn?: number | null;
 }
 
 const DAYS_OF_WEEK: { value: DayOfWeek; label: string }[] = [
@@ -99,22 +112,11 @@ function CreateLabSectionModal({
   });
 
   // Get instructors and graders for lab leader selection
-  const { data: staffRoles } = useList<UserRoleWithPrivateProfileAndUser>({
-    resource: "user_roles",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id as string },
-      {
-        operator: "or",
-        value: [
-          { field: "role", operator: "eq", value: "instructor" },
-          { field: "role", operator: "eq", value: "grader" }
-        ]
-      }
-    ],
-    meta: {
-      select: "*, profiles!private_profile_id(*), users(*)"
-    }
-  });
+  const staffRolesPredicate = useCallback(
+    (role: UserRoleWithPrivateProfileAndUser) => role.role === "instructor" || role.role === "grader",
+    []
+  );
+  const staffRoles = useListTableControllerValues(controller.userRolesWithProfiles, staffRolesPredicate);
 
   // Fetch existing lab section leaders when editing
   useEffect(() => {
@@ -191,7 +193,8 @@ function CreateLabSectionModal({
           class_id: Number(course_id),
           campus: null,
           meeting_times: null,
-          sis_crn: null
+          // Preserve sis_crn when updating, only set to null when creating
+          sis_crn: initialData?.sis_crn ?? null
         };
 
         let labSectionId: number;
@@ -341,7 +344,7 @@ function CreateLabSectionModal({
                     <Field.Label>Lab Facilitators</Field.Label>
                     <Select
                       isMulti
-                      options={staffRoles?.data?.map((role) => ({
+                      options={staffRoles.map((role) => ({
                         value: role.private_profile_id,
                         label: `${role.profiles?.name || "Unknown"} (${role.role})`
                       }))}
@@ -409,7 +412,7 @@ function ManageMeetingsModal({
 
   const sectionMeetings = labSectionMeetings
     .filter((meeting) => meeting.lab_section_id === labSection.id)
-    .sort((a, b) => new Date(a.meeting_date).getTime() - new Date(b.meeting_date).getTime());
+    .sort((a, b) => a.meeting_date.localeCompare(b.meeting_date));
 
   const handleToggleCancelled = async (meeting: LabSectionMeeting) => {
     setIsLoading(true);
@@ -469,7 +472,7 @@ function ManageMeetingsModal({
                         <Table.Row key={meeting.id}>
                           <Table.Cell>
                             <Text fontWeight="medium">
-                              {format(new Date(meeting.meeting_date), "EEEE, MMM d, yyyy")}
+                              {format(parse(meeting.meeting_date, "yyyy-MM-dd", new Date()), "EEEE, MMM d, yyyy")}
                             </Text>
                           </Table.Cell>
                           <Table.Cell>
@@ -643,14 +646,24 @@ function CreateMeetingModal({
   );
 }
 
+type LabSectionRow = LabSection & {
+  leadersNames: string[];
+  upcomingMeetingsCount: number;
+  nextMeetingDate: string | null;
+  studentCount: number;
+};
+
 function LabSectionsTable() {
   const controller = useCourseController();
   const supabase = createClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const sectionsReady = useIsTableControllerReady(controller.labSections);
   const meetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
   const [isDeleting, setIsDeleting] = useState(false);
   const [labSectionLeadersMap, setLabSectionLeadersMap] = useState<Map<number, string[]>>(new Map());
   const [leadersRefreshKey, setLeadersRefreshKey] = useState(0);
+  const [highlightedSectionId, setHighlightedSectionId] = useState<number | null>(null);
 
   const {
     isOpen: isCreateModalOpen,
@@ -683,6 +696,24 @@ function LabSectionsTable() {
   // Get lab section meetings from course controller
   const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings);
 
+  // Get user roles to count students per lab section
+  const activeStudentPredicate = useCallback(
+    (role: UserRoleWithPrivateProfileAndUser) => role.role === "student" && !role.disabled,
+    []
+  );
+  const activeStudentRoles = useListTableControllerValues(controller.userRolesWithProfiles, activeStudentPredicate);
+
+  // Calculate student count per lab section
+  const studentCountByLabSection = useMemo(() => {
+    const countMap = new Map<number, number>();
+    activeStudentRoles.forEach((role) => {
+      if (role.lab_section_id) {
+        countMap.set(role.lab_section_id, (countMap.get(role.lab_section_id) || 0) + 1);
+      }
+    });
+    return countMap;
+  }, [activeStudentRoles]);
+
   // Fetch lab section leaders for all sections
   useEffect(() => {
     const fetchLeaders = async () => {
@@ -713,70 +744,386 @@ function LabSectionsTable() {
     fetchLeaders();
   }, [labSections, supabase, leadersRefreshKey]);
 
+  const formatTime = useCallback((time: string) => {
+    return format(new Date(`2000-01-01T${time}`), "h:mm a");
+  }, []);
+
+  const getDayDisplayName = useCallback((day: string) => {
+    return DAYS_OF_WEEK.find((d) => d.value === day)?.label || day;
+  }, []);
+
+  const getUpcomingMeetings = useCallback(
+    (labSectionId: number) => {
+      const meetings = labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSectionId);
+      // Get today's date as YYYY-MM-DD string for date-only comparison
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      return meetings
+        .filter((meeting) => meeting.meeting_date >= todayStr && !meeting.cancelled)
+        .sort((a, b) => a.meeting_date.localeCompare(b.meeting_date));
+    },
+    [labSectionMeetings]
+  );
+
+  // Transform lab sections to include computed data
+  const tableData = useMemo<LabSectionRow[]>(() => {
+    return labSections.map((section) => {
+      const upcomingMeetings = getUpcomingMeetings(section.id);
+      return {
+        ...section,
+        leadersNames: labSectionLeadersMap.get(section.id) || [],
+        upcomingMeetingsCount: upcomingMeetings.length,
+        nextMeetingDate: upcomingMeetings.length > 0 ? upcomingMeetings[0].meeting_date : null,
+        studentCount: studentCountByLabSection.get(section.id) || 0
+      };
+    });
+  }, [labSections, labSectionLeadersMap, getUpcomingMeetings, studentCountByLabSection]);
+
   const handleCreateNew = () => {
     openCreateModal(undefined);
   };
 
-  const handleEdit = async (labSection: LabSection) => {
-    // Fetch current leaders for this section
-    const { data: leaders } = await supabase
-      .from("lab_section_leaders")
-      .select("profile_id")
-      .eq("lab_section_id", labSection.id);
+  const handleEdit = useCallback(
+    async (labSection: LabSection) => {
+      // Fetch current leaders for this section
+      const { data: leaders } = await supabase
+        .from("lab_section_leaders")
+        .select("profile_id")
+        .eq("lab_section_id", labSection.id);
 
-    openCreateModal({
-      id: labSection.id,
-      name: labSection.name,
-      day_of_week: labSection.day_of_week as DayOfWeek,
-      start_time: labSection.start_time || "",
-      end_time: labSection.end_time || undefined,
-      lab_leader_ids: leaders?.map((l) => l.profile_id) || [],
-      meeting_location: labSection.meeting_location || undefined,
-      description: labSection.description || undefined
-    });
-  };
+      openCreateModal({
+        id: labSection.id,
+        name: labSection.name,
+        day_of_week: labSection.day_of_week as DayOfWeek,
+        start_time: labSection.start_time || "",
+        end_time: labSection.end_time || undefined,
+        lab_leader_ids: leaders?.map((l) => l.profile_id) || [],
+        meeting_location: labSection.meeting_location || undefined,
+        description: labSection.description || undefined,
+        sis_crn: labSection.sis_crn ?? undefined
+      });
+    },
+    [supabase, openCreateModal]
+  );
 
-  const handleDelete = async (id: number) => {
-    setIsDeleting(true);
-    try {
-      await controller.labSections.delete(id);
-      toaster.success({
-        title: "Lab section deleted successfully"
-      });
-    } catch (error) {
-      toaster.error({
-        title: "Error deleting lab section",
-        description: error instanceof Error ? error.message : "An unknown error occurred"
-      });
-    } finally {
-      setIsDeleting(false);
-    }
-  };
+  const handleDelete = useCallback(
+    async (id: number) => {
+      setIsDeleting(true);
+      try {
+        await controller.labSections.delete(id);
+        toaster.success({
+          title: "Lab section deleted successfully"
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Error deleting lab section",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
+      } finally {
+        setIsDeleting(false);
+      }
+    },
+    [controller.labSections]
+  );
 
   const handleModalSuccess = () => {
     // Trigger refresh of lab section leaders map
     setLeadersRefreshKey((prev) => prev + 1);
   };
 
-  const formatTime = (time: string) => {
-    return format(new Date(`2000-01-01T${time}`), "h:mm a");
-  };
+  // Define table columns
+  const columns = useMemo<ColumnDef<LabSectionRow>[]>(
+    () => [
+      {
+        id: "name",
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ row }) => (
+          <VStack gap={1} align="start">
+            <Text fontWeight="medium">{row.original.name}</Text>
+            {row.original.description && (
+              <Text fontSize="sm" color="fg.muted">
+                {row.original.description}
+              </Text>
+            )}
+          </VStack>
+        ),
+        enableSorting: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue) return true;
+          const name = row.original.name.toLowerCase();
+          const description = row.original.description?.toLowerCase() || "";
+          return name.includes(filterValue.toLowerCase()) || description.includes(filterValue.toLowerCase());
+        }
+      },
+      {
+        id: "schedule",
+        accessorKey: "day_of_week",
+        header: "Schedule",
+        cell: ({ row }) => (
+          <VStack gap={1} align="start">
+            <Text>{row.original.day_of_week ? getDayDisplayName(row.original.day_of_week) : "N/A"}</Text>
+            <Text fontSize="sm" color="fg.muted">
+              {row.original.start_time ? formatTime(row.original.start_time) : "N/A"}
+              {row.original.end_time && ` - ${formatTime(row.original.end_time)}`}
+            </Text>
+          </VStack>
+        ),
+        enableSorting: true
+      },
+      {
+        id: "meeting_location",
+        accessorKey: "meeting_location",
+        header: "Room Location",
+        cell: ({ row }) => <Text>{row.original.meeting_location || "Not specified"}</Text>,
+        enableSorting: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue) return true;
+          const location = row.original.meeting_location?.toLowerCase() || "";
+          return location.includes(filterValue.toLowerCase());
+        }
+      },
+      {
+        id: "facilitators",
+        accessorFn: (row) => row.leadersNames.join(", "),
+        header: "Lab Facilitators",
+        cell: ({ row }) => {
+          const leaders = row.original.leadersNames;
+          if (leaders.length === 0) {
+            return <Text color="fg.muted">Not assigned</Text>;
+          }
+          return (
+            <VStack gap={1} align="start">
+              {leaders.map((name, idx) => (
+                <Text key={idx} fontSize="sm">
+                  {name}
+                </Text>
+              ))}
+            </VStack>
+          );
+        },
+        enableSorting: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue) return true;
+          const leaders = row.original.leadersNames.join(" ").toLowerCase();
+          return leaders.includes(filterValue.toLowerCase());
+        }
+      },
+      {
+        id: "upcomingMeetings",
+        accessorKey: "upcomingMeetingsCount",
+        header: "Upcoming Meetings",
+        cell: ({ row }) => {
+          const upcomingMeetings = getUpcomingMeetings(row.original.id);
+          if (upcomingMeetings.length === 0) {
+            return (
+              <Text fontSize="sm" color="fg.muted">
+                No upcoming meetings
+              </Text>
+            );
+          }
+          return (
+            <VStack gap={1} align="start">
+              {upcomingMeetings.slice(0, 3).map((meeting) => (
+                <Text key={meeting.id} fontSize="sm">
+                  {format(parse(meeting.meeting_date, "yyyy-MM-dd", new Date()), "MMM d, yyyy")}
+                </Text>
+              ))}
+              {upcomingMeetings.length > 3 && (
+                <Text fontSize="xs" color="fg.muted">
+                  +{upcomingMeetings.length - 3} more
+                </Text>
+              )}
+            </VStack>
+          );
+        },
+        enableSorting: true
+      },
+      {
+        id: "students",
+        accessorKey: "studentCount",
+        header: "Students",
+        cell: ({ row }) => {
+          const count = row.original.studentCount;
+          return (
+            <Text fontSize="sm" color="fg.muted">
+              {count} {count === 1 ? "student" : "students"}
+            </Text>
+          );
+        },
+        enableSorting: true
+      },
+      {
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => (
+          <HStack gap={2}>
+            <Tooltip content="Manage meetings">
+              <Button size="sm" variant="ghost" onClick={() => openMeetingsModal(row.original)}>
+                <FaCalendar />
+              </Button>
+            </Tooltip>
+            <Tooltip content="Edit lab section">
+              <Button size="sm" variant="ghost" onClick={() => handleEdit(row.original)}>
+                <FaEdit />
+              </Button>
+            </Tooltip>
+            <PopConfirm
+              triggerLabel="Delete lab section"
+              trigger={
+                <Button size="sm" variant="ghost" colorPalette="red" loading={isDeleting}>
+                  <FaTrash />
+                </Button>
+              }
+              confirmHeader="Delete Lab Section"
+              confirmText={`Are you sure you want to delete "${row.original.name}"? This action cannot be undone.`}
+              onConfirm={async () => await handleDelete(row.original.id)}
+            />
+          </HStack>
+        )
+      }
+    ],
+    [getDayDisplayName, formatTime, getUpcomingMeetings, isDeleting, handleDelete, handleEdit, openMeetingsModal]
+  );
 
-  const getDayDisplayName = (day: string) => {
-    return DAYS_OF_WEEK.find((d) => d.value === day)?.label || day;
-  };
+  // Create table instance
+  const table = useReactTable({
+    data: tableData,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: {
+      pagination: {
+        pageIndex: 0,
+        pageSize: 50
+      }
+    }
+  });
 
-  const getLabSectionMeetings = (labSectionId: number) => {
-    return labSectionMeetings.filter((meeting) => meeting.lab_section_id === labSectionId);
-  };
+  // Handle URL parameter for selecting a lab section (must be after tableData and table are defined)
+  useEffect(() => {
+    const selectParam = searchParams.get("select");
+    if (selectParam && tableData.length > 0) {
+      const sectionId = Number.parseInt(selectParam, 10);
+      if (!Number.isNaN(sectionId) && labSections.some((s) => s.id === sectionId)) {
+        setHighlightedSectionId(sectionId);
 
-  const getUpcomingMeetings = (labSectionId: number) => {
-    const meetings = getLabSectionMeetings(labSectionId);
-    const now = new Date();
-    return meetings
-      .filter((meeting) => new Date(meeting.meeting_date) >= now && !meeting.cancelled)
-      .sort((a, b) => new Date(a.meeting_date).getTime() - new Date(b.meeting_date).getTime());
-  };
+        // Find the row index and navigate to the correct page if needed
+        const rowIndex = tableData.findIndex((row) => row.id === sectionId);
+        if (rowIndex >= 0) {
+          const pageSize = table.getState().pagination.pageSize;
+          const targetPage = Math.floor(rowIndex / pageSize);
+          const currentPage = table.getState().pagination.pageIndex;
+
+          if (targetPage !== currentPage) {
+            table.setPageIndex(targetPage);
+          }
+        }
+
+        // Use MutationObserver to wait for the row element to be rendered
+        const rowId = `lab-section-row-${sectionId}`;
+        let observer: MutationObserver | null = null;
+        let scrollTimeout: NodeJS.Timeout | null = null;
+        const rafIds: number[] = [];
+
+        const attemptScroll = () => {
+          const rowElement = document.getElementById(rowId);
+          if (rowElement) {
+            rowElement.scrollIntoView({ behavior: "smooth", block: "center" });
+            if (observer) {
+              observer.disconnect();
+              observer = null;
+            }
+            // Cancel any pending animation frames
+            rafIds.forEach((id) => cancelAnimationFrame(id));
+            rafIds.length = 0;
+            return true;
+          }
+          return false;
+        };
+
+        const setupScrollObserver = () => {
+          // Try immediately in case element already exists
+          if (attemptScroll()) {
+            return;
+          }
+
+          // Wait for next animation frame to ensure DOM has updated after pagination change
+          const firstRafId = requestAnimationFrame(() => {
+            const secondRafId = requestAnimationFrame(() => {
+              // Try again after render cycle
+              if (attemptScroll()) {
+                return;
+              }
+
+              // Set up MutationObserver to watch for the element to appear
+              observer = new MutationObserver(() => {
+                if (attemptScroll()) {
+                  // Element found and scrolled, observer will be cleaned up in attemptScroll
+                }
+              });
+
+              // Observe the table container for changes
+              const tableContainer = document.querySelector('[role="table"]')?.parentElement;
+              if (tableContainer) {
+                observer.observe(tableContainer, {
+                  childList: true,
+                  subtree: true
+                });
+              }
+
+              // Fallback timeout in case MutationObserver doesn't catch it
+              scrollTimeout = setTimeout(() => {
+                attemptScroll();
+                if (observer) {
+                  observer.disconnect();
+                  observer = null;
+                }
+              }, 1000);
+            });
+            rafIds.push(secondRafId);
+          });
+          rafIds.push(firstRafId);
+        };
+
+        // Setup scroll observer (waits for render if page changed)
+        setupScrollObserver();
+
+        // Use a ref to track the nested timeout since it's created inside a callback
+        const removeHighlightTimeoutRef = { current: null as NodeJS.Timeout | null };
+
+        // Remove the query parameter after a delay
+        const removeParamTimeout = setTimeout(() => {
+          const params = new URLSearchParams(searchParams.toString());
+          params.delete("select");
+          // Standardize URL format: always use pathname + query string format
+          const queryString = params.toString();
+          const newUrl = `${window.location.pathname}${queryString ? `?${queryString}` : ""}`;
+          router.replace(newUrl);
+          // Remove highlight after animation
+          removeHighlightTimeoutRef.current = setTimeout(() => setHighlightedSectionId(null), 2000);
+        }, 1000);
+
+        // Cleanup function to clear all timeouts, observers, and animation frames
+        return () => {
+          if (scrollTimeout) {
+            clearTimeout(scrollTimeout);
+          }
+          if (observer) {
+            observer.disconnect();
+          }
+          rafIds.forEach((id) => cancelAnimationFrame(id));
+          clearTimeout(removeParamTimeout);
+          if (removeHighlightTimeoutRef.current) {
+            clearTimeout(removeHighlightTimeoutRef.current);
+          }
+        };
+      }
+    }
+  }, [searchParams, labSections, tableData, table, router]);
+
   if (!sectionsReady || !meetingsReady) {
     return (
       <VStack gap={4} mt={4}>
@@ -788,7 +1135,7 @@ function LabSectionsTable() {
 
   return (
     <>
-      <VStack gap={4} mt={4}>
+      <VStack gap={4} mt={4} align="start" width="100%">
         <HStack justify="space-between" width="100%">
           <Heading size="lg">Lab Sections</Heading>
           <Button onClick={handleCreateNew} size="sm">
@@ -797,127 +1144,145 @@ function LabSectionsTable() {
         </HStack>
 
         {labSections.length === 0 ? (
-          <Box p={8} textAlign="center" border="1px dashed" borderColor="border.muted" borderRadius="md">
+          <Box p={8} textAlign="center" border="1px dashed" borderColor="border.muted" borderRadius="md" width="100%">
             <Text color="fg.muted">No lab sections created yet.</Text>
             <Button mt={2} onClick={handleCreateNew} variant="outline" size="sm">
               Create your first lab section
             </Button>
           </Box>
         ) : (
-          <Table.Root>
-            <Table.Header>
-              <Table.Row>
-                <Table.ColumnHeader>Name</Table.ColumnHeader>
-                <Table.ColumnHeader>Schedule</Table.ColumnHeader>
-                <Table.ColumnHeader>Room Location</Table.ColumnHeader>
-                <Table.ColumnHeader>Lab Facilitators</Table.ColumnHeader>
-                <Table.ColumnHeader>Upcoming Meetings</Table.ColumnHeader>
-                <Table.ColumnHeader>Students</Table.ColumnHeader>
-                <Table.ColumnHeader>Actions</Table.ColumnHeader>
-              </Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {labSections.map((labSection) => (
-                <Table.Row key={labSection.id}>
-                  <Table.Cell>
-                    <VStack gap={1} align="start">
-                      <Text fontWeight="medium">{labSection.name}</Text>
-                      {labSection.description && (
-                        <Text fontSize="sm" color="fg.muted">
-                          {labSection.description}
-                        </Text>
-                      )}
-                    </VStack>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <VStack gap={1} align="start">
-                      <Text>{labSection.day_of_week ? getDayDisplayName(labSection.day_of_week) : "N/A"}</Text>
-                      <Text fontSize="sm" color="fg.muted">
-                        {labSection.start_time ? formatTime(labSection.start_time) : "N/A"}
-                        {labSection.end_time && ` - ${formatTime(labSection.end_time)}`}
-                      </Text>
-                    </VStack>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Text>{labSection.meeting_location || "Not specified"}</Text>
-                  </Table.Cell>
-                  <Table.Cell>
-                    {(() => {
-                      const leaders = labSectionLeadersMap.get(labSection.id) || [];
-                      if (leaders.length === 0) {
-                        return <Text color="fg.muted">Not assigned</Text>;
-                      }
-                      return (
-                        <VStack gap={1} align="start">
-                          {leaders.map((name, idx) => (
-                            <Text key={idx} fontSize="sm">
-                              {name}
-                            </Text>
-                          ))}
-                        </VStack>
-                      );
-                    })()}
-                  </Table.Cell>
-                  <Table.Cell>
-                    {(() => {
-                      const upcomingMeetings = getUpcomingMeetings(labSection.id);
-                      if (upcomingMeetings.length === 0) {
-                        return (
-                          <Text fontSize="sm" color="fg.muted">
-                            No upcoming meetings
-                          </Text>
-                        );
-                      }
-                      return (
-                        <VStack gap={1} align="start">
-                          {upcomingMeetings.slice(0, 3).map((meeting) => (
-                            <Text key={meeting.id} fontSize="sm">
-                              {format(new Date(meeting.meeting_date), "MMM d, yyyy")}
-                            </Text>
-                          ))}
-                          {upcomingMeetings.length > 3 && (
-                            <Text fontSize="xs" color="fg.muted">
-                              +{upcomingMeetings.length - 3} more
-                            </Text>
+          <>
+            <Box width="100%" overflowX="auto">
+              <Table.Root>
+                <Table.Header>
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <Table.Row bg="bg.subtle" key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => (
+                        <Table.ColumnHeader key={header.id}>
+                          {header.isPlaceholder ? null : (
+                            <>
+                              <Text
+                                onClick={header.column.getToggleSortingHandler()}
+                                cursor={header.column.getCanSort() ? "pointer" : "default"}
+                                userSelect="none"
+                              >
+                                {flexRender(header.column.columnDef.header, header.getContext())}
+                                {header.column.getCanSort() &&
+                                  ({
+                                    asc: " 🔼",
+                                    desc: " 🔽"
+                                  }[header.column.getIsSorted() as string] ??
+                                    " 🔄")}
+                              </Text>
+                              {/* Add filters for specific columns */}
+                              {header.id === "name" && (
+                                <Input
+                                  placeholder="Filter by name..."
+                                  size="sm"
+                                  value={(header.column.getFilterValue() as string) ?? ""}
+                                  onChange={(e) => header.column.setFilterValue(e.target.value)}
+                                />
+                              )}
+                              {header.id === "schedule" && (
+                                <NativeSelect.Root size="sm">
+                                  <NativeSelect.Field
+                                    value={(header.column.getFilterValue() as string) ?? ""}
+                                    onChange={(e) => header.column.setFilterValue(e.target.value || undefined)}
+                                  >
+                                    <option value="">All days</option>
+                                    {DAYS_OF_WEEK.map((day) => (
+                                      <option key={day.value} value={day.value}>
+                                        {day.label}
+                                      </option>
+                                    ))}
+                                  </NativeSelect.Field>
+                                </NativeSelect.Root>
+                              )}
+                              {header.id === "meeting_location" && (
+                                <Input
+                                  placeholder="Filter by location..."
+                                  size="sm"
+                                  value={(header.column.getFilterValue() as string) ?? ""}
+                                  onChange={(e) => header.column.setFilterValue(e.target.value)}
+                                />
+                              )}
+                              {header.id === "facilitators" && (
+                                <Input
+                                  placeholder="Filter by facilitator..."
+                                  size="sm"
+                                  value={(header.column.getFilterValue() as string) ?? ""}
+                                  onChange={(e) => header.column.setFilterValue(e.target.value)}
+                                />
+                              )}
+                            </>
                           )}
-                        </VStack>
-                      );
-                    })()}
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Text fontSize="sm" color="fg.muted">
-                      {/* TODO: Add student count */}0 students
-                    </Text>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <HStack gap={2}>
-                      <Tooltip content="Manage meetings">
-                        <Button size="sm" variant="ghost" onClick={() => openMeetingsModal(labSection)}>
-                          <FaCalendar />
-                        </Button>
-                      </Tooltip>
-                      <Tooltip content="Edit lab section">
-                        <Button size="sm" variant="ghost" onClick={() => handleEdit(labSection)}>
-                          <FaEdit />
-                        </Button>
-                      </Tooltip>
-                      <PopConfirm
-                        triggerLabel="Delete lab section"
-                        trigger={
-                          <Button size="sm" variant="ghost" colorPalette="red" loading={isDeleting}>
-                            <FaTrash />
-                          </Button>
-                        }
-                        confirmHeader="Delete Lab Section"
-                        confirmText={`Are you sure you want to delete "${labSection.name}"? This action cannot be undone.`}
-                        onConfirm={async () => await handleDelete(labSection.id)}
-                      />
-                    </HStack>
-                  </Table.Cell>
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
+                        </Table.ColumnHeader>
+                      ))}
+                    </Table.Row>
+                  ))}
+                </Table.Header>
+                <Table.Body>
+                  {table.getRowModel().rows.map((row) => {
+                    const isHighlighted = highlightedSectionId === row.original.id;
+                    return (
+                      <Table.Row
+                        key={row.id}
+                        id={`lab-section-row-${row.original.id}`}
+                        bg={isHighlighted ? "bg.info" : undefined}
+                        transition="background-color 0.3s"
+                      >
+                        {row.getVisibleCells().map((cell) => (
+                          <Table.Cell key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </Table.Cell>
+                        ))}
+                      </Table.Row>
+                    );
+                  })}
+                </Table.Body>
+              </Table.Root>
+            </Box>
+
+            {/* Pagination controls */}
+            <HStack justify="space-between" width="100%" pt={4}>
+              <HStack>
+                <Button
+                  onClick={() => table.previousPage()}
+                  disabled={!table.getCanPreviousPage()}
+                  size="sm"
+                  variant="outline"
+                >
+                  Previous
+                </Button>
+                <Button onClick={() => table.nextPage()} disabled={!table.getCanNextPage()} size="sm" variant="outline">
+                  Next
+                </Button>
+              </HStack>
+              <HStack gap={2}>
+                <Text fontSize="sm">
+                  Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+                </Text>
+                <Text fontSize="sm" color="fg.muted">
+                  ({table.getFilteredRowModel().rows.length} total rows)
+                </Text>
+              </HStack>
+              <HStack gap={2}>
+                <Text fontSize="sm">Show:</Text>
+                <NativeSelect.Root size="sm" width="auto">
+                  <NativeSelect.Field
+                    value={table.getState().pagination.pageSize}
+                    onChange={(e) => table.setPageSize(Number(e.target.value))}
+                  >
+                    {[10, 25, 50, 100].map((pageSize) => (
+                      <option key={pageSize} value={pageSize}>
+                        {pageSize}
+                      </option>
+                    ))}
+                  </NativeSelect.Field>
+                </NativeSelect.Root>
+              </HStack>
+            </HStack>
+          </>
         )}
       </VStack>
 

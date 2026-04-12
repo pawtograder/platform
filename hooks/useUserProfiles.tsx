@@ -29,6 +29,7 @@ export function useUserProfile(id: string | null | undefined):
       avatar_url: string;
       real_name?: string;
       private_profile_id?: string;
+      discussion_karma?: number;
     }
   | undefined {
   const controller = useCourseController();
@@ -52,7 +53,8 @@ export function useUserProfile(id: string | null | undefined):
       flair: profile.flair || "",
       flair_color: profile.flair_color || "",
       real_name: userRole?.profiles.name && profile.id !== userRole.private_profile_id ? userRole.profiles.name : "",
-      private_profile_id: userRole?.private_profile_id
+      private_profile_id: userRole?.private_profile_id,
+      discussion_karma: profile.discussion_karma
     };
   }, [profile, userRole]);
   return ret;

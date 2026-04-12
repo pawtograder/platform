@@ -17,11 +17,15 @@
  * Where RECYCLE_USERS_KEY defaults to "demo" but can be set via environment variable.
  * This allows multiple test environments to have separate user pools.
  */
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Database, type Json } from "@/utils/supabase/SupabaseTypes";
 import { faker } from "@faker-js/faker";
 import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
 
+import {
+  fetchDefaultGradeTargetStudentProfileIdsBatch,
+  fetchRubricCheckIdsRequiringTargetStudentProfileIdsBatch
+} from "@/lib/rubricCommentTargetStudentProfileId";
 import {
   createClass,
   createUserInClass,
@@ -31,6 +35,8 @@ import {
 } from "../tests/e2e/TestingUtils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { DEFAULT_RATE_LIMITS, RateLimitConfig, RateLimitManager } from "@/tests/generator/GenerationUtils";
+import { TEAM_COLLABORATION_SURVEY } from "@/tests/fixtures/teamCollaborationSurvey";
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
 
 // Ensure crypto is available globally for Node.js environments
 if (typeof globalThis.crypto === "undefined") {
@@ -65,6 +71,10 @@ export interface LabAssignmentConfig {
 export interface GroupAssignmentConfig {
   numGroupAssignments: number;
   numLabGroupAssignments: number;
+  /** When true, form groups once and reuse the same membership across all group assignments */
+  reuseGroupsAcrossAssignments?: boolean;
+  /** Override group size (e.g. 4 for 3-4 person groups). If unset, uses calculateGroupSize(students). */
+  groupSize?: number;
 }
 
 export interface HelpRequestConfig {
@@ -85,6 +95,10 @@ export interface SurveyConfig {
   numTemplates: number;
   responseRate: number; // Percentage of students who respond (0-1)
   submissionRate: number; // Percentage of responses that are submitted (0-1)
+  linkToGroupAssignments?: boolean; // Create surveys linked to group assignments (only group members respond)
+  includeTeamCollaboration?: boolean; // Include the team collaboration survey type in the rotation
+  /** When set, first N assignment-linked surveys get 100% responses (all submitted); rest get 0%. */
+  completeResponsesForFirstNAssignmentSurveys?: number;
 }
 
 export interface SeedingConfiguration {
@@ -589,6 +603,99 @@ const SURVEYJS_TEMPLATES = {
         ]
       }
     ]
+  },
+
+  teamCollaboration: TEAM_COLLABORATION_SURVEY
+};
+
+const TEAM_COLLABORATION_ANALYTICS_CONFIG: SurveyAnalyticsConfig = {
+  questions: {
+    q1: {
+      includeInAnalytics: true,
+      displayLabel: "This week I have..."
+    },
+    q2: {
+      includeInAnalytics: true,
+      displayLabel: "Interacted with team by..."
+    },
+    q3: {
+      includeInAnalytics: true,
+      alertThreshold: 5,
+      alertDirection: "above",
+      alertMessage: "Student unclear on weekly goals",
+      displayLabel: "Knew what to do"
+    },
+    q4: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Individual reports lower than expected progress",
+      displayLabel: "Personal progress"
+    },
+    q5: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Team reports lower than expected progress",
+      displayLabel: "Team progress"
+    },
+    q6: {
+      includeInAnalytics: true,
+      alertThreshold: 6,
+      alertDirection: "any_above",
+      alertMessage: "Possible unequal contribution reported",
+      displayLabel: "Equal contribution"
+    },
+    q7: {
+      includeInAnalytics: true,
+      alertThreshold: 4,
+      alertDirection: "above",
+      alertMessage: "Student planning to do less next week",
+      displayLabel: "Next week plans"
+    },
+    q16: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Low team interdependence",
+      isReversedScale: true,
+      displayLabel: "Team reliance"
+    },
+    q21: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Information hoarding detected",
+      isReversedScale: true,
+      displayLabel: "Info sharing"
+    },
+    q23: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Low team satisfaction",
+      isReversedScale: true,
+      displayLabel: "Team satisfaction"
+    },
+    q24: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Tasks not completed as agreed",
+      isReversedScale: true,
+      displayLabel: "Task agreement"
+    },
+    q9: {
+      includeInAnalytics: true,
+      flagValues: [4, 5, 6],
+      alertMessage: "Teammate/communication impediments reported",
+      displayLabel: "Impediments"
+    }
+  },
+  globalSettings: {
+    varianceThreshold: 1.5,
+    nonResponseThreshold: 0.8,
+    trendDeclineCount: 3
   }
 };
 
@@ -1092,7 +1199,7 @@ export class DatabaseSeeder {
       }
 
       // // Create assignments and submissions
-      const { assignments, nextOrdinal } = await this.createAssignments(config, class_id, students);
+      const { assignments, nextOrdinal } = await this.createAssignments(config, class_id, students, graders);
 
       // Create additional discussion topics if configured
       if (config.discussionConfig?.numAdditionalTopics) {
@@ -1241,7 +1348,7 @@ export class DatabaseSeeder {
 
       // Create surveys if configured
       if (config.surveyConfig) {
-        await this.createSurveys(config.surveyConfig, class_id, students, instructors);
+        await this.createSurveys(config.surveyConfig, class_id, students, instructors, assignments);
       }
 
       // Display final summary
@@ -2137,7 +2244,8 @@ export class DatabaseSeeder {
   private async createAssignments(
     config: SeedingConfiguration,
     class_id: number,
-    students: TestingUser[]
+    students: TestingUser[],
+    graders: TestingUser[] = []
   ): Promise<{
     assignments: Array<{
       id: number;
@@ -2159,7 +2267,7 @@ export class DatabaseSeeder {
     const timeStep = timeRange / (config.numAssignments - 1);
 
     // Calculate group size for group assignments
-    const groupSize = calculateGroupSize(students.length);
+    const groupSize = config.groupAssignmentConfig?.groupSize ?? calculateGroupSize(students.length);
 
     // Get the maximum ordinal from existing discussion topics to determine starting ordinal
     const { data: existingTopics, error: topicsError } = await supabase
@@ -2186,6 +2294,13 @@ export class DatabaseSeeder {
     console.log(`   Lab assignments: ${config.labAssignmentConfig!.numLabAssignments}`);
     console.log(`   Group assignments: ${config.groupAssignmentConfig!.numGroupAssignments}`);
     console.log(`   Lab group assignments: ${config.groupAssignmentConfig!.numLabGroupAssignments}`);
+
+    // Form groups once and reuse across all group assignments when configured
+    let sharedGroupMembership: string[][] | null = null;
+    if (config.groupAssignmentConfig?.reuseGroupsAcrossAssignments) {
+      sharedGroupMembership = this.formGroupMembership(students, groupSize);
+      console.log(`   Formed ${sharedGroupMembership.length} shared groups (reused across assignments)`);
+    }
 
     for (let i = 0; i < config.numAssignments; i++) {
       const assignmentDate = new Date(config.firstAssignmentDate.getTime() + timeStep * i);
@@ -2307,7 +2422,16 @@ export class DatabaseSeeder {
       // Create assignment groups for group assignments
       let groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
       if (isGroupAssignment || isLabGroupAssignment) {
-        groups = await this.createAssignmentGroups(assignmentData.id, class_id, students, groupSize);
+        if (sharedGroupMembership) {
+          groups = await this.createAssignmentGroupsFromMembership(
+            assignmentData.id,
+            class_id,
+            sharedGroupMembership,
+            graders
+          );
+        } else {
+          groups = await this.createAssignmentGroups(assignmentData.id, class_id, students, groupSize, graders);
+        }
       }
 
       const assignmentResult = {
@@ -2998,11 +3122,27 @@ export class DatabaseSeeder {
       }
     });
 
-    // Get all submission files for annotations
-    const { data: submissionFiles } = await supabase
-      .from("submission_files")
-      .select("id, name, submission_id")
-      .in("submission_id", submissionIds);
+    const rubricIdToCheckIds = new Map<number, number[]>(
+      [...rubricChecksMap.entries()].map(([rubricId, checks]) => [rubricId, checks.map((c) => c.id)])
+    );
+
+    const [individualChecksByRubric, { data: submissionFiles }] = await Promise.all([
+      fetchRubricCheckIdsRequiringTargetStudentProfileIdsBatch(supabase, rubricIdToCheckIds),
+      supabase.from("submission_files").select("id, name, submission_id").in("submission_id", submissionIds)
+    ]);
+
+    const submissionIdsForDefaultTarget = [
+      ...new Set(
+        (reviewInfo ?? [])
+          .filter((r) => (individualChecksByRubric.get(r.rubric_id)?.size ?? 0) > 0)
+          .map((r) => r.submission_id)
+      )
+    ];
+
+    const defaultTargetBySubmission = await fetchDefaultGradeTargetStudentProfileIdsBatch(
+      supabase,
+      submissionIdsForDefaultTarget
+    );
 
     const submissionFilesMap = new Map<number, Array<{ id: number; name: string; submission_id: number }>>();
     submissionFiles?.forEach((file) => {
@@ -3095,6 +3235,18 @@ export class DatabaseSeeder {
         // Create comments for applicable checks with allocated points
         for (const check of applicableChecks) {
           const pointsAwarded = checkPointAllocations.get(check.id) || 0;
+          const individualSet = individualChecksByRubric.get(review.rubric_id);
+          const needsIndividualTarget = individualSet?.has(check.id) === true;
+          const targetProfile = needsIndividualTarget ? defaultTargetBySubmission.get(review.submission_id) : undefined;
+          let targetField: { target_student_profile_id: string } | Record<string, never> = {};
+          if (needsIndividualTarget) {
+            if (targetProfile == null) {
+              throw new Error(
+                `gradeSubmissions: rubric check ${check.id} requires target_student_profile_id but no default target for submission ${review.submission_id} (review ${review.id})`
+              );
+            }
+            targetField = { target_student_profile_id: targetProfile };
+          }
 
           if (check.is_annotation && files.length > 0) {
             // Create submission file comment (annotation)
@@ -3111,7 +3263,8 @@ export class DatabaseSeeder {
               class_id: review.class_id,
               released: true,
               rubric_check_id: check.id,
-              submission_review_id: review.id
+              submission_review_id: review.id,
+              ...targetField
             });
           } else {
             // Create submission comment (general comment)
@@ -3123,7 +3276,8 @@ export class DatabaseSeeder {
               class_id: review.class_id,
               released: true,
               rubric_check_id: check.id,
-              submission_review_id: review.id
+              submission_review_id: review.id,
+              ...targetField
             });
           }
         }
@@ -4312,12 +4466,92 @@ final;`,
     );
   }
 
+  /** Form group membership once (shuffle + partition). Returns array of arrays of profile_ids. */
+  private formGroupMembership(students: TestingUser[], groupSize: number): string[][] {
+    const numGroups = Math.ceil(students.length / groupSize);
+    const shuffled = [...students].sort(() => Math.random() - 0.5);
+    const membership: string[][] = [];
+    for (let i = 0; i < numGroups; i++) {
+      const groupStudents = shuffled.slice(i * groupSize, (i + 1) * groupSize);
+      if (groupStudents.length > 0) {
+        membership.push(groupStudents.map((s) => s.private_profile_id));
+      }
+    }
+    return membership;
+  }
+
+  /** Create assignment groups from a pre-formed membership structure (reuse across assignments). */
+  private async createAssignmentGroupsFromMembership(
+    assignment_id: number,
+    class_id: number,
+    membership: string[][],
+    graders: TestingUser[] = []
+  ): Promise<Array<{ id: number; name: string; memberCount: number; members: string[] }>> {
+    const groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
+
+    const createdGroups = await Promise.all(
+      membership.map(async (memberProfileIds, i) => {
+        if (memberProfileIds.length === 0) return null;
+
+        const mentorProfileId = graders.length > 0 ? graders[i % graders.length].private_profile_id : null;
+
+        const { data: groupData, error: groupError } = await this.rateLimitManager.trackAndLimit(
+          "assignment_groups",
+          () =>
+            supabase
+              .from("assignment_groups")
+              .insert({
+                assignment_id,
+                class_id,
+                // Numeric suffix avoids unique(lower(name), assignment_id) collisions from
+                // String.fromCharCode(65 + i) repeating letters for large group counts (e.g. Group A vs Group a).
+                name: `Group ${i + 1}`,
+                mentor_profile_id: mentorProfileId
+              })
+              .select("id, name")
+        );
+
+        if (groupError || !groupData || groupData.length === 0) {
+          throw new Error(`Failed to create assignment group: ${groupError?.message || "No data returned"}`);
+        }
+
+        const group = groupData[0];
+        const memberInserts = memberProfileIds.map((profileId) => ({
+          assignment_group_id: group.id,
+          profile_id: profileId,
+          assignment_id,
+          class_id,
+          added_by: memberProfileIds[0]
+        }));
+
+        if (memberInserts.length > 0) {
+          await this.rateLimitManager.trackAndLimit(
+            "assignment_groups_members",
+            () => supabase.from("assignment_groups_members").insert(memberInserts).select("*"),
+            memberInserts.length
+          );
+        }
+
+        return {
+          id: group.id,
+          name: group.name,
+          memberCount: memberProfileIds.length,
+          members: memberProfileIds
+        };
+      })
+    );
+
+    groups.push(...createdGroups.filter((group): group is NonNullable<typeof group> => group !== null));
+    return groups;
+  }
+
   // Helper method to create assignment groups
   private async createAssignmentGroups(
     assignment_id: number,
     class_id: number,
     students: TestingUser[],
-    groupSize: number
+    groupSize: number,
+    graders: TestingUser[] = []
   ): Promise<Array<{ id: number; name: string; memberCount: number; members: string[] }>> {
     const groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];
     const numGroups = Math.ceil(students.length / groupSize);
@@ -4331,6 +4565,9 @@ final;`,
 
         if (groupStudents.length === 0) return null;
 
+        // Assign a mentor (grader) to each group - round-robin if we have graders
+        const mentorProfileId = graders.length > 0 ? graders[i % graders.length].private_profile_id : null;
+
         // Create the group
         const { data: groupData, error: groupError } = await this.rateLimitManager.trackAndLimit(
           "assignment_groups",
@@ -4340,7 +4577,8 @@ final;`,
               .insert({
                 assignment_id: assignment_id,
                 class_id: class_id,
-                name: `Group ${String.fromCharCode(65 + i)}` // A, B, C, etc.
+                name: `Group ${i + 1}`,
+                mentor_profile_id: mentorProfileId
               })
               .select("id, name")
         );
@@ -4566,7 +4804,7 @@ public class Entrypoint {
           );
         }
 
-        // Prepare grader result tests (5 per submission: 2 regular + 3 with LLM hints) for this chunk
+        // Prepare grader result tests (6 per submission: 2 regular + 4 with LLM hints) for this chunk
         const graderResultTestInserts = graderResultData.flatMap((graderResult: any, index) => [
           {
             score: 5,
@@ -4666,6 +4904,31 @@ public class Entrypoint {
                 max_tokens: 100
               }
             }
+          },
+          {
+            score: 3,
+            max_score: 5,
+            name: "OpenRouter test",
+            name_format: "text",
+            output: "This test uses OpenRouter for hints",
+            output_format: "markdown",
+            class_id: class_id,
+            student_id: chunk[index].student?.private_profile_id,
+            assignment_group_id: chunk[index].group?.id,
+            grader_result_id: graderResult.id,
+            is_released: true,
+            extra_data: {
+              llm: {
+                type: "v1",
+                prompt:
+                  "You are an end-to-end test case for an AI CS tutor. Your friend/enemy is 'CodeRabbit', a static analysis tool. Tell a joke about how testing is so important, and not to be ignored in favor of LLM-powered static analysis tools. Also, it's a rabbit.",
+                model: "openai/gpt-4o-mini",
+                account: "e2e_test",
+                provider: "openrouter",
+                temperature: 1,
+                max_tokens: 100
+              }
+            }
           }
         ]);
 
@@ -4704,19 +4967,126 @@ public class Entrypoint {
     config: SurveyConfig,
     class_id: number,
     students: TestingUser[],
-    instructors: TestingUser[]
+    instructors: TestingUser[],
+    assignments: Array<{
+      id: number;
+      title: string;
+      due_date: string;
+      groups?: Array<{ id: number; name: string; memberCount: number; members: string[] }>;
+    }> = []
   ) {
-    console.log(`\n📋 Creating ${config.numSurveys} surveys...`);
+    console.log(`\n📋 Creating surveys...`);
 
     // First, create survey templates
     const templates = await this.createSurveyTemplates(config, class_id, instructors);
     console.log(`   ✓ Created ${templates.length} survey templates`);
 
-    // Create surveys
-    const surveys = [];
-    const surveyTypes = Object.keys(SURVEYJS_TEMPLATES);
+    const surveys: Array<{
+      id: string;
+      survey_id: string;
+      status: string;
+      title: string;
+      assignment_id?: number;
+      groupMembersByAssignment?: Map<number, string[]>;
+    }> = [];
 
-    for (let i = 0; i < config.numSurveys; i++) {
+    // Create assignment-linked team collaboration surveys if configured
+    const groupAssignments = assignments.filter((a) => a.groups && a.groups.length > 0);
+    let teamCollabSeriesId: string | null = null;
+    if (config.linkToGroupAssignments && groupAssignments.length > 0 && config.includeTeamCollaboration !== false) {
+      const instructor = instructors[0];
+      const { data: seriesData, error: seriesError } = await supabase
+        .from("survey_series")
+        .insert({
+          class_id: class_id,
+          name: "Weekly Team Collaboration",
+          description: "Weekly surveys to track team dynamics and identify struggling teams",
+          created_by: instructor.private_profile_id
+        })
+        .select("id")
+        .single();
+      if (seriesError) {
+        console.warn(`   ⚠ Could not create survey series: ${seriesError.message}`);
+      } else if (seriesData) {
+        teamCollabSeriesId = seriesData.id;
+        console.log(`   ✓ Created survey series: "Weekly Team Collaboration"`);
+      }
+    }
+
+    if (config.linkToGroupAssignments && groupAssignments.length > 0 && config.includeTeamCollaboration !== false) {
+      const teamCollabTemplate = SURVEYJS_TEMPLATES.teamCollaboration;
+      let weekNumber = 1;
+      for (const assignment of groupAssignments) {
+        const instructor = instructors[Math.floor(Math.random() * instructors.length)];
+        const groupMembers = new Set<string>();
+        for (const group of assignment.groups!) {
+          for (const memberId of group.members) {
+            groupMembers.add(memberId);
+          }
+        }
+
+        const surveyData = {
+          class_id: class_id,
+          created_by: instructor.private_profile_id,
+          assigned_to_all: false,
+          title: `Week ${weekNumber} Team Collaboration Survey`,
+          description: teamCollabTemplate.description,
+          json: teamCollabTemplate,
+          status: "published" as const,
+          allow_response_editing: Math.random() < 0.5,
+          assignment_id: assignment.id,
+          due_date: addDays(new Date(), Math.floor(Math.random() * 14) + 5).toISOString(),
+          version: 1,
+          series_id: teamCollabSeriesId,
+          series_ordinal: weekNumber,
+          analytics_config: TEAM_COLLABORATION_ANALYTICS_CONFIG
+        };
+
+        const { data: surveyResult, error: surveyError } = await this.rateLimitManager.trackAndLimit("surveys", () =>
+          supabase.from("surveys").insert(surveyData).select("id, survey_id, status, title")
+        );
+
+        if (surveyError) {
+          throw new Error(`Failed to create assignment-linked survey: ${surveyError.message}`);
+        }
+
+        // Create survey_assignments for each group member (required when assigned_to_all is false)
+        const assignmentInserts = Array.from(groupMembers).map((profileId) => ({
+          survey_id: surveyResult[0].id,
+          profile_id: profileId,
+          class_id: class_id
+        }));
+        if (assignmentInserts.length > 0) {
+          const { error: assignError } = await this.rateLimitManager.trackAndLimit(
+            "survey_assignments",
+            () => supabase.from("survey_assignments").insert(assignmentInserts).select("id"),
+            assignmentInserts.length
+          );
+          if (assignError) {
+            throw new Error(`Failed to assign survey to group members: ${assignError.message}`);
+          }
+        }
+
+        surveys.push({
+          ...surveyResult[0],
+          assignment_id: assignment.id,
+          groupMembersByAssignment: new Map([[assignment.id, Array.from(groupMembers)]])
+        });
+        console.log(
+          `   ✓ Created assignment-linked survey: "${surveyResult[0].title}" (Week ${weekNumber}, linked to assignment ${assignment.id}, ${groupMembers.size} group members)`
+        );
+        weekNumber++;
+      }
+    }
+
+    // Create regular (non-linked) surveys
+    const surveyTypes =
+      config.includeTeamCollaboration !== false
+        ? Object.keys(SURVEYJS_TEMPLATES)
+        : Object.keys(SURVEYJS_TEMPLATES).filter((k) => k !== "teamCollaboration");
+    const remaining = Math.max(0, config.numSurveys - surveys.length);
+
+    for (let i = 0; i < remaining; i++) {
       const instructor = instructors[Math.floor(Math.random() * instructors.length)];
       const surveyType = surveyTypes[i % surveyTypes.length] as keyof typeof SURVEYJS_TEMPLATES;
       const template = SURVEYJS_TEMPLATES[surveyType];
@@ -4759,7 +5129,8 @@ public class Entrypoint {
         students,
         class_id,
         config.responseRate,
-        config.submissionRate
+        config.submissionRate,
+        config.completeResponsesForFirstNAssignmentSurveys
       );
     }
 
@@ -4803,21 +5174,31 @@ public class Entrypoint {
   }
 
   private async createSurveyResponses(
-    surveys: Array<{ id: string; survey_id: string; status: string; title: string }>,
+    surveys: Array<{
+      id: string;
+      survey_id: string;
+      status: string;
+      title: string;
+      assignment_id?: number;
+      groupMembersByAssignment?: Map<number, string[]>;
+    }>,
     students: TestingUser[],
     class_id: number,
     responseRate: number,
-    submissionRate: number
+    submissionRate: number,
+    completeResponsesForFirstNAssignmentSurveys?: number
   ) {
     console.log(`   Creating survey responses...`);
 
     const responsesToCreate: Array<{
       survey_id: string;
       profile_id: string;
-      response: Record<string, any>;
+      response: Json;
       is_submitted: boolean;
       submitted_at: string | null;
     }> = [];
+
+    let assignmentLinkedIndex = 0;
 
     for (const survey of surveys) {
       // Get the survey JSON to generate appropriate responses
@@ -4825,15 +5206,43 @@ public class Entrypoint {
 
       if (!surveyData || !surveyData.json) continue;
 
-      const surveyJson = surveyData.json as { pages: Array<{ elements: Array<any> }> };
+      const surveyJson = surveyData.json as {
+        pages: Array<{ elements: Array<{ name?: string; type?: string; choices?: unknown[] }> }>;
+      };
       const allElements = surveyJson.pages.flatMap((page) => page.elements || []);
 
-      // Determine which students respond (based on responseRate)
-      const respondingStudents = students.filter(() => Math.random() < responseRate);
+      // For assignment-linked surveys, only group members can respond
+      let eligibleStudents: TestingUser[];
+      if (survey.assignment_id && survey.groupMembersByAssignment) {
+        const memberIds = survey.groupMembersByAssignment.get(survey.assignment_id) || [];
+        const memberIdSet = new Set(memberIds);
+        eligibleStudents = students.filter((s) => memberIdSet.has(s.private_profile_id));
+      } else {
+        eligibleStudents = students;
+      }
+
+      // Apply completeResponsesForFirstNAssignmentSurveys: first N get 100%/100%, rest get 0%
+      let effectiveResponseRate = responseRate;
+      let effectiveSubmissionRate = submissionRate;
+      if (survey.assignment_id && completeResponsesForFirstNAssignmentSurveys !== undefined) {
+        if (assignmentLinkedIndex < completeResponsesForFirstNAssignmentSurveys) {
+          effectiveResponseRate = 1;
+          effectiveSubmissionRate = 1;
+        } else {
+          effectiveResponseRate = 0; // Skip responses for this survey
+        }
+        assignmentLinkedIndex++;
+      }
+
+      // Determine which eligible students respond (based on effectiveResponseRate)
+      const respondingStudents =
+        effectiveResponseRate >= 1
+          ? eligibleStudents
+          : eligibleStudents.filter(() => Math.random() < effectiveResponseRate);
 
       for (const student of respondingStudents) {
-        const isSubmitted = Math.random() < submissionRate;
-        const responseData: Record<string, any> = {};
+        const isSubmitted = effectiveSubmissionRate >= 1 || Math.random() < effectiveSubmissionRate;
+        const responseData: Record<string, unknown> = {};
 
         // Generate responses for each question element
         allElements.forEach((element) => {
@@ -4844,7 +5253,7 @@ public class Entrypoint {
         responsesToCreate.push({
           survey_id: survey.id,
           profile_id: student.private_profile_id,
-          response: responseData,
+          response: responseData as Json,
           is_submitted: isSubmitted,
           submitted_at: isSubmitted ? new Date().toISOString() : null
         });
@@ -4887,7 +5296,9 @@ public class Entrypoint {
       case "dropdown": {
         const choices = element.choices || [];
         if (choices.length === 0) return null;
-        return choices[Math.floor(Math.random() * choices.length)];
+        const selected = choices[Math.floor(Math.random() * choices.length)];
+        // Handle both { value, text } objects and plain string/number choices
+        return typeof selected === "object" && selected !== null && "value" in selected ? selected.value : selected;
       }
 
       case "checkbox": {
@@ -4895,7 +5306,11 @@ public class Entrypoint {
         if (checkboxChoices.length === 0) return [];
         // Select 1-3 random options
         const numSelections = Math.floor(Math.random() * Math.min(3, checkboxChoices.length)) + 1;
-        return faker.helpers.arrayElements(checkboxChoices, numSelections);
+        const selected = faker.helpers.arrayElements(checkboxChoices, numSelections);
+        // Handle both { value, text } objects and plain string/number choices
+        return selected.map((s: unknown) =>
+          typeof s === "object" && s !== null && "value" in s ? (s as { value: unknown }).value : s
+        );
       }
 
       case "boolean":

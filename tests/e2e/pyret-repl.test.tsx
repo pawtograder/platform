@@ -48,7 +48,9 @@ test.beforeAll(async () => {
     class_id: course.id
   });
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, instructor]);
+});
 async function insertPyretSubmission({
   student_profile_id,
   assignment_id,

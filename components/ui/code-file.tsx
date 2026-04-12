@@ -37,6 +37,11 @@ const CodeFilePlain = dynamic(() => import("./code-file-plain"), {
   loading: () => <Skeleton height="600px" width="100%" />
 });
 
+const CodeFileStarryNight = dynamic(() => import("./code-file-starry-night"), {
+  ssr: false,
+  loading: () => <Skeleton height="600px" width="100%" />
+});
+
 const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
   const { preferences, updatePreferences, isSaving } = useUserPreferences();
   const [draftUseMonaco, setDraftUseMonaco] = useState<boolean | null>(null);
@@ -62,6 +67,13 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
   if (preferences === undefined) {
     return <Skeleton height="620px" width="100%" />;
   }
+
+  const files = props.files;
+  const singleFile = files?.length
+    ? (files.find((f) => f.id === (props.activeFileId ?? files[0]?.id)) ?? files[0])
+    : props.file;
+
+  const isMultiFileTabs = !!(props.files && props.files.length > 1);
 
   return (
     <Box w="100%">
@@ -97,7 +109,15 @@ const CodeFile = forwardRef<CodeFileHandle, CodeFileProps>((props, ref) => {
           Save preference
         </Button>
       </Flex>
-      {useMonacoGradingEditor ? <CodeFileMonaco ref={ref} {...props} /> : <CodeFilePlain ref={ref} {...props} />}
+      {useMonacoGradingEditor ? (
+        <CodeFileMonaco ref={ref} {...props} />
+      ) : isMultiFileTabs ? (
+        <CodeFilePlain ref={ref} {...props} />
+      ) : singleFile ? (
+        <CodeFileStarryNight file={singleFile} />
+      ) : (
+        <CodeFilePlain ref={ref} {...props} />
+      )}
     </Box>
   );
 });

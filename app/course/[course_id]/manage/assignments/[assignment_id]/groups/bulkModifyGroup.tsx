@@ -1,10 +1,11 @@
 import PersonName from "@/components/ui/person-name";
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentGroupWithMembersAndMentor } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, HStack, Portal, SegmentGroup, Text } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { LuX } from "react-icons/lu";
 import { StudentMoveData, useGroupManagement } from "./GroupManagementContext";
+import { findGroupForProfileOnAssignment } from "./groupMembershipUtils";
 import { RolesWithProfilesAndGroupMemberships } from "./page";
 
 export default function BulkModifyGroup({
@@ -14,18 +15,16 @@ export default function BulkModifyGroup({
   trigger,
   groupToModify
 }: {
-  groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  groups: AssignmentGroupWithMembersAndMentor[];
   assignment: Assignment;
   profiles: RolesWithProfilesAndGroupMemberships[];
   trigger: JSX.Element;
-  groupToModify?: AssignmentGroupWithMembersInvitationsAndJoinRequests;
+  groupToModify?: AssignmentGroupWithMembersAndMentor;
 }) {
   const { addMovesToFulfill, modProfiles, movesToFulfill, removeMoveToFulfill } = useGroupManagement();
   const [membersToRemove, setMembersToRemove] = useState<string[]>([]);
   const [findStrategy, setFindStrategy] = useState<"by_member" | "by_team_name">("by_team_name");
-  const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(
-    groupToModify ?? null
-  );
+  const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersAndMentor | null>(groupToModify ?? null);
   const [chosenStudentHasGroup, setChosenStudentHasGroup] = useState<boolean>(true);
   const [selectedMembers, setSelectedMembers] = useState<
     MultiValue<{ value: RolesWithProfilesAndGroupMemberships; label: string | null }>
@@ -82,15 +81,11 @@ export default function BulkModifyGroup({
                         <Select
                           id="chosen_student"
                           onChange={(e) => {
-                            setChosenStudentHasGroup(
-                              e?.value.profiles.assignment_groups_members[0] === undefined ? false : true
-                            );
-                            setGroupToMod(
-                              groups.find(
-                                (group) =>
-                                  group.id === e?.value.profiles.assignment_groups_members[0]?.assignment_group_id
-                              ) ?? null
-                            );
+                            const g = e?.value
+                              ? findGroupForProfileOnAssignment(groups, assignment.id, e.value.private_profile_id)
+                              : undefined;
+                            setChosenStudentHasGroup(!!g);
+                            setGroupToMod(g ?? null);
                           }}
                           options={profiles?.map((profile: RolesWithProfilesAndGroupMemberships) => ({
                             value: profile,
@@ -192,10 +187,12 @@ export default function BulkModifyGroup({
                         isMulti={true}
                         options={profiles
                           ?.filter((profile) => {
-                            return (
-                              profile.profiles.assignment_groups_members[0] === undefined ||
-                              profile.profiles.assignment_groups_members[0].assignment_group_id !== groupToMod.id
+                            const g = findGroupForProfileOnAssignment(
+                              groups,
+                              assignment.id,
+                              profile.private_profile_id
                             );
+                            return !g || g.id !== groupToMod.id;
                           })
                           .map((profile: RolesWithProfilesAndGroupMemberships) => ({
                             value: profile,
@@ -226,13 +223,14 @@ export default function BulkModifyGroup({
                     onClick={() => {
                       if (groupToMod) {
                         const result: StudentMoveData[] = selectedMembers.map((member) => {
+                          const prev = findGroupForProfileOnAssignment(
+                            groups,
+                            assignment.id,
+                            member.value.private_profile_id
+                          );
                           return {
                             profile_id: member.value.private_profile_id,
-                            old_group_id:
-                              member.value.profiles.assignment_groups_members.length > 0
-                                ? member.value.profiles.assignment_groups_members[0].assignment_group_id
-                                : null,
-
+                            old_group_id: prev?.id ?? null,
                             new_group_id: groupToMod.id
                           };
                         });

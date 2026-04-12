@@ -1,16 +1,16 @@
 "use client";
 
-import { Box, Table, Text, Badge, HStack, IconButton, Button } from "@chakra-ui/react";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import Link from "@/components/ui/link";
-import { formatInTimeZone } from "date-fns-tz";
-import { MenuRoot, MenuTrigger, MenuContent, MenuItem } from "@/components/ui/menu";
+import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
-import { useCallback, useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
-import { HiOutlineDotsHorizontal } from "react-icons/hi";
-import { FaTrash } from "react-icons/fa";
-import { useLivePolls, useCourse, useCourseController } from "@/hooks/useCourseController";
+import { useCourseController, useLivePolls } from "@/hooks/useCourseController";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Badge, Box, Button, HStack, IconButton, Table, Text } from "@chakra-ui/react";
+import { useRouter } from "next/navigation";
+import { useCallback, useMemo, useState } from "react";
+import { FaTrash } from "react-icons/fa";
+import { HiOutlineDotsHorizontal } from "react-icons/hi";
 
 type LivePoll = Database["public"]["Tables"]["live_polls"]["Row"];
 
@@ -23,9 +23,7 @@ type PollsTableProps = {
 export default function PollsTable({ courseId }: PollsTableProps) {
   const router = useRouter();
   const polls = useLivePolls();
-  const course = useCourse();
   const { livePolls } = useCourseController();
-  const timezone = course?.time_zone || "America/New_York";
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
   const filteredPolls = useMemo(() => {
@@ -57,76 +55,74 @@ export default function PollsTable({ courseId }: PollsTableProps) {
     );
   };
 
-  const handleToggleLive = useCallback(async (pollId: string, nextState: boolean) => {
-    const loadingToast = toaster.create({
-      title: nextState ? "Starting Poll" : "Closing Poll",
-      description: nextState ? "Making poll available to students..." : "Closing poll for students...",
-      type: "loading"
-    });
-
-    try {
-      // If making poll live, set deactivates_at to 1 hour from now
-      // If closing poll, clear deactivates_at
-      const updateData: { is_live: boolean; deactivates_at: string | null } = {
-        is_live: nextState,
-        deactivates_at: nextState
-          ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
-          : null
-      };
-
-      await livePolls.update(pollId, updateData);
-
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: nextState ? "Poll is Live" : "Poll Closed",
-        description: nextState ? "Students can now answer this poll." : "Students can no longer submit responses.",
-        type: "success"
+  const handleToggleLive = useCallback(
+    async (pollId: string, nextState: boolean) => {
+      const loadingToast = toaster.create({
+        title: nextState ? "Starting Poll" : "Closing Poll",
+        description: nextState ? "Making poll available to students..." : "Closing poll for students...",
+        type: "loading"
       });
-    } catch (err) {
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Unable to update poll",
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
-        type: "error"
+
+      try {
+        // If making poll live, set deactivates_at to 1 hour from now
+        // If closing poll, clear deactivates_at
+        const updateData: { is_live: boolean; deactivates_at: string | null } = {
+          is_live: nextState,
+          deactivates_at: nextState
+            ? new Date(Date.now() + 60 * 60 * 1000).toISOString() // 1 hour from now
+            : null
+        };
+
+        await livePolls.update(pollId, updateData);
+
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: nextState ? "Poll is Live" : "Poll Closed",
+          description: nextState ? "Students can now answer this poll." : "Students can no longer submit responses.",
+          type: "success"
+        });
+      } catch (err) {
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: "Unable to update poll",
+          description: err instanceof Error ? err.message : "An unexpected error occurred",
+          type: "error"
+        });
+      }
+    },
+    [livePolls]
+  );
+
+  const handleDelete = useCallback(
+    async (pollId: string) => {
+      const confirmed = confirm(`Are you sure you want to delete this poll? This action cannot be undone.`);
+      if (!confirmed) return;
+
+      const loadingToast = toaster.create({
+        title: "Deleting Poll",
+        description: "Removing poll and all responses...",
+        type: "loading"
       });
-    }
-  }, []);
+      try {
+        await livePolls.hardDelete(pollId);
 
-  const handleDelete = useCallback(async (pollId: string) => {
-    const confirmed = confirm(`Are you sure you want to delete this poll? This action cannot be undone.`);
-    if (!confirmed) return;
-
-    const loadingToast = toaster.create({
-      title: "Deleting Poll",
-      description: "Removing poll and all responses...",
-      type: "loading"
-    });
-    try {
-      await livePolls.hardDelete(pollId);
-
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Poll Deleted",
-        description: "The poll and all its responses have been deleted.",
-        type: "success"
-      });
-    } catch (err) {
-      toaster.dismiss(loadingToast);
-      toaster.create({
-        title: "Unable to delete poll",
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
-        type: "error"
-      });
-    }
-  }, []);
-
-  const formatDate = (dateString: string) => {
-    try {
-      return formatInTimeZone(new Date(dateString), timezone, "MMM d, yyyy 'at' h:mm a");
-    } catch {
-      return dateString;
-    }
-  };
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: "Poll Deleted",
+          description: "The poll and all its responses have been deleted.",
+          type: "success"
+        });
+      } catch (err) {
+        toaster.dismiss(loadingToast);
+        toaster.create({
+          title: "Unable to delete poll",
+          description: err instanceof Error ? err.message : "An unexpected error occurred",
+          type: "error"
+        });
+      }
+    },
+    [livePolls]
+  );
 
   return (
     <>
@@ -180,7 +176,7 @@ export default function PollsTable({ courseId }: PollsTableProps) {
                 <Table.Cell>{getStatusBadge(poll.is_live)}</Table.Cell>
                 <Table.Cell>
                   <Text fontSize="xs" color="fg.muted">
-                    {formatDate(poll.created_at)}
+                    <TimeZoneAwareDate date={poll.created_at} format="full" />
                   </Text>
                 </Table.Cell>
                 <Table.Cell>

@@ -6,7 +6,7 @@
  */
 
 import { Redis as UpstashRedis } from "https://deno.land/x/upstash_redis@v1.22.0/mod.ts";
-import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno";
 import { applyPatch } from "https://esm.sh/diff@5.1.0";
@@ -362,6 +362,8 @@ export async function getChangedFiles(
  * Create a branch and commit changes to a target repository
  * For text files with patches, applies the patch to the content at baseSha
  * For binary files or files with full content, uses the provided content
+ * @param templateRepo - Optional template repo name for fallback when patch fails
+ * @param templateSha - Optional template SHA to fetch content from when patch fails
  */
 export async function createBranchAndCommit(
   repoFullName: string,
@@ -369,7 +371,9 @@ export async function createBranchAndCommit(
   baseSha: string,
   files: FileChange[],
   commitMessage: string,
-  scope?: Sentry.Scope
+  scope?: Sentry.Scope,
+  templateRepo?: string,
+  templateSha?: string
 ): Promise<void> {
   const octokit = await github.getOctoKit(repoFullName, scope);
   if (!octokit) {
@@ -385,22 +389,70 @@ export async function createBranchAndCommit(
 
   console.log("createBranchAndCommit", repoFullName, branchName, baseSha, files.length, "files");
 
-  // Create new branch
+  // Create or update branch - handle various edge cases robustly
+  let newRef: { ref: string };
   try {
-    await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+    // First, try to create the branch
+    const createResult = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
       owner,
       repo,
-      ref: `heads/${branchName}`
+      ref: `refs/heads/${branchName}`,
+      sha: baseSha
     });
-  } catch {
-    // Branch doesn't exist, which is fine
+    newRef = createResult.data;
+  } catch (createError: unknown) {
+    const errorMessage = createError instanceof Error ? createError.message : String(createError);
+
+    // If branch already exists, force-update it to the base SHA
+    if (errorMessage.includes("Reference already exists")) {
+      scope?.addBreadcrumb({
+        message: `Branch ${branchName} already exists, force-updating to ${baseSha}`,
+        category: "git",
+        level: "info"
+      });
+
+      try {
+        const updateResult = await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+          owner,
+          repo,
+          ref: `heads/${branchName}`,
+          sha: baseSha,
+          force: true // Force update even if not a fast-forward
+        });
+        newRef = updateResult.data;
+      } catch (updateError: unknown) {
+        // If force update fails, try delete then create
+        const updateErrorMsg = updateError instanceof Error ? updateError.message : String(updateError);
+        scope?.addBreadcrumb({
+          message: `Force update failed: ${updateErrorMsg}, trying delete+create`,
+          category: "git",
+          level: "warning"
+        });
+
+        try {
+          await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+            owner,
+            repo,
+            ref: `heads/${branchName}`
+          });
+        } catch {
+          // Ignore delete errors - branch might not exist or might be protected
+        }
+
+        // Try create again
+        const retryResult = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+          owner,
+          repo,
+          ref: `refs/heads/${branchName}`,
+          sha: baseSha
+        });
+        newRef = retryResult.data;
+      }
+    } else {
+      // Some other error - rethrow
+      throw createError;
+    }
   }
-  const { data: newRef } = await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-    owner,
-    repo,
-    ref: `refs/heads/${branchName}`,
-    sha: baseSha
-  });
   scope?.setTag("new_ref", newRef.ref);
 
   const { data: baseCommit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
@@ -463,13 +515,77 @@ export async function createBranchAndCommit(
           }
           patchedContent = result;
         } catch (patchError) {
+          // Add diagnostic information
+          const patchPreview = file.patch ? file.patch.substring(0, 200) : "no patch";
+          const baseContentPreview = baseContent.substring(0, 200);
           scope?.addBreadcrumb({
-            message: `Failed to apply patch to ${file.path}: ${patchError}`,
+            message: `Failed to apply patch to ${file.path}`,
             category: "patch",
-            level: "error"
+            level: "error",
+            data: {
+              error: String(patchError),
+              baseContentLength: baseContent.length,
+              patchLength: file.patch?.length || 0,
+              patchPreview,
+              baseContentPreview
+            }
           });
           console.error(`Failed to apply patch to ${file.path}:`, patchError);
-          throw patchError;
+          console.error(`Base content length: ${baseContent.length}, Patch length: ${file.patch?.length || 0}`);
+          console.error(`Patch preview: ${patchPreview}`);
+          console.error(`Base content preview: ${baseContentPreview}`);
+
+          // Fallback: fetch full content from template repo if available
+          if (templateRepo && templateSha) {
+            scope?.addBreadcrumb({
+              message: `Attempting fallback: fetching full content from template repo for ${file.path}`,
+              category: "patch",
+              level: "info"
+            });
+
+            try {
+              const templateOctokit = await github.getOctoKit(templateRepo, scope);
+              if (templateOctokit) {
+                const [templateOwner, templateRepoName] = templateRepo.split("/");
+                const { data: templateFileData } = await templateOctokit.request(
+                  "GET /repos/{owner}/{repo}/contents/{path}",
+                  {
+                    owner: templateOwner,
+                    repo: templateRepoName,
+                    path: file.path,
+                    ref: templateSha
+                  }
+                );
+
+                if ("content" in templateFileData && templateFileData.content) {
+                  // Use the full content from template repo
+                  patchedContent = atob(templateFileData.content);
+                  scope?.addBreadcrumb({
+                    message: `Successfully fetched full content from template repo for ${file.path}`,
+                    category: "patch",
+                    level: "info"
+                  });
+                } else {
+                  throw new Error("Template file content not available");
+                }
+              } else {
+                throw new Error("Could not get octokit for template repo");
+              }
+            } catch (fallbackError) {
+              scope?.addBreadcrumb({
+                message: `Fallback failed for ${file.path}: ${fallbackError}`,
+                category: "patch",
+                level: "error"
+              });
+              console.error(`Fallback failed for ${file.path}:`, fallbackError);
+              throw new Error(
+                `Patch application failed and fallback failed: ${patchError}. Fallback error: ${fallbackError}`
+              );
+            }
+          } else {
+            // No fallback available, throw original error
+            throw patchError;
+          }
         }
 
         // Create blob with patched content
@@ -583,6 +699,291 @@ export async function createPullRequest(
 }
 
 /**
+ * Check if a repository already has the handout changes applied.
+ *
+ * This handles the case where a PR was merged but our database wasn't updated.
+ * The student may have made ADDITIONAL edits to files (changing the SHA),
+ * but the handout patch might already be applied.
+ *
+ * We check this by simulating what would happen if we applied the patches:
+ * - For removed files: check if they're already gone
+ * - For binary files: check if the content matches the template
+ * - For text files with patches: check if applying the patch results in no change
+ *   (meaning the patch is already applied)
+ *
+ * @returns true if all handout changes are already applied (no diff needed), false otherwise
+ */
+export async function isRepoAlreadyInSync(
+  studentRepoFullName: string,
+  templateRepo: string,
+  changedFiles: FileChange[],
+  templateToSha: string,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  const studentOctokit = await github.getOctoKit(studentRepoFullName, scope);
+  const templateOctokit = await github.getOctoKit(templateRepo, scope);
+
+  if (!studentOctokit || !templateOctokit) {
+    return false; // Can't verify, assume not in sync
+  }
+
+  const [studentOwner, studentRepo] = studentRepoFullName.split("/");
+  const [templateOwner, templateRepoName] = templateRepo.split("/");
+
+  scope?.addBreadcrumb({
+    message: `Checking if ${studentRepoFullName} already has handout changes applied (${changedFiles.length} files)`,
+    category: "sync",
+    level: "info"
+  });
+
+  try {
+    for (const file of changedFiles) {
+      // Handle removed files
+      if (file.status === "removed") {
+        try {
+          await studentOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+            owner: studentOwner,
+            repo: studentRepo,
+            path: file.path,
+            ref: "main"
+          });
+          // File still exists - not in sync
+          scope?.addBreadcrumb({
+            message: `File ${file.path} should be removed but still exists`,
+            category: "sync",
+            level: "debug"
+          });
+          return false;
+        } catch (error: unknown) {
+          // Only treat 404 as "file doesn't exist" - other errors (rate limit, auth, network) should fail the check
+          const status =
+            error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
+          if (status === 404) {
+            // File doesn't exist - good, it was supposed to be removed
+            continue;
+          }
+          // Other error (rate limit, auth, network, etc.) - can't reliably determine sync status
+          scope?.addBreadcrumb({
+            message: `Error checking if removed file ${file.path} exists: status=${status}, error=${error}`,
+            category: "sync",
+            level: "warning"
+          });
+          return false;
+        }
+      }
+
+      // Get current content from student repo
+      let studentContent: string;
+      try {
+        const { data: studentFile } = await studentOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+          owner: studentOwner,
+          repo: studentRepo,
+          path: file.path,
+          ref: "main"
+        });
+        if ("content" in studentFile && studentFile.content) {
+          studentContent = atob(studentFile.content);
+        } else {
+          // Can't get content - assume not in sync
+          return false;
+        }
+      } catch (error: unknown) {
+        const status =
+          error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
+        if (status === 404) {
+          // File doesn't exist in student repo but should (added/modified file) - not in sync
+          scope?.addBreadcrumb({
+            message: `File ${file.path} doesn't exist in student repo but should`,
+            category: "sync",
+            level: "debug"
+          });
+        } else {
+          // Other error (rate limit, auth, network, etc.) - can't reliably determine sync status
+          scope?.addBreadcrumb({
+            message: `Error fetching file ${file.path} from student repo: status=${status}, error=${error}`,
+            category: "sync",
+            level: "warning"
+          });
+        }
+        return false;
+      }
+
+      // For binary files: compare against template content directly
+      if (file.isBinary && file.content) {
+        const templateContent = atob(file.content);
+        if (studentContent !== templateContent) {
+          scope?.addBreadcrumb({
+            message: `Binary file ${file.path} differs from template`,
+            category: "sync",
+            level: "debug"
+          });
+          return false;
+        }
+        continue;
+      }
+
+      // For text files with patches: check if applying the patch results in no change
+      if (file.patch && !file.isBinary) {
+        try {
+          const patchedContent = applyPatch(studentContent, file.patch);
+
+          if (patchedContent === false) {
+            // Patch failed to apply - could mean conflicts or already applied differently
+            // Try a different check: see if the expected template content is present
+            const { data: templateFile } = await templateOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+              owner: templateOwner,
+              repo: templateRepoName,
+              path: file.path,
+              ref: templateToSha
+            });
+
+            if ("content" in templateFile && templateFile.content) {
+              const expectedContent = atob(templateFile.content);
+              // Check if student's file contains all the expected content from template
+              // This is a loose check - if student made additional changes on top, that's fine
+              if (studentContent.includes(expectedContent) || expectedContent === studentContent) {
+                // Template content is present in student file
+                continue;
+              }
+            }
+
+            // Patch failed and content doesn't match - not in sync
+            scope?.addBreadcrumb({
+              message: `Patch for ${file.path} failed to apply and content doesn't match template`,
+              category: "sync",
+              level: "debug"
+            });
+            return false;
+          }
+
+          // If patch applied and result is same as current content, patch is already applied
+          if (patchedContent === studentContent) {
+            // The patch is already applied - this file is in sync
+            continue;
+          }
+
+          // Patch would make changes - not in sync
+          scope?.addBreadcrumb({
+            message: `File ${file.path} would change if patch applied - not in sync`,
+            category: "sync",
+            level: "debug"
+          });
+          return false;
+        } catch (patchError) {
+          scope?.addBreadcrumb({
+            message: `Error applying patch to ${file.path}: ${patchError}`,
+            category: "sync",
+            level: "debug"
+          });
+          return false;
+        }
+      }
+
+      // For files with full content (new files): compare content
+      if (file.content && !file.isBinary) {
+        const expectedContent = atob(file.content);
+        if (studentContent !== expectedContent) {
+          // For new files, student might have made additional edits
+          // Check if at least the expected content is present
+          if (!studentContent.includes(expectedContent)) {
+            scope?.addBreadcrumb({
+              message: `New file ${file.path} doesn't contain expected content`,
+              category: "sync",
+              level: "debug"
+            });
+            return false;
+          }
+        }
+        continue;
+      }
+    }
+
+    // All files are in sync!
+    scope?.addBreadcrumb({
+      message: `Repository ${studentRepoFullName} already has all handout changes applied`,
+      category: "sync",
+      level: "info"
+    });
+    return true;
+  } catch (error) {
+    scope?.addBreadcrumb({
+      message: `Error checking sync status: ${error}`,
+      category: "sync",
+      level: "warning"
+    });
+    return false; // On error, assume not in sync and proceed with normal flow
+  }
+}
+
+/**
+ * Find existing sync PRs for a repository with the given branch name pattern.
+ * Returns info about any existing PR (open, merged, or closed without merge).
+ */
+export async function findExistingSyncPR(
+  repoFullName: string,
+  branchName: string,
+  scope?: Sentry.Scope
+): Promise<{
+  exists: boolean;
+  merged?: boolean;
+  isOpen?: boolean;
+  closedWithoutMerge?: boolean;
+  prNumber?: number;
+  prUrl?: string;
+  mergeSha?: string;
+} | null> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) {
+    return null;
+  }
+
+  const [owner, repo] = repoFullName.split("/");
+
+  try {
+    // Search for PRs with the given head branch
+    const { data: prs } = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
+      owner,
+      repo,
+      head: `${owner}:${branchName}`,
+      state: "all" // Include both open and closed PRs
+    });
+
+    if (prs.length === 0) {
+      return { exists: false };
+    }
+
+    const pr = prs[0]; // Get the most recent PR with this branch
+    const prUrl = pr.html_url;
+    const merged = pr.merged_at !== null;
+    const isOpen = pr.state === "open";
+    const closedWithoutMerge = pr.state === "closed" && !merged;
+
+    scope?.addBreadcrumb({
+      message: `Found existing PR #${pr.number} for branch ${branchName} (state: ${pr.state}, merged: ${merged}, closedWithoutMerge: ${closedWithoutMerge})`,
+      category: "sync",
+      level: "info"
+    });
+
+    return {
+      exists: true,
+      merged,
+      isOpen,
+      closedWithoutMerge,
+      prNumber: pr.number,
+      prUrl,
+      mergeSha: pr.merge_commit_sha || undefined
+    };
+  } catch (error) {
+    scope?.addBreadcrumb({
+      message: `Error checking for existing PR: ${error}`,
+      category: "sync",
+      level: "warning"
+    });
+    return null;
+  }
+}
+
+/**
  * Attempt to auto-merge a pull request
  */
 export async function attemptAutoMerge(
@@ -683,9 +1084,110 @@ export async function syncRepositoryToHandout(params: {
           };
         }
 
+        const branchName = `sync-to-${toSha.substring(0, 7)}`;
+
+        // RESILIENCE CHECK 1: Check for existing PR with this branch name FIRST
+        // This must happen before any branch deletion to avoid closing open PRs
+        const existingPR = await findExistingSyncPR(repositoryFullName, branchName, scope);
+
+        // RESILIENCE CHECK 2: Check if student repo is already in sync with template
+        // This handles cases where a previous PR was merged but our database wasn't updated
+        const alreadyInSync = await isRepoAlreadyInSync(repositoryFullName, templateRepo, changedFiles, toSha, scope);
+
+        if (alreadyInSync) {
+          scope?.addBreadcrumb({
+            message: `Repository ${repositoryFullName} is already in sync with template at ${toSha}`,
+            category: "sync",
+            level: "info"
+          });
+
+          // If there's an existing merged PR, return its info so DB can be updated
+          if (existingPR?.exists && existingPR.merged) {
+            return {
+              success: true,
+              pr_number: existingPR.prNumber,
+              pr_url: existingPR.prUrl,
+              merged: true,
+              merge_sha: existingPR.mergeSha
+            };
+          }
+
+          // If there's an open PR but repo is in sync, the PR is stale
+          // Don't delete the branch - let the PR remain for visibility
+          // Just report no changes needed
+          if (existingPR?.exists && !existingPR.merged) {
+            scope?.addBreadcrumb({
+              message: `Repository in sync but has open PR #${existingPR.prNumber} - may need manual review`,
+              category: "sync",
+              level: "warning"
+            });
+          }
+
+          // Only clean up branch if NO PR exists (safe to delete)
+          if (!existingPR?.exists) {
+            const octokit = await github.getOctoKit(repositoryFullName, scope);
+            if (octokit) {
+              const [owner, repo] = repositoryFullName.split("/");
+              try {
+                await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+                  owner,
+                  repo,
+                  ref: `heads/${branchName}`
+                });
+              } catch {
+                // Branch doesn't exist, which is fine
+              }
+            }
+          }
+
+          return {
+            success: true,
+            no_changes: true
+          };
+        }
+
+        if (existingPR?.exists) {
+          if (existingPR.merged) {
+            // PR was already merged! Just return success so the database can be updated
+            scope?.addBreadcrumb({
+              message: `Found already-merged PR #${existingPR.prNumber} for ${repositoryFullName}`,
+              category: "sync",
+              level: "info"
+            });
+            return {
+              success: true,
+              pr_number: existingPR.prNumber,
+              pr_url: existingPR.prUrl,
+              merged: true,
+              merge_sha: existingPR.mergeSha
+            };
+          } else if (existingPR.isOpen) {
+            // PR exists and is still open - return its info so caller knows the state
+            scope?.addBreadcrumb({
+              message: `Found open PR #${existingPR.prNumber} for ${repositoryFullName}`,
+              category: "sync",
+              level: "info"
+            });
+            return {
+              success: true,
+              pr_number: existingPR.prNumber,
+              pr_url: existingPR.prUrl,
+              merged: false
+            };
+          } else if (existingPR.closedWithoutMerge) {
+            // PR was closed without merge - we need to create a new PR
+            // The branch will be recreated below, and a new PR will be opened
+            scope?.addBreadcrumb({
+              message: `Found closed-without-merge PR #${existingPR.prNumber} for ${repositoryFullName} - will create new PR`,
+              category: "sync",
+              level: "info"
+            });
+            // Fall through to create new branch and PR
+          }
+        }
+
         // Create branch and commit based on syncedRepoSha (Student_orig)
         // This enables proper 3-way merging when the PR targets current main
-        const branchName = `sync-to-${toSha.substring(0, 7)}`;
         const commitMessage = `Sync handout updates to ${toSha.substring(0, 7)}
 
 This commit was automatically generated by an instructor to sync
@@ -694,7 +1196,16 @@ changes from the template repository.
 Changed files:
 ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
-        await createBranchAndCommit(repositoryFullName, branchName, syncedRepoSha, changedFiles, commitMessage, scope);
+        await createBranchAndCommit(
+          repositoryFullName,
+          branchName,
+          syncedRepoSha,
+          changedFiles,
+          commitMessage,
+          scope,
+          templateRepo,
+          toSha
+        );
 
         // Create PR
         const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;
@@ -729,6 +1240,7 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
 *This PR was automatically generated. It will be auto-merged if there are no conflicts. If there are merge conflicts, they will be shown in the GitHub UI - you can resolve them directly on GitHub or locally. If you need help, ask your course staff.*`;
 
         let prNumber: number;
+        let prUrl: string;
         try {
           prNumber = await createPullRequest(
             repositoryFullName,
@@ -739,9 +1251,11 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
             adminSupabase,
             scope
           );
+          prUrl = `https://github.com/${repositoryFullName}/pull/${prNumber}`;
         } catch (error) {
-          // Handle case where there are no commits between branches (repo already up to date)
           const errorMessage = error instanceof Error ? error.message : String(error);
+
+          // Handle case where there are no commits between branches (repo already up to date)
           if (errorMessage.includes("No commits between")) {
             scope?.addBreadcrumb({
               message: `No commits between branches - repository already up to date`,
@@ -769,11 +1283,41 @@ ${textFiles.length > 0 ? `**Text files** (will be merged with your changes):\n${
               no_changes: true
             };
           }
-          // Re-throw if it's a different error
-          throw error;
-        }
 
-        const prUrl = `https://github.com/${repositoryFullName}/pull/${prNumber}`;
+          // Handle case where PR already exists (race condition or retry after partial failure)
+          if (errorMessage.includes("A pull request already exists") || errorMessage.includes("already exists for")) {
+            scope?.addBreadcrumb({
+              message: `PR already exists for branch ${branchName}, looking up existing PR`,
+              category: "sync",
+              level: "info"
+            });
+
+            // Look up the existing PR
+            const existingPRAfterError = await findExistingSyncPR(repositoryFullName, branchName, scope);
+            if (existingPRAfterError?.exists) {
+              if (existingPRAfterError.merged) {
+                return {
+                  success: true,
+                  pr_number: existingPRAfterError.prNumber,
+                  pr_url: existingPRAfterError.prUrl,
+                  merged: true,
+                  merge_sha: existingPRAfterError.mergeSha
+                };
+              } else {
+                // Use the existing PR
+                prNumber = existingPRAfterError.prNumber!;
+                prUrl = existingPRAfterError.prUrl!;
+                // Continue to auto-merge attempt below
+              }
+            } else {
+              // Couldn't find the existing PR - re-throw the error
+              throw error;
+            }
+          } else {
+            // Re-throw if it's a different error
+            throw error;
+          }
+        }
 
         // Attempt auto-merge if requested
         let merged = false;

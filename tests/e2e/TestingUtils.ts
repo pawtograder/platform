@@ -1,17 +1,25 @@
 import { createAdminClient } from "@/utils/supabase/client";
+import {
+  fetchDefaultGradeTargetStudentProfileId,
+  fetchRubricCheckIdsRequiringTargetStudentProfileId,
+  resolveTargetStudentProfileIdForRubricComment
+} from "@/lib/rubricCommentTargetStudentProfileId";
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Page } from "@playwright/test";
+import { TZDate } from "@date-fns/tz";
+import { expect, Page } from "@playwright/test";
+import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
-import { createClient } from "@supabase/supabase-js";
 dotenv.config({ path: ".env.local" });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
 // export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
 export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
+
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = format(new Date(), "dd/MM/yy HH:mm:ss") + "#" + suffix;
@@ -29,46 +37,104 @@ export type TestingUser = {
   password: string;
 };
 
+export function formatDateForTest(
+  date: string | Date | TZDate,
+  timeZone: string = "America/New_York",
+  format: "full" | "compact" | "dateOnly" | "timeOnly" | "Pp" | "MMM d, h:mm a" | "MMM d" = "MMM d, h:mm a"
+): string {
+  let d: Date;
+  if (date instanceof TZDate || date instanceof Date) {
+    d = date;
+  } else {
+    d = new Date(date);
+  }
+
+  switch (format) {
+    case "compact":
+      return formatInTimeZone(d, timeZone, "M/d/yyyy, h:mm:ss a zzz");
+    case "dateOnly":
+      return formatInTimeZone(d, timeZone, "MMM d, yyyy (zzz)");
+    case "timeOnly":
+      return formatInTimeZone(d, timeZone, "h:mm a zzz");
+    case "Pp":
+      return formatInTimeZone(d, timeZone, "MM/dd/yyyy, h:mm a zzz");
+    case "MMM d, h:mm a":
+      return formatInTimeZone(d, timeZone, "MMM d, h:mm a zzz");
+    case "MMM d":
+      return formatInTimeZone(d, timeZone, "MMM d (zzz)");
+    case "full":
+    default:
+      return formatInTimeZone(d, timeZone, "MMM d, yyyy, h:mm a zzz");
+  }
+}
+
+/**
+ * Supabase CLI 2.71.1+ uses ES256 JWT signing. If your .env.local has HS256 keys
+ * (from CLI < 2.71 or an older local project), the API rejects them with
+ * "signing method HS256 is invalid". You must use ES256 keys:
+ * 1. Upgrade CLI: npm install supabase@latest  (or use npx supabase@latest)
+ * 2. Full reset (wipes local DB): npx supabase stop --no-backup && npx supabase start
+ * 3. Export keys: npx supabase status -o env
+ * 4. Update .env.local with SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+ */
+
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 1000): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const isTransient = msg.includes("fetch failed") || msg.includes("ECONNREFUSED") || msg.includes("ETIMEDOUT");
+      if (!isTransient || attempt === maxRetries) throw error;
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      console.log(`Transient error (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${msg}`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("withRetry: unreachable");
+}
 export async function createClass({
   name,
   rateLimitManager
 }: { name?: string; rateLimitManager?: RateLimitManager } = {}) {
-  const className = name ?? `E2E Test Class`;
-  const { data: classDataList, error: classError } = await (
-    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
-  ).trackAndLimit("classes", () =>
-    supabase
-      .from("classes")
-      .insert({
-        name: className,
-        slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
-        github_org: "pawtograder-playground",
-        start_date: addDays(new Date(), -30).toISOString(),
-        end_date: addDays(new Date(), 180).toISOString(),
-        late_tokens_per_student: 10,
-        time_zone: "America/New_York"
-      })
-      .select("*")
-  );
-  if (classError) {
-    throw new Error(`Failed to create class: ${classError.message}`);
-  }
-  const classData = classDataList[0];
-  if (!classData) {
-    throw new Error("Failed to create class");
-  }
-  //Update slug to include class_id
-  const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
-    supabase
-      .from("classes")
-      .update({ slug: `${classData.slug}-${classData.id}` })
-      .eq("id", classData.id)
-      .select("id")
-  );
-  if (classError2) {
-    throw new Error(`Failed to update class slug: ${classError2.message}`);
-  }
-  return classData;
+  return withRetry(async () => {
+    const className = name ?? `E2E Test Class`;
+    const { data: classDataList, error: classError } = await (
+      rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+    ).trackAndLimit("classes", () =>
+      supabase
+        .from("classes")
+        .insert({
+          name: className,
+          slug: "e2e-ignore-" + className.toLowerCase().replace(/ /g, "-"),
+          github_org: "pawtograder-playground",
+          start_date: addDays(new Date(), -30).toISOString(),
+          end_date: addDays(new Date(), 180).toISOString(),
+          late_tokens_per_student: 10,
+          time_zone: "America/New_York"
+        })
+        .select("*")
+    );
+    if (classError) {
+      throw new Error(`Failed to create class: ${classError.message}`);
+    }
+    const classData = classDataList[0];
+    if (!classData) {
+      throw new Error("Failed to create class");
+    }
+    //Update slug to include class_id
+    const { error: classError2 } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("classes", () =>
+      supabase
+        .from("classes")
+        .update({ slug: `${classData.slug}-${classData.id}` })
+        .eq("id", classData.id)
+        .select("id")
+    );
+    if (classError2) {
+      throw new Error(`Failed to update class slug: ${classError2.message}`);
+    }
+    return classData;
+  });
 }
 let sectionIdx = 1;
 export async function createClassSection({
@@ -286,7 +352,10 @@ export async function updateClassSettings({
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient(
+    process.env.SUPABASE_URL!,
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+  );
 
   // Generate magic link using admin client (same as TestingUtils.ts does)
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -316,7 +385,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // Helper function to create a Supabase client authenticated as a specific user
 export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient<Database>(
+    process.env.SUPABASE_URL!,
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+  );
 
   // Generate magic link using admin client
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -343,6 +415,72 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   return userSupabase;
 }
 
+const TIMEZONE_DIALOG_TITLE = "Choose Your Time Zone Preference";
+const TIMEZONE_PREFERENCE_KEY = "pawtograder-timezone-pref";
+const DEFAULT_TIMEZONE_PREFERENCE: "course" | "browser" = "course";
+
+export async function ensureTimeZonePreferenceInitialized(
+  page: Page,
+  preference: "course" | "browser" = DEFAULT_TIMEZONE_PREFERENCE
+) {
+  await page.addInitScript(
+    ({ key, value }) => {
+      try {
+        const existingPreference = localStorage.getItem(key);
+        if (!existingPreference) {
+          localStorage.setItem(key, value);
+        }
+      } catch {
+        // Ignore localStorage failures in test setup.
+      }
+    },
+    { key: TIMEZONE_PREFERENCE_KEY, value: preference }
+  );
+}
+
+export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 10000): Promise<boolean> {
+  const timezoneDialog = page.getByRole("dialog", { name: TIMEZONE_DIALOG_TITLE });
+  const isVisible = await timezoneDialog.isVisible({ timeout: timeoutMs }).catch(() => false);
+  if (!isVisible) {
+    return false;
+  }
+
+  const closeButton = timezoneDialog.getByRole("button", { name: /^Close$/ }).first();
+  const canClickCloseButton = await closeButton.isVisible({ timeout: 1000 }).catch(() => false);
+  if (canClickCloseButton) {
+    await closeButton.click({ timeout: 5000 }).catch(async () => {
+      await page.keyboard.press("Escape");
+    });
+  } else {
+    await page.keyboard.press("Escape");
+  }
+
+  await timezoneDialog.waitFor({ state: "hidden", timeout: timeoutMs });
+  return true;
+}
+
+/**
+ * Navigates to a course URL and waits until the timezone preference dialog (if any) is gone
+ * and an expected heading is visible. Use after `ensureTimeZonePreferenceInitialized` for CI
+ * where the modal can mount late (e.g. Etc/Unknown browser TZ) after a short dismiss window.
+ */
+export async function gotoCourseUrlWhenHeadingVisible(
+  page: Page,
+  url: string,
+  headingName: string,
+  options?: { navigationTimeoutMs?: number; assertTimeoutMs?: number }
+): Promise<void> {
+  const navTimeout = options?.navigationTimeoutMs ?? 60_000;
+  const assertTimeout = options?.assertTimeoutMs ?? 90_000;
+
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeout });
+
+  await expect(async () => {
+    await dismissTimeZonePreferenceModal(page, 12_000);
+    await expect(page.getByRole("heading", { name: headingName })).toBeVisible({ timeout: 12_000 });
+  }).toPass({ timeout: assertTimeout });
+}
+
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
@@ -354,44 +492,89 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
       throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
     }
 
-    const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
+    const magicLink = `/auth/magic-link?token_hash=${encodeURIComponent(magicLinkData.properties?.hashed_token ?? "")}`;
 
     // Use magic link for login
     await page.goto(magicLink);
     await page.getByRole("button", { name: "Sign in with magic link" }).click();
-    await page.waitForLoadState("networkidle");
 
-    const currentUrl = page.url();
-    const isSuccessful = currentUrl.includes("/course");
-    // Check to see if we got the magic link expired notice
-    if (!isSuccessful) {
-      // Magic link expired, retry if we have retries remaining
-      if (retriesRemaining > 0) {
-        return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
-      } else {
-        throw new Error("Magic link expired and no retries remaining");
+    // On slower machines (especially in dev mode), redirect can lag after submit.
+    // Wait for either successful course navigation or explicit expired-link message.
+    let outcome: "success" | "expired" | "unknown" = "unknown";
+    try {
+      await page.waitForURL(/\/course(\/|$)/, { timeout: 30_000 });
+      outcome = "success";
+    } catch {
+      const expiredMessage = page.getByText(/Email link is invalid or has expired/i);
+      try {
+        await expiredMessage.waitFor({ state: "visible", timeout: 2_000 });
+        outcome = "expired";
+      } catch {
+        outcome = "unknown";
       }
     }
 
-    if (!isSuccessful) {
-      throw new Error("Failed to sign in - neither success nor expired state detected");
+    if (outcome === "success") {
+      return;
     }
-  } catch (error) {
-    if (retriesRemaining > 0 && (error as Error).message.includes("Failed to sign in")) {
-      console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
+    if (retriesRemaining > 0) {
       return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
     }
-    throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
+    if (outcome === "expired") {
+      throw new Error("Magic link expired and no retries remaining");
+    }
+    throw new Error(`Magic link sign-in did not complete (final URL: ${page.url()})`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to sign in with magic link: ${message}`);
   }
 }
-export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
+export async function generateMagicLink(user: TestingUser): Promise<string> {
+  const { data, error } = await supabase.auth.admin.generateLink({
+    email: user.email,
+    type: "magiclink"
+  });
+  if (error) throw new Error(`Failed to generate magic link for ${user.email}: ${error.message}`);
+  const tokenHash = data.properties?.hashed_token;
+  if (!tokenHash) throw new Error(`Failed to generate magic link for ${user.email}: missing token hash`);
+  const baseUrl = (process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return `${baseUrl}/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
+}
+
+export async function logMagicLink(users: (TestingUser | undefined)[]) {
+  if (process.env.E2E_PRINT_MAGIC_LINKS !== "true") return;
+  for (const user of users.filter(Boolean)) {
+    try {
+      const link = await generateMagicLink(user!);
+      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
+    } catch (err) {
+      console.warn(
+        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+}
+
+export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
+  if (dismissTimezoneDialog) {
+    await ensureTimeZonePreferenceInitialized(page);
+  }
+
   await page.goto("/");
   await signInWithMagicLinkAndRetry(page, testingUser);
+
+  if (dismissTimezoneDialog) {
+    await dismissTimeZonePreferenceModal(page, 15000);
+  }
 
   if (course) {
     await page.waitForLoadState("networkidle");
     await page.goto(`/course/${course.id}`);
     await page.waitForLoadState("networkidle");
+  }
+
+  if (dismissTimezoneDialog) {
+    await dismissTimeZonePreferenceModal(page, 10000);
   }
 }
 
@@ -870,6 +1053,9 @@ export async function insertPreBakedSubmission({
   }
   const repositoryData = repositoryDataList[0];
   const repository_id = repositoryData?.id;
+  if (!repository_id) {
+    throw new Error("Failed to create repository id");
+  }
 
   const { data: checkRunDataList, error: checkRunError } = await (
     rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
@@ -1143,22 +1329,37 @@ export async function insertAssignment({
   due_date,
   lab_due_date_offset,
   allow_not_graded_submissions,
+  permit_empty_submissions,
   class_id,
   rateLimitManager,
   name,
   regrade_deadline,
   release_date,
-  grader_pseudonymous_mode
+  grader_pseudonymous_mode,
+  show_leaderboard,
+  group_config,
+  min_group_size,
+  max_group_size,
+  group_formation_deadline,
+  assignment_slug
 }: {
   due_date: string;
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
+  permit_empty_submissions?: boolean;
   class_id: number;
   rateLimitManager?: RateLimitManager;
   name?: string;
   regrade_deadline?: string | null;
   release_date?: string;
   grader_pseudonymous_mode?: boolean;
+  show_leaderboard?: boolean;
+  group_config?: "individual" | "groups" | "both";
+  min_group_size?: number | null;
+  max_group_size?: number | null;
+  group_formation_deadline?: string | null;
+  /** When set, used as assignments.slug instead of the global assignment index (avoids parallel E2E collisions). */
+  assignment_slug?: string;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -1181,6 +1382,7 @@ export async function insertAssignment({
   }
   const selfReviewSettingData = selfReviewSettingDataList[0];
   const self_review_setting_id = selfReviewSettingData.id;
+  const slug = assignment_slug ?? `assignment-${currentAssignmentIdx}`;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
     .insert({
@@ -1194,12 +1396,17 @@ export async function insertAssignment({
       max_late_tokens: 10,
       release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: `assignment-${currentAssignmentIdx}`,
-      group_config: "individual",
+      slug,
+      group_config: group_config ?? "individual",
+      min_group_size: min_group_size ?? null,
+      max_group_size: max_group_size ?? null,
+      group_formation_deadline: group_formation_deadline ?? null,
       allow_not_graded_submissions: allow_not_graded_submissions || false,
+      permit_empty_submissions: permit_empty_submissions ?? true,
       self_review_setting_id: self_review_setting_id,
       regrade_deadline: regrade_deadline,
-      grader_pseudonymous_mode: grader_pseudonymous_mode || false
+      grader_pseudonymous_mode: grader_pseudonymous_mode || false,
+      show_leaderboard: show_leaderboard || false
     })
     .select("id")
     .single();
@@ -1474,25 +1681,30 @@ export async function insertSubmissionViaAPI({
   const repositoryData = repositoryDataList[0];
   const repository_id = repositoryData?.id;
 
-  const { error: checkRunError } = await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
-    "repository_check_runs",
-    () =>
-      supabase
-        .from("repository_check_runs")
-        .insert({
-          class_id: class_id,
-          repository_id: repository_id,
-          check_run_id: 1,
-          status: "{}",
-          sha: sha || "HEAD",
-          commit_message: commit_message || "none"
-        })
-        .select("id")
+  const { data: checkRunDataList, error: checkRunError } = await (
+    rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER
+  ).trackAndLimit("repository_check_runs", () =>
+    supabase
+      .from("repository_check_runs")
+      .insert({
+        class_id: class_id,
+        repository_id: repository_id,
+        check_run_id: 1,
+        status: "{}",
+        sha: sha || "HEAD",
+        commit_message: commit_message || "none"
+      })
+      .select("id")
   );
   if (checkRunError) {
     // eslint-disable-next-line no-console
     console.error(checkRunError);
     throw new Error("Failed to create check run");
+  }
+  const checkRunData = checkRunDataList[0];
+  const check_run_id = checkRunData?.id;
+  if (!check_run_id) {
+    throw new Error("Failed to create check run id");
   }
   // Prepare a JWT token to invoke the edge function
   const payload = {
@@ -1512,23 +1724,232 @@ export async function insertSubmissionViaAPI({
     "." +
     Buffer.from(JSON.stringify(payload)).toString("base64") +
     ".";
-  const { data } = await supabase.functions.invoke("autograder-create-submission", {
+  const { data, error } = await supabase.functions.invoke("autograder-create-submission", {
     headers: {
       Authorization: token_str
     }
   });
+  if (error) {
+    // Non-2xx response — try to extract structured error details from the response body
+    if (error.context instanceof Response) {
+      const rawBody = await error.context.text().catch(() => "");
+      if (rawBody) {
+        try {
+          const body = JSON.parse(rawBody) as { error?: { details?: unknown } };
+          if (body?.error?.details) {
+            throw new Error(String(body.error.details));
+          }
+        } catch (e) {
+          if (e instanceof Error && !(e instanceof SyntaxError)) throw e;
+        }
+      }
+    }
+    throw new Error(`Failed to create submission: ${error.message}`);
+  }
   if (data == null) {
     throw new Error("Failed to create submission, no data returned");
   }
   if ("error" in data) {
     if (typeof data.error === "object" && data.error && "details" in data.error) {
-      throw new Error(String((data.error as { details: string }).details));
+      const details = String((data.error as { details: string }).details);
+      if (details.length > 0) {
+        throw new Error(details);
+      }
     }
     throw new Error("Failed to create submission");
   }
+
+  if (!("submission_id" in data) || typeof data.submission_id !== "number") {
+    throw new Error("Failed to create submission, invalid response");
+  }
+
   return {
     repository_name: repository,
     submission_id: (data as { submission_id: number }).submission_id
+  };
+}
+
+export type GradingScriptResult = {
+  ret_code: number;
+  output: string;
+  execution_time: number;
+  feedback: {
+    score?: number;
+    max_score?: number;
+    output: {
+      hidden?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+      visible?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+      after_due_date?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+      after_published?: { output: string; output_format?: "text" | "markdown" | "ansi" };
+    };
+    lint: {
+      status: "pass" | "fail";
+      output: string;
+      output_format?: "text" | "markdown" | "ansi";
+    };
+    tests: {
+      score?: number;
+      max_score?: number;
+      name: string;
+      name_format?: "text" | "markdown" | "ansi";
+      output: string;
+      output_format?: "text" | "markdown" | "ansi";
+      hidden_output?: string;
+      hidden_output_format?: "text" | "markdown" | "ansi";
+      part?: string;
+      hide_until_released?: boolean;
+    }[];
+  };
+  grader_sha: string;
+  action_ref: string;
+  action_repository: string;
+};
+
+export type GradeResponse = {
+  is_ok: boolean;
+  message: string;
+  details_url: string;
+  artifacts?: {
+    name: string;
+    path: string;
+    token: string;
+  }[];
+  supabase_url: string;
+  supabase_anon_key: string;
+};
+
+/**
+ * Submits feedback for a submission via the autograder-submit-feedback edge function.
+ * This simulates what the grading script does after grading completes.
+ */
+export async function submitFeedbackViaAPI({
+  repository,
+  sha,
+  run_id = 1,
+  run_attempt = 1,
+  feedback
+}: {
+  repository: string;
+  sha: string;
+  run_id?: number;
+  run_attempt?: number;
+  feedback: GradingScriptResult;
+}): Promise<GradeResponse> {
+  // Prepare a JWT token to invoke the edge function (same format as insertSubmissionViaAPI)
+  const payload = {
+    repository: repository,
+    sha: sha,
+    workflow_ref: ".github/workflows/grade.yml-e2e-test",
+    run_id: run_id,
+    run_attempt: run_attempt
+  };
+  const header = {
+    alg: "RS256",
+    typ: "JWT",
+    kid: process.env.END_TO_END_SECRET || "not-a-secret"
+  };
+  const token_str =
+    Buffer.from(JSON.stringify(header)).toString("base64") +
+    "." +
+    Buffer.from(JSON.stringify(payload)).toString("base64") +
+    ".";
+
+  const { data, error } = await supabase.functions.invoke("autograder-submit-feedback", {
+    headers: {
+      Authorization: token_str
+    },
+    body: feedback
+  });
+
+  if (error) {
+    throw new Error(`Failed to submit feedback: ${error.message}`);
+  }
+
+  if (data == null) {
+    throw new Error("Failed to submit feedback, no data returned");
+  }
+
+  if ("error" in data) {
+    if (typeof data.error === "object" && data.error && "details" in data.error) {
+      const details = String((data.error as { details: string }).details);
+      if (details.length > 0) {
+        throw new Error(details);
+      }
+    }
+    throw new Error("Failed to submit feedback");
+  }
+
+  return data as GradeResponse;
+}
+
+/**
+ * Creates a sample GradingScriptResult with reasonable test data
+ */
+export function createSampleGradingResult(overrides?: Partial<GradingScriptResult>): GradingScriptResult {
+  return {
+    ret_code: 0,
+    output: "Grading completed successfully",
+    execution_time: 5000,
+    grader_sha: "abc123gradersha",
+    action_ref: "main",
+    action_repository: "pawtograder/assignment-action",
+    feedback: {
+      score: 85,
+      max_score: 100,
+      output: {
+        visible: {
+          output: "All visible tests passed!",
+          output_format: "text"
+        },
+        hidden: {
+          output: "Hidden test details here",
+          output_format: "text"
+        }
+      },
+      lint: {
+        status: "pass",
+        output: "No linting errors found",
+        output_format: "text"
+      },
+      tests: [
+        {
+          name: "Test 1 - Basic functionality",
+          score: 25,
+          max_score: 25,
+          output: "Test passed successfully",
+          output_format: "text",
+          part: "Part A"
+        },
+        {
+          name: "Test 2 - Edge cases",
+          score: 20,
+          max_score: 25,
+          output: "Partial credit: missed one edge case",
+          output_format: "text",
+          part: "Part A"
+        },
+        {
+          name: "Test 3 - Performance",
+          score: 25,
+          max_score: 25,
+          output: "Performance within acceptable limits",
+          output_format: "text",
+          part: "Part B"
+        },
+        {
+          name: "Test 4 - Hidden test",
+          score: 15,
+          max_score: 25,
+          output: "Hidden test result",
+          output_format: "text",
+          hidden_output: "Detailed hidden output for instructors",
+          hidden_output_format: "text",
+          hide_until_released: true,
+          part: "Part B"
+        }
+      ]
+    },
+    ...overrides
   };
 }
 
@@ -1573,6 +1994,11 @@ export async function createRegradeRequest(
     closedPoints?: number;
   }
 ) {
+  const target_student_profile_id = await resolveTargetStudentProfileIdForRubricComment(
+    supabase,
+    submission_id,
+    rubric_check_id
+  );
   // First create a submission comment to reference
   const { data: commentData, error: commentError } = await supabase
     .from("submission_comments")
@@ -1583,7 +2009,8 @@ export async function createRegradeRequest(
       points: options?.commentPoints ?? Math.floor(Math.random() * 10),
       class_id: class_id,
       rubric_check_id,
-      released: true
+      released: true,
+      target_student_profile_id
     })
     .select("*")
     .single();
@@ -1674,6 +2101,15 @@ export async function gradeSubmission(
       throw new Error(`Failed to get rubric checks: ${checksError.message}`);
     }
 
+    const individualCheckIds = await fetchRubricCheckIdsRequiringTargetStudentProfileId(
+      supabase,
+      (rubricChecks ?? []).map((c) => c.id)
+    );
+    const defaultIndividualTarget =
+      individualCheckIds.size > 0
+        ? await fetchDefaultGradeTargetStudentProfileId(supabase, reviewInfo.submission_id)
+        : null;
+
     // Get submission files for annotation comments
     const { data: submissionFiles } = await supabase
       .from("submission_files")
@@ -1706,6 +2142,11 @@ export async function gradeSubmission(
             const lineRandomValue = options?.lineNumberRandomizer?.() ?? Math.random();
             const lineNumber = Math.floor(lineRandomValue * 5) + 1; // Random line number 1-5
 
+            const targetField =
+              individualCheckIds.has(check.id) && defaultIndividualTarget
+                ? { target_student_profile_id: defaultIndividualTarget }
+                : {};
+
             await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit(
               "submission_file_comments",
               () =>
@@ -1721,12 +2162,17 @@ export async function gradeSubmission(
                     class_id: reviewInfo.class_id,
                     released: true,
                     rubric_check_id: check.id,
-                    submission_review_id: grading_review_id
+                    submission_review_id: grading_review_id,
+                    ...targetField
                   })
                   .select("id")
             );
           }
         } else {
+          const targetField =
+            individualCheckIds.has(check.id) && defaultIndividualTarget
+              ? { target_student_profile_id: defaultIndividualTarget }
+              : {};
           // Create submission comment (general comment)
           await (options?.rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("submission_comments", () =>
             supabase
@@ -1739,7 +2185,8 @@ export async function gradeSubmission(
                 class_id: reviewInfo.class_id,
                 released: true,
                 rubric_check_id: check.id,
-                submission_review_id: grading_review_id
+                submission_review_id: grading_review_id,
+                ...targetField
               })
               .select("id")
           );
@@ -2546,7 +2993,7 @@ export async function createAssignmentsAndGradebookColumns({
     slug: "average-assignments",
     score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
     max_score: 100,
-    sort_order: 2,
+    sort_order: numAssignments,
     rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 

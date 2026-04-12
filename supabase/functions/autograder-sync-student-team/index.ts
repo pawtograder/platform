@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { reinviteToOrgTeam, syncStudentTeam } from "../_shared/GitHubWrapper.ts";
 import {

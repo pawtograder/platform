@@ -1,4 +1,5 @@
 "use client";
+import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
@@ -14,10 +15,12 @@ import {
 } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
   GraderResultTest,
+  IndividualScores,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -35,15 +38,18 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { TZDate } from "@date-fns/tz";
 import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
+import { formatInTimeZone } from "date-fns-tz";
 import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { BsCheck, BsX } from "react-icons/bs";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
 function StudentNameCell({
@@ -84,16 +90,16 @@ function StudentNameCell({
   );
 }
 
-function ScoreLink({
+function ScoreLinkWithProfile({
   score,
   private_profile_id,
   submission_id,
   course_id,
   assignment_id
 }: {
-  score: number;
+  score: number | null | undefined;
   private_profile_id: string;
-  submission_id: number;
+  submission_id: number | null | undefined;
   course_id: string;
   assignment_id: string;
 }) {
@@ -102,20 +108,192 @@ function ScoreLink({
   if (isObfuscated && !canShowGradeFor) {
     return <Skeleton w="50px" h="1em" />;
   }
-  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
+  const label = score !== null && score !== undefined ? score : "—";
+  if (submission_id == null) {
+    return <Text fontSize="inherit">{label}</Text>;
+  }
+  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
 }
-export default function AssignmentsTable() {
+
+function ScoreLink({
+  score,
+  private_profile_id,
+  submission_id,
+  course_id,
+  assignment_id
+}: {
+  score: number | null | undefined;
+  private_profile_id: string | null | undefined;
+  submission_id: number | null | undefined;
+  course_id: string;
+  assignment_id: string;
+}) {
+  const isObfuscated = useObfuscatedGradesMode();
+  const label = score !== null && score !== undefined ? score : "—";
+  if (!private_profile_id) {
+    if (isObfuscated) {
+      return <Skeleton w="50px" h="1em" />;
+    }
+    if (submission_id == null) {
+      return <Text fontSize="inherit">{label}</Text>;
+    }
+    return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{label}</Link>;
+  }
+  return (
+    <ScoreLinkWithProfile
+      score={score}
+      private_profile_id={private_profile_id}
+      submission_id={submission_id}
+      course_id={course_id}
+      assignment_id={assignment_id}
+    />
+  );
+}
+
+/** Per-student combined total from `per_student_grading_totals`, if present. */
+function getPerStudentCombinedGradingTotal(submission: ActiveSubmissionsWithGradesForAssignment): number | null {
+  const studentId = submission.student_private_profile_id;
+  if (!studentId) return null;
+  const perStudentTotals = submission.per_student_grading_totals as IndividualScores | null | undefined;
+  return perStudentTotals && typeof perStudentTotals[studentId] === "number"
+    ? (perStudentTotals[studentId] as number)
+    : null;
+}
+
+/** Same numeric total as the Total Score column (per-student combined total, else `total_score`). */
+function getDisplayedTotalScore(submission: ActiveSubmissionsWithGradesForAssignment): number | null {
+  return getPerStudentCombinedGradingTotal(submission) ?? submission.total_score ?? null;
+}
+
+/** Total score when `student_private_profile_id` is missing (no per-student obfuscation target). */
+function TotalScoreCellUnknownStudent({
+  row,
+  course_id,
+  assignment_id
+}: {
+  row: { original: ActiveSubmissionsWithGradesForAssignment };
+  course_id: string;
+  assignment_id: string;
+}) {
+  const isObfuscated = useObfuscatedGradesMode();
+  const individualScores = row.original.individual_scores as IndividualScores | null | undefined;
+  const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
+  const displayScore = getDisplayedTotalScore(row.original);
+  if (isObfuscated) {
+    return <Skeleton w="50px" h="1em" />;
+  }
+  const tooltipContent = hasIndividual
+    ? Object.entries(individualScores!)
+        .filter(([, s]) => s !== undefined)
+        .map(([, s]) => `${s}`)
+        .join(" | ")
+    : "";
+  return (
+    <HStack gap={1}>
+      <ScoreLink
+        score={displayScore}
+        private_profile_id={undefined}
+        submission_id={row.original.activesubmissionid}
+        course_id={course_id}
+        assignment_id={assignment_id}
+      />
+      {hasIndividual && tooltipContent !== "" && (
+        <Tooltip content={`Individual portion(s): ${tooltipContent}`}>
+          <Text fontSize="xs" color="fg.info" cursor="help">
+            ⓘ
+          </Text>
+        </Tooltip>
+      )}
+    </HStack>
+  );
+}
+
+function TotalScoreCellWithStudent({
+  row,
+  course_id,
+  assignment_id,
+  studentId
+}: {
+  row: { original: ActiveSubmissionsWithGradesForAssignment };
+  course_id: string;
+  assignment_id: string;
+  studentId: string;
+}) {
+  const perStudentCombined = getPerStudentCombinedGradingTotal(row.original);
+  const individualScores = row.original.individual_scores as IndividualScores | null | undefined;
+  const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
+  const isObfuscated = useObfuscatedGradesMode();
+  const canShowGradeFor = useCanShowGradeFor(studentId);
+  const showTooltip = (perStudentCombined != null || hasIndividual) && (!isObfuscated || canShowGradeFor);
+
+  const displayScore = getDisplayedTotalScore(row.original);
+
+  const tooltipContent =
+    individualScores && individualScores[studentId] !== undefined
+      ? `Individual portion: ${individualScores[studentId]}`
+      : perStudentCombined != null
+        ? `Full total (group + autograder + tweak + individual portions): ${perStudentCombined}`
+        : individualScores
+          ? Object.entries(individualScores)
+              .filter(([, s]) => s !== undefined)
+              .map(([, score]) => `${score}`)
+              .join(" | ")
+          : "";
+
+  return (
+    <HStack gap={1}>
+      <ScoreLink
+        score={displayScore}
+        private_profile_id={studentId}
+        submission_id={row.original.activesubmissionid}
+        course_id={course_id}
+        assignment_id={assignment_id}
+      />
+      {showTooltip && (
+        <Tooltip content={tooltipContent}>
+          <Text fontSize="xs" color="fg.info" cursor="help">
+            ⓘ
+          </Text>
+        </Tooltip>
+      )}
+    </HStack>
+  );
+}
+
+function TotalScoreCell({
+  row,
+  course_id,
+  assignment_id
+}: {
+  row: { original: ActiveSubmissionsWithGradesForAssignment };
+  course_id: string;
+  assignment_id: string;
+}) {
+  const studentId = row.original.student_private_profile_id;
+  if (!studentId) {
+    return <TotalScoreCellUnknownStudent row={row} course_id={course_id} assignment_id={assignment_id} />;
+  }
+  return (
+    <TotalScoreCellWithStudent row={row} course_id={course_id} assignment_id={assignment_id} studentId={studentId} />
+  );
+}
+export default function AssignmentsTable({
+  tableController: providedTableController
+}: {
+  tableController?: TableController<"submissions"> | null;
+} = {}) {
   const { assignment_id, course_id } = useParams();
   const router = useRouter();
   const { role: classRole } = useClassProfiles();
   const { assignment } = useAssignmentController();
   const assignmentGroups = useAssignmentGroups();
-  const course = classRole.classes;
+
   const { classRealTimeController } = useCourseController();
-  const timeZone = course.time_zone || "America/New_York";
+  const { timeZone } = useTimeZone();
   const supabase = useMemo(() => createClient(), []);
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
+  const [isMarkingAllComplete, setIsMarkingAllComplete] = useState(false);
 
   // Get sections and assignment data for default visibility logic
   const classSections = useClassSections();
@@ -130,7 +308,8 @@ export default function AssignmentsTable() {
       late_due_date: false,
       created_at: false,
       gradername: false,
-      checkername: false
+      checkername: false,
+      grading_complete: false
     };
   });
 
@@ -170,14 +349,32 @@ export default function AssignmentsTable() {
           if (!row.original.name) return false;
           return values.some((val) => row.original.name!.toLowerCase().includes(val.toLowerCase()));
         },
-        cell: ({ row }) => (
-          <StudentNameCell
-            course_id={course_id as string}
-            assignment_id={assignment_id as string}
-            uid={row.original.student_private_profile_id!}
-            activeSubmissionId={row.original.activesubmissionid}
-          />
-        )
+        cell: ({ row }) => {
+          const uid = row.original.student_private_profile_id;
+          if (!uid) {
+            const sid = row.original.activesubmissionid;
+            const label = row.original.name ?? "—";
+            return (
+              <HStack w="100%">
+                {sid != null ? (
+                  <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${sid}`}>
+                    <Text>{label}</Text>
+                  </Link>
+                ) : (
+                  <Text>{label}</Text>
+                )}
+              </HStack>
+            );
+          }
+          return (
+            <StudentNameCell
+              course_id={course_id as string}
+              assignment_id={assignment_id as string}
+              uid={uid}
+              activeSubmissionId={row.original.activesubmissionid}
+            />
+          );
+        }
       },
       {
         id: "groupname",
@@ -225,13 +422,7 @@ export default function AssignmentsTable() {
 
           return (
             <Text>
-              {new TZDate(lateDueDate).toLocaleString(undefined, {
-                year: "numeric",
-                month: "numeric",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit"
-              })}
+              <TimeZoneAwareDate date={lateDueDate} format="Pp" />
             </Text>
           );
         },
@@ -247,14 +438,8 @@ export default function AssignmentsTable() {
             return values.includes("Same as due date");
           }
 
-          const date = new TZDate(row.original.late_due_date);
-          const formattedDate = date.toLocaleString(undefined, {
-            year: "numeric",
-            month: "numeric",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit"
-          });
+          const date = new TZDate(row.original.late_due_date, timeZone);
+          const formattedDate = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
           return values.some((val) => formattedDate.toLowerCase().includes(val.toLowerCase()));
         }
       },
@@ -267,9 +452,9 @@ export default function AssignmentsTable() {
         cell: (props) => {
           return (
             <ScoreLink
-              score={props.getValue() as number}
-              private_profile_id={props.row.original.student_private_profile_id!}
-              submission_id={props.row.original.activesubmissionid!}
+              score={props.getValue() as number | null | undefined}
+              private_profile_id={props.row.original.student_private_profile_id}
+              submission_id={props.row.original.activesubmissionid}
               course_id={course_id as string}
               assignment_id={assignment_id as string}
             />
@@ -285,24 +470,16 @@ export default function AssignmentsTable() {
       },
       {
         id: "total_score",
-        accessorKey: "total_score",
+        accessorFn: (row) => getDisplayedTotalScore(row),
         header: "Total Score",
         enableColumnFilter: true,
-        cell: (props) => {
-          return (
-            <ScoreLink
-              score={props.getValue() as number}
-              private_profile_id={props.row.original.student_private_profile_id!}
-              submission_id={props.row.original.activesubmissionid!}
-              course_id={course_id as string}
-              assignment_id={assignment_id as string}
-            />
-          );
-        },
+        cell: (props) => (
+          <TotalScoreCell row={props.row} course_id={course_id as string} assignment_id={assignment_id as string} />
+        ),
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const score = row.original.total_score;
+          const score = getDisplayedTotalScore(row.original);
           if (score === null || score === undefined) return values.includes("No score");
           return values.includes(score.toString());
         }
@@ -326,18 +503,23 @@ export default function AssignmentsTable() {
                 prefetch={false}
                 href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
               >
-                {new TZDate(props.getValue() as string, timeZone).toLocaleString()}
+                <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
               </Link>
             );
           }
-          return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
+          return (
+            <Text>
+              <TimeZoneAwareDate date={props.getValue() as string} format="compact" />
+            </Text>
+          );
         },
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const values = Array.isArray(filterValue) ? filterValue : [filterValue];
           if (!row.original.created_at) return values.includes("No submission");
           const date = new TZDate(row.original.created_at, timeZone);
-          return values.some((val) => date.toLocaleString().toLowerCase().includes(val.toLowerCase()));
+          const formatted = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
+          return values.some((val) => formatted.toLowerCase().includes(val.toLowerCase()));
         }
       },
       {
@@ -365,6 +547,22 @@ export default function AssignmentsTable() {
         }
       },
       {
+        id: "grading_complete",
+        accessorKey: "completed_at",
+        header: "Grading Complete",
+        enableColumnFilter: true,
+        cell: (props) => {
+          return props.getValue() ? <Icon as={FaCheck} /> : <Icon as={FaTimes} />;
+        },
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const isComplete = row.original.completed_at !== null;
+          const status = isComplete ? "Complete" : "Incomplete";
+          return values.includes(status);
+        }
+      },
+      {
         id: "released",
         accessorKey: "released",
         header: "Released",
@@ -384,9 +582,17 @@ export default function AssignmentsTable() {
     [timeZone, course_id, assignment_id, assignment]
   );
 
-  const [tableController, setTableController] = useState<TableController<"submissions"> | null>(null);
+  const [internalTableController, setInternalTableController] = useState<TableController<"submissions"> | null>(null);
+
+  // Use provided tableController if available, otherwise create our own
+  const tableController = providedTableController ?? internalTableController;
 
   useEffect(() => {
+    // Only create internal tableController if one wasn't provided
+    if (providedTableController) {
+      return;
+    }
+
     Sentry.addBreadcrumb({
       category: "tableController",
       message: "Creating TableController for submissions_with_grades_for_assignment_nice",
@@ -406,12 +612,12 @@ export default function AssignmentsTable() {
       table: "submissions_with_grades_for_assignment_nice" as any
     });
 
-    setTableController(tc);
+    setInternalTableController(tc);
 
     return () => {
       tc.close();
     };
-  }, [supabase, assignment_id, classRealTimeController]);
+  }, [supabase, assignment_id, classRealTimeController, providedTableController]);
 
   const {
     getHeaderGroups,
@@ -522,6 +728,15 @@ export default function AssignmentsTable() {
             >
               Unrelease All Submission Reviews
             </Button>
+            <MarkAllCompleteButton
+              assignment_id={Number(assignment_id)}
+              supabase={supabase}
+              tableController={tableController}
+              isReleasingAll={isReleasingAll}
+              isUnreleasingAll={isUnreleasingAll}
+              isMarkingAllComplete={isMarkingAllComplete}
+              setIsMarkingAllComplete={setIsMarkingAllComplete}
+            />
             <ExportGradesButton assignment_id={Number(assignment_id)} class_id={Number(course_id)} />
             <DownloadAllButton />
           </HStack>
@@ -570,6 +785,12 @@ export default function AssignmentsTable() {
               onCheckedChange={() => toggleColumnVisibility("checkername")}
             >
               Checker
+            </Checkbox>
+            <Checkbox
+              checked={columnVisibility.grading_complete}
+              onCheckedChange={() => toggleColumnVisibility("grading_complete")}
+            >
+              Grading Complete
             </Checkbox>
           </HStack>
         </Box>
@@ -744,6 +965,21 @@ export default function AssignmentsTable() {
                                 placeholder="Filter by checker..."
                               />
                             )}
+                            {header.id === "grading_complete" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Complete", value: "Complete" },
+                                  { label: "Incomplete", value: "Incomplete" }
+                                ]}
+                                placeholder="Filter by grading complete..."
+                              />
+                            )}
                             {header.id === "released" && (
                               <Select
                                 isMulti={true}
@@ -773,7 +1009,7 @@ export default function AssignmentsTable() {
                                       .rows.reduce((map, row) => {
                                         if (row.original.created_at) {
                                           const date = new TZDate(row.original.created_at, timeZone);
-                                          const dateStr = date.toLocaleDateString();
+                                          const dateStr = formatInTimeZone(date, timeZone, "MM/dd/yyyy");
                                           if (!map.has(dateStr)) {
                                             map.set(dateStr, dateStr);
                                           }
@@ -807,14 +1043,8 @@ export default function AssignmentsTable() {
                                           ) {
                                             map.set("Same as due date", "Same as due date");
                                           } else {
-                                            const date = new TZDate(row.original.late_due_date);
-                                            const dateStr = date.toLocaleString(undefined, {
-                                              year: "numeric",
-                                              month: "numeric",
-                                              day: "numeric",
-                                              hour: "numeric",
-                                              minute: "2-digit"
-                                            });
+                                            const date = new TZDate(row.original.late_due_date, timeZone);
+                                            const dateStr = formatInTimeZone(date, timeZone, "MM/dd/yyyy, h:mm a zzz");
                                             if (!map.has(dateStr)) {
                                               map.set(dateStr, dateStr);
                                             }
@@ -871,7 +1101,7 @@ export default function AssignmentsTable() {
                                   ...Array.from(
                                     getRowModel()
                                       .rows.reduce((map, row) => {
-                                        const score = row.original.total_score;
+                                        const score = getDisplayedTotalScore(row.original);
                                         if (score !== null && score !== undefined) {
                                           const scoreStr = score.toString();
                                           if (!map.has(scoreStr)) {
@@ -1104,7 +1334,7 @@ async function exportGrades({
 
   const { data: autograder_test_results, error: autograder_test_results_error } = await supabase
     .from("grader_result_tests")
-    .select("*, submissions!inner(id, assignment_id, is_active)")
+    .select("*, submissions!grader_result_tests_submission_id_fkey!inner(id, assignment_id, is_active)")
     .eq("submissions.is_active", true)
     .eq("submissions.assignment_id", assignment_id);
   if (autograder_test_results_error) {
@@ -1332,6 +1562,157 @@ async function exportGrades({
     URL.revokeObjectURL(url);
   }
 }
+
+type EligibilityData = {
+  total_incomplete: number;
+  completable: number;
+  missing_required_checks: number;
+};
+
+function MarkAllCompleteButton({
+  assignment_id,
+  supabase,
+  tableController,
+  isReleasingAll,
+  isUnreleasingAll,
+  isMarkingAllComplete,
+  setIsMarkingAllComplete
+}: {
+  assignment_id: number;
+  supabase: ReturnType<typeof createClient>;
+  tableController: TableController<"submissions"> | null;
+  isReleasingAll: boolean;
+  isUnreleasingAll: boolean;
+  isMarkingAllComplete: boolean;
+  setIsMarkingAllComplete: (v: boolean) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [eligibilityData, setEligibilityData] = useState<EligibilityData | null>(null);
+  const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      let cancelled = false;
+      const run = async () => {
+        setIsCheckingEligibility(true);
+        setEligibilityData(null);
+        try {
+          const { data, error } = await supabase.rpc("check_grading_completion_eligibility", {
+            p_assignment_id: assignment_id
+          });
+          if (cancelled) return;
+          if (error) {
+            toaster.error({ title: "Error", description: error.message });
+            return;
+          }
+          const row = Array.isArray(data) ? data[0] : null;
+          if (row && typeof row === "object" && "total_incomplete" in row) {
+            setEligibilityData({
+              total_incomplete: Number(row.total_incomplete ?? 0),
+              completable: Number(row.completable ?? 0),
+              missing_required_checks: Number(row.missing_required_checks ?? 0)
+            });
+          } else {
+            setEligibilityData({ total_incomplete: 0, completable: 0, missing_required_checks: 0 });
+          }
+        } finally {
+          if (!cancelled) setIsCheckingEligibility(false);
+        }
+      };
+      run();
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [isOpen, assignment_id, supabase]);
+
+  const handleConfirm = useCallback(async () => {
+    setIsMarkingAllComplete(true);
+    setIsOpen(false);
+    try {
+      const { data, error } = await supabase.rpc("complete_eligible_grading_reviews", {
+        p_assignment_id: assignment_id
+      });
+      if (error) throw new Error(error.message);
+      await tableController?.refetchAll();
+      const count = typeof data === "number" ? data : 0;
+      toaster.success({
+        title: "Success",
+        description:
+          count > 0 ? `${count} submission review(s) marked as complete` : "No reviews were eligible to mark complete"
+      });
+    } catch (error) {
+      toaster.error({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    } finally {
+      setIsMarkingAllComplete(false);
+    }
+  }, [assignment_id, supabase, tableController, setIsMarkingAllComplete]);
+
+  const canComplete = (eligibilityData?.completable ?? 0) > 0;
+  const isDisabled = isReleasingAll || isUnreleasingAll || isMarkingAllComplete;
+
+  return (
+    <Popover.Root open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
+      <Popover.Trigger asChild>
+        <Button colorPalette="blue" variant="subtle" loading={isMarkingAllComplete} disabled={isDisabled}>
+          Mark All Grading Complete
+        </Button>
+      </Popover.Trigger>
+      <Popover.Positioner>
+        <Popover.Content>
+          <Popover.Arrow>
+            <Popover.ArrowTip />
+          </Popover.Arrow>
+          <Popover.Header>Mark All Grading Complete</Popover.Header>
+          <Popover.Body>
+            {isCheckingEligibility ? (
+              <HStack gap={2}>
+                <Spinner size="sm" />
+                <Text>Checking which submissions can be marked complete...</Text>
+              </HStack>
+            ) : eligibilityData ? (
+              <VStack align="stretch" gap={3}>
+                <Text>
+                  {eligibilityData.total_incomplete === 0
+                    ? "All submission reviews are already complete."
+                    : eligibilityData.completable > 0
+                      ? `${eligibilityData.completable} of ${eligibilityData.total_incomplete} incomplete submission(s) can be marked complete.`
+                      : "No incomplete submissions can be marked complete."}
+                </Text>
+                {eligibilityData.missing_required_checks > 0 && (
+                  <Text color="fg.muted">
+                    {eligibilityData.missing_required_checks} submission(s) have missing required rubric checks.
+                  </Text>
+                )}
+                <HStack justify="flex-end" gap={2}>
+                  <IconButton aria-label="Cancel" variant="ghost" size="sm" onClick={() => setIsOpen(false)}>
+                    <Icon as={BsX} boxSize={5} />
+                  </IconButton>
+                  <IconButton
+                    aria-label="Confirm"
+                    variant="solid"
+                    size="sm"
+                    disabled={!canComplete}
+                    loading={isMarkingAllComplete}
+                    onClick={handleConfirm}
+                  >
+                    <Icon as={BsCheck} boxSize={5} />
+                  </IconButton>
+                </HStack>
+              </VStack>
+            ) : (
+              <Text>Unable to load eligibility.</Text>
+            )}
+          </Popover.Body>
+        </Popover.Content>
+      </Popover.Positioner>
+    </Popover.Root>
+  );
+}
+
 function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
   const supabase = useMemo(() => createClient(), []);
   const [includeScoreBreakdown, setIncludeScoreBreakdown] = useState(true);
@@ -1339,11 +1720,54 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
   const [includeRepoMetadata, setIncludeRepoMetadata] = useState(false);
   const [includeSubmissionMetadata, setIncludeSubmissionMetadata] = useState(false);
   const [includeAutograderTestResults, setIncludeAutograderTestResults] = useState(true);
+  const [isExporting, setIsExporting] = useState<null | "csv" | "json">(null);
+
+  const handleExport = useCallback(
+    async (mode: "csv" | "json") => {
+      if (isExporting) return;
+      setIsExporting(mode);
+      try {
+        await exportGrades({
+          assignment_id,
+          class_id,
+          supabase,
+          include_score_breakdown: includeScoreBreakdown,
+          include_rubric_checks: includeRubricChecks,
+          include_repo_metadata: includeRepoMetadata,
+          include_submission_metadata: includeSubmissionMetadata,
+          include_autograder_test_results: includeAutograderTestResults,
+          mode
+        });
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("Error exporting grades:", error);
+        toaster.error({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Unknown error occurred while exporting grades"
+        });
+      } finally {
+        setIsExporting(null);
+      }
+    },
+    [
+      assignment_id,
+      class_id,
+      includeAutograderTestResults,
+      includeRepoMetadata,
+      includeRubricChecks,
+      includeScoreBreakdown,
+      includeSubmissionMetadata,
+      isExporting,
+      supabase
+    ]
+  );
 
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="subtle">Export Grades</Button>
+        <Button variant="subtle" loading={isExporting !== null} disabled={isExporting !== null}>
+          Export Grades
+        </Button>
       </Popover.Trigger>
       <Popover.Positioner>
         <Popover.Content>
@@ -1354,30 +1778,35 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
             <VStack align="start" gap={2}>
               <Checkbox
                 checked={includeScoreBreakdown}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeScoreBreakdown(details.checked === true)}
               >
                 Include Score Breakdown
               </Checkbox>
               <Checkbox
                 checked={includeRubricChecks}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeRubricChecks(details.checked === true)}
               >
                 Include Rubric Checks
               </Checkbox>
               <Checkbox
                 checked={includeAutograderTestResults}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeAutograderTestResults(details.checked === true)}
               >
                 Include Autograder Test Results
               </Checkbox>
               <Checkbox
                 checked={includeRepoMetadata}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeRepoMetadata(details.checked === true)}
               >
                 Include Repo Metadata
               </Checkbox>
               <Checkbox
                 checked={includeSubmissionMetadata}
+                disabled={isExporting !== null}
                 onCheckedChange={(details) => setIncludeSubmissionMetadata(details.checked === true)}
               >
                 Include Submission Metadata
@@ -1387,19 +1816,9 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
                   size="sm"
                   variant="ghost"
                   colorPalette="green"
-                  onClick={() =>
-                    exportGrades({
-                      assignment_id,
-                      class_id,
-                      supabase,
-                      include_score_breakdown: includeScoreBreakdown,
-                      include_rubric_checks: includeRubricChecks,
-                      include_repo_metadata: includeRepoMetadata,
-                      include_submission_metadata: includeSubmissionMetadata,
-                      include_autograder_test_results: includeAutograderTestResults,
-                      mode: "csv"
-                    })
-                  }
+                  loading={isExporting === "csv"}
+                  disabled={isExporting !== null}
+                  onClick={() => handleExport("csv")}
                 >
                   CSV
                 </Button>
@@ -1407,19 +1826,9 @@ function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number
                   size="sm"
                   variant="ghost"
                   colorPalette="green"
-                  onClick={() =>
-                    exportGrades({
-                      assignment_id,
-                      class_id,
-                      supabase,
-                      include_score_breakdown: includeScoreBreakdown,
-                      include_rubric_checks: includeRubricChecks,
-                      include_repo_metadata: includeRepoMetadata,
-                      include_submission_metadata: includeSubmissionMetadata,
-                      include_autograder_test_results: includeAutograderTestResults,
-                      mode: "json"
-                    })
-                  }
+                  loading={isExporting === "json"}
+                  disabled={isExporting !== null}
+                  onClick={() => handleExport("json")}
                 >
                   JSON
                 </Button>

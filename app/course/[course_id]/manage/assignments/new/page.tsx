@@ -6,6 +6,7 @@ import {
   assignmentCreateSolutionRepo,
   assignmentGroupCopyGroupsFromAssignment
 } from "@/lib/edgeFunctions";
+import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -21,7 +22,8 @@ export default function NewAssignmentPage() {
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
-      allow_not_graded_submissions: true
+      allow_not_graded_submissions: true,
+      permit_empty_submissions: true
     }
   });
   const router = useRouter();
@@ -88,6 +90,7 @@ export default function NewAssignmentPage() {
             description: getValues("description"),
             max_late_tokens: getValues("max_late_tokens") || null,
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
+            permit_empty_submissions: getValues("permit_empty_submissions") !== false,
             total_points: getValues("total_points"),
             template_repo: getValues("template_repo"),
             submission_files: getValues("submission_files"),
@@ -98,6 +101,7 @@ export default function NewAssignmentPage() {
             min_group_size: getValues("min_group_size") || null,
             max_group_size: getValues("max_group_size") || null,
             allow_student_formed_groups: getValues("allow_student_formed_groups"),
+            enable_repo_analytics: getValues("enable_repo_analytics") || false,
             self_review_setting_id: settings.data.id as number,
             group_formation_deadline: getValues("group_formation_deadline")
               ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
@@ -140,6 +144,7 @@ export default function NewAssignmentPage() {
             type: "success"
           });
 
+          void revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
           router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`);
         }
       } catch (error) {

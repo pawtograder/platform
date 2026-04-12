@@ -1,6 +1,6 @@
 "use client";
 
-import { Alert } from "@/components/ui/alert";
+import { TimeZoneModal } from "@/components/TimeZoneModal";
 import { useColorMode } from "@/components/ui/color-mode";
 import {
   DrawerBackdrop,
@@ -20,10 +20,11 @@ import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from 
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
-import React, { Fragment, useEffect, useRef, useState } from "react";
+import React, { Fragment, useEffect, useRef } from "react";
 import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
+  FiBarChart,
   FiBookOpen,
   FiCheckSquare,
   FiClipboard,
@@ -134,16 +135,24 @@ const LinkItems = (courseID: number) => [
       },
       {
         name: "Lab Sections",
-        instructors_only: true,
+        instructors_or_graders_only: true,
         icon: MdOutlineScience,
-        target: `/course/${courseID}/manage/course/lab-sections`
+        target: `/course/${courseID}/manage/course/lab-roster`
       },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       {
         name: "Discussion Topics",
         icon: FiHash,
         instructors_only: true,
-        target: `/course/${courseID}/manage/discussion-topics`
+        target: `/course/${courseID}/manage/discussion-topics`,
+        feature_flag: "discussion"
+      },
+      {
+        name: "Discussion Engagement",
+        icon: FiBarChart,
+        instructors_or_graders_only: true,
+        target: `/course/${courseID}/manage/discussion-engagement`,
+        feature_flag: "discussion"
       },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
@@ -218,25 +227,6 @@ function CoursePicker({ currentCourse }: { currentCourse: Course }) {
         <DrawerCloseTrigger />
       </DrawerContent>
     </DrawerRoot>
-  );
-}
-
-function TimeZoneWarning({ courseTz }: { courseTz: string }) {
-  const [dismissed, setDismissed] = useState(false);
-  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (courseTz === browserTz || dismissed) {
-    return <></>;
-  }
-  return (
-    <Alert
-      status="warning"
-      w={{ base: "100%", md: "fit-content" }}
-      size="sm"
-      closable
-      onClose={() => setDismissed(true)}
-    >
-      Warning: This course is in {courseTz} but your computer appears to be in {browserTz}
-    </Alert>
   );
 }
 
@@ -340,7 +330,16 @@ export default function DynamicCourseNav() {
                           <Menu.Positioner>
                             <Menu.Content>
                               {link.submenu
-                                .filter((submenu) => !submenu.instructors_only || isInstructor)
+                                .filter(
+                                  (submenu) =>
+                                    (!submenu.instructors_only || isInstructor) &&
+                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader)
+                                )
+                                .filter((submenu) => {
+                                  if (!("feature_flag" in submenu)) return true;
+                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
+                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
+                                })
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
                                     <NextLink href={submenu.target || "#"}>
@@ -387,8 +386,7 @@ export default function DynamicCourseNav() {
             </HStack>
           </Box>
 
-          {/* Timezone warning */}
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+          <TimeZoneModal />
         </VStack>
       </Box>
 
@@ -433,7 +431,16 @@ export default function DynamicCourseNav() {
                           <Menu.Positioner>
                             <Menu.Content>
                               {link.submenu
-                                .filter((submenu) => !submenu.instructors_only || isInstructor)
+                                .filter(
+                                  (submenu) =>
+                                    (!submenu.instructors_only || isInstructor) &&
+                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader)
+                                )
+                                .filter((submenu) => {
+                                  if (!("feature_flag" in submenu)) return true;
+                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
+                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
+                                })
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
                                     <NextLink href={submenu.target || "#"}>
@@ -471,7 +478,6 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
           <UserMenu />
         </Flex>
       </Box>

@@ -57,7 +57,7 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
           </HStack>
         </Badge>
       </HStack>
-      <Text fontSize="sm" color="gray.600">
+      <Text fontSize="sm" color="fg.muted">
         {config.description}
       </Text>
       {(status === "resolved" || status === "closed") && (

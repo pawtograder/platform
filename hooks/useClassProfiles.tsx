@@ -32,7 +32,9 @@ export function useClassProfiles() {
 export function useFeatureEnabled(feature: string) {
   const { role } = useClassProfiles();
   const course = role.classes as CourseWithFeatures;
-  return course.features?.find((f) => f.name === feature)?.enabled;
+  const featureFlag = course.features?.find((f) => f.name === feature);
+  // Default to true if feature flag doesn't exist
+  return featureFlag?.enabled ?? true;
 }
 
 export function useIsGrader() {

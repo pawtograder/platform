@@ -51,6 +51,7 @@ const TABLES_WITH_UPDATED_AT = new Set<TablesThatHaveAnIDField>([
   "discussion_thread_likes",
   "assignments",
   "assignment_due_date_exceptions",
+  "assignment_leaderboard",
   "discussion_thread_read_status",
   "discussion_thread_watchers",
   "discussion_threads",
@@ -166,8 +167,14 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
   // Survey related tables
   surveys: ["staff"], // Survey metadata (staff-only management)
+  survey_series: [], // No realtime broadcasts; staff manage via surveys
   survey_responses: ["staff"], // Response data only to staff
-  survey_assignments: ["staff"] // Assignment data only to staff
+  survey_assignments: ["staff"], // Assignment data only to staff
+
+  // Leaderboard table - broadcasts to all class members
+  assignment_leaderboard: ["staff", "students"],
+  // No unified realtime broadcast today; load via TableController like other static course metadata.
+  gradebooks: []
 };
 
 /**
@@ -474,7 +481,18 @@ export function useTableControllerValueById<
 
   return value;
 }
-export function useIsTableControllerReady<T extends TablesThatHaveAnIDField>(controller?: TableController<T>): boolean {
+export function useIsTableControllerReady<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T> | undefined | null,
+  ResultOne = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(controller?: TableController<T, Query, IDType, ResultOne>): boolean {
   const [ready, setReady] = useState(controller?.ready ?? false);
   useEffect(() => {
     if (!controller) {
@@ -578,6 +596,10 @@ export type BroadcastMessage =
     }
   | GradebookRowRecalcStateBroadcastMessage
   | OfficeHoursBroadcastMessage;
+
+/** Page size for PostgREST `range` pagination (initial full load and {@link fetchPostgrestAllPages}). */
+export const POSTGREST_PAGE_SIZE_DEFAULT = 1000;
+
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
   Query extends string = "*",
@@ -635,6 +657,12 @@ export default class TableController<
   private _isRefetching: boolean = false;
   private _refetchListeners: ((isRefetching: boolean) => void)[] = [];
   private _debounceInterval: number;
+  /**
+   * Maximum jitter to add to debounce interval (in ms).
+   * Used to prevent thundering herd when many clients reconnect simultaneously.
+   * Set to 0 for real-time sensitive tables like chat messages.
+   */
+  private _debounceJitter: number;
   private _listDataListeners: ((
     data: ResultOne[],
     { entered, left }: { entered: ResultOne[]; left: ResultOne[] }
@@ -780,12 +808,14 @@ export default class TableController<
       clearTimeout(this._debounceTimeout);
     }
 
-    this._debounceTimeout = setTimeout(
-      async () => {
-        await this._processBatchedOperations();
-      },
-      this._debounceInterval + Math.random() * 1000 * 5
-    ); // Add some jitter to prevent thundering herd
+    // Calculate delay: debounce interval + random jitter (if configured)
+    // Jitter helps prevent thundering herd when many clients process events simultaneously
+    const jitter = this._debounceJitter > 0 ? Math.random() * this._debounceJitter : 0;
+    const delay = this._debounceInterval + jitter;
+
+    this._debounceTimeout = setTimeout(async () => {
+      await this._processBatchedOperations();
+    }, delay);
   }
 
   /**
@@ -932,7 +962,7 @@ export default class TableController<
 
     try {
       let page = 0;
-      const pageSize = 1000;
+      const pageSize = POSTGREST_PAGE_SIZE_DEFAULT;
       const changedRows: ResultOne[] = [];
 
       // Fetch in pages ordered by updated_at to advance watermark monotonically
@@ -1018,7 +1048,7 @@ export default class TableController<
   private async _fetchInitialData(loadEntireTable: boolean): Promise<ResultOne[]> {
     const rows: ResultOne[] = [];
     let page = 0;
-    const pageSize = 1000;
+    const pageSize = POSTGREST_PAGE_SIZE_DEFAULT;
     let nRows: number | undefined;
 
     // Always add ORDER BY id to ensure deterministic pagination
@@ -1391,7 +1421,8 @@ export default class TableController<
     loadEntireTable = true,
     initialData,
     enableAutoRefetch,
-    autoFetchMissingRows
+    autoFetchMissingRows,
+    debounceJitter
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -1427,6 +1458,13 @@ export default class TableController<
      * If false, never auto-fetch missing rows on getById.
      */
     autoFetchMissingRows?: boolean;
+    /**
+     * Maximum jitter to add to debounce interval (in ms).
+     * Used to prevent thundering herd when many clients reconnect simultaneously.
+     * Set to 0 for real-time sensitive tables like chat messages.
+     * Default: 500ms
+     */
+    debounceJitter?: number;
   }) {
     this._rows = [];
     this._client = client;
@@ -1438,6 +1476,9 @@ export default class TableController<
     this._selectForSingleRow = selectForSingleRow;
     this._realtimeFilter = realtimeFilter || null;
     this._debounceInterval = debounceInterval || 500;
+    // Default jitter reduced from 5000ms to 500ms to improve perceived responsiveness
+    // while still providing some thundering herd protection
+    this._debounceJitter = debounceJitter ?? 500;
     this._enableAutoRefetch = enableAutoRefetch;
     this._autoFetchMissingRows = autoFetchMissingRows ?? true;
     // Track controller creation
@@ -1446,8 +1487,8 @@ export default class TableController<
     const newCount = currentCount + 1;
     TableController._controllerCounts.set(tableName, newCount);
 
-    // Only log creation if there are more than 4 live controllers for this table
-    if (newCount > 4) {
+    // Only log creation if there are more than 10 live controllers for this table
+    if (newCount > 10) {
       // eslint-disable-next-line no-console
       console.log(
         `⚠️ TableController created for "${tableName}" (count: ${newCount} - potential leak!)`,
@@ -2620,4 +2661,49 @@ export default class TableController<
   get rowCount() {
     return this._rows.length;
   }
+}
+
+/**
+ * Loads all rows for a PostgREST query using the same paging strategy as {@link TableController}
+ * when `loadEntireTable` is true: apply deterministic `order` columns, then fetch with `range` in
+ * chunks (default 1000) until a short page or empty result.
+ *
+ * Use for views or denormalized result sets where rows must **not** be merged by primary key.
+ * For example, `active_submissions_for_class` repeats `submission_id` for each group member;
+ * {@link TableController} would treat those as duplicate ids and drop rows.
+ */
+export async function fetchPostgrestAllPages<Row>(
+  // PostgREST builders are generic-heavy; callers pass a fully filtered query before ordering.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  filteredQuery: any,
+  orderBy: { column: string; ascending?: boolean }[],
+  options?: { pageSize?: number; isCancelled?: () => boolean }
+): Promise<Row[]> {
+  let orderedQuery = filteredQuery;
+  for (const o of orderBy) {
+    orderedQuery = orderedQuery.order(o.column, { ascending: o.ascending ?? true });
+  }
+  const pageSize = options?.pageSize ?? POSTGREST_PAGE_SIZE_DEFAULT;
+  const rows: Row[] = [];
+  let page = 0;
+  for (;;) {
+    if (options?.isCancelled?.()) {
+      return rows;
+    }
+    const rangeStart = page * pageSize;
+    const rangeEnd = (page + 1) * pageSize - 1;
+    const { data, error } = await orderedQuery.range(rangeStart, rangeEnd);
+    if (error) {
+      throw error;
+    }
+    if (!data || data.length === 0) {
+      break;
+    }
+    rows.push(...(data as Row[]));
+    if (data.length < pageSize) {
+      break;
+    }
+    page++;
+  }
+  return rows;
 }

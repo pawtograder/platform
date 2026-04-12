@@ -1,24 +1,30 @@
 "use client";
 
+import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
+import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hours-discussion-browser";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
+import Markdown from "@/components/ui/markdown";
 import {
+  useHelpQueues,
   useHelpRequests,
   useHelpRequestStudents,
   useHelpRequestTemplates,
-  useHelpQueues,
-  useHelpQueueAssignments,
+  useActiveHelpQueueAssignments,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import { useTimeZone } from "@/lib/TimeZoneProvider";
 import {
   Assignment,
   HelpRequest,
   HelpRequestLocationType,
-  HelpRequestTemplate,
   HelpRequestMessage,
+  HelpRequestTemplate,
   HelpRequestWithStudentCount,
   Submission,
   SubmissionFile
@@ -27,11 +33,12 @@ import { Box, Button, Fieldset, Heading, IconButton, Input, Stack, Text, Textare
 import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
+import { formatInTimeZone } from "date-fns-tz";
 import { X } from "lucide-react";
+import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
-import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
@@ -46,6 +53,8 @@ export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { timeZone } = useTimeZone();
+  const { course } = useCourseController();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
@@ -69,6 +78,7 @@ export default function HelpRequestForm() {
     watch,
     reset,
     setError,
+    clearErrors,
     formState: { errors, isSubmitting },
     handleSubmit
   } = useForm<HelpRequest & { file_references?: HelpRequestFormFileReference[] }>({
@@ -83,24 +93,14 @@ export default function HelpRequestForm() {
       resource: "help_requests",
       action: "create",
       onMutationError: (error) => {
+        const isRls =
+          error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "42501";
         toaster.error({
-          title: "Error",
-          description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
+          title: isRls ? "Permission issue" : "Could not create help request",
+          description: isRls
+            ? "You don't have permission to create this help request with these settings. Try making the request public instead of private, or contact your instructor."
+            : getStudentFacingErrorMessage(error)
         });
-
-        // Check if it's an RLS violation
-        if (error && typeof error === "object" && "code" in error && error.code === "42501") {
-          toaster.error({
-            title: "Permission Error",
-            description:
-              "You don't have permission to create this help request. This might be due to database security policies. Please try making the request public instead of private, or contact your instructor."
-          });
-        } else {
-          toaster.error({
-            title: "Error",
-            description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
-          });
-        }
       }
     }
   });
@@ -117,12 +117,20 @@ export default function HelpRequestForm() {
   const isLoadingQueues = false; // Individual hooks don't expose loading state
   const connectionError = null; // Will be handled by connection status if needed
 
-  // Get help queue assignments to check for active staff
-  const allHelpQueueAssignments = useHelpQueueAssignments();
+  // Get active help queue assignments to check for active staff
+  // Uses useActiveHelpQueueAssignments which subscribes to individual item changes
+  // for proper reactivity when staff starts/stops working
+  const activeHelpQueueAssignments = useActiveHelpQueueAssignments();
   const queueIdsWithActiveStaff = useMemo(() => {
-    const activeAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
-    return new Set(activeAssignments.map((a) => a.help_queue_id));
-  }, [allHelpQueueAssignments]);
+    const activeStaffSet = new Set(activeHelpQueueAssignments.map((a) => a.help_queue_id));
+    // Demo queues don't require active staff - add all demo queues to the set
+    allHelpQueues.forEach((queue) => {
+      if (queue.is_demo) {
+        activeStaffSet.add(queue.id);
+      }
+    });
+    return activeStaffSet;
+  }, [activeHelpQueueAssignments, allHelpQueues]);
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -133,6 +141,40 @@ export default function HelpRequestForm() {
   const templates = allTemplates.filter(
     (template) => template.class_id === Number.parseInt(course_id as string) && template.is_active
   );
+
+  // Get single template ID for stable dependency
+  const singleTemplateId = templates.length === 1 ? templates[0].id : null;
+
+  // Track if we've auto-selected the template to prevent infinite loops
+  const autoSelectedTemplateRef = useRef<number | null>(null);
+
+  // Auto-select single template if there's exactly one
+  useEffect(() => {
+    if (singleTemplateId !== null) {
+      // Only auto-select if we haven't already selected this template
+      if (autoSelectedTemplateRef.current !== singleTemplateId) {
+        const singleTemplate = templates.find((t) => t.id === singleTemplateId);
+        if (singleTemplate) {
+          const currentTemplateId = getValues("template_id");
+          const currentRequest = getValues("request");
+
+          // Only set template_id if it's not already set to this template
+          if (currentTemplateId !== singleTemplateId) {
+            setValue("template_id", singleTemplateId, { shouldValidate: false });
+          }
+          // Pre-populate request field if it's empty
+          if (!currentRequest && singleTemplate.template_content) {
+            setValue("request", singleTemplate.template_content, { shouldValidate: false });
+          }
+          autoSelectedTemplateRef.current = singleTemplateId;
+        }
+      }
+    } else {
+      // Reset ref if there's not exactly one template
+      autoSelectedTemplateRef.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [singleTemplateId]);
 
   // Hierarchical selection states
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | null>(null);
@@ -235,8 +277,8 @@ export default function HelpRequestForm() {
       setUserActiveRequests(activeRequestsWithCount);
     } catch (error) {
       toaster.error({
-        title: "Error",
-        description: "Error in processing user requests from realtime data: " + (error as Error).message
+        title: "Could not load your help request history",
+        description: getStudentFacingErrorMessage(error)
       });
     }
   }, [private_profile_id, course_id, allHelpRequests, allHelpRequestStudents]);
@@ -264,28 +306,82 @@ export default function HelpRequestForm() {
   // Watch the selected help queue to validate against existing requests
   const selectedHelpQueue = watch("help_queue");
 
-  // Validate that selected queue has active staff
+  // Count open requests ahead in the selected queue
+  const openRequestsAhead = useMemo(() => {
+    if (!selectedHelpQueue) return 0;
+    return allHelpRequests.filter(
+      (request) =>
+        Number(request.help_queue) === Number(selectedHelpQueue) &&
+        (request.status === "open" || request.status === "in_progress")
+    ).length;
+  }, [selectedHelpQueue, allHelpRequests]);
+
+  // Watch is_private for conflict detection
+  const is_private = watch("is_private");
+
+  // Check if the selected queue would conflict with current requests (moved up for use in effects)
+  const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
+  const wouldConflict = useMemo(() => {
+    return Boolean(
+      selectedHelpQueue &&
+        isCreatingSoloRequest &&
+        userActiveRequests.some(
+          (request) =>
+            Number(request.help_queue) === Number(selectedHelpQueue) &&
+            request.student_count === 1 &&
+            Boolean(request.is_private) === Boolean(is_private)
+        )
+    );
+  }, [selectedHelpQueue, isCreatingSoloRequest, userActiveRequests, is_private]);
+
+  // Clear conflict error when conflict is resolved
+  useEffect(() => {
+    if (!wouldConflict && errors.root?.conflict) {
+      clearErrors("root.conflict");
+    }
+  }, [wouldConflict, errors.root?.conflict, clearErrors]);
+
+  // Validate that selected queue is available and has active staff (skip for demo queues)
   useEffect(() => {
     if (selectedHelpQueue) {
       const selectedQueue = helpQueues.find((q) => q.id === selectedHelpQueue);
-      if (selectedQueue && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
+
+      // Check if queue exists in available queues list
+      if (!selectedQueue) {
+        // Queue is not available (available === false) or doesn't exist
+        const queueFromAll = allHelpQueues.find((q) => q.id === selectedHelpQueue);
+        if (queueFromAll) {
+          setError("help_queue", {
+            type: "manual",
+            message: "This queue is not currently accepting new requests. Please select a different queue."
+          });
+        }
+      } else if (!selectedQueue.is_demo && !queueIdsWithActiveStaff.has(selectedHelpQueue)) {
+        // Demo queues don't require active staff
         setError("help_queue", {
           type: "manual",
           message: "This queue is not currently staffed. Please select a queue with active staff members."
         });
       } else {
-        // Clear the error if queue has active staff
+        // Clear any manual queue errors if queue is available and staffed (or is demo)
         const errorMessage = errors.help_queue?.message;
         if (
           errors.help_queue?.type === "manual" &&
           typeof errorMessage === "string" &&
-          errorMessage.includes("not currently staffed")
+          (errorMessage.includes("not currently staffed") || errorMessage.includes("not currently accepting"))
         ) {
-          setValue("help_queue", selectedHelpQueue, { shouldValidate: true });
+          clearErrors("help_queue");
         }
       }
     }
-  }, [selectedHelpQueue, helpQueues, queueIdsWithActiveStaff, setError, setValue, errors.help_queue]);
+  }, [selectedHelpQueue, helpQueues, allHelpQueues, queueIdsWithActiveStaff, setError, clearErrors, errors.help_queue]);
+
+  // Clear students error when students are selected
+  useEffect(() => {
+    if (selectedStudents.length > 0 && errors.root?.students) {
+      clearErrors("root.students");
+    }
+  }, [selectedStudents.length, errors.root?.students, clearErrors]);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
@@ -310,12 +406,33 @@ export default function HelpRequestForm() {
             title: "Error",
             description: "At least one student must be selected for the help request."
           });
+          setError("root.students", {
+            type: "manual",
+            message: "At least one student must be selected for the help request."
+          });
           return;
         }
 
-        // Check if selected queue has active staff
+        // Check if template is selected when templates exist
+        if (templates.length > 0) {
+          const selectedTemplateId = getValues("template_id");
+          if (!selectedTemplateId) {
+            toaster.error({
+              title: "Error",
+              description: "You must select a template for this help request."
+            });
+            setError("template_id", {
+              type: "manual",
+              message: "Template selection is required."
+            });
+            return;
+          }
+        }
+
+        // Check if selected queue has active staff (skip for demo queues)
         const selectedQueueId = getValues("help_queue");
-        if (selectedQueueId && !queueIdsWithActiveStaff.has(selectedQueueId)) {
+        const selectedQueue = helpQueues.find((q) => q.id === selectedQueueId);
+        if (selectedQueueId && !selectedQueue?.is_demo && !queueIdsWithActiveStaff.has(selectedQueueId)) {
           toaster.error({
             title: "Error",
             description: "This queue is not currently staffed. Please select a queue with active staff members."
@@ -340,9 +457,14 @@ export default function HelpRequestForm() {
           );
 
           if (hasSoloRequestInQueue) {
+            const conflictMessage = `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`;
             toaster.error({
               title: "Error",
-              description: `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`
+              description: conflictMessage
+            });
+            setError("root.conflict", {
+              type: "manual",
+              message: conflictMessage
             });
             return;
           }
@@ -387,13 +509,12 @@ export default function HelpRequestForm() {
                     class_id: Number.parseInt(course_id as string)
                   });
                 } catch (error) {
+                  const msg = getStudentFacingErrorMessage(error);
                   toaster.error({
-                    title: "Error",
-                    description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
+                    title: "Could not add everyone to the request",
+                    description: `We could not add a classmate to this help request: ${msg}`
                   });
-                  throw new Error(
-                    `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
-                  );
+                  throw new Error(`Failed to create student associations: ${msg}`);
                 }
               }
 
@@ -470,13 +591,12 @@ export default function HelpRequestForm() {
                     line_number: ref.line_number
                   });
                 } catch (error) {
+                  const msg = getStudentFacingErrorMessage(error);
                   toaster.error({
-                    title: "Error",
-                    description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                    title: "Could not attach code reference",
+                    description: msg
                   });
-                  throw new Error(
-                    `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                  );
+                  throw new Error(`Failed to create file reference: ${msg}`);
                 }
               }
             }
@@ -507,8 +627,8 @@ export default function HelpRequestForm() {
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
           } catch (error) {
             toaster.error({
-              title: "Error",
-              description: error instanceof Error ? error.message : "Failed to complete help request creation"
+              title: "Could not complete help request",
+              description: getStudentFacingErrorMessage(error)
             });
           }
         };
@@ -538,13 +658,21 @@ export default function HelpRequestForm() {
       router,
       reset,
       submissions?.data,
-      studentHelpActivity
+      studentHelpActivity,
+      templates.length
     ]
   );
 
   // Show loading state if queries are still loading
   if (query?.error) {
-    return <div>Error: {query.error.message}</div>;
+    return (
+      <Box textAlign="center" py={8}>
+        <Text color="red.500">{getStudentFacingErrorMessage(query.error)}</Text>
+        <Button mt={4} onClick={() => window.location.reload()}>
+          Refresh page
+        </Button>
+      </Box>
+    );
   }
   if (!query || isLoadingQueues) {
     return (
@@ -565,478 +693,553 @@ export default function HelpRequestForm() {
       </Box>
     );
   }
-  const is_private = watch("is_private");
 
-  // Check if the selected queue would conflict with current requests
-  const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
-  const wouldConflict = Boolean(
-    selectedHelpQueue &&
-      isCreatingSoloRequest &&
-      userActiveRequests.some(
-        (request) =>
-          Number(request.help_queue) === Number(selectedHelpQueue) &&
-          request.student_count === 1 &&
-          Boolean(request.is_private) === Boolean(is_private)
-      )
+  // Compute hasErrors, ignoring empty root object left by React Hook Form
+  const hasErrors = Object.keys(errors).some(
+    (key) =>
+      key !== "root" || (key === "root" && Object.keys((errors as Record<string, unknown>).root || {}).length > 0)
   );
 
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
       <Toaster />
-      <Heading>Request Live Help</Heading>
-      <Text>Submit a request to get help synchronously from a TA via text or video chat.</Text>
+      <Stack spaceY={4}>
+        <Box>
+          <Heading>Request Live Help</Heading>
+          <Text mt={2}>Get real-time help from course staff via text chat or video call.</Text>
+          <Text fontSize="sm" color="fg.muted" mt={2}>
+            Once you submit a request, you&apos;ll be added to the queue and a staff member will join your chat as soon
+            as they&apos;re available. You can continue browsing the site while you wait — we&apos;ll notify you when
+            someone joins. Please stay available to respond promptly.
+          </Text>
+          {selectedHelpQueue && openRequestsAhead > 0 && (
+            <Text color="blue.600" mt={3} fontSize="sm" fontWeight="medium">
+              📋 There {openRequestsAhead === 1 ? "is" : "are"} currently {openRequestsAhead} request
+              {openRequestsAhead !== 1 ? "s" : ""} ahead of you. We help students first-come, first-served.
+            </Text>
+          )}
+          <Box mt={4} p={3} bg="bg.subtle" borderRadius="md" borderWidth="1px" borderColor="border.muted">
+            <Text fontSize="sm" color="fg.muted">
+              <Text as="span" fontWeight="medium" color="fg.default">
+                💡 Not urgent?
+              </Text>{" "}
+              Consider posting on the{" "}
+              <Link
+                href={`/course/${course_id}/discussion`}
+                style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}
+              >
+                Discussion Forum
+              </Link>{" "}
+              instead. You can post publicly to get help from classmates and staff, or privately to reach only the
+              course staff. It&apos;s a great option for questions that don&apos;t need an immediate response.
+            </Text>
+          </Box>
+          {course?.office_hours_description && (
+            <Box mt={3} p={3} bg="bg.subtle" borderRadius="md" borderWidth="1px" borderColor="border.muted">
+              <Text fontSize="sm" fontWeight="medium" color="fg.muted" mb={1}>
+                📌 About Office Hours in {course?.name}
+              </Text>
+              <Box fontSize="sm" color="fg.muted">
+                <Markdown>{course.office_hours_description}</Markdown>
+              </Box>
+            </Box>
+          )}
+        </Box>
+        <OfficeHoursDiscussionBrowser />
 
-      {wouldConflict && (
-        <Text color="orange.500" mb={4}>
-          ⚠️ You already have a {is_private ? "private" : "public"} solo help request in this queue. You can have up to
-          2 solo requests per queue (1 private + 1 public). Please resolve or close your current request, switch privacy
-          settings, or add other students to create a group request.
-        </Text>
-      )}
-
-      <Fieldset.Root size="lg" maxW="100%">
-        <Fieldset.Content>
-          <Field
-            label="Help Queue"
-            required={true}
-            errorText={errors.help_queue?.message?.toString()}
-            invalid={!!errors.help_queue}
-            helperText="Select which help queue to submit your request to"
-          >
-            <Controller
-              name="help_queue"
-              control={control}
-              defaultValue={Number.parseInt(queue_id as string)}
-              render={({ field }) => (
-                <Select
-                  isMulti={false}
-                  placeholder="Select a help queue"
-                  options={
-                    helpQueues?.map(
-                      (queue) =>
-                        ({
-                          label: `${queue.name} - ${queue.description}`,
-                          value: queue.id.toString()
-                        }) as SelectOption
-                    ) ?? []
-                  }
-                  value={
-                    field.value
-                      ? ({
-                          label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
-                          value: field.value.toString()
-                        } as SelectOption)
-                      : null
-                  }
-                  onChange={(option: SelectOption | null) => {
-                    const val = option?.value ?? "";
-                    const queueId = val === "" ? undefined : Number.parseInt(val);
-                    field.onChange(queueId);
-
-                    // Immediately validate if selected queue has active staff
-                    if (queueId && !queueIdsWithActiveStaff.has(queueId)) {
-                      setError("help_queue", {
-                        type: "manual",
-                        message: "This queue is not currently staffed. Please select a queue with active staff members."
-                      });
-                    } else if (queueId && queueIdsWithActiveStaff.has(queueId)) {
-                      // Clear any existing error if queue has active staff
-                      const errorMessage = errors.help_queue?.message;
-                      if (
-                        errors.help_queue?.type === "manual" &&
-                        typeof errorMessage === "string" &&
-                        errorMessage.includes("not currently staffed")
-                      ) {
-                        setError("help_queue", { type: "manual", message: undefined });
-                      }
-                    }
-                  }}
-                />
-              )}
-            />
-          </Field>
-        </Fieldset.Content>
-
-        <Fieldset.Content>
-          <StudentGroupPicker
-            selectedStudents={selectedStudents}
-            onSelectionChange={setSelectedStudents}
-            label="Students"
-            required={true}
-            helperText="Select all students who should be associated with this help request. You are automatically included and cannot be removed."
-            placeholder="Search and select students..."
-            invalid={selectedStudents.length === 0}
-            errorMessage={selectedStudents.length === 0 ? "At least one student must be selected" : undefined}
-            minSelections={1}
-            requiredStudents={private_profile_id ? [private_profile_id] : []}
-          />
-        </Fieldset.Content>
-
-        {templates && templates.length > 0 && (
-          <Fieldset.Content>
-            <Field label="Template " optionalText="(Optional)">
-              <Controller
-                name="template_id"
-                control={control}
-                render={({ field }) => (
-                  <Select
-                    isMulti={false}
-                    placeholder="Choose a template"
-                    options={templates.map(
-                      (tmpl: HelpRequestTemplate) => ({ label: tmpl.name, value: tmpl.id.toString() }) as SelectOption
-                    )}
-                    value={
-                      field.value
-                        ? ({
-                            label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
-                            value: field.value.toString()
-                          } as SelectOption)
-                        : null
-                    }
-                    onChange={(option: SelectOption | null) => {
-                      // option can be null if cleared
-                      const val = option?.value ?? "";
-                      field.onChange(val === "" ? undefined : Number.parseInt(val));
-                      const tmpl = templates.find((t: HelpRequestTemplate) => t.id.toString() === val);
-                      if (tmpl && !getValues("request")) {
-                        setValue("request", tmpl.template_content);
-                      }
-                    }}
-                  />
-                )}
-              />
-            </Field>
-          </Fieldset.Content>
+        {wouldConflict && (
+          <Text color="orange.500" mb={4}>
+            ⚠️ You already have a {is_private ? "private" : "public"} solo help request in this queue. You can have up
+            to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request, switch
+            privacy settings, or add other students to create a group request.
+          </Text>
         )}
 
-        <Fieldset.Content>
-          <Field
-            label="Help Request Description"
-            required={true}
-            errorText={errors.request?.message?.toString()}
-            invalid={errors.request ? true : false}
-          >
-            <Controller
-              name="request"
-              control={control}
-              render={({ field }) => {
-                return (
-                  <Textarea
-                    {...field}
-                    placeholder="Describe your question or issue in detail..."
-                    minHeight="200px"
-                    width="800px"
-                  />
-                );
-              }}
-            />
-          </Field>
-        </Fieldset.Content>
-
-        {/* Code/Submission Reference Section */}
-        <Fieldset.Content>
-          <Field
-            label="Reference Assignment "
-            optionalText="(Optional)"
-            helperText="First select an assignment to reference"
-          >
-            <Select
-              isMulti={false}
-              isClearable={true}
-              placeholder="Select an assignment"
-              options={
-                assignments?.data
-                  ?.filter((assignment) => assignment.id)
-                  .map(
-                    (assignment) =>
-                      ({
-                        label: `${assignment.title} (Due: ${assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"})`,
-                        value: assignment.id!.toString()
-                      }) as SelectOption
-                  ) ?? []
-              }
-              value={
-                selectedAssignmentId
-                  ? ({
-                      label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
-                      value: selectedAssignmentId.toString()
-                    } as SelectOption)
-                  : null
-              }
-              onChange={(option: SelectOption | null) => {
-                const val = option?.value ?? "";
-                setSelectedAssignmentId(val === "" ? null : Number.parseInt(val));
-                setSelectedSubmissionId(null); // Reset submission when assignment changes
-              }}
-            />
-          </Field>
-        </Fieldset.Content>
-
-        {/* Show submission selection only when assignment is selected */}
-        {selectedAssignmentId && (
+        <Fieldset.Root size="lg" maxW="100%">
           <Fieldset.Content>
             <Field
-              label="Reference Submission "
-              optionalText="(Optional)"
-              helperText="Select a specific submission from the chosen assignment"
+              label="Help Queue"
+              required={true}
+              errorText={errors.help_queue?.message?.toString()}
+              invalid={!!errors.help_queue}
+              helperText="Select which help queue to submit your request to"
             >
               <Controller
-                name="referenced_submission_id"
+                name="help_queue"
                 control={control}
+                defaultValue={Number.parseInt(queue_id as string)}
                 render={({ field }) => (
                   <Select
                     isMulti={false}
-                    isClearable={true}
-                    placeholder="Select a submission to reference"
+                    placeholder="Select a help queue"
                     options={
-                      submissions?.data?.map(
-                        (submission: Submission) =>
+                      helpQueues?.map(
+                        (queue) =>
                           ({
-                            label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
-                            value: submission.id.toString()
+                            label: `${queue.name} - ${queue.description}`,
+                            value: queue.id.toString()
                           }) as SelectOption
                       ) ?? []
                     }
                     value={
                       field.value
                         ? ({
-                            label:
-                              submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
+                            label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
                             value: field.value.toString()
                           } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {
                       const val = option?.value ?? "";
-                      const submissionId = val === "" ? null : Number.parseInt(val);
-                      field.onChange(submissionId);
-                      setSelectedSubmissionId(submissionId);
+                      const queueId = val === "" ? undefined : Number.parseInt(val);
+                      field.onChange(queueId);
+
+                      // Immediately validate if selected queue has active staff (skip for demo queues)
+                      const selectedQueue = helpQueues.find((q) => q.id === queueId);
+                      if (queueId && !selectedQueue?.is_demo && !queueIdsWithActiveStaff.has(queueId)) {
+                        setError("help_queue", {
+                          type: "manual",
+                          message:
+                            "This queue is not currently staffed. Please select a queue with active staff members."
+                        });
+                      } else if (queueId && (selectedQueue?.is_demo || queueIdsWithActiveStaff.has(queueId))) {
+                        // Clear any existing error if queue has active staff or is demo
+                        const errorMessage = errors.help_queue?.message;
+                        if (
+                          errors.help_queue?.type === "manual" &&
+                          typeof errorMessage === "string" &&
+                          errorMessage.includes("not currently staffed")
+                        ) {
+                          clearErrors("help_queue");
+                        }
+                      }
                     }}
                   />
                 )}
               />
             </Field>
           </Fieldset.Content>
-        )}
 
-        {/* File References Section - Show only when a submission is selected */}
-        {selectedSubmissionId && submissionFiles?.data && submissionFiles.data.length > 0 && (
           <Fieldset.Content>
-            <Field
-              label="Reference Specific Files "
-              optionalText="(Optional)"
-              helperText="Reference specific files and line numbers from your submission"
-            >
-              <Controller
-                name="file_references"
-                control={control}
-                defaultValue={[]}
-                render={({ field }) => (
+            <StudentGroupPicker
+              selectedStudents={selectedStudents}
+              onSelectionChange={setSelectedStudents}
+              label="Students"
+              required={true}
+              helperText="Select all students who should be associated with this help request. You are automatically included and cannot be removed."
+              placeholder="Search and select students..."
+              invalid={selectedStudents.length === 0}
+              errorMessage={selectedStudents.length === 0 ? "At least one student must be selected" : undefined}
+              minSelections={1}
+              requiredStudents={private_profile_id ? [private_profile_id] : []}
+            />
+          </Fieldset.Content>
+
+          {templates && templates.length > 0 && (
+            <Fieldset.Content>
+              {templates.length === 1 ? (
+                // Show template info when there's exactly one template
+                <Field label="Template" required={true}>
                   <Box>
-                    {/* Add new file reference */}
-                    <Stack gap={3} mb={4}>
+                    <Text fontWeight="semibold" mb={2}>
+                      {templates[0].name}
+                    </Text>
+                    {templates[0].description && (
+                      <Text color="fg.muted" fontSize="sm" mb={2}>
+                        {templates[0].description}
+                      </Text>
+                    )}
+                    <Controller
+                      name="template_id"
+                      control={control}
+                      defaultValue={templates[0].id}
+                      render={({ field }) => <input type="hidden" {...field} value={field.value || templates[0].id} />}
+                    />
+                  </Box>
+                </Field>
+              ) : (
+                // Show template picker when there are multiple templates
+                <Field
+                  label="Template"
+                  required={true}
+                  errorText={errors.template_id?.message?.toString()}
+                  invalid={!!errors.template_id}
+                >
+                  <Controller
+                    name="template_id"
+                    control={control}
+                    rules={{
+                      required: templates.length > 0 ? "Template selection is required." : false
+                    }}
+                    render={({ field }) => (
                       <Select
-                        placeholder="Select a file to add"
-                        options={submissionFiles.data
-                          .filter(
-                            (file: SubmissionFile) =>
-                              !field.value?.some(
-                                (ref: HelpRequestFormFileReference) => ref.submission_file_id === file.id
-                              )
-                          )
-                          .map((file: SubmissionFile) => ({
-                            label: file.name,
-                            value: file.id.toString()
-                          }))}
+                        isMulti={false}
+                        isClearable={false}
+                        placeholder="Choose a template"
+                        options={templates.map(
+                          (tmpl: HelpRequestTemplate) =>
+                            ({ label: tmpl.name, value: tmpl.id.toString() }) as SelectOption
+                        )}
+                        value={
+                          field.value
+                            ? ({
+                                label:
+                                  templates.find((t: HelpRequestTemplate) => t.id === field.value)?.name || "Unknown",
+                                value: field.value.toString()
+                              } as SelectOption)
+                            : null
+                        }
                         onChange={(option: SelectOption | null) => {
                           if (option) {
-                            const newRef: HelpRequestFormFileReference = {
-                              submission_file_id: Number.parseInt(option.value),
-                              line_number: undefined
-                            };
-                            field.onChange([...(field.value || []), newRef]);
+                            const val = option.value;
+                            field.onChange(Number.parseInt(val));
+                            const tmpl = templates.find((t: HelpRequestTemplate) => t.id.toString() === val);
+                            if (tmpl && !getValues("request")) {
+                              setValue("request", tmpl.template_content);
+                            }
                           }
                         }}
-                        value={null}
-                        isClearable={false}
                       />
-                    </Stack>
-
-                    {/* Display current file references */}
-                    {field.value && field.value.length > 0 && (
-                      <Stack gap={2}>
-                        {field.value.map((ref: HelpRequestFormFileReference, index: number) => {
-                          const fileName =
-                            submissionFiles.data.find((f: SubmissionFile) => f.id === ref.submission_file_id)?.name ||
-                            "Unknown";
-                          return (
-                            <Box
-                              key={`file-ref-${index}-${ref.submission_file_id}`}
-                              p={3}
-                              border="1px solid"
-                              borderColor="gray.200"
-                              borderRadius="md"
-                            >
-                              <Stack direction="row" gap={3} align="center">
-                                <Text flex={1} fontWeight="medium">
-                                  {fileName}
-                                </Text>
-                                <Input
-                                  placeholder="Line number (optional)"
-                                  type="number"
-                                  value={ref.line_number || ""}
-                                  onChange={(e) => {
-                                    const newRefs = [...field.value];
-                                    newRefs[index] = {
-                                      ...ref,
-                                      line_number: e.target.value ? Number.parseInt(e.target.value) : undefined
-                                    };
-                                    field.onChange(newRefs);
-                                  }}
-                                  width="150px"
-                                  min={1}
-                                />
-                                <IconButton
-                                  aria-label="Remove file reference"
-                                  size="sm"
-                                  colorScheme="red"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    const newRefs = field.value.filter(
-                                      (_: HelpRequestFormFileReference, i: number) => i !== index
-                                    );
-                                    field.onChange(newRefs);
-                                  }}
-                                >
-                                  <X size={16} />
-                                </IconButton>
-                              </Stack>
-                            </Box>
-                          );
-                        })}
-                      </Stack>
                     )}
-                  </Box>
+                  />
+                </Field>
+              )}
+            </Fieldset.Content>
+          )}
+
+          <Fieldset.Content>
+            <Field
+              label="Help Request Description"
+              required={true}
+              errorText={errors.request?.message?.toString()}
+              invalid={errors.request ? true : false}
+            >
+              <Controller
+                name="request"
+                control={control}
+                render={({ field }) => {
+                  return (
+                    <Textarea
+                      {...field}
+                      placeholder="Describe your question or issue in detail..."
+                      minHeight="200px"
+                      width="800px"
+                    />
+                  );
+                }}
+              />
+            </Field>
+          </Fieldset.Content>
+
+          {/* Code/Submission Reference Section */}
+          <Fieldset.Content>
+            <Field
+              label="Reference Assignment "
+              optionalText="(Optional)"
+              helperText="First select an assignment to reference"
+            >
+              <Select
+                isMulti={false}
+                isClearable={true}
+                placeholder="Select an assignment"
+                options={
+                  assignments?.data
+                    ?.filter((assignment) => assignment.id)
+                    .map(
+                      (assignment) =>
+                        ({
+                          label: `${assignment.title} (Due: ${assignment.due_date ? formatInTimeZone(new Date(assignment.due_date), timeZone, "MMM d, yyyy (zzz)") : "No due date"})`,
+                          value: assignment.id!.toString()
+                        }) as SelectOption
+                    ) ?? []
+                }
+                value={
+                  selectedAssignmentId
+                    ? ({
+                        label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
+                        value: selectedAssignmentId.toString()
+                      } as SelectOption)
+                    : null
+                }
+                onChange={(option: SelectOption | null) => {
+                  const val = option?.value ?? "";
+                  setSelectedAssignmentId(val === "" ? null : Number.parseInt(val));
+                  setSelectedSubmissionId(null); // Reset submission when assignment changes
+                }}
+              />
+            </Field>
+          </Fieldset.Content>
+
+          {/* Show submission selection only when assignment is selected */}
+          {selectedAssignmentId && (
+            <Fieldset.Content>
+              <Field
+                label="Reference Submission "
+                optionalText="(Optional)"
+                helperText="Select a specific submission from the chosen assignment"
+              >
+                <Controller
+                  name="referenced_submission_id"
+                  control={control}
+                  render={({ field }) => (
+                    <Select
+                      isMulti={false}
+                      isClearable={true}
+                      placeholder="Select a submission to reference"
+                      options={
+                        submissions?.data?.map(
+                          (submission: Submission) =>
+                            ({
+                              label: `${submission.repository} (${formatInTimeZone(new Date(submission.created_at), timeZone, "MMM d, yyyy (zzz)")}) - Run #${submission.run_number}`,
+                              value: submission.id.toString()
+                            }) as SelectOption
+                        ) ?? []
+                      }
+                      value={
+                        field.value
+                          ? ({
+                              label:
+                                submissions?.data?.find((s: Submission) => s.id === field.value)?.repository ||
+                                "Unknown",
+                              value: field.value.toString()
+                            } as SelectOption)
+                          : null
+                      }
+                      onChange={(option: SelectOption | null) => {
+                        const val = option?.value ?? "";
+                        const submissionId = val === "" ? null : Number.parseInt(val);
+                        field.onChange(submissionId);
+                        setSelectedSubmissionId(submissionId);
+                      }}
+                    />
+                  )}
+                />
+              </Field>
+            </Fieldset.Content>
+          )}
+
+          {/* File References Section - Show only when a submission is selected */}
+          {selectedSubmissionId && submissionFiles?.data && submissionFiles.data.length > 0 && (
+            <Fieldset.Content>
+              <Field
+                label="Reference Specific Files "
+                optionalText="(Optional)"
+                helperText="Reference specific files and line numbers from your submission"
+              >
+                <Controller
+                  name="file_references"
+                  control={control}
+                  defaultValue={[]}
+                  render={({ field }) => (
+                    <Box>
+                      {/* Add new file reference */}
+                      <Stack gap={3} mb={4}>
+                        <Select
+                          placeholder="Select a file to add"
+                          options={submissionFiles.data
+                            .filter(
+                              (file: SubmissionFile) =>
+                                !field.value?.some(
+                                  (ref: HelpRequestFormFileReference) => ref.submission_file_id === file.id
+                                )
+                            )
+                            .map((file: SubmissionFile) => ({
+                              label: file.name,
+                              value: file.id.toString()
+                            }))}
+                          onChange={(option: SelectOption | null) => {
+                            if (option) {
+                              const newRef: HelpRequestFormFileReference = {
+                                submission_file_id: Number.parseInt(option.value),
+                                line_number: undefined
+                              };
+                              field.onChange([...(field.value || []), newRef]);
+                            }
+                          }}
+                          value={null}
+                          isClearable={false}
+                        />
+                      </Stack>
+
+                      {/* Display current file references */}
+                      {field.value && field.value.length > 0 && (
+                        <Stack gap={2}>
+                          {field.value.map((ref: HelpRequestFormFileReference, index: number) => {
+                            const fileName =
+                              submissionFiles.data.find((f: SubmissionFile) => f.id === ref.submission_file_id)?.name ||
+                              "Unknown";
+                            return (
+                              <Box
+                                key={`file-ref-${index}-${ref.submission_file_id}`}
+                                p={3}
+                                border="1px solid"
+                                borderColor="gray.200"
+                                borderRadius="md"
+                              >
+                                <Stack direction="row" gap={3} align="center">
+                                  <Text flex={1} fontWeight="medium">
+                                    {fileName}
+                                  </Text>
+                                  <Input
+                                    placeholder="Line number (optional)"
+                                    type="number"
+                                    value={ref.line_number || ""}
+                                    onChange={(e) => {
+                                      const newRefs = [...field.value];
+                                      newRefs[index] = {
+                                        ...ref,
+                                        line_number: e.target.value ? Number.parseInt(e.target.value) : undefined
+                                      };
+                                      field.onChange(newRefs);
+                                    }}
+                                    width="150px"
+                                    min={1}
+                                  />
+                                  <IconButton
+                                    aria-label="Remove file reference"
+                                    size="sm"
+                                    colorScheme="red"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      const newRefs = field.value.filter(
+                                        (_: HelpRequestFormFileReference, i: number) => i !== index
+                                      );
+                                      field.onChange(newRefs);
+                                    }}
+                                  >
+                                    <X size={16} />
+                                  </IconButton>
+                                </Stack>
+                              </Box>
+                            );
+                          })}
+                        </Stack>
+                      )}
+                    </Box>
+                  )}
+                />
+              </Field>
+            </Fieldset.Content>
+          )}
+
+          <Fieldset.Content>
+            <Field
+              label="Privacy "
+              helperText={
+                selectedSubmissionId
+                  ? "Private requests are only visible to course staff and associated students. This is automatically enabled when referencing a submission."
+                  : "Private requests are only visible to course staff and associated students."
+              }
+              optionalText={selectedSubmissionId ? "(Required)" : "(Optional)"}
+            >
+              <Controller
+                name="is_private"
+                control={control}
+                defaultValue={false}
+                render={({ field }) => (
+                  <Checkbox
+                    checked={selectedSubmissionId ? true : field.value}
+                    disabled={!!selectedSubmissionId}
+                    onCheckedChange={({ checked }) => {
+                      if (!selectedSubmissionId) {
+                        field.onChange(!!checked);
+                      }
+                    }}
+                  >
+                    Private
+                  </Checkbox>
                 )}
               />
             </Field>
           </Fieldset.Content>
-        )}
 
-        <Fieldset.Content>
-          <Field
-            label="Privacy "
-            helperText={
-              selectedSubmissionId
-                ? "Private requests are only visible to course staff and associated students. This is automatically enabled when referencing a submission."
-                : "Private requests are only visible to course staff and associated students."
-            }
-            optionalText={selectedSubmissionId ? "(Required)" : "(Optional)"}
-          >
-            <Controller
-              name="is_private"
-              control={control}
-              defaultValue={false}
-              render={({ field }) => (
-                <Checkbox
-                  checked={selectedSubmissionId ? true : field.value}
-                  disabled={!!selectedSubmissionId}
-                  onCheckedChange={({ checked }) => {
-                    if (!selectedSubmissionId) {
-                      field.onChange(!!checked);
-                    }
-                  }}
-                >
-                  Private
-                </Checkbox>
-              )}
-            />
-          </Field>
-        </Fieldset.Content>
-
-        <Fieldset.Content>
-          <Field
-            label="Location"
-            required
-            errorText={errors.location_type?.message?.toString()}
-            invalid={!!errors.location_type}
-          >
-            <Controller
-              name="location_type"
-              control={control}
-              defaultValue="remote"
-              render={({ field }) => (
-                <Select
-                  isMulti={false}
-                  placeholder="Select location type"
-                  options={locationTypeOptions.map((location) => ({
-                    label: location.charAt(0).toUpperCase() + location.slice(1).replace("_", " "),
-                    value: location
-                  }))}
-                  value={
-                    field.value
-                      ? {
-                          label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
-                          value: field.value
-                        }
-                      : null
-                  }
-                  onChange={(option: { label: string; value: string } | null) => {
-                    field.onChange(option?.value || null);
-                  }}
-                />
-              )}
-            />
-          </Field>
-        </Fieldset.Content>
-
-        {userPreviousRequests.length > 0 && (
           <Fieldset.Content>
-            <Field label="Follow-Up to Previous Request " optionalText="(Optional)">
+            <Field
+              label="Location"
+              required
+              errorText={errors.location_type?.message?.toString()}
+              invalid={!!errors.location_type}
+            >
               <Controller
-                name="followup_to"
+                name="location_type"
                 control={control}
+                defaultValue="remote"
                 render={({ field }) => (
                   <Select
                     isMulti={false}
-                    isClearable={true}
-                    placeholder="Reference a previous request"
-                    options={userPreviousRequests.map(
-                      (req) =>
-                        ({
-                          label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${new Date(req.resolved_at!).toLocaleDateString()})`,
-                          value: req.id.toString()
-                        }) as SelectOption
-                    )}
+                    placeholder="Select location type"
+                    options={locationTypeOptions.map((location) => ({
+                      label: location.charAt(0).toUpperCase() + location.slice(1).replace("_", " "),
+                      value: location
+                    }))}
                     value={
                       field.value
-                        ? ({
-                            label:
-                              userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
-                                "..." || "",
-                            value: field.value.toString()
-                          } as SelectOption)
+                        ? {
+                            label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
+                            value: field.value
+                          }
                         : null
                     }
-                    onChange={(option: SelectOption | null) => {
-                      const val = option?.value ?? "";
-                      field.onChange(val === "" ? undefined : Number.parseInt(val));
+                    onChange={(option: { label: string; value: string } | null) => {
+                      field.onChange(option?.value || null);
                     }}
                   />
                 )}
               />
             </Field>
           </Fieldset.Content>
-        )}
-      </Fieldset.Root>
-      <Button
-        type="submit"
-        loading={isSubmitting || isSubmittingGuard}
-        disabled={isSubmitting || isSubmittingGuard || wouldConflict || selectedStudents.length === 0}
-        mt={4}
-      >
-        Submit Request
-      </Button>
+
+          {userPreviousRequests.length > 0 && (
+            <Fieldset.Content>
+              <Field label="Follow-Up to Previous Request " optionalText="(Optional)">
+                <Controller
+                  name="followup_to"
+                  control={control}
+                  render={({ field }) => (
+                    <Select
+                      isMulti={false}
+                      isClearable={true}
+                      placeholder="Reference a previous request"
+                      options={userPreviousRequests.map(
+                        (req) =>
+                          ({
+                            label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${formatInTimeZone(new Date(req.resolved_at!), timeZone, "MMM d, yyyy (zzz)")})`,
+                            value: req.id.toString()
+                          }) as SelectOption
+                      )}
+                      value={
+                        field.value
+                          ? (() => {
+                              const request = userPreviousRequests.find((r) => r.id === field.value)?.request;
+                              const computedLabel =
+                                request && request.length > 60 ? request.substring(0, 60) + "..." : request || "";
+                              return {
+                                label: computedLabel,
+                                value: field.value.toString()
+                              } as SelectOption;
+                            })()
+                          : null
+                      }
+                      onChange={(option: SelectOption | null) => {
+                        const val = option?.value ?? "";
+                        field.onChange(val === "" ? undefined : Number.parseInt(val));
+                      }}
+                    />
+                  )}
+                />
+              </Field>
+            </Fieldset.Content>
+          )}
+        </Fieldset.Root>
+        <Button
+          type="submit"
+          loading={isSubmitting || isSubmittingGuard}
+          disabled={isSubmitting || isSubmittingGuard || hasErrors}
+          mt={4}
+        >
+          Submit Request
+        </Button>
+      </Stack>
     </form>
   );
 }
