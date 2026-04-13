@@ -53,6 +53,7 @@ import {
   useRubricCheck,
   useRubricChecksByCriteria,
   useRubricCriteriaByPart,
+  useRubricById,
   useRubricParts,
   useRubrics
 } from "@/hooks/useAssignment";
@@ -71,6 +72,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
@@ -1220,6 +1222,7 @@ export function RubricCheckGlobal({
       {isEditing && (
         <SubmissionCommentForm
           check={check}
+          criteriaRubricId={criteria.rubric_id}
           submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
@@ -1263,6 +1266,7 @@ export function RubricCheckGlobal({
  */
 function SubmissionCommentForm({
   check,
+  criteriaRubricId,
   submissionReview,
   selectedOptionIndex,
   linkedArtifactId,
@@ -1270,6 +1274,7 @@ function SubmissionCommentForm({
   onSuccess
 }: {
   check: HydratedRubricCheck;
+  criteriaRubricId: number;
   submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
@@ -1279,6 +1284,8 @@ function SubmissionCommentForm({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
   const submissionController = useSubmissionController();
+  const rubricForCriteria = useRubricById(criteriaRubricId);
+  const isStudent = useIsStudent();
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const graderPseudonymousMode = useGraderPseudonymousMode();
@@ -1344,8 +1351,20 @@ function SubmissionCommentForm({
           onSuccess();
           if (check.is_annotation) {
             throw new Error("Not implemented");
-          } else {
+          }
+          try {
             await submissionController.submission_comments.create(values);
+          } catch (error: unknown) {
+            const code =
+              typeof error === "object" && error !== null && "code" in error
+                ? String((error as { code?: string }).code ?? "")
+                : "";
+            if (isStudent && rubricForCriteria?.review_round === "self-review" && code === "42501") {
+              throw new Error(
+                "The self-review due date has passed, so you can no longer add or change checks. If you need more time, ask your instructor."
+              );
+            }
+            throw new Error(getStudentFacingErrorMessage(error));
           }
         }}
         defaultSingleLine={true}
