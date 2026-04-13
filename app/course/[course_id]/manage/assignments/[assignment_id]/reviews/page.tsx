@@ -34,6 +34,7 @@ import { useEffect, useState } from "react";
 import { MdClear } from "react-icons/md";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import AssignReviewModal from "./assignReviewModal";
+import BulkEditReviewDueDatesDialog from "./BulkEditReviewDueDatesDialog";
 import EditReviewAssignmentModal from "./EditReviewAssignmentModal";
 import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
 import GradingProgressDashboard from "./GradingProgressDashboard";
@@ -338,6 +339,11 @@ export default function ReviewAssignmentsPage() {
           <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
             Reassign Grading by Grader
           </Link>
+          <BulkEditReviewDueDatesDialog
+            courseId={Number(course_id)}
+            assignmentId={Number(assignment_id)}
+            onSuccess={handleReviewAssignmentChange}
+          />
           <Button onClick={() => openAssignModal(null)} variant="ghost" size="sm">
             Assign Single Review
           </Button>
@@ -376,6 +382,7 @@ export default function ReviewAssignmentsPage() {
               closeAssignModal();
             }}
             initialData={assignModalData}
+            isSelfReview={assignModalData.rubrics?.review_round === "self-review"}
           />
         ) : (
           <AssignReviewModal

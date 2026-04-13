@@ -74,7 +74,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     [rubrics]
   );
   const gradingRubricParts = useRubricParts(gradingRubric?.id);
-  const selfReviewRubric = rubrics?.find((r) => r.review_round === "self-review");
   const supabase = createClient();
   const [isExporting, setIsExporting] = useState(false);
 
@@ -163,7 +162,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
             .from("review_assignments")
             .select(joinData)
             .eq("assignment_id", Number(assignmentId))
-            .not("rubric_id", "eq", selfReviewRubric?.id || 0)
             .order("id", { ascending: true })
         });
         await tableController.readyPromise;
@@ -365,7 +363,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   }, [
     assignmentId,
     supabase,
-    selfReviewRubric,
     getReviewStatus,
     course.classes.time_zone,
     userRolesWithProfiles,
@@ -476,6 +473,35 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       },
       {
+        id: "review_round",
+        header: "Round",
+        accessorFn: (row: PopulatedReviewAssignment) => row.rubrics?.review_round ?? "N/A",
+        cell: function render({ row }: { row: Row<PopulatedReviewAssignment> }) {
+          const r = row.original.rubrics?.review_round;
+          if (r === "self-review") return "Self-review";
+          if (r === "grading-review") return "Grading";
+          if (r === "meta-grading-review") return "Meta-grading";
+          if (r === "code-walk") return "Code walk";
+          return r ?? "N/A";
+        },
+        enableColumnFilter: true,
+        filterFn: (row: Row<PopulatedReviewAssignment>, id, filterValue: string[]) => {
+          if (!filterValue || filterValue.length === 0) return true;
+          const r = row.original.rubrics?.review_round;
+          const label =
+            r === "self-review"
+              ? "Self-review"
+              : r === "grading-review"
+                ? "Grading"
+                : r === "meta-grading-review"
+                  ? "Meta-grading"
+                  : r === "code-walk"
+                    ? "Code walk"
+                    : (r ?? "N/A");
+          return filterValue.includes(label);
+        }
+      },
+      {
         id: "due_date",
         header: `Due Date (${course.classes.time_zone ?? "America/New_York"})`,
         accessorKey: "due_date",
@@ -568,11 +594,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   useEffect(() => {
     if (!classRealTimeController) return;
 
-    const query = supabase
-      .from("review_assignments")
-      .select(joinedSelect)
-      .eq("assignment_id", Number(assignmentId))
-      .not("rubric_id", "eq", selfReviewRubric?.id || 0);
+    const query = supabase.from("review_assignments").select(joinedSelect).eq("assignment_id", Number(assignmentId));
 
     const tc = new TableController<"review_assignments", typeof joinedSelect, number>({
       query,
@@ -586,7 +608,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     return () => {
       tc.close();
     };
-  }, [classRealTimeController, supabase, assignmentId, selfReviewRubric]);
+  }, [classRealTimeController, supabase, assignmentId]);
 
   const table = useTableControllerTable<
     "review_assignments",
@@ -724,6 +746,14 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         return "N/A";
       }),
       rubric: createFilterOptions(data, (row) => row.rubrics?.name || "N/A"),
+      review_round: createFilterOptions(data, (row) => {
+        const r = row.rubrics?.review_round;
+        if (r === "self-review") return "Self-review";
+        if (r === "grading-review") return "Grading";
+        if (r === "meta-grading-review") return "Meta-grading";
+        if (r === "code-walk") return "Code walk";
+        return r ?? "N/A";
+      }),
       status: createFilterOptions(data, (row) => getReviewStatus(row)),
       "rubric-part": createFilterOptions(
         data,

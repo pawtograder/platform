@@ -50,6 +50,8 @@ type EditReviewAssignmentModalProps = {
   courseId: number;
   onSuccessAction: () => void;
   initialData: PopulatedReviewAssignment;
+  /** Self-review rows always assign the submitting student; only due date is editable */
+  isSelfReview?: boolean;
 };
 
 export default function EditReviewAssignmentModal({
@@ -57,7 +59,8 @@ export default function EditReviewAssignmentModal({
   onCloseAction,
   courseId,
   onSuccessAction,
-  initialData
+  initialData,
+  isSelfReview = false
 }: EditReviewAssignmentModalProps) {
   const {
     control,
@@ -158,11 +161,16 @@ export default function EditReviewAssignmentModal({
       await updateReviewAssignment({
         resource: "review_assignments",
         id: initialData.id,
-        values: { assignee_profile_id: data.assignee_profile_id, due_date: data.due_date },
+        values: isSelfReview
+          ? { due_date: data.due_date }
+          : { assignee_profile_id: data.assignee_profile_id, due_date: data.due_date },
         successNotification: false,
         errorNotification: false
       });
-      toaster.success({ title: "Review assignment updated", description: "Assignee and due date saved." });
+      toaster.success({
+        title: "Review assignment updated",
+        description: isSelfReview ? "Due date saved." : "Assignee and due date saved."
+      });
       onSuccessAction();
     } catch (error) {
       toaster.error({
@@ -231,30 +239,40 @@ export default function EditReviewAssignmentModal({
                 )}
               </Field>
 
-              <Field label="New Assignee" invalid={!!errors.assignee_profile_id}>
-                <Controller
-                  name="assignee_profile_id"
-                  control={control}
-                  rules={{ required: "Assignee is required" }}
-                  render={({ field }) => (
-                    <ChakraReactSelect
-                      {...field}
-                      inputId="assignee_profile_id_edit"
-                      options={assigneeOptions}
-                      isLoading={isLoadingCourseUsers || isLoadingGradingConflicts || isLoadingSelectedSubmission}
-                      placeholder={"Select Assignee..."}
-                      onChange={(option) => field.onChange(option?.value)}
-                      value={assigneeOptions.find((opt) => opt.value === field.value)}
-                      chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
-                    />
+              {!isSelfReview ? (
+                <Field label="New Assignee" invalid={!!errors.assignee_profile_id}>
+                  <Controller
+                    name="assignee_profile_id"
+                    control={control}
+                    rules={{ required: "Assignee is required" }}
+                    render={({ field }) => (
+                      <ChakraReactSelect
+                        {...field}
+                        inputId="assignee_profile_id_edit"
+                        options={assigneeOptions}
+                        isLoading={isLoadingCourseUsers || isLoadingGradingConflicts || isLoadingSelectedSubmission}
+                        placeholder={"Select Assignee..."}
+                        onChange={(option) => field.onChange(option?.value)}
+                        value={assigneeOptions.find((opt) => opt.value === field.value)}
+                        chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
+                      />
+                    )}
+                  />
+                  {errors.assignee_profile_id && (
+                    <Text color="red.500" fontSize="sm">
+                      {errors.assignee_profile_id.message}
+                    </Text>
                   )}
-                />
-                {errors.assignee_profile_id && (
-                  <Text color="red.500" fontSize="sm">
-                    {errors.assignee_profile_id.message}
+                </Field>
+              ) : (
+                <Box>
+                  <Text fontWeight="bold">Assignee</Text>
+                  <Text fontSize="sm" color="fg.muted">
+                    Self-review is always assigned to the student who submitted. Change the due date above, or use bulk
+                    edit to shift many at once.
                   </Text>
-                )}
-              </Field>
+                </Box>
+              )}
             </VStack>
           </form>
         </DialogBody>
