@@ -11181,7 +11181,7 @@ export type Database = {
           p_class_id: number;
           p_due_date: string;
           p_only_incomplete?: boolean;
-          p_rubric_id?: number | null;
+          p_rubric_id: number;
         };
         Returns: Json;
       };

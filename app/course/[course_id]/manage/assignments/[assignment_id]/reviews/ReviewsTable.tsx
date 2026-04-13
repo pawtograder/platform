@@ -35,8 +35,12 @@ export type PopulatedReviewAssignment = GetResult<
   "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"
 >;
 
+export type ReviewsTableVariant = "grading" | "self-review";
+
 interface ReviewsTableProps {
   assignmentId: string | number;
+  /** Grading vs self-review use separate data queries and columns */
+  variant: ReviewsTableVariant;
   openAssignModal: (data: PopulatedReviewAssignment | null) => void;
   onReviewAssignmentDeleted: () => void;
 }
@@ -59,7 +63,12 @@ function csvSafe(value: unknown): string {
   return `"${s}"`;
 }
 
-export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAssignmentDeleted }: ReviewsTableProps) {
+export default function ReviewsTable({
+  assignmentId,
+  variant,
+  openAssignModal,
+  onReviewAssignmentDeleted
+}: ReviewsTableProps) {
   const { course_id } = useParams();
   const { mutate: deleteReviewAssignment } = useDelete();
   const { role: course } = useClassProfiles();
@@ -74,6 +83,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     [rubrics]
   );
   const gradingRubricParts = useRubricParts(gradingRubric?.id);
+  const selfReviewRubric = useMemo(() => rubrics?.find((r) => r.review_round === "self-review"), [rubrics]);
   const supabase = createClient();
   const [isExporting, setIsExporting] = useState(false);
 
@@ -166,7 +176,14 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         });
         await tableController.readyPromise;
         // Type assertion is safe here - we've selected all fields used in CSV export
-        csvData = tableController.rows as unknown as PopulatedReviewAssignment[];
+        const rows = tableController.rows as unknown as PopulatedReviewAssignment[];
+        if (variant === "grading") {
+          const sid = selfReviewRubric?.id;
+          csvData = sid != null ? rows.filter((ra) => ra.rubric_id !== sid) : rows;
+        } else {
+          const sid = selfReviewRubric?.id;
+          csvData = sid != null ? rows.filter((ra) => ra.rubric_id === sid) : [];
+        }
         tableController.close();
       } catch (error: unknown) {
         const description = error instanceof Error ? error.message : "Unknown error";
@@ -348,7 +365,12 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       const link = document.createElement("a");
       const url = URL.createObjectURL(blob);
       link.setAttribute("href", url);
-      link.setAttribute("download", `review-assignments-${assignmentId}.csv`);
+      link.setAttribute(
+        "download",
+        variant === "self-review"
+          ? `self-review-assignments-${assignmentId}.csv`
+          : `grading-review-assignments-${assignmentId}.csv`
+      );
       link.style.visibility = "hidden";
       document.body.appendChild(link);
       link.click();
@@ -362,6 +384,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     }
   }, [
     assignmentId,
+    variant,
+    selfReviewRubric?.id,
     supabase,
     getReviewStatus,
     course.classes.time_zone,
@@ -378,13 +402,13 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     []
   );
 
-  const columns = useMemo<ColumnDef<PopulatedReviewAssignment>[]>(
-    () => [
+  const columns = useMemo<ColumnDef<PopulatedReviewAssignment>[]>(() => {
+    const cols: ColumnDef<PopulatedReviewAssignment>[] = [
       {
         id: "assignment_id_filter_col",
         accessorKey: "assignment_id",
         header: "Assignment ID",
-        enableHiding: true, // Allow hiding
+        enableHiding: true,
         filterFn: (row: Row<PopulatedReviewAssignment>, id: string, filterValue: string | number) => {
           return String(row.original.assignment_id) === String(filterValue);
         }
@@ -432,7 +456,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
             }
           }
 
-          // If we have a valid submission, make it clickable
           if (submission) {
             const url = `/course/${course_id}/assignments/${assignmentId}/submissions/${submission.id}?review_assignment_id=${row.original.id}`;
             return <Link href={url}>{submitterName}</Link>;
@@ -457,50 +480,58 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           }
           return filterValue.includes("N/A");
         }
-      },
-      {
-        id: "rubric",
-        header: "Rubric",
-        accessorFn: (row: PopulatedReviewAssignment) => row.rubrics?.name || "N/A",
-        cell: function render({ row }: { row: Row<PopulatedReviewAssignment> }) {
-          return row.original.rubrics?.name || "N/A";
+      }
+    ];
+
+    if (variant === "grading") {
+      cols.push(
+        {
+          id: "rubric",
+          header: "Rubric",
+          accessorFn: (row: PopulatedReviewAssignment) => row.rubrics?.name || "N/A",
+          cell: function render({ row }: { row: Row<PopulatedReviewAssignment> }) {
+            return row.original.rubrics?.name || "N/A";
+          },
+          enableColumnFilter: true,
+          filterFn: (row: Row<PopulatedReviewAssignment>, id, filterValue: string[]) => {
+            if (!filterValue || filterValue.length === 0) return true;
+            const rubricName = row.original.rubrics?.name || "N/A";
+            return filterValue.includes(rubricName);
+          }
         },
-        enableColumnFilter: true,
-        filterFn: (row: Row<PopulatedReviewAssignment>, id, filterValue: string[]) => {
-          if (!filterValue || filterValue.length === 0) return true;
-          const rubricName = row.original.rubrics?.name || "N/A";
-          return filterValue.includes(rubricName);
+        {
+          id: "review_round",
+          header: "Round",
+          accessorFn: (row: PopulatedReviewAssignment) => row.rubrics?.review_round ?? "N/A",
+          cell: function render({ row }: { row: Row<PopulatedReviewAssignment> }) {
+            const r = row.original.rubrics?.review_round;
+            if (r === "self-review") return "Self-review";
+            if (r === "grading-review") return "Grading";
+            if (r === "meta-grading-review") return "Meta-grading";
+            if (r === "code-walk") return "Code walk";
+            return r ?? "N/A";
+          },
+          enableColumnFilter: true,
+          filterFn: (row: Row<PopulatedReviewAssignment>, id, filterValue: string[]) => {
+            if (!filterValue || filterValue.length === 0) return true;
+            const r = row.original.rubrics?.review_round;
+            const label =
+              r === "self-review"
+                ? "Self-review"
+                : r === "grading-review"
+                  ? "Grading"
+                  : r === "meta-grading-review"
+                    ? "Meta-grading"
+                    : r === "code-walk"
+                      ? "Code walk"
+                      : (r ?? "N/A");
+            return filterValue.includes(label);
+          }
         }
-      },
-      {
-        id: "review_round",
-        header: "Round",
-        accessorFn: (row: PopulatedReviewAssignment) => row.rubrics?.review_round ?? "N/A",
-        cell: function render({ row }: { row: Row<PopulatedReviewAssignment> }) {
-          const r = row.original.rubrics?.review_round;
-          if (r === "self-review") return "Self-review";
-          if (r === "grading-review") return "Grading";
-          if (r === "meta-grading-review") return "Meta-grading";
-          if (r === "code-walk") return "Code walk";
-          return r ?? "N/A";
-        },
-        enableColumnFilter: true,
-        filterFn: (row: Row<PopulatedReviewAssignment>, id, filterValue: string[]) => {
-          if (!filterValue || filterValue.length === 0) return true;
-          const r = row.original.rubrics?.review_round;
-          const label =
-            r === "self-review"
-              ? "Self-review"
-              : r === "grading-review"
-                ? "Grading"
-                : r === "meta-grading-review"
-                  ? "Meta-grading"
-                  : r === "code-walk"
-                    ? "Code walk"
-                    : (r ?? "N/A");
-          return filterValue.includes(label);
-        }
-      },
+      );
+    }
+
+    cols.push(
       {
         id: "due_date",
         header: `Due Date (${course.classes.time_zone ?? "America/New_York"})`,
@@ -584,9 +615,10 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           );
         }
       }
-    ],
-    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone, course_id, assignmentId]
-  );
+    );
+
+    return cols;
+  }, [variant, handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone, course_id, assignmentId]);
   const joinedSelect =
     "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
   const [tableController, setTableController] =
@@ -594,7 +626,16 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   useEffect(() => {
     if (!classRealTimeController) return;
 
-    const query = supabase.from("review_assignments").select(joinedSelect).eq("assignment_id", Number(assignmentId));
+    let query = supabase.from("review_assignments").select(joinedSelect).eq("assignment_id", Number(assignmentId));
+
+    if (variant === "grading") {
+      if (selfReviewRubric?.id != null) {
+        query = query.not("rubric_id", "eq", selfReviewRubric.id);
+      }
+    } else {
+      const selfRubricId = selfReviewRubric?.id;
+      query = query.eq("rubric_id", selfRubricId ?? -1);
+    }
 
     const tc = new TableController<"review_assignments", typeof joinedSelect, number>({
       query,
@@ -608,7 +649,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     return () => {
       tc.close();
     };
-  }, [classRealTimeController, supabase, assignmentId]);
+  }, [classRealTimeController, supabase, assignmentId, variant, selfReviewRubric?.id]);
 
   const table = useTableControllerTable<
     "review_assignments",
@@ -734,7 +775,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   const filterOptions = useMemo(() => {
     if (!data || data.length === 0) return {};
 
-    return {
+    const base: Record<string, SelectOption[]> = {
       assignee: createFilterOptions(data, (row) => row.profiles?.name || row.assignee_profile_id),
       submission: createFilterOptions(data, (row) => {
         const submission = row.submissions;
@@ -744,15 +785,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           return `Submission ID: ${submission.id}`;
         }
         return "N/A";
-      }),
-      rubric: createFilterOptions(data, (row) => row.rubrics?.name || "N/A"),
-      review_round: createFilterOptions(data, (row) => {
-        const r = row.rubrics?.review_round;
-        if (r === "self-review") return "Self-review";
-        if (r === "grading-review") return "Grading";
-        if (r === "meta-grading-review") return "Meta-grading";
-        if (r === "code-walk") return "Code walk";
-        return r ?? "N/A";
       }),
       status: createFilterOptions(data, (row) => getReviewStatus(row)),
       "rubric-part": createFilterOptions(
@@ -765,7 +797,21 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
             ?.trim() ?? "All"
       )
     };
-  }, [data, createFilterOptions, getReviewStatus]);
+
+    if (variant === "grading") {
+      base.rubric = createFilterOptions(data, (row) => row.rubrics?.name || "N/A");
+      base.review_round = createFilterOptions(data, (row) => {
+        const r = row.rubrics?.review_round;
+        if (r === "self-review") return "Self-review";
+        if (r === "grading-review") return "Grading";
+        if (r === "meta-grading-review") return "Meta-grading";
+        if (r === "code-walk") return "Code walk";
+        return r ?? "N/A";
+      });
+    }
+
+    return base;
+  }, [data, createFilterOptions, getReviewStatus, variant]);
 
   const assignmentIdNumber = useMemo(() => Number(assignmentId), [assignmentId]);
   const staffProfileIds = useMemo(() => {
@@ -801,7 +847,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   }, [assignmentGroupsWithMembers.rows, assignmentIdNumber]);
   const unassignedSummary = useMemo(() => {
     const submissionsForAssignment = activeSubmissions?.filter((sub) => sub.assignment_id === assignmentIdNumber) ?? [];
-    if (!gradingRubric || submissionsForAssignment.length === 0) {
+    if (variant !== "grading" || !gradingRubric || submissionsForAssignment.length === 0) {
       return { total: submissionsForAssignment.length, unassigned: 0 };
     }
 
@@ -862,6 +908,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
     return { total: filteredSubmissions.length, unassigned: unassignedCount };
   }, [
+    variant,
     activeSubmissions,
     assignmentIdNumber,
     data,
@@ -876,31 +923,43 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     return <Spinner />;
   }
 
+  if (variant === "self-review" && selfReviewRubric == null) {
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        This assignment has no self-review rubric configured.
+      </Text>
+    );
+  }
+
   if (isError) {
     return <Text color="red.500">Error loading reviews: {error?.message}</Text>;
   }
 
   const currentRows = getRowModel().rows;
-  const hasUnassigned = unassignedSummary.unassigned > 0;
+  const hasUnassigned = variant === "grading" && unassignedSummary.unassigned > 0;
+
+  const tableTitle = variant === "self-review" ? "Self-review assignments" : "Grading review assignments";
 
   return (
     <VStack align="stretch" w="100%">
       <HStack justifyContent="space-between" alignItems="center" mb={4}>
         <Text fontSize="lg" fontWeight="bold">
-          Review Assignments
+          {tableTitle}
         </Text>
         <Button onClick={exportToCSV} size="sm" variant="outline" loading={isExporting}>
           <FaDownload style={{ marginRight: "8px" }} />
           Export CSV
         </Button>
       </HStack>
-      <Alert status={hasUnassigned ? "warning" : "success"} variant="subtle" mb={4}>
-        {unassignedSummary.total === 0
-          ? "No active submissions yet for this assignment."
-          : hasUnassigned
-            ? `${unassignedSummary.unassigned} of ${unassignedSummary.total} active submissions still need grading assignments.`
-            : "All active submissions currently have grading assignments. Use the Bulk Assign Grading button to assign reviews to submissions that have not yet been assigned."}
-      </Alert>
+      {variant === "grading" && (
+        <Alert status={hasUnassigned ? "warning" : "success"} variant="subtle" mb={4}>
+          {unassignedSummary.total === 0
+            ? "No active submissions yet for this assignment."
+            : hasUnassigned
+              ? `${unassignedSummary.unassigned} of ${unassignedSummary.total} active submissions still need grading assignments.`
+              : "All active submissions currently have grading assignments. Use the Bulk Assign Grading button to assign reviews to submissions that have not yet been assigned."}
+        </Alert>
+      )}
       <Table.Root>
         <Table.Header>
           {getHeaderGroups().map((headerGroup) => (
@@ -976,7 +1035,11 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
             </EmptyState.Indicator>
             <VStack textAlign="center">
               <EmptyState.Title>No review assignments</EmptyState.Title>
-              <EmptyState.Description>There aren&apos;t any reviews for this assignment yet</EmptyState.Description>
+              <EmptyState.Description>
+                {variant === "self-review"
+                  ? "No self-review assignments yet for this homework."
+                  : "There aren&apos;t any grading review assignments for this homework yet."}
+              </EmptyState.Description>
             </VStack>
           </EmptyState.Content>
         </EmptyState.Root>
@@ -1028,7 +1091,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           size="sm"
         >
           <NativeSelect.Field
-            id={`page-size-select-reviews`}
+            id={`page-size-select-reviews-${variant}`}
             title="Select page size"
             aria-label="Select number of items per page"
             value={getState().pagination.pageSize}

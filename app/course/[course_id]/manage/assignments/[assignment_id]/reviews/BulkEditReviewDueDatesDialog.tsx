@@ -17,9 +17,8 @@ import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Text, VStack } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MdEditCalendar } from "react-icons/md";
 
 type RubricRow = Pick<Database["public"]["Tables"]["rubrics"]["Row"], "id" | "name" | "review_round">;
@@ -43,47 +42,52 @@ type BulkEditReviewDueDatesDialogProps = {
   courseId: number;
   assignmentId: number;
   onSuccess: () => void;
+  /** Rubrics the instructor may target in this dialog (e.g. all non–self-review, or only self-review) */
+  rubrics: RubricRow[];
+  triggerLabel?: string;
+  dialogTitle?: string;
 };
 
 export default function BulkEditReviewDueDatesDialog({
   courseId,
   assignmentId,
-  onSuccess
+  onSuccess,
+  rubrics,
+  triggerLabel = "Bulk edit due dates",
+  dialogTitle = "Bulk edit review due dates"
 }: BulkEditReviewDueDatesDialogProps) {
   const supabase = createClient();
   const [isOpen, setIsOpen] = useState(false);
   const [dueDate, setDueDate] = useState("");
-  const [selectedRubric, setSelectedRubric] = useState<RubricRow | "all" | null>("all");
+  const [selectedRubric, setSelectedRubric] = useState<RubricRow | null>(null);
   const [onlyIncomplete, setOnlyIncomplete] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  const { data: rubricsData, isLoading: rubricsLoading } = useList<RubricRow>({
-    resource: "rubrics",
-    filters: [
-      { field: "class_id", operator: "eq", value: courseId },
-      { field: "assignment_id", operator: "eq", value: assignmentId }
-    ],
-    meta: { select: "id, name, review_round" },
-    queryOptions: { enabled: isOpen && !!courseId && !!assignmentId }
-  });
-
-  const rubricOptions = useMemo(() => {
-    const rows = rubricsData?.data ?? [];
-    return [
-      {
-        value: "all" as const,
-        label: "All rubrics (self-review and grading)"
-      },
-      ...rows.map((r) => ({
+  const rubricOptions = useMemo(
+    () =>
+      rubrics.map((r) => ({
         value: r,
         label: `${r.name} (${reviewRoundLabel(r.review_round)})`
-      }))
-    ];
-  }, [rubricsData?.data]);
+      })),
+    [rubrics]
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (rubricOptions.length === 1) {
+      setSelectedRubric(rubricOptions[0].value);
+    } else {
+      setSelectedRubric(null);
+    }
+  }, [isOpen, rubricOptions]);
 
   const handleApply = async () => {
     if (!dueDate) {
       toaster.error({ title: "Due date required", description: "Choose a date and time." });
+      return;
+    }
+    if (!selectedRubric) {
+      toaster.error({ title: "Rubric required", description: "Select which rubric to update." });
       return;
     }
 
@@ -95,12 +99,10 @@ export default function BulkEditReviewDueDatesDialog({
 
     setIsSaving(true);
     try {
-      const p_rubric_id = selectedRubric && selectedRubric !== "all" ? (selectedRubric as RubricRow).id : null;
-
       const { data, error } = await supabase.rpc("bulk_update_review_assignment_due_dates", {
         p_class_id: courseId,
         p_assignment_id: assignmentId,
-        p_rubric_id,
+        p_rubric_id: selectedRubric.id,
         p_due_date: isoDue,
         p_only_incomplete: onlyIncomplete
       });
@@ -122,30 +124,36 @@ export default function BulkEditReviewDueDatesDialog({
       onSuccess();
       setIsOpen(false);
       setDueDate("");
-      setSelectedRubric("all");
       setOnlyIncomplete(true);
     } finally {
       setIsSaving(false);
     }
   };
 
+  const disabled = rubrics.length === 0;
+
   return (
     <DialogRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          title={disabled ? "No rubrics available for this scope" : undefined}
+        >
           <MdEditCalendar style={{ marginRight: "8px" }} />
-          Bulk edit due dates
+          {triggerLabel}
         </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Bulk edit review due dates</DialogTitle>
+          <DialogTitle>{dialogTitle}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <VStack align="stretch" gap={4}>
             <Text fontSize="sm" color="fg.muted">
-              Sets the same due date on multiple review assignments for this homework. You can target all rubrics or a
-              single rubric (including self-review).
+              Sets the same due date on review assignments for one rubric. Choose the rubric below (grading rounds and
+              self-review are edited separately).
             </Text>
             <Field.Root required>
               <Field.Label>New due date (local)</Field.Label>
@@ -164,22 +172,20 @@ export default function BulkEditReviewDueDatesDialog({
             <Box>
               <Field.Label>Rubric</Field.Label>
               <Select
-                isLoading={rubricsLoading}
                 value={
-                  selectedRubric === "all" || selectedRubric === null
-                    ? rubricOptions[0]
-                    : {
-                        value: selectedRubric as RubricRow,
-                        label: `${(selectedRubric as RubricRow).name} (${reviewRoundLabel((selectedRubric as RubricRow).review_round)})`
+                  selectedRubric
+                    ? {
+                        value: selectedRubric,
+                        label: `${selectedRubric.name} (${reviewRoundLabel(selectedRubric.review_round)})`
                       }
+                    : null
                 }
                 onChange={(opt) => {
-                  if (!opt) return;
-                  if (opt.value === "all") setSelectedRubric("all");
-                  else setSelectedRubric(opt.value as RubricRow);
+                  setSelectedRubric(opt ? (opt.value as RubricRow) : null);
                 }}
                 options={rubricOptions}
-                placeholder="Choose scope..."
+                placeholder="Choose a rubric..."
+                isClearable
               />
             </Box>
             <Checkbox checked={onlyIncomplete} onCheckedChange={({ checked }) => setOnlyIncomplete(!!checked)}>

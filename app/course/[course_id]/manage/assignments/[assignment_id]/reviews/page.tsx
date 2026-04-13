@@ -26,11 +26,12 @@ import {
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { useRubrics } from "@/hooks/useAssignment";
 import { Box, Container, Field, Heading, HStack, List, Separator, Tabs, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate, useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MdClear } from "react-icons/md";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import AssignReviewModal from "./assignReviewModal";
@@ -311,6 +312,18 @@ function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: 
 export default function ReviewAssignmentsPage() {
   const { course_id, assignment_id } = useParams();
   const invalidate = useInvalidate();
+  const rubrics = useRubrics();
+  const gradingRubricsBulk = useMemo(
+    () =>
+      (rubrics ?? [])
+        .filter((r) => r.review_round !== "self-review")
+        .map((r) => ({ id: r.id, name: r.name, review_round: r.review_round })),
+    [rubrics]
+  );
+  const selfReviewRubricBulk = useMemo(() => {
+    const sr = rubrics?.find((r) => r.review_round === "self-review");
+    return sr ? [{ id: sr.id, name: sr.name, review_round: sr.review_round }] : [];
+  }, [rubrics]);
   const {
     isOpen: isAssignModalOpen,
     modalData: assignModalData,
@@ -342,7 +355,18 @@ export default function ReviewAssignmentsPage() {
           <BulkEditReviewDueDatesDialog
             courseId={Number(course_id)}
             assignmentId={Number(assignment_id)}
+            rubrics={gradingRubricsBulk}
             onSuccess={handleReviewAssignmentChange}
+            triggerLabel="Bulk edit grading due dates"
+            dialogTitle="Bulk edit grading review due dates"
+          />
+          <BulkEditReviewDueDatesDialog
+            courseId={Number(course_id)}
+            assignmentId={Number(assignment_id)}
+            rubrics={selfReviewRubricBulk}
+            onSuccess={handleReviewAssignmentChange}
+            triggerLabel="Bulk edit self-review due dates"
+            dialogTitle="Bulk edit self-review due dates"
           />
           <Button onClick={() => openAssignModal(null)} variant="ghost" size="sm">
             Assign Single Review
@@ -361,13 +385,30 @@ export default function ReviewAssignmentsPage() {
         </Tabs.Content>
         <Tabs.Content value="all-assignments">
           <VStack align="stretch" gap={4}>
-            <Heading size="md">Current Assignments</Heading>
+            <Heading size="md">Current assignments</Heading>
             <Separator w="100%" mb={2} />
-            <ReviewsTable
-              assignmentId={assignment_id as string}
-              openAssignModal={openAssignModal}
-              onReviewAssignmentDeleted={handleReviewAssignmentChange}
-            />
+            <Tabs.Root defaultValue="grading" variant="line" lazyMount unmountOnExit>
+              <Tabs.List>
+                <Tabs.Trigger value="grading">Grading reviews</Tabs.Trigger>
+                <Tabs.Trigger value="self-review">Self reviews</Tabs.Trigger>
+              </Tabs.List>
+              <Tabs.Content value="grading">
+                <ReviewsTable
+                  variant="grading"
+                  assignmentId={assignment_id as string}
+                  openAssignModal={openAssignModal}
+                  onReviewAssignmentDeleted={handleReviewAssignmentChange}
+                />
+              </Tabs.Content>
+              <Tabs.Content value="self-review">
+                <ReviewsTable
+                  variant="self-review"
+                  assignmentId={assignment_id as string}
+                  openAssignModal={openAssignModal}
+                  onReviewAssignmentDeleted={handleReviewAssignmentChange}
+                />
+              </Tabs.Content>
+            </Tabs.Root>
           </VStack>
         </Tabs.Content>
       </Tabs.Root>
