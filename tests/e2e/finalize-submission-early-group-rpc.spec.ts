@@ -100,33 +100,28 @@ test.describe("finalize_submission_early RPC for group assignments", () => {
     });
   });
 
-  test("only one group member can successfully finalize early via direct RPC", async () => {
+  test("only one group member can successfully finalize early via direct RPC burst", async () => {
     const studentAClient = await createAuthenticatedClient(studentA);
     const studentBClient = await createAuthenticatedClient(studentB);
 
-    const [firstAttempt, secondAttempt] = await Promise.all([
-      studentAClient.rpc("finalize_submission_early", {
+    const attempts = Array.from({ length: 6 }, (_, idx) =>
+      (idx % 2 === 0 ? studentAClient : studentBClient).rpc("finalize_submission_early", {
         this_assignment_id: assignmentId,
-        this_profile_id: studentA.private_profile_id
-      }),
-      studentBClient.rpc("finalize_submission_early", {
-        this_assignment_id: assignmentId,
-        this_profile_id: studentB.private_profile_id
+        this_profile_id: idx % 2 === 0 ? studentA.private_profile_id : studentB.private_profile_id
       })
-    ]);
+    );
+    const results = await Promise.all(attempts);
+    expect(results.map((result) => result.error).filter(Boolean)).toHaveLength(0);
 
-    expect([firstAttempt.error, secondAttempt.error].filter(Boolean)).toHaveLength(0);
-
-    const responses: FinalizeSubmissionResponse[] = [
-      firstAttempt.data as FinalizeSubmissionResponse,
-      secondAttempt.data as FinalizeSubmissionResponse
-    ];
+    const responses: FinalizeSubmissionResponse[] = results.map((result) => result.data as FinalizeSubmissionResponse);
     const successfulResponses = responses.filter((response) => response?.success);
     const failedResponses = responses.filter((response) => !response?.success);
 
     expect(successfulResponses).toHaveLength(1);
-    expect(failedResponses).toHaveLength(1);
-    expect(failedResponses[0]?.error ?? failedResponses[0]?.message).toBe("Submission already finalized");
+    expect(failedResponses).toHaveLength(responses.length - 1);
+    expect(
+      failedResponses.every((response) => (response.error ?? response.message) === "Submission already finalized")
+    ).toBe(true);
 
     const { data: exceptions, error: exceptionsError } = await supabase
       .from("assignment_due_date_exceptions")
