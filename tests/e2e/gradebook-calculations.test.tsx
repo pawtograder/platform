@@ -131,14 +131,40 @@ async function setOverride(class_id: number, column_slug: string, student_id: st
   if (error) throw new Error(`setOverride failed for ${column_slug}: ${error.message}`);
 }
 
-/** Release a column (triggers sync private->public for manual; triggers recalc for dependents). */
+/**
+ * Release a column. For instructor-only columns this mirrors the production
+ * release_instructor_only_gradebook_column RPC: first sets released=true while
+ * instructor_only is still true (triggering the one-time snapshot sync that
+ * copies the private row's score to the public row), then clears instructor_only
+ * so the column becomes a normal live column with standard sync behavior.
+ * For regular columns, just sets released=true.
+ */
 async function releaseColumn(class_id: number, column_slug: string) {
-  const { error } = await supabase
+  const { data: col, error: colError } = await supabase
     .from("gradebook_columns")
-    .update({ released: true })
+    .select("id, instructor_only")
     .eq("class_id", class_id)
-    .eq("slug", column_slug);
-  if (error) throw new Error(`Release failed for ${column_slug}: ${error.message}`);
+    .eq("slug", column_slug)
+    .single();
+  if (colError || !col) throw new Error(`Column ${column_slug} not found: ${colError?.message}`);
+
+  if (col.instructor_only) {
+    // Step 1: set released while instructor_only is still true so the snapshot
+    // sync trigger fires and copies the private score to the public row.
+    const { error: e1 } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", col.id);
+    if (e1) throw new Error(`Release step 1 failed for ${column_slug}: ${e1.message}`);
+    // Step 2: clear instructor_only — column becomes a normal live column;
+    // subsequent score edits will propagate to students via standard sync.
+    const { error: e2 } = await supabase.from("gradebook_columns").update({ instructor_only: false }).eq("id", col.id);
+    if (e2) throw new Error(`Release step 2 failed for ${column_slug}: ${e2.message}`);
+  } else {
+    const { error } = await supabase
+      .from("gradebook_columns")
+      .update({ released: true })
+      .eq("class_id", class_id)
+      .eq("slug", column_slug);
+    if (error) throw new Error(`Release failed for ${column_slug}: ${error.message}`);
+  }
 }
 
 /** Unrelease a column (clears public rows for manual columns; triggers recalc for dependents). */
@@ -1395,8 +1421,14 @@ test.describe("Fixture 3: Countif Lab + Skill Tracking", () => {
 // ────────────────────────────────────────────────────────────────────
 // FIXTURE 4: Instructor-Only Columns
 //
-// Tests RLS visibility, frozen snapshot on release, and that post-
-// release modifications to the instructor row don't propagate.
+// Tests RLS visibility and the production release flow for instructor-
+// only columns. The release helper mirrors release_instructor_only_
+// gradebook_column: step 1 sets released=true while instructor_only is
+// still true (triggering a one-time public-row snapshot), then step 2
+// clears instructor_only so the column becomes a normal live column.
+// After release, standard sync behavior applies: score edits propagate
+// to students, and setting released=false clears the public score but
+// the column remains visible (instructor_only=false satisfies RLS).
 //
 // Columns:
 //   hw-total      (manual, max=100)
@@ -1589,11 +1621,11 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
     await studentClient.auth.signOut();
   });
 
-  test("post-release instructor edit does NOT change student snapshot", async () => {
-    // Instructor updates curve-adj for Alice from 10 → 18
+  test("post-release instructor edit propagates to student view (instructor_only cleared at release)", async () => {
+    // Instructor updates curve-adj for Alice from 10 → 18.
     await setScore(course.id, "curve-adj", alice.private_profile_id, 18);
 
-    // Private row updated
+    // Private row updated.
     await waitForScore({
       class_id: course.id,
       student_id: alice.private_profile_id,
@@ -1611,8 +1643,9 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
       expected: 103
     });
 
-    // Student's curve-adj public row is FROZEN at 10 (snapshot from release time)
-    // The sync trigger skips instructor-only columns after initial release.
+    // After release, instructor_only was cleared (production RPC flow), so curve-adj is now a
+    // normal live column. The standard sync trigger (sync_private_gradebook_column_student_fields)
+    // fires synchronously when the private score changes and propagates it to the public row.
     const { data: pubCell } = await supabase
       .from("gradebook_column_students")
       .select("score")
@@ -1620,7 +1653,7 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
       .eq("student_id", alice.private_profile_id)
       .eq("is_private", false)
       .single();
-    expect(pubCell?.score).toBe(10);
+    expect(pubCell?.score).toBe(18);
   });
 
   test("release curved-total: student sees current private snapshot", async () => {
@@ -1628,6 +1661,13 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
     // (sync_private_gradebook_column_student) requires is_recalculating=false
     // on both old and new rows (lines 105-106 of the migration).
     await kickRecalculation(course.id);
+
+    // Release hw-total first so that after the two-step release of curved-total clears
+    // instructor_only, the recalculation worker has valid public dependency scores:
+    //   hw-total public → Alice=85, Bob=70
+    //   curve-adj public → Alice=18 (propagated in previous test), Bob=15
+    // This ensures the post-clear recalc produces 103 and 85, matching the snapshot.
+    await releaseColumn(course.id, "hw-total");
 
     await releaseColumn(course.id, "curved-total");
 
@@ -1651,25 +1691,30 @@ test.describe("Fixture 4: Instructor-Only Columns", () => {
     });
   });
 
-  test("unrelease hides column from student again", async () => {
+  test("unrelease clears public score but column remains visible after instructor_only cleared", async () => {
     await unreleaseColumn(course.id, "curve-adj");
 
-    // Student should no longer see curve-adj
+    // Because the two-step release cleared instructor_only, the RLS policy's
+    // "OR instructor_only = false" branch is now always true for this column.
+    // Setting released=false no longer hides it from students — they still see
+    // the column metadata and cell row, but the score is null (cleared by the
+    // unrelease sync trigger).
     const studentClient = await createStudentClient(alice);
     const { data: colData } = await studentClient
       .from("gradebook_columns")
       .select("id")
       .eq("id", curveAdjColId)
       .maybeSingle();
-    expect(colData).toBeNull();
+    expect(colData?.id).toBe(curveAdjColId);
 
     const { data: cellData } = await studentClient
       .from("gradebook_column_students")
-      .select("id")
+      .select("id, score")
       .eq("gradebook_column_id", curveAdjColId)
       .eq("student_id", alice.private_profile_id)
       .maybeSingle();
-    expect(cellData).toBeNull();
+    expect(cellData).not.toBeNull();
+    expect(cellData?.score).toBeNull();
 
     // curved-total is still released — student can still see that
     const { data: calcColData } = await studentClient

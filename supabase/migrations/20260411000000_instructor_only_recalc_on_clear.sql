@@ -50,7 +50,22 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  v_class_id bigint;
 BEGIN
+  SELECT class_id INTO v_class_id
+  FROM public.gradebook_columns
+  WHERE id = p_column_id;
+
+  IF v_class_id IS NULL THEN
+    RAISE EXCEPTION 'Column % does not exist', p_column_id;
+  END IF;
+
+  IF NOT public.authorizeforclassgrader(v_class_id) THEN
+    RAISE EXCEPTION 'Access denied: insufficient permissions for class %', v_class_id
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   -- Step 1: Release while still instructor_only — triggers snapshot sync
   UPDATE public.gradebook_columns
   SET released = true
