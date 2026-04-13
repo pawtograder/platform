@@ -53,7 +53,6 @@ import {
   useRubricCheck,
   useRubricChecksByCriteria,
   useRubricCriteriaByPart,
-  useRubricById,
   useRubricParts,
   useRubrics
 } from "@/hooks/useAssignment";

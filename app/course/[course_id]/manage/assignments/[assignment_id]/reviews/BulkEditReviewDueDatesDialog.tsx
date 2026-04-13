@@ -16,7 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Text, VStack } from "@chakra-ui/react";
+import { Text, VStack } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useEffect, useMemo, useState } from "react";
 import { MdEditCalendar } from "react-icons/md";
@@ -155,8 +155,7 @@ export default function BulkEditReviewDueDatesDialog({
               Sets the same due date on review assignments for one rubric. Choose the rubric below (grading rounds and
               self-review are edited separately).
             </Text>
-            <Field.Root required>
-              <Field.Label>New due date (local)</Field.Label>
+            <Field label="New due date (local)" required>
               <input
                 type="datetime-local"
                 value={dueDate}
@@ -168,9 +167,8 @@ export default function BulkEditReviewDueDatesDialog({
                   border: "1px solid var(--chakra-colors-border)"
                 }}
               />
-            </Field.Root>
-            <Box>
-              <Field.Label>Rubric</Field.Label>
+            </Field>
+            <Field label="Rubric">
               <Select
                 value={
                   selectedRubric
@@ -187,7 +185,7 @@ export default function BulkEditReviewDueDatesDialog({
                 placeholder="Choose a rubric..."
                 isClearable
               />
-            </Box>
+            </Field>
             <Checkbox checked={onlyIncomplete} onCheckedChange={({ checked }) => setOnlyIncomplete(!!checked)}>
               Only rows not yet completed
             </Checkbox>

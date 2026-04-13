@@ -44,6 +44,8 @@ type UpdateAssigneeData = {
   due_date: string;
 };
 
+type ReviewAssignmentUpdate = Database["public"]["Tables"]["review_assignments"]["Update"];
+
 type EditReviewAssignmentModalProps = {
   isOpen: boolean;
   onCloseAction: () => void;
@@ -82,7 +84,7 @@ export default function EditReviewAssignmentModal({
     });
   }, [initialData, reset]);
 
-  const { mutateAsync: updateReviewAssignment } = useUpdate<ReviewAssignmentRow, HttpError, UpdateAssigneeData>();
+  const { mutateAsync: updateReviewAssignment } = useUpdate<ReviewAssignmentRow, HttpError, ReviewAssignmentUpdate>();
 
   // Load course users (graders and instructors)
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
