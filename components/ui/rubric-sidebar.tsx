@@ -76,6 +76,7 @@ import {
   useActiveSubmissionReviewId
 } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
@@ -516,18 +517,30 @@ export function RubricCheckComment({
     }
   }, [comment?.regrade_request_id]);
 
+  const rubricForCriteria = useRubricById(criteria?.rubric_id);
+  const isStudent = useIsStudent();
+
   const handleEditComment = useCallback(
     async (message: string) => {
-      if (comment_type === "submission") {
-        await submissionController.submission_comments.update(comment_id, { comment: message });
-      } else if (comment_type === "file") {
-        await submissionController.submission_file_comments.update(comment_id, { comment: message });
-      } else if (comment_type === "artifact") {
-        await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
+      try {
+        if (comment_type === "submission") {
+          await submissionController.submission_comments.update(comment_id, { comment: message });
+        } else if (comment_type === "file") {
+          await submissionController.submission_file_comments.update(comment_id, { comment: message });
+        } else if (comment_type === "artifact") {
+          await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
+        }
+      } catch (error: unknown) {
+        throw new Error(
+          getStudentFacingErrorMessage(error, {
+            isStudent,
+            rubricReviewRound: rubricForCriteria?.review_round ?? null
+          })
+        );
       }
       setIsEditing(false);
     },
-    [comment_id, comment_type, setIsEditing, submissionController]
+    [comment_id, comment_type, submissionController, isStudent, rubricForCriteria?.review_round]
   );
 
   const linkedFileId =
@@ -1226,6 +1239,7 @@ export function RubricCheckGlobal({
       {isEditing && (
         <SubmissionCommentForm
           check={check}
+          criteriaRubricId={criteria.rubric_id}
           submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
@@ -1269,6 +1283,7 @@ export function RubricCheckGlobal({
  */
 function SubmissionCommentForm({
   check,
+  criteriaRubricId,
   submissionReview,
   selectedOptionIndex,
   linkedArtifactId,
@@ -1276,6 +1291,7 @@ function SubmissionCommentForm({
   onSuccess
 }: {
   check: HydratedRubricCheck;
+  criteriaRubricId: number;
   submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
@@ -1285,6 +1301,8 @@ function SubmissionCommentForm({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
   const submissionController = useSubmissionController();
+  const rubricForCriteria = useRubricById(criteriaRubricId);
+  const isStudent = useIsStudent();
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const graderPseudonymousMode = useGraderPseudonymousMode();
@@ -1350,8 +1368,16 @@ function SubmissionCommentForm({
           onSuccess();
           if (check.is_annotation) {
             throw new Error("Not implemented");
-          } else {
+          }
+          try {
             await submissionController.submission_comments.create(values);
+          } catch (error: unknown) {
+            throw new Error(
+              getStudentFacingErrorMessage(error, {
+                isStudent,
+                rubricReviewRound: rubricForCriteria?.review_round ?? null
+              })
+            );
           }
         }}
         defaultSingleLine={true}

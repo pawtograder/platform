@@ -11175,6 +11175,16 @@ export type Database = {
         };
         Returns: Json;
       };
+      bulk_update_review_assignment_due_dates: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_due_date: string;
+          p_only_incomplete?: boolean;
+          p_rubric_id: number;
+        };
+        Returns: Json;
+      };
       bulk_csv_import_enrollment: {
         Args: {
           p_class_id: number;

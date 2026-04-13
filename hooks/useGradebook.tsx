@@ -1,6 +1,10 @@
 "use client";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, { type BroadcastMessage, type PossiblyTentativeResult } from "@/lib/TableController";
+import TableController, {
+  fetchPostgrestAllPages,
+  type BroadcastMessage,
+  type PossiblyTentativeResult
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
@@ -175,20 +179,34 @@ export function useLinkToAssignment(column_id: number, student_id: string) {
   const column = useGradebookColumn(column_id);
   const dependencies = column?.dependencies as { gradebook_columns?: number[]; assignments?: number[] };
   const assignmentLink = useMemo(() => {
-    if (!dependencies) return null;
+    const depAssignmentIds = dependencies?.assignments ?? [];
+    const assignmentIdsToTry = [...depAssignmentIds];
+    if (assignmentIdsToTry.length === 0) {
+      const row = gradebookController.assignments_table.rows.find((r) => r.gradebook_column_id === column_id);
+      if (row?.id != null) assignmentIdsToTry.push(row.id);
+    }
+    if (assignmentIdsToTry.length === 0) {
+      return null;
+    }
     const gradesForStudent = gradebookController.studentSubmissions.get(student_id);
-    for (const assignment_id of dependencies.assignments ?? []) {
+    let result: string | null | undefined = null;
+    for (const assignment_id of assignmentIdsToTry) {
       const assignment = gradesForStudent?.find((s) => s.assignment_id === assignment_id);
-      if (assignment) {
-        if (assignment.submission_id) {
-          return `/course/${column?.class_id}/assignments/${assignment.assignment_id}/submissions/${assignment.submission_id}`;
-        } else {
-          return undefined;
-        }
+      if (assignment?.submission_id) {
+        result = `/course/${column?.class_id}/assignments/${assignment.assignment_id}/submissions/${assignment.submission_id}`;
+        break;
       }
     }
-    return null;
-  }, [gradebookController, column, dependencies, student_id]);
+    return result;
+  }, [
+    gradebookController,
+    gradebookController.studentSubmissions,
+    gradebookController.assignments_table.rows,
+    column,
+    column_id,
+    dependencies,
+    student_id
+  ]);
   return assignmentLink;
 }
 export function useReferencedContent(
@@ -238,7 +256,16 @@ export function useReferencedContent(
         <VStack align="left">{links}</VStack>
       </HStack>
     ) : null;
-  }, [gradebookController, column, student_id, dependencies, inclusions.assignments, inclusions.gradebook_columns]);
+  }, [
+    gradebookController,
+    gradebookController.studentSubmissions,
+    gradebookController.gradebook_columns.rows,
+    column,
+    student_id,
+    dependencies,
+    inclusions.assignments,
+    inclusions.gradebook_columns
+  ]);
   return referencedContent;
 }
 
@@ -1967,6 +1994,8 @@ export class GradebookController {
 // --- Context ---
 type GradebookContextType = {
   gradebookController: GradebookController;
+  /** Bumps when `studentSubmissions` is replaced so consumers re-render (controller reference is stable). */
+  studentSubmissionsEpoch: number;
 };
 const GradebookContext = createContext<GradebookContextType | null>(null);
 export function useGradebookController() {
@@ -2004,6 +2033,16 @@ export function GradebookProvider({
   const [mathjsError, setMathjsError] = useState<Error | null>(null);
   /** Increments each time `controller.current` is assigned a new `GradebookController` (avoids stale context when a boolean dep fails to change). */
   const [controllerGeneration, setControllerGeneration] = useState(0);
+  const [studentSubmissionsEpoch, setStudentSubmissionsEpoch] = useState(0);
+  const [submissionsLoadError, setSubmissionsLoadError] = useState<Error | null>(null);
+  const [submissionsFetchNonce, setSubmissionsFetchNonce] = useState(0);
+  const onStudentSubmissionsHydrated = useCallback(() => {
+    setStudentSubmissionsEpoch((e) => e + 1);
+  }, []);
+  const retrySubmissionsFetch = useCallback(() => {
+    setSubmissionsLoadError(null);
+    setSubmissionsFetchNonce((n) => n + 1);
+  }, []);
 
   // Load MathJS first, then create controller
   useEffect(() => {
@@ -2080,8 +2119,11 @@ export function GradebookProvider({
 
   const gradebookContextValue = useMemo((): GradebookContextType => {
     const c = controller.current;
-    return { gradebookController: c as GradebookController };
-  }, [controllerGeneration]);
+    return {
+      gradebookController: c as GradebookController,
+      studentSubmissionsEpoch
+    };
+  }, [studentSubmissionsEpoch, controllerGeneration]);
 
   if (!gradebook_id || isNaN(Number(gradebook_id))) {
     return <Text>Error: Gradebook is not enabled for this course.</Text>;
@@ -2131,9 +2173,33 @@ export function GradebookProvider({
 
   return (
     <GradebookContext.Provider value={gradebookContextValue}>
-      <GradebookControllerCreator class_id={class_id} setReady={setReady} controller={controller.current} />
-      {!ready && <LoadingScreen />}
-      {ready && children}
+      <GradebookControllerCreator
+        class_id={class_id}
+        setReady={setReady}
+        controller={controller.current}
+        onStudentSubmissionsHydrated={onStudentSubmissionsHydrated}
+        submissionsFetchNonce={submissionsFetchNonce}
+        onSubmissionsLoadError={setSubmissionsLoadError}
+      />
+      {submissionsLoadError ? (
+        <Box p={4}>
+          <VStack gap={4}>
+            <Heading size="md" color="red.500">
+              Failed to Load Submissions
+            </Heading>
+            <Text>Could not load submission data for the gradebook.</Text>
+            <Text fontSize="sm" color="text.subtle">
+              Error: {submissionsLoadError.message}
+            </Text>
+            <Button onClick={retrySubmissionsFetch}>Retry</Button>
+          </VStack>
+        </Box>
+      ) : (
+        <>
+          {!ready && <LoadingScreen />}
+          {ready && children}
+        </>
+      )}
     </GradebookContext.Provider>
   );
 }
@@ -2141,11 +2207,17 @@ export function GradebookProvider({
 function GradebookControllerCreator({
   class_id,
   setReady,
-  controller
+  controller,
+  onStudentSubmissionsHydrated,
+  submissionsFetchNonce,
+  onSubmissionsLoadError
 }: {
   class_id: number;
   setReady: (ready: boolean) => void;
   controller: GradebookController;
+  onStudentSubmissionsHydrated: () => void;
+  submissionsFetchNonce: number;
+  onSubmissionsLoadError: (error: Error | null) => void;
 }) {
   const [controllerIsReady, setControllerIsReady] = useState(controller.isReady);
   useEffect(() => {
@@ -2166,29 +2238,58 @@ function GradebookControllerCreator({
     }
   }, [assignments, assignmentsLoading, controller]);
 
-  const { data: submissions, isLoading: submissionsLoading } = useList<
-    Database["public"]["Views"]["active_submissions_for_class"]["Row"]
-  >({
-    resource: "active_submissions_for_class",
-    filters: [{ field: "class_id", operator: "eq", value: class_id }],
-    pagination: { pageSize: 100000 },
-    queryOptions: { enabled: !!class_id },
-    meta: {
-      select: "*"
-    }
-  });
+  /**
+   * Load all `active_submissions_for_class` rows via the same multi-page strategy as {@link TableController}
+   * (`fetchPostgrestAllPages`). We cannot use a TableController for this view: group submissions repeat
+   * `submission_id` per member, and TableController coalesces rows by `id`.
+   */
+  const [submissionsLoading, setSubmissionsLoading] = useState(Boolean(class_id));
   useEffect(() => {
-    if (submissions && !submissionsLoading) {
-      controller.studentSubmissions.clear();
-      for (const submission of submissions.data) {
-        if (!submission.student_private_profile_id) continue;
-        if (!controller.studentSubmissions.has(submission.student_private_profile_id)) {
-          controller.studentSubmissions.set(submission.student_private_profile_id ?? "", []);
-        }
-        controller.studentSubmissions.get(submission.student_private_profile_id ?? "")!.push(submission);
-      }
+    if (!class_id) {
+      setSubmissionsLoading(false);
+      onSubmissionsLoadError(null);
+      return;
     }
-  }, [submissions, submissionsLoading, controller]);
+    let cancelled = false;
+    setSubmissionsLoading(true);
+    onSubmissionsLoadError(null);
+    const supabase = createClient();
+
+    (async () => {
+      try {
+        const combined = await fetchPostgrestAllPages<
+          Database["public"]["Views"]["active_submissions_for_class"]["Row"]
+        >(
+          supabase.from("active_submissions_for_class").select("*").eq("class_id", class_id),
+          [
+            { column: "submission_id", ascending: true },
+            { column: "student_private_profile_id", ascending: true }
+          ],
+          { isCancelled: () => cancelled }
+        );
+        if (cancelled) return;
+        const next = new Map<string, Database["public"]["Views"]["active_submissions_for_class"]["Row"][]>();
+        for (const submission of combined) {
+          if (!submission.student_private_profile_id) continue;
+          const sid = submission.student_private_profile_id;
+          if (!next.has(sid)) next.set(sid, []);
+          next.get(sid)!.push(submission);
+        }
+        controller.studentSubmissions = next;
+        onStudentSubmissionsHydrated();
+        setSubmissionsLoading(false);
+      } catch (err) {
+        if (!cancelled) {
+          Sentry.captureException(err);
+          onSubmissionsLoadError(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [class_id, controller, onStudentSubmissionsHydrated, submissionsFetchNonce, onSubmissionsLoadError]);
 
   useEffect(() => {
     if (!submissionsLoading && controllerIsReady) {
