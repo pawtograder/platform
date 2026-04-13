@@ -6,8 +6,6 @@ import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { promises as fs } from "node:fs";
 import Papa from "papaparse";
-import { createClient } from "@supabase/supabase-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   createClass,
   createUsersInClass,
@@ -15,7 +13,8 @@ import {
   TestingUser,
   createAssignmentsAndGradebookColumns,
   insertPreBakedSubmission,
-  supabase
+  supabase,
+  createAuthenticatedClient
 } from "./TestingUtils";
 // removed unused import
 
@@ -610,17 +609,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       .single();
     expect(pubBefore?.score).toBeNull();
 
-    const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    // Ensure the student has a known password (magic-link users get a random one at creation)
-    await supabase.auth.admin.updateUserById(students[0].user_id, { password: students[0].password });
-    const studentClient = createClient<Database>(process.env.SUPABASE_URL!, anonKey!);
-    const { error: signInError } = await studentClient.auth.signInWithPassword({
-      email: students[0].email,
-      password: students[0].password
-    });
-    if (signInError) {
-      throw new Error(`Student sign-in failed: ${signInError.message}`);
-    }
+    const studentClient = await createAuthenticatedClient(students[0]);
     const { data: studCol, error: studColErr } = await studentClient
       .from("gradebook_columns")
       .select("id")
