@@ -11,11 +11,6 @@ import { useEffect } from "react";
  * Shows class-wide late token settings and assignment-level exceptions.
  */
 export default function DueDateExtensionsPage() {
-  const { assignmentDueDateExceptions } = useCourseController();
-  useEffect(() => {
-    //Ensure not cached
-    assignmentDueDateExceptions.refetchAll();
-  }, [assignmentDueDateExceptions]);
   return (
     <Container>
       <VStack align="stretch" gap={6} py={4}>

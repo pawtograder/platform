@@ -10,6 +10,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useActiveSubmissions, useAssignmentController, useRubricParts, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
+import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController, { useIsTableControllerReady } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -950,6 +951,10 @@ export default function ReviewsTable({
   }
 
   const currentRows = getRowModel().rows;
+  const rowWindow = useVirtualizedRowWindow(currentRows, {
+    estimatedRowHeight: 72,
+    minRowsForVirtualization: 80
+  });
   const hasUnassigned = variant === "grading" && unassignedSummary.unassigned > 0;
 
   const tableTitle = variant === "self-review" ? "Self-review assignments" : "Grading review assignments";
@@ -974,73 +979,93 @@ export default function ReviewsTable({
               : "All active submissions currently have grading assignments. Use the Bulk Assign Grading button to assign reviews to submissions that have not yet been assigned."}
         </Alert>
       )}
-      <Table.Root>
-        <Table.Header>
-          {getHeaderGroups().map((headerGroup) => (
-            <Table.Row bg="bg.subtle" key={headerGroup.id}>
-              {headerGroup.headers
-                .filter((h) => h.id !== "assignment_id_filter_col")
-                .map((header) => (
-                  <Table.ColumnHeader key={header.id}>
-                    {header.isPlaceholder ? null : (
-                      <>
-                        <Text
-                          onClick={header.column.getToggleSortingHandler()}
-                          cursor={header.column.getCanSort() ? "pointer" : "default"}
-                          textAlign={header.column.id === "actions" ? "center" : undefined}
-                          title={header.column.getCanSort() ? `Sort by ${header.column.id}` : undefined}
-                        >
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          {{
-                            asc: " 🔼",
-                            desc: " 🔽"
-                          }[header.column.getIsSorted() as string] ?? null}
-                        </Text>
-                        {header.column.getCanFilter() ? (
-                          <Select
-                            isMulti
-                            size="sm"
-                            placeholder={`Filter ${typeof header.column.columnDef.header === "string" ? header.column.columnDef.header : header.column.id}`}
-                            options={filterOptions[header.column.id as keyof typeof filterOptions] || []}
-                            value={((header.column.getFilterValue() as string[]) || []).map((val) => ({
-                              value: val,
-                              label: val
-                            }))}
-                            onChange={(selectedOptions: MultiValue<SelectOption>) => {
-                              const values = selectedOptions.map((option) => option.value);
-                              header.column.setFilterValue(values.length > 0 ? values : undefined);
-                            }}
-                            aria-label={`Filter by ${typeof header.column.columnDef.header === "string" ? header.column.columnDef.header : header.column.id}`}
-                            chakraStyles={{
-                              container: (provided) => ({
-                                ...provided,
-                                marginTop: "4px"
-                              })
-                            }}
-                          />
-                        ) : null}
-                      </>
-                    )}
-                  </Table.ColumnHeader>
-                ))}
-            </Table.Row>
-          ))}
-        </Table.Header>
-        <Table.Body>
-          {currentRows.map((row) => (
-            <Table.Row key={row.id}>
-              {row
-                .getVisibleCells()
-                .filter((cell) => cell.column.id !== "assignment_id_filter_col")
-                .map((cell) => (
-                  <Table.Cell key={cell.id} textAlign={cell.column.id === "actions" ? "center" : undefined}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </Table.Cell>
-                ))}
-            </Table.Row>
-          ))}
-        </Table.Body>
-      </Table.Root>
+      <VStack
+        align="stretch"
+        borderWidth="1px"
+        borderRadius="md"
+        ref={rowWindow.containerRef}
+        onScroll={rowWindow.onScroll}
+        overflowY="auto"
+        maxH="70vh"
+      >
+        <Table.Root>
+          <Table.Header>
+            {getHeaderGroups().map((headerGroup) => (
+              <Table.Row bg="bg.subtle" key={headerGroup.id}>
+                {headerGroup.headers
+                  .filter((h) => h.id !== "assignment_id_filter_col")
+                  .map((header) => (
+                    <Table.ColumnHeader key={header.id}>
+                      {header.isPlaceholder ? null : (
+                        <>
+                          <Text
+                            onClick={header.column.getToggleSortingHandler()}
+                            cursor={header.column.getCanSort() ? "pointer" : "default"}
+                            textAlign={header.column.id === "actions" ? "center" : undefined}
+                            title={header.column.getCanSort() ? `Sort by ${header.column.id}` : undefined}
+                          >
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                            {{
+                              asc: " 🔼",
+                              desc: " 🔽"
+                            }[header.column.getIsSorted() as string] ?? null}
+                          </Text>
+                          {header.column.getCanFilter() ? (
+                            <Select
+                              isMulti
+                              size="sm"
+                              placeholder={`Filter ${typeof header.column.columnDef.header === "string" ? header.column.columnDef.header : header.column.id}`}
+                              options={filterOptions[header.column.id as keyof typeof filterOptions] || []}
+                              value={((header.column.getFilterValue() as string[]) || []).map((val) => ({
+                                value: val,
+                                label: val
+                              }))}
+                              onChange={(selectedOptions: MultiValue<SelectOption>) => {
+                                const values = selectedOptions.map((option) => option.value);
+                                header.column.setFilterValue(values.length > 0 ? values : undefined);
+                              }}
+                              aria-label={`Filter by ${typeof header.column.columnDef.header === "string" ? header.column.columnDef.header : header.column.id}`}
+                              chakraStyles={{
+                                container: (provided) => ({
+                                  ...provided,
+                                  marginTop: "4px"
+                                })
+                              }}
+                            />
+                          ) : null}
+                        </>
+                      )}
+                    </Table.ColumnHeader>
+                  ))}
+              </Table.Row>
+            ))}
+          </Table.Header>
+          <Table.Body>
+            {rowWindow.shouldVirtualize && rowWindow.paddingTop > 0 ? (
+              <Table.Row>
+                <Table.Cell colSpan={columns.length - 1} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
+              </Table.Row>
+            ) : null}
+            {rowWindow.visibleRows.map((row) => (
+              <Table.Row key={row.id}>
+                {row
+                  .getVisibleCells()
+                  .filter((cell) => cell.column.id !== "assignment_id_filter_col")
+                  .map((cell) => (
+                    <Table.Cell key={cell.id} textAlign={cell.column.id === "actions" ? "center" : undefined}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </Table.Cell>
+                  ))}
+              </Table.Row>
+            ))}
+            {rowWindow.shouldVirtualize && rowWindow.paddingBottom > 0 ? (
+              <Table.Row>
+                <Table.Cell colSpan={columns.length - 1} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
+              </Table.Row>
+            ) : null}
+          </Table.Body>
+        </Table.Root>
+      </VStack>
       {currentRows.length === 0 && (
         <EmptyState.Root size={"md"}>
           <EmptyState.Content>

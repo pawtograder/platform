@@ -25,6 +25,7 @@ import { createClient } from "@/utils/supabase/client";
 import TableController from "@/lib/TableController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { useCourseController } from "@/hooks/useCourseController";
+import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { LuRefreshCw } from "react-icons/lu";
 import { LuExternalLink } from "react-icons/lu";
@@ -470,6 +471,10 @@ function WorkflowRunTable() {
 
   // Use getRowModel for displaying filtered data
   const filteredWorkflowRuns = getRowModel().rows;
+  const rowWindow = useVirtualizedRowWindow(filteredWorkflowRuns, {
+    estimatedRowHeight: 68,
+    minRowsForVirtualization: 80
+  });
 
   return (
     <Box>
@@ -505,366 +510,403 @@ function WorkflowRunTable() {
         </Box>
       ) : (
         <>
-          <Table.Root>
-            <Table.Header>
-              {getHeaderGroups().map((headerGroup) => (
-                <Table.Row bg="bg.subtle" key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => {
-                    return (
-                      <Table.ColumnHeader key={header.id}>
-                        {header.isPlaceholder ? null : (
-                          <>
-                            <Text onClick={header.column.getToggleSortingHandler()} cursor="pointer">
-                              {flexRender(header.column.columnDef.header, header.getContext())}
-                              {{
-                                asc: (
+          <Box ref={rowWindow.containerRef} onScroll={rowWindow.onScroll} overflowY="auto" maxH="70vh">
+            <Table.Root>
+              <Table.Header>
+                {getHeaderGroups().map((headerGroup) => (
+                  <Table.Row bg="bg.subtle" key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => {
+                      return (
+                        <Table.ColumnHeader key={header.id}>
+                          {header.isPlaceholder ? null : (
+                            <>
+                              <Text onClick={header.column.getToggleSortingHandler()} cursor="pointer">
+                                {flexRender(header.column.columnDef.header, header.getContext())}
+                                {{
+                                  asc: (
+                                    <Icon size="md">
+                                      <FaSortUp />
+                                    </Icon>
+                                  ),
+                                  desc: (
+                                    <Icon size="md">
+                                      <FaSortDown />
+                                    </Icon>
+                                  )
+                                }[header.column.getIsSorted() as string] ?? (
                                   <Icon size="md">
-                                    <FaSortUp />
+                                    <FaSort />
                                   </Icon>
-                                ),
-                                desc: (
-                                  <Icon size="md">
-                                    <FaSortDown />
-                                  </Icon>
-                                )
-                              }[header.column.getIsSorted() as string] ?? (
-                                <Icon size="md">
-                                  <FaSort />
-                                </Icon>
+                                )}
+                              </Text>
+                              {header.id === "workflow_run_id" && (
+                                <CreatableSelect
+                                  isMulti
+                                  name={header.id}
+                                  options={Array.from(
+                                    data
+                                      .reduce((map, row) => {
+                                        const runId = row.workflow_run_id;
+                                        if (runId && !map.has(runId)) {
+                                          map.set(runId, runId);
+                                        }
+                                        return map;
+                                      }, new Map<number, number>())
+                                      .values()
+                                  ).map((runId) => ({ label: `#${runId}`, value: String(runId) }))}
+                                  placeholder="Filter Run ID..."
+                                  closeMenuOnSelect={false}
+                                  size="sm"
+                                  value={
+                                    Array.isArray(header.column.getFilterValue())
+                                      ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                          label: `#${v}`,
+                                          value: v
+                                        }))
+                                      : []
+                                  }
+                                  onChange={(selected) => {
+                                    header.column.setFilterValue(
+                                      selected && selected.length > 0
+                                        ? selected.map((option) => option.value)
+                                        : undefined
+                                    );
+                                  }}
+                                  chakraStyles={{
+                                    container: (provided) => ({ ...provided, width: "100%" }),
+                                    dropdownIndicator: (provided) => ({
+                                      ...provided,
+                                      bg: "transparent",
+                                      px: 2,
+                                      cursor: "pointer"
+                                    }),
+                                    indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                  }}
+                                />
                               )}
-                            </Text>
-                            {header.id === "workflow_run_id" && (
-                              <CreatableSelect
-                                isMulti
-                                name={header.id}
-                                options={Array.from(
-                                  data
-                                    .reduce((map, row) => {
-                                      const runId = row.workflow_run_id;
-                                      if (runId && !map.has(runId)) {
-                                        map.set(runId, runId);
-                                      }
-                                      return map;
-                                    }, new Map<number, number>())
-                                    .values()
-                                ).map((runId) => ({ label: `#${runId}`, value: String(runId) }))}
-                                placeholder="Filter Run ID..."
-                                closeMenuOnSelect={false}
-                                size="sm"
-                                value={
-                                  Array.isArray(header.column.getFilterValue())
-                                    ? (header.column.getFilterValue() as string[]).map((v) => ({
-                                        label: `#${v}`,
-                                        value: v
-                                      }))
-                                    : []
-                                }
-                                onChange={(selected) => {
-                                  header.column.setFilterValue(
-                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
-                                  );
-                                }}
-                                chakraStyles={{
-                                  container: (provided) => ({ ...provided, width: "100%" }),
-                                  dropdownIndicator: (provided) => ({
-                                    ...provided,
-                                    bg: "transparent",
-                                    px: 2,
-                                    cursor: "pointer"
-                                  }),
-                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
-                                }}
-                              />
-                            )}
-                            {header.id === "profile_id" && (
-                              <CreatableSelect
-                                isMulti
-                                name={header.id}
-                                options={Array.from(
-                                  data
-                                    .reduce((map, row) => {
-                                      const profileId = row.profile_id;
-                                      if (profileId && !map.has(profileId)) {
-                                        const profileName = profiles.get(profileId) || profileId;
-                                        map.set(profileId, profileName);
-                                      }
-                                      return map;
-                                    }, new Map<string, string>())
-                                    .entries()
-                                )
-                                  .sort((a, b) => a[1].localeCompare(b[1]))
-                                  .map(([id, name]) => ({ label: name, value: id }))}
-                                placeholder="Filter Student..."
-                                closeMenuOnSelect={false}
-                                size="sm"
-                                value={
-                                  Array.isArray(header.column.getFilterValue())
-                                    ? (header.column.getFilterValue() as string[]).map((v) => {
-                                        const name = profiles.get(v) || v;
-                                        return { label: name, value: v };
-                                      })
-                                    : []
-                                }
-                                onChange={(selected) => {
-                                  header.column.setFilterValue(
-                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
-                                  );
-                                }}
-                                chakraStyles={{
-                                  container: (provided) => ({ ...provided, width: "100%" }),
-                                  dropdownIndicator: (provided) => ({
-                                    ...provided,
-                                    bg: "transparent",
-                                    px: 2,
-                                    cursor: "pointer"
-                                  }),
-                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
-                                }}
-                              />
-                            )}
-                            {header.id === "assignment_id" && (
-                              <CreatableSelect
-                                isMulti
-                                name={header.id}
-                                options={Array.from(
-                                  data
-                                    .reduce((map, row) => {
-                                      const assignmentId = row.assignment_id;
-                                      if (assignmentId && !map.has(assignmentId)) {
-                                        const assignmentName =
-                                          assignments.get(assignmentId) || `Assignment #${assignmentId}`;
-                                        map.set(assignmentId, assignmentName);
-                                      }
-                                      return map;
-                                    }, new Map<number, string>())
-                                    .entries()
-                                )
-                                  .sort((a, b) => a[1].localeCompare(b[1]))
-                                  .map(([, name]) => ({ label: name, value: name }))}
-                                placeholder="Filter by assignment..."
-                                closeMenuOnSelect={false}
-                                size="sm"
-                                value={
-                                  Array.isArray(header.column.getFilterValue())
-                                    ? (header.column.getFilterValue() as string[]).map((v) => ({ label: v, value: v }))
-                                    : []
-                                }
-                                onChange={(selected) => {
-                                  header.column.setFilterValue(
-                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
-                                  );
-                                }}
-                                chakraStyles={{
-                                  container: (provided) => ({ ...provided, width: "100%" }),
-                                  dropdownIndicator: (provided) => ({
-                                    ...provided,
-                                    bg: "transparent",
-                                    px: 2,
-                                    cursor: "pointer"
-                                  }),
-                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
-                                }}
-                              />
-                            )}
-                            {header.id === "actor_login" && (
-                              <CreatableSelect
-                                isMulti
-                                name={header.id}
-                                options={Array.from(
-                                  data
-                                    .reduce((map, row) => {
-                                      const actor = row.actor_login || "Unknown";
-                                      if (!map.has(actor)) {
-                                        map.set(actor, actor);
-                                      }
-                                      return map;
-                                    }, new Map<string, string>())
-                                    .values()
-                                )
-                                  .sort()
-                                  .map((actor) => ({ label: actor, value: actor }))}
-                                placeholder="Filter by actor..."
-                                closeMenuOnSelect={false}
-                                size="sm"
-                                value={
-                                  Array.isArray(header.column.getFilterValue())
-                                    ? (header.column.getFilterValue() as string[]).map((v) => ({ label: v, value: v }))
-                                    : []
-                                }
-                                onChange={(selected) => {
-                                  header.column.setFilterValue(
-                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
-                                  );
-                                }}
-                                chakraStyles={{
-                                  container: (provided) => ({ ...provided, width: "100%" }),
-                                  dropdownIndicator: (provided) => ({
-                                    ...provided,
-                                    bg: "transparent",
-                                    px: 2,
-                                    cursor: "pointer"
-                                  }),
-                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
-                                }}
-                              />
-                            )}
-                            {header.id === "head_sha" && (
-                              <CreatableSelect
-                                isMulti
-                                name={header.id}
-                                options={Array.from(
-                                  data
-                                    .reduce((map, row) => {
-                                      const sha = row.head_sha;
-                                      if (sha && !map.has(sha)) {
-                                        map.set(sha, sha);
-                                      }
-                                      return map;
-                                    }, new Map<string, string>())
-                                    .values()
-                                )
-                                  .sort()
-                                  .map((sha) => ({ label: sha.substring(0, 7), value: sha }))}
-                                placeholder="Filter by commit..."
-                                closeMenuOnSelect={false}
-                                size="sm"
-                                value={
-                                  Array.isArray(header.column.getFilterValue())
-                                    ? (header.column.getFilterValue() as string[]).map((v) => ({
-                                        label: v.substring(0, 7),
-                                        value: v
-                                      }))
-                                    : []
-                                }
-                                onChange={(selected) => {
-                                  header.column.setFilterValue(
-                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
-                                  );
-                                }}
-                                chakraStyles={{
-                                  container: (provided) => ({ ...provided, width: "100%" }),
-                                  dropdownIndicator: (provided) => ({
-                                    ...provided,
-                                    bg: "transparent",
-                                    px: 2,
-                                    cursor: "pointer"
-                                  }),
-                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
-                                }}
-                              />
-                            )}
-                            {header.id === "status" && (
-                              <CreatableSelect
-                                isMulti
-                                name={header.id}
-                                options={Array.from(
-                                  data
-                                    .reduce((map, row) => {
-                                      const { requested_at, in_progress_at, completed_at } = row;
-                                      let status = "unknown";
-                                      if (completed_at) status = "completed";
-                                      else if (in_progress_at) status = "in progress";
-                                      else if (requested_at) status = "requested";
-                                      if (!map.has(status)) {
-                                        map.set(status, status);
-                                      }
-                                      return map;
-                                    }, new Map<string, string>())
-                                    .values()
-                                ).map((status) => ({
-                                  label: status.charAt(0).toUpperCase() + status.slice(1),
-                                  value: status
-                                }))}
-                                placeholder="Filter by status..."
-                                closeMenuOnSelect={false}
-                                size="sm"
-                                value={
-                                  Array.isArray(header.column.getFilterValue())
-                                    ? (header.column.getFilterValue() as string[]).map((v) => ({
-                                        label: v.charAt(0).toUpperCase() + v.slice(1),
-                                        value: v
-                                      }))
-                                    : []
-                                }
-                                onChange={(selected) => {
-                                  header.column.setFilterValue(
-                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
-                                  );
-                                }}
-                                chakraStyles={{
-                                  container: (provided) => ({ ...provided, width: "100%" }),
-                                  dropdownIndicator: (provided) => ({
-                                    ...provided,
-                                    bg: "transparent",
-                                    px: 2,
-                                    cursor: "pointer"
-                                  }),
-                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
-                                }}
-                              />
-                            )}
-                            {header.id === "run_number" && (
-                              <CreatableSelect
-                                isMulti
-                                name={header.id}
-                                options={Array.from(
-                                  data
-                                    .reduce((map, row) => {
-                                      const runNumber = row.run_number;
-                                      if (runNumber && !map.has(runNumber)) {
-                                        map.set(runNumber, runNumber);
-                                      }
-                                      return map;
-                                    }, new Map<number, number>())
-                                    .values()
-                                )
-                                  .sort((a, b) => a - b)
-                                  .map((runNumber) => ({ label: String(runNumber), value: String(runNumber) }))}
-                                placeholder="Filter Run #..."
-                                closeMenuOnSelect={false}
-                                size="sm"
-                                value={
-                                  Array.isArray(header.column.getFilterValue())
-                                    ? (header.column.getFilterValue() as string[]).map((v) => ({ label: v, value: v }))
-                                    : []
-                                }
-                                onChange={(selected) => {
-                                  header.column.setFilterValue(
-                                    selected && selected.length > 0 ? selected.map((option) => option.value) : undefined
-                                  );
-                                }}
-                                chakraStyles={{
-                                  container: (provided) => ({ ...provided, width: "100%" }),
-                                  dropdownIndicator: (provided) => ({
-                                    ...provided,
-                                    bg: "transparent",
-                                    px: 2,
-                                    cursor: "pointer"
-                                  }),
-                                  indicatorSeparator: (provided) => ({ ...provided, display: "none" })
-                                }}
-                              />
-                            )}
-                          </>
-                        )}
-                      </Table.ColumnHeader>
-                    );
-                  })}
-                </Table.Row>
-              ))}
-            </Table.Header>
-            <Table.Body>
-              {filteredWorkflowRuns.map((row) => (
-                <Table.Row key={row.id}>
-                  {row.getVisibleCells().map((cell) => {
-                    return (
-                      <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                    );
-                  })}
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
+                              {header.id === "profile_id" && (
+                                <CreatableSelect
+                                  isMulti
+                                  name={header.id}
+                                  options={Array.from(
+                                    data
+                                      .reduce((map, row) => {
+                                        const profileId = row.profile_id;
+                                        if (profileId && !map.has(profileId)) {
+                                          const profileName = profiles.get(profileId) || profileId;
+                                          map.set(profileId, profileName);
+                                        }
+                                        return map;
+                                      }, new Map<string, string>())
+                                      .entries()
+                                  )
+                                    .sort((a, b) => a[1].localeCompare(b[1]))
+                                    .map(([id, name]) => ({ label: name, value: id }))}
+                                  placeholder="Filter Student..."
+                                  closeMenuOnSelect={false}
+                                  size="sm"
+                                  value={
+                                    Array.isArray(header.column.getFilterValue())
+                                      ? (header.column.getFilterValue() as string[]).map((v) => {
+                                          const name = profiles.get(v) || v;
+                                          return { label: name, value: v };
+                                        })
+                                      : []
+                                  }
+                                  onChange={(selected) => {
+                                    header.column.setFilterValue(
+                                      selected && selected.length > 0
+                                        ? selected.map((option) => option.value)
+                                        : undefined
+                                    );
+                                  }}
+                                  chakraStyles={{
+                                    container: (provided) => ({ ...provided, width: "100%" }),
+                                    dropdownIndicator: (provided) => ({
+                                      ...provided,
+                                      bg: "transparent",
+                                      px: 2,
+                                      cursor: "pointer"
+                                    }),
+                                    indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                  }}
+                                />
+                              )}
+                              {header.id === "assignment_id" && (
+                                <CreatableSelect
+                                  isMulti
+                                  name={header.id}
+                                  options={Array.from(
+                                    data
+                                      .reduce((map, row) => {
+                                        const assignmentId = row.assignment_id;
+                                        if (assignmentId && !map.has(assignmentId)) {
+                                          const assignmentName =
+                                            assignments.get(assignmentId) || `Assignment #${assignmentId}`;
+                                          map.set(assignmentId, assignmentName);
+                                        }
+                                        return map;
+                                      }, new Map<number, string>())
+                                      .entries()
+                                  )
+                                    .sort((a, b) => a[1].localeCompare(b[1]))
+                                    .map(([, name]) => ({ label: name, value: name }))}
+                                  placeholder="Filter by assignment..."
+                                  closeMenuOnSelect={false}
+                                  size="sm"
+                                  value={
+                                    Array.isArray(header.column.getFilterValue())
+                                      ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                          label: v,
+                                          value: v
+                                        }))
+                                      : []
+                                  }
+                                  onChange={(selected) => {
+                                    header.column.setFilterValue(
+                                      selected && selected.length > 0
+                                        ? selected.map((option) => option.value)
+                                        : undefined
+                                    );
+                                  }}
+                                  chakraStyles={{
+                                    container: (provided) => ({ ...provided, width: "100%" }),
+                                    dropdownIndicator: (provided) => ({
+                                      ...provided,
+                                      bg: "transparent",
+                                      px: 2,
+                                      cursor: "pointer"
+                                    }),
+                                    indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                  }}
+                                />
+                              )}
+                              {header.id === "actor_login" && (
+                                <CreatableSelect
+                                  isMulti
+                                  name={header.id}
+                                  options={Array.from(
+                                    data
+                                      .reduce((map, row) => {
+                                        const actor = row.actor_login || "Unknown";
+                                        if (!map.has(actor)) {
+                                          map.set(actor, actor);
+                                        }
+                                        return map;
+                                      }, new Map<string, string>())
+                                      .values()
+                                  )
+                                    .sort()
+                                    .map((actor) => ({ label: actor, value: actor }))}
+                                  placeholder="Filter by actor..."
+                                  closeMenuOnSelect={false}
+                                  size="sm"
+                                  value={
+                                    Array.isArray(header.column.getFilterValue())
+                                      ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                          label: v,
+                                          value: v
+                                        }))
+                                      : []
+                                  }
+                                  onChange={(selected) => {
+                                    header.column.setFilterValue(
+                                      selected && selected.length > 0
+                                        ? selected.map((option) => option.value)
+                                        : undefined
+                                    );
+                                  }}
+                                  chakraStyles={{
+                                    container: (provided) => ({ ...provided, width: "100%" }),
+                                    dropdownIndicator: (provided) => ({
+                                      ...provided,
+                                      bg: "transparent",
+                                      px: 2,
+                                      cursor: "pointer"
+                                    }),
+                                    indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                  }}
+                                />
+                              )}
+                              {header.id === "head_sha" && (
+                                <CreatableSelect
+                                  isMulti
+                                  name={header.id}
+                                  options={Array.from(
+                                    data
+                                      .reduce((map, row) => {
+                                        const sha = row.head_sha;
+                                        if (sha && !map.has(sha)) {
+                                          map.set(sha, sha);
+                                        }
+                                        return map;
+                                      }, new Map<string, string>())
+                                      .values()
+                                  )
+                                    .sort()
+                                    .map((sha) => ({ label: sha.substring(0, 7), value: sha }))}
+                                  placeholder="Filter by commit..."
+                                  closeMenuOnSelect={false}
+                                  size="sm"
+                                  value={
+                                    Array.isArray(header.column.getFilterValue())
+                                      ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                          label: v.substring(0, 7),
+                                          value: v
+                                        }))
+                                      : []
+                                  }
+                                  onChange={(selected) => {
+                                    header.column.setFilterValue(
+                                      selected && selected.length > 0
+                                        ? selected.map((option) => option.value)
+                                        : undefined
+                                    );
+                                  }}
+                                  chakraStyles={{
+                                    container: (provided) => ({ ...provided, width: "100%" }),
+                                    dropdownIndicator: (provided) => ({
+                                      ...provided,
+                                      bg: "transparent",
+                                      px: 2,
+                                      cursor: "pointer"
+                                    }),
+                                    indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                  }}
+                                />
+                              )}
+                              {header.id === "status" && (
+                                <CreatableSelect
+                                  isMulti
+                                  name={header.id}
+                                  options={Array.from(
+                                    data
+                                      .reduce((map, row) => {
+                                        const { requested_at, in_progress_at, completed_at } = row;
+                                        let status = "unknown";
+                                        if (completed_at) status = "completed";
+                                        else if (in_progress_at) status = "in progress";
+                                        else if (requested_at) status = "requested";
+                                        if (!map.has(status)) {
+                                          map.set(status, status);
+                                        }
+                                        return map;
+                                      }, new Map<string, string>())
+                                      .values()
+                                  ).map((status) => ({
+                                    label: status.charAt(0).toUpperCase() + status.slice(1),
+                                    value: status
+                                  }))}
+                                  placeholder="Filter by status..."
+                                  closeMenuOnSelect={false}
+                                  size="sm"
+                                  value={
+                                    Array.isArray(header.column.getFilterValue())
+                                      ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                          label: v.charAt(0).toUpperCase() + v.slice(1),
+                                          value: v
+                                        }))
+                                      : []
+                                  }
+                                  onChange={(selected) => {
+                                    header.column.setFilterValue(
+                                      selected && selected.length > 0
+                                        ? selected.map((option) => option.value)
+                                        : undefined
+                                    );
+                                  }}
+                                  chakraStyles={{
+                                    container: (provided) => ({ ...provided, width: "100%" }),
+                                    dropdownIndicator: (provided) => ({
+                                      ...provided,
+                                      bg: "transparent",
+                                      px: 2,
+                                      cursor: "pointer"
+                                    }),
+                                    indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                  }}
+                                />
+                              )}
+                              {header.id === "run_number" && (
+                                <CreatableSelect
+                                  isMulti
+                                  name={header.id}
+                                  options={Array.from(
+                                    data
+                                      .reduce((map, row) => {
+                                        const runNumber = row.run_number;
+                                        if (runNumber && !map.has(runNumber)) {
+                                          map.set(runNumber, runNumber);
+                                        }
+                                        return map;
+                                      }, new Map<number, number>())
+                                      .values()
+                                  )
+                                    .sort((a, b) => a - b)
+                                    .map((runNumber) => ({ label: String(runNumber), value: String(runNumber) }))}
+                                  placeholder="Filter Run #..."
+                                  closeMenuOnSelect={false}
+                                  size="sm"
+                                  value={
+                                    Array.isArray(header.column.getFilterValue())
+                                      ? (header.column.getFilterValue() as string[]).map((v) => ({
+                                          label: v,
+                                          value: v
+                                        }))
+                                      : []
+                                  }
+                                  onChange={(selected) => {
+                                    header.column.setFilterValue(
+                                      selected && selected.length > 0
+                                        ? selected.map((option) => option.value)
+                                        : undefined
+                                    );
+                                  }}
+                                  chakraStyles={{
+                                    container: (provided) => ({ ...provided, width: "100%" }),
+                                    dropdownIndicator: (provided) => ({
+                                      ...provided,
+                                      bg: "transparent",
+                                      px: 2,
+                                      cursor: "pointer"
+                                    }),
+                                    indicatorSeparator: (provided) => ({ ...provided, display: "none" })
+                                  }}
+                                />
+                              )}
+                            </>
+                          )}
+                        </Table.ColumnHeader>
+                      );
+                    })}
+                  </Table.Row>
+                ))}
+              </Table.Header>
+              <Table.Body>
+                {rowWindow.shouldVirtualize && rowWindow.paddingTop > 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
+                  </Table.Row>
+                ) : null}
+                {rowWindow.visibleRows.map((row) => (
+                  <Table.Row key={row.id}>
+                    {row.getVisibleCells().map((cell) => {
+                      return (
+                        <Table.Cell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </Table.Cell>
+                      );
+                    })}
+                  </Table.Row>
+                ))}
+                {rowWindow.shouldVirtualize && rowWindow.paddingBottom > 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
+                  </Table.Row>
+                ) : null}
+              </Table.Body>
+            </Table.Root>
+          </Box>
           <VStack w="100%" gap={4} mt={4}>
             <HStack>
               <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>

@@ -1,5 +1,5 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
-import { createClientWithCaching, fetchAssignmentControllerData, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { createClientWithCaching, getUserRolesForCourse } from "@/lib/ssrUtils";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { ManageAssignmentNav } from "./ManageAssignmentNav";
@@ -46,11 +46,9 @@ export default async function ManageAssignmentLayout({
     redirect(`/course/${courseId}`);
   }
 
-  // Pre-fetch all assignment controller data on the server with caching
-  const initialData = await fetchAssignmentControllerData(
-    assignmentId,
-    role.role === "instructor" || role.role === "grader"
-  );
+  // Staff assignment pages should stream fast even with large courses and many submissions.
+  // Let table controllers load on-demand on the client instead of blocking layout render.
+  const initialData = undefined;
 
   // Fetch assignment metadata for the title
   const client = await createClientWithCaching({ tags: ["assignment_metadata"] });

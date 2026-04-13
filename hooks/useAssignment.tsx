@@ -661,7 +661,7 @@ export function AssignmentProvider({
   const params = useParams();
   const courseController = useCourseController();
   const [controller, setController] = useState<AssignmentController | null>(null);
-  const [ready, setReady] = useState(false);
+  const [assignmentLoaded, setAssignmentLoaded] = useState(false);
   const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
 
   // Use ref for initialData so it doesn't trigger effect re-runs
@@ -676,7 +676,7 @@ export function AssignmentProvider({
   if (assignment_id !== prevAssignmentId) {
     setPrevAssignmentId(assignment_id);
     setController(null);
-    setReady(false);
+    setAssignmentLoaded(false);
   }
 
   useEffect(() => {
@@ -689,7 +689,7 @@ export function AssignmentProvider({
       initialData: initialDataRef.current
     });
     setController(ctrl);
-    setReady(false);
+    setAssignmentLoaded(false);
 
     return () => {
       ctrl.close(); // Closure captures exact instance — no ref ambiguity
@@ -706,32 +706,33 @@ export function AssignmentProvider({
 
   return (
     <AssignmentContext.Provider value={{ assignmentController: controller }}>
-      <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller} />
-      {ready && children}
+      <AssignmentControllerCreator
+        assignment_id={assignment_id}
+        setAssignmentLoaded={setAssignmentLoaded}
+        controller={controller}
+      />
+      {assignmentLoaded && children}
     </AssignmentContext.Provider>
   );
 }
 
 /**
- * Loads assignment data, rubrics, and submissions into the provided AssignmentController and manages readiness state.
+ * Loads assignment data into the provided AssignmentController and manages readiness state.
  *
- * Waits for assignment, rubrics, submissions, and required table controllers to be loaded before signaling readiness. Does not render any UI.
+ * Does not render any UI.
  *
  * @param assignment_id - The ID of the assignment to load
- * @param setReady - Callback to set readiness state when all data and controllers are loaded
  * @param controller - The AssignmentController instance to populate with loaded data
  */
 function AssignmentControllerCreator({
   assignment_id,
-  setReady,
+  setAssignmentLoaded,
   controller
 }: {
   assignment_id: number;
-  setReady: (ready: boolean) => void;
+  setAssignmentLoaded: (ready: boolean) => void;
   controller: AssignmentController;
 }) {
-  const [tableControllersReady, setTableControllersReady] = useState(false);
-
   // Assignment base data (no nested rubrics)
   const { query: assignmentQuery } = useShow<AssignmentWithRubricsAndReferences>({
     resource: "assignments",
@@ -742,40 +743,13 @@ function AssignmentControllerCreator({
     }
   });
 
-  // Wait for all table controllers to be ready
-  useEffect(() => {
-    let cancelled = false;
-    setTableControllersReady(false);
-    const promises = [
-      controller.reviewAssignments.readyPromise,
-      controller.regradeRequests.readyPromise,
-      controller.rubricsController.readyPromise,
-      controller.rubricPartsController.readyPromise,
-      controller.rubricCriteriaController.readyPromise,
-      controller.rubricChecksController.readyPromise,
-      controller.rubricCheckReferencesController.readyPromise,
-      controller.submissions.readyPromise,
-      controller.assignmentGroups.readyPromise,
-      controller.leaderboard.readyPromise
-    ];
-    Promise.all(promises).then(() => {
-      if (!cancelled) setTableControllersReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [controller]);
-
   // Set assignment base data
   useEffect(() => {
     if (assignmentQuery.data?.data) {
       controller.assignment = assignmentQuery.data.data;
+      setAssignmentLoaded(true);
     }
-
-    if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
-      setReady(true);
-    }
-  }, [assignmentQuery.data, assignmentQuery.isLoading, controller, setReady, tableControllersReady]);
+  }, [assignmentQuery.data, controller, setAssignmentLoaded]);
 
   return null;
 }

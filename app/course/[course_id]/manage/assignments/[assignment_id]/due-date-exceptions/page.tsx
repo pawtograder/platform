@@ -8,6 +8,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useCourse, useCourseController, useStudentRoster } from "@/hooks/useCourseController";
 import { useListTableControllerValues, useTableControllerValueById } from "@/lib/TableController";
+import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { Assignment, AssignmentDueDateException, AssignmentGroup, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -608,16 +609,7 @@ export default function DueDateExceptions() {
   const course = useCourse();
   const { assignment_id } = useParams();
   const { assignments, assignmentGroupsWithMembers, assignmentDueDateExceptions } = useCourseController();
-  //Ensure all data is fresh
-  useEffect(() => {
-    assignments.refetchAll();
-  }, [assignments]);
-  useEffect(() => {
-    assignmentDueDateExceptions.refetchAll();
-  }, [assignmentDueDateExceptions]);
-  useEffect(() => {
-    assignmentGroupsWithMembers.refetchAll();
-  }, [assignmentGroupsWithMembers]);
+  // TableControllers already hydrate/fetch and stay realtime; avoid forced mount refetches on large classes.
   const controller = useCourseController();
 
   // Get assignment data
@@ -815,6 +807,11 @@ export default function DueDateExceptions() {
       }
     }
   });
+  const tableRows = table.getRowModel().rows;
+  const rowWindow = useVirtualizedRowWindow(tableRows, {
+    estimatedRowHeight: 68,
+    minRowsForVirtualization: 60
+  });
 
   if (!assignment) {
     return <Skeleton height="400px" width="100%" />;
@@ -849,59 +846,71 @@ export default function DueDateExceptions() {
       </Box>
 
       {/* Table */}
-      <Box w="100%" overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto">
-        <Table.Root minW="0" w="100%">
-          <Table.Header>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <Table.Row key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <Table.ColumnHeader
-                    key={header.id}
-                    bg="bg.muted"
-                    style={{
-                      position: "sticky",
-                      top: 0,
-                      zIndex: 20
-                    }}
-                  >
-                    {header.isPlaceholder ? null : (
-                      <Text onClick={header.column.getToggleSortingHandler()}>
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        {{
-                          asc: (
+      <Box w="100%" overflowX="auto" maxW="100vw">
+        <Box ref={rowWindow.containerRef} onScroll={rowWindow.onScroll} overflowY="auto" maxH="70vh">
+          <Table.Root minW="0" w="100%">
+            <Table.Header>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <Table.Row key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <Table.ColumnHeader
+                      key={header.id}
+                      bg="bg.muted"
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 20
+                      }}
+                    >
+                      {header.isPlaceholder ? null : (
+                        <Text onClick={header.column.getToggleSortingHandler()}>
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {{
+                            asc: (
+                              <Icon size="md">
+                                <FaSortUp />
+                              </Icon>
+                            ),
+                            desc: (
+                              <Icon size="md">
+                                <FaSortDown />
+                              </Icon>
+                            )
+                          }[header.column.getIsSorted() as string] ?? (
                             <Icon size="md">
-                              <FaSortUp />
+                              <FaSort />
                             </Icon>
-                          ),
-                          desc: (
-                            <Icon size="md">
-                              <FaSortDown />
-                            </Icon>
-                          )
-                        }[header.column.getIsSorted() as string] ?? (
-                          <Icon size="md">
-                            <FaSort />
-                          </Icon>
-                        )}
-                      </Text>
-                    )}
-                  </Table.ColumnHeader>
-                ))}
-              </Table.Row>
-            ))}
-          </Table.Header>
-          <Table.Body>
-            {table.getRowModel().rows.map((row, idx) => (
-              <Table.Row key={row.id} bg={idx % 2 === 0 ? "bg.subtle" : undefined}>
-                {row.getVisibleCells().map((cell) => (
-                  <Table.Cell key={cell.id} p={2}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </Table.Cell>
-                ))}
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
+                          )}
+                        </Text>
+                      )}
+                    </Table.ColumnHeader>
+                  ))}
+                </Table.Row>
+              ))}
+            </Table.Header>
+            <Table.Body>
+              {rowWindow.shouldVirtualize && rowWindow.paddingTop > 0 ? (
+                <Table.Row>
+                  <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
+                </Table.Row>
+              ) : null}
+              {rowWindow.visibleRows.map((row, idx) => (
+                <Table.Row key={row.id} bg={idx % 2 === 0 ? "bg.subtle" : undefined}>
+                  {row.getVisibleCells().map((cell) => (
+                    <Table.Cell key={cell.id} p={2}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </Table.Cell>
+                  ))}
+                </Table.Row>
+              ))}
+              {rowWindow.shouldVirtualize && rowWindow.paddingBottom > 0 ? (
+                <Table.Row>
+                  <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
+                </Table.Row>
+              ) : null}
+            </Table.Body>
+          </Table.Root>
+        </Box>
       </Box>
 
       <Text>{studentData.length} Students</Text>
