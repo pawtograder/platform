@@ -81,8 +81,7 @@ export default function ReviewsTable({
   const gradingRubric = useMemo(() => {
     if (!rubricsReady) return undefined;
     return (
-      rubrics.find((r) => r.review_round === "grading-review") ??
-      rubrics.find((r) => r.review_round !== "self-review")
+      rubrics.find((r) => r.review_round === "grading-review") ?? rubrics.find((r) => r.review_round !== "self-review")
     );
   }, [rubrics, rubricsReady]);
   const gradingRubricParts = useRubricParts(gradingRubric?.id);
