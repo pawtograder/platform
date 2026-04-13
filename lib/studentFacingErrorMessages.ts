@@ -1,8 +1,17 @@
+export type StudentFacingErrorContext = {
+  isStudent?: boolean;
+  /** When set with `isStudent`, refines Postgres permission errors during self-review */
+  rubricReviewRound?: string | null;
+};
+
+const SELF_REVIEW_PAST_DUE_MESSAGE =
+  "The self-review due date has passed, so you can no longer add or change checks. If you need more time, ask your instructor.";
+
 /**
  * Maps Supabase/PostgREST errors and other thrown values into plain-language messages for students.
  * Prefer this over raw `error.message` when the underlying string may be cryptic (e.g. SQL fragments).
  */
-export function getStudentFacingErrorMessage(error: unknown): string {
+export function getStudentFacingErrorMessage(error: unknown, context?: StudentFacingErrorContext): string {
   if (error === null || error === undefined) {
     return "Something went wrong. Please try again.";
   }
@@ -11,6 +20,15 @@ export function getStudentFacingErrorMessage(error: unknown): string {
   }
 
   const code = getErrorCode(error);
+
+  if (
+    code === "42501" &&
+    context?.isStudent &&
+    context.rubricReviewRound === "self-review"
+  ) {
+    return SELF_REVIEW_PAST_DUE_MESSAGE;
+  }
+
   const message = getErrorProperty(error, "message");
   const details = getErrorProperty(error, "details");
   const hint = getErrorProperty(error, "hint");
@@ -37,7 +55,8 @@ export function getStudentFacingErrorMessage(error: unknown): string {
 function getErrorCode(error: unknown): string | undefined {
   if (typeof error === "object" && error !== null && "code" in error) {
     const c = (error as { code?: unknown }).code;
-    return typeof c === "string" ? c : undefined;
+    if (typeof c === "string") return c;
+    if (typeof c === "number") return String(c);
   }
   return undefined;
 }
