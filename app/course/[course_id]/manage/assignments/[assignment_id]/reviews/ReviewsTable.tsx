@@ -934,6 +934,11 @@ export default function ReviewsTable({
     activeProfileIds
   ]);
 
+  const currentRows = getRowModel().rows;
+  const rowWindow = useVirtualizedRowWindow(currentRows, {
+    estimatedRowHeight: 72,
+    minRowsForVirtualization: 80
+  });
   if (!rubricsReady || isLoadingReviewAssignments) {
     return <Spinner />;
   }
@@ -949,12 +954,6 @@ export default function ReviewsTable({
   if (isError) {
     return <Text color="red.500">Error loading reviews: {error?.message}</Text>;
   }
-
-  const currentRows = getRowModel().rows;
-  const rowWindow = useVirtualizedRowWindow(currentRows, {
-    estimatedRowHeight: 72,
-    minRowsForVirtualization: 80
-  });
   const hasUnassigned = variant === "grading" && unassignedSummary.unassigned > 0;
 
   const tableTitle = variant === "self-review" ? "Self-review assignments" : "Grading review assignments";

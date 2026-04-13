@@ -36,7 +36,7 @@ type DueDateExceptionRow = {
  * Renders all due date exceptions for the class in one virtualized table.
  */
 export default function DueDateExceptionsTable() {
-  const unsortedAssignments = useAssignments() ?? [];
+  const unsortedAssignments = useAssignments();
   const students = useAllStudentProfiles();
   const { assignmentDueDateExceptions, assignmentGroupsWithMembers } = useCourseController();
   const dueDateExceptions = useListTableControllerValues(assignmentDueDateExceptions, () => true);
@@ -51,7 +51,7 @@ export default function DueDateExceptionsTable() {
 
   const assignments = useMemo(
     () =>
-      [...unsortedAssignments].sort((a, b) => {
+      [...(unsortedAssignments ?? [])].sort((a, b) => {
         const aDate = new Date(a.due_date);
         const bDate = new Date(b.due_date);
         return aDate.getTime() - bDate.getTime();
@@ -214,7 +214,7 @@ export default function DueDateExceptionsTable() {
         )
       }
     ],
-    [assignmentDueDateExceptions, timeFormatter]
+    [assignmentDueDateExceptions]
   );
 
   const table = useReactTable({

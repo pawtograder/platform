@@ -3,8 +3,6 @@
 import { Box, Container, List, Text, VStack } from "@chakra-ui/react";
 import ClassLateTokenSettings from "./classLateTokenSettings";
 import DueDateExceptionsTable from "./tables/dueDateExceptionsTable";
-import { useCourseController } from "@/hooks/useCourseController";
-import { useEffect } from "react";
 
 /**
  * Assignment Exceptions page - the default page for due date extensions.
