@@ -21,7 +21,11 @@ export function getStudentFacingErrorMessage(error: unknown, context?: StudentFa
 
   const code = getErrorCode(error);
 
-  if (code === "42501" && context?.isStudent && context.rubricReviewRound === "self-review") {
+  if (
+    code === "42501" &&
+    context?.isStudent &&
+    context.rubricReviewRound === "self-review"
+  ) {
     return SELF_REVIEW_PAST_DUE_MESSAGE;
   }
 

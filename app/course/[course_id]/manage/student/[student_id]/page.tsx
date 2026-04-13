@@ -3,7 +3,6 @@ import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import {
   useAllStudentProfiles,
-  useClassSections,
   useCourseController,
   useIsDroppedStudent,
   useLabSections,
@@ -15,14 +14,14 @@ import {
   useTableControllerTableValues,
   useTableControllerValueById
 } from "@/lib/TableController";
-import type { Assignment, AssignmentGroupWithMembersAndMentor, LabSection } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, LabSection } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Card, HStack, Heading, Separator, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaBookOpen, FaChalkboardTeacher, FaUsers } from "react-icons/fa";
+import { FaChalkboardTeacher, FaUsers } from "react-icons/fa";
 import { MdOutlineScience } from "react-icons/md";
 
 type HelpRequest = {
@@ -98,7 +97,7 @@ export default function StudentPage() {
   const { course_id, student_id } = useParams();
   const router = useRouter();
   const controller = useCourseController();
-  const { client, gradebookColumns, assignmentGroupsWithMembers } = controller;
+  const { client, gradebookColumns } = controller;
   const [studentSummary, setStudentSummary] = useState<StudentSummary | null>(null);
   const columns = useTableControllerTableValues(gradebookColumns);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -108,40 +107,17 @@ export default function StudentPage() {
   const isDroppedStudent = useIsDroppedStudent(student_id as string);
   const allStudents = useAllStudentProfiles();
   const labSections = useLabSections();
-  const classSections = useClassSections();
-  const assignmentGroups = useTableControllerTableValues(assignmentGroupsWithMembers);
   const userRoles = useUserRolesWithProfiles();
   const profiles = useTableControllerTableValues(controller.profiles);
 
-  const studentRoleForPage = useMemo(() => {
-    const sid = student_id as string;
-    return userRoles.find((role) => role.private_profile_id === sid || role.public_profile_id === sid);
-  }, [userRoles, student_id]);
-
-  const studentEmail =
-    studentRoleForPage?.users && !Array.isArray(studentRoleForPage.users) ? studentRoleForPage.users.email : null;
-
-  // Lecture section (Canvas/SIS section), if enrolled in one
-  const lectureSection = useMemo(() => {
-    if (!studentRoleForPage?.class_section_id) return null;
-    return classSections.find((s) => s.id === studentRoleForPage.class_section_id) ?? null;
-  }, [studentRoleForPage?.class_section_id, classSections]);
-
   // Get student's lab section
   const studentLabSection = useMemo(() => {
-    if (!studentRoleForPage?.lab_section_id) return null;
-    return labSections.find((section) => section.id === studentRoleForPage.lab_section_id) || null;
-  }, [studentRoleForPage?.lab_section_id, labSections]);
-
-  const assignmentGroupByAssignmentId = useMemo(() => {
-    const sid = student_id as string;
-    const map = new Map<number, AssignmentGroupWithMembersAndMentor>();
-    for (const g of assignmentGroups as AssignmentGroupWithMembersAndMentor[]) {
-      if (!g.assignment_groups_members?.some((m) => m.profile_id === sid)) continue;
-      map.set(g.assignment_id, g);
-    }
-    return map;
-  }, [assignmentGroups, student_id]);
+    const studentRole = userRoles.find(
+      (role) => role.private_profile_id === student_id || role.public_profile_id === student_id
+    );
+    if (!studentRole?.lab_section_id) return null;
+    return labSections.find((section) => section.id === studentRole.lab_section_id) || null;
+  }, [userRoles, labSections, student_id]);
 
   // Get lab section leaders
   const labSectionLeadersFilter = useCallback(
@@ -279,41 +255,6 @@ export default function StudentPage() {
         </Box>
       </HStack>
 
-      {studentEmail && (
-        <Text fontSize="sm" color="fg.muted">
-          {studentEmail}
-        </Text>
-      )}
-
-      {/* Lecture section (e.g. Canvas), if enrolled */}
-      {lectureSection && (
-        <Card.Root size="sm" variant="subtle">
-          <Card.Body p={3}>
-            <HStack gap={2} mb={2}>
-              <FaBookOpen />
-              <Text fontWeight="medium" fontSize="sm">
-                Lecture section
-              </Text>
-            </HStack>
-            <VStack align="start" gap={1}>
-              <Text fontWeight="medium" fontSize="sm">
-                {lectureSection.name}
-              </Text>
-              {lectureSection.meeting_times && (
-                <Text fontSize="xs" color="fg.muted">
-                  {lectureSection.meeting_times}
-                </Text>
-              )}
-              {lectureSection.meeting_location && (
-                <Text fontSize="xs" color="fg.muted">
-                  {lectureSection.meeting_location}
-                </Text>
-              )}
-            </VStack>
-          </Card.Body>
-        </Card.Root>
-      )}
-
       {/* Lab Section Card */}
       {studentLabSection && (
         <Card.Root size="sm" variant="subtle">
@@ -365,7 +306,6 @@ export default function StudentPage() {
                 <Table.Header>
                   <Table.Row>
                     <Table.ColumnHeader>Title</Table.ColumnHeader>
-                    <Table.ColumnHeader minW={{ md: "200px" }}>Group</Table.ColumnHeader>
                     <Table.ColumnHeader textAlign="right">Submission #</Table.ColumnHeader>
                     <Table.ColumnHeader>Submission Time</Table.ColumnHeader>
                     <Table.ColumnHeader textAlign="right">Autograder Score</Table.ColumnHeader>
@@ -375,117 +315,94 @@ export default function StudentPage() {
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
-                  {studentSummary.assignments.map((a) => {
-                    const group = assignmentGroupByAssignmentId.get(a.assignment_id);
-                    const mateNames =
-                      group?.assignment_groups_members
-                        ?.filter((m) => m.profile_id !== (student_id as string))
-                        .map((m) => profileIdToName.get(m.profile_id))
-                        .filter((n): n is string => !!n) ?? [];
-                    const mentorName =
-                      group?.mentor_profile_id && group.mentor && !Array.isArray(group.mentor)
-                        ? group.mentor.name
-                        : null;
-                    return (
-                      <Table.Row key={a.assignment_id}>
-                        <Table.Cell
-                          maxW={{ base: 56, md: 96 }}
-                          overflow="hidden"
-                          textOverflow="ellipsis"
-                          whiteSpace="nowrap"
-                        >
-                          {a.submission_id ? (
-                            <Link
-                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                            >
-                              {a.title}
-                            </Link>
-                          ) : (
-                            a.title
-                          )}
-                        </Table.Cell>
-                        <Table.Cell fontSize="xs" verticalAlign="top">
-                          {group ? (
-                            <VStack align="start" gap={0.5}>
-                              <Text fontWeight="medium">{group.name}</Text>
-                              {mateNames.length > 0 && <Text color="fg.muted">With: {mateNames.join(", ")}</Text>}
-                              {mentorName && <Text color="fg.muted">Mentor: {mentorName}</Text>}
-                            </VStack>
-                          ) : (
-                            <Text color="fg.muted">—</Text>
-                          )}
-                        </Table.Cell>
-                        <Table.Cell textAlign="right">
-                          {a.submission_id && a.submission_ordinal != null ? (
-                            <Link
-                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                            >
-                              #{a.submission_ordinal}
-                            </Link>
-                          ) : (
-                            "—"
-                          )}
-                        </Table.Cell>
-                        <Table.Cell>
-                          {a.submission_id ? (
-                            <Link
-                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                            >
-                              {a.submission_timestamp ? (
-                                <TimeZoneAwareDate date={a.submission_timestamp} format="compact" />
-                              ) : (
-                                "—"
-                              )}
-                            </Link>
-                          ) : a.submission_timestamp ? (
-                            <TimeZoneAwareDate date={a.submission_timestamp} format="compact" />
-                          ) : (
-                            "—"
-                          )}
-                        </Table.Cell>
-                        <Table.Cell textAlign="right">
-                          {a.submission_id ? (
-                            <Link
-                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                            >
-                              {a.autograder_score ?? "—"}
-                            </Link>
-                          ) : (
-                            (a.autograder_score ?? "—")
-                          )}
-                        </Table.Cell>
-                        <Table.Cell textAlign="right">
-                          {a.submission_id ? (
-                            <Link
-                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                            >
-                              {a.total_score ?? "—"} / {a.total_points ?? "—"}
-                            </Link>
-                          ) : (
-                            (a.total_score ?? "—")
-                          )}
-                        </Table.Cell>
-                        <Table.Cell>
-                          {a.effective_due_date ? (
-                            a.submission_id ? (
-                              <Link
-                                href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
-                              >
-                                <TimeZoneAwareDate date={a.effective_due_date} format="compact" />
-                              </Link>
+                  {studentSummary.assignments.map((a) => (
+                    <Table.Row key={a.assignment_id}>
+                      <Table.Cell
+                        maxW={{ base: 56, md: 96 }}
+                        overflow="hidden"
+                        textOverflow="ellipsis"
+                        whiteSpace="nowrap"
+                      >
+                        {a.submission_id ? (
+                          <Link
+                            href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                          >
+                            {a.title}
+                          </Link>
+                        ) : (
+                          a.title
+                        )}
+                      </Table.Cell>
+                      <Table.Cell textAlign="right">
+                        {a.submission_id && a.submission_ordinal != null ? (
+                          <Link
+                            href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                          >
+                            #{a.submission_ordinal}
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
+                        {a.submission_id ? (
+                          <Link
+                            href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                          >
+                            {a.submission_timestamp ? (
+                              <TimeZoneAwareDate date={a.submission_timestamp} format="compact" />
                             ) : (
+                              "—"
+                            )}
+                          </Link>
+                        ) : a.submission_timestamp ? (
+                          <TimeZoneAwareDate date={a.submission_timestamp} format="compact" />
+                        ) : (
+                          "—"
+                        )}
+                      </Table.Cell>
+                      <Table.Cell textAlign="right">
+                        {a.submission_id ? (
+                          <Link
+                            href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                          >
+                            {a.autograder_score ?? "—"}
+                          </Link>
+                        ) : (
+                          (a.autograder_score ?? "—")
+                        )}
+                      </Table.Cell>
+                      <Table.Cell textAlign="right">
+                        {a.submission_id ? (
+                          <Link
+                            href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                          >
+                            {a.total_score ?? "—"} / {a.total_points ?? "—"}
+                          </Link>
+                        ) : (
+                          (a.total_score ?? "—")
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
+                        {a.effective_due_date ? (
+                          a.submission_id ? (
+                            <Link
+                              href={`/course/${course_id}/assignments/${a.assignment_id}/submissions/${a.submission_id}`}
+                            >
                               <TimeZoneAwareDate date={a.effective_due_date} format="compact" />
-                            )
+                            </Link>
                           ) : (
-                            "—"
-                          )}
-                        </Table.Cell>
-                        <Table.Cell>
-                          <AdjustDueDateCell assignmentId={a.assignment_id} studentId={student_id as string} />
-                        </Table.Cell>
-                      </Table.Row>
-                    );
-                  })}
+                            <TimeZoneAwareDate date={a.effective_due_date} format="compact" />
+                          )
+                        ) : (
+                          "—"
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
+                        <AdjustDueDateCell assignmentId={a.assignment_id} studentId={student_id as string} />
+                      </Table.Cell>
+                    </Table.Row>
+                  ))}
                 </Table.Body>
               </Table.Root>
             </Box>
