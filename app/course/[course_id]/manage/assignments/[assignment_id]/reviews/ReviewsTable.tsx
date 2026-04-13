@@ -7,11 +7,11 @@ import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useActiveSubmissions, useRubricParts, useRubrics } from "@/hooks/useAssignment";
+import { useActiveSubmissions, useAssignmentController, useRubricParts, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import TableController from "@/lib/TableController";
+import TableController, { useIsTableControllerReady } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { EmptyState, HStack, IconButton, Input, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
@@ -74,16 +74,22 @@ export default function ReviewsTable({
   const { role: course } = useClassProfiles();
   const { classRealTimeController, userRolesWithProfiles, assignmentDueDateExceptions, assignmentGroupsWithMembers } =
     useCourseController();
+  const assignmentController = useAssignmentController();
+  const rubricsReady = useIsTableControllerReady(assignmentController.rubricsController);
   const rubrics = useRubrics();
   const activeSubmissions = useActiveSubmissions();
-  const gradingRubric = useMemo(
-    () =>
-      rubrics?.find((r) => r.review_round === "grading-review") ??
-      rubrics?.find((r) => r.review_round !== "self-review"),
-    [rubrics]
-  );
+  const gradingRubric = useMemo(() => {
+    if (!rubricsReady) return undefined;
+    return (
+      rubrics.find((r) => r.review_round === "grading-review") ??
+      rubrics.find((r) => r.review_round !== "self-review")
+    );
+  }, [rubrics, rubricsReady]);
   const gradingRubricParts = useRubricParts(gradingRubric?.id);
-  const selfReviewRubric = useMemo(() => rubrics?.find((r) => r.review_round === "self-review"), [rubrics]);
+  const selfReviewRubric = useMemo(() => {
+    if (!rubricsReady) return undefined;
+    return rubrics.find((r) => r.review_round === "self-review");
+  }, [rubrics, rubricsReady]);
   const supabase = createClient();
   const [isExporting, setIsExporting] = useState(false);
 
@@ -143,6 +149,9 @@ export default function ReviewsTable({
 
   // CSV Export function
   const exportToCSV = useCallback(async () => {
+    if (!rubricsReady) {
+      return;
+    }
     setIsExporting(true);
     try {
       // Fetch all review assignments data
@@ -385,6 +394,7 @@ export default function ReviewsTable({
   }, [
     assignmentId,
     variant,
+    rubricsReady,
     selfReviewRubric?.id,
     supabase,
     getReviewStatus,
@@ -626,6 +636,11 @@ export default function ReviewsTable({
   useEffect(() => {
     if (!classRealTimeController) return;
 
+    if (!rubricsReady) {
+      setTableController(undefined);
+      return;
+    }
+
     let query = supabase.from("review_assignments").select(joinedSelect).eq("assignment_id", Number(assignmentId));
 
     if (variant === "grading") {
@@ -649,7 +664,7 @@ export default function ReviewsTable({
     return () => {
       tc.close();
     };
-  }, [classRealTimeController, supabase, assignmentId, variant, selfReviewRubric?.id]);
+  }, [classRealTimeController, supabase, assignmentId, variant, selfReviewRubric?.id, rubricsReady]);
 
   const table = useTableControllerTable<
     "review_assignments",
@@ -919,7 +934,7 @@ export default function ReviewsTable({
     activeProfileIds
   ]);
 
-  if (isLoadingReviewAssignments) {
+  if (!rubricsReady || isLoadingReviewAssignments) {
     return <Spinner />;
   }
 

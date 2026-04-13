@@ -511,18 +511,30 @@ export function RubricCheckComment({
     }
   }, [comment?.regrade_request_id]);
 
+  const rubricForCriteria = useRubricById(criteria?.rubric_id);
+  const isStudent = useIsStudent();
+
   const handleEditComment = useCallback(
     async (message: string) => {
-      if (comment_type === "submission") {
-        await submissionController.submission_comments.update(comment_id, { comment: message });
-      } else if (comment_type === "file") {
-        await submissionController.submission_file_comments.update(comment_id, { comment: message });
-      } else if (comment_type === "artifact") {
-        await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
+      try {
+        if (comment_type === "submission") {
+          await submissionController.submission_comments.update(comment_id, { comment: message });
+        } else if (comment_type === "file") {
+          await submissionController.submission_file_comments.update(comment_id, { comment: message });
+        } else if (comment_type === "artifact") {
+          await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
+        }
+      } catch (error: unknown) {
+        throw new Error(
+          getStudentFacingErrorMessage(error, {
+            isStudent,
+            rubricReviewRound: rubricForCriteria?.review_round ?? null
+          })
+        );
       }
       setIsEditing(false);
     },
-    [comment_id, comment_type, setIsEditing, submissionController]
+    [comment_id, comment_type, submissionController, isStudent, rubricForCriteria?.review_round]
   );
 
   const linkedFileId =
@@ -1354,16 +1366,12 @@ function SubmissionCommentForm({
           try {
             await submissionController.submission_comments.create(values);
           } catch (error: unknown) {
-            const code =
-              typeof error === "object" && error !== null && "code" in error
-                ? String((error as { code?: string }).code ?? "")
-                : "";
-            if (isStudent && rubricForCriteria?.review_round === "self-review" && code === "42501") {
-              throw new Error(
-                "The self-review due date has passed, so you can no longer add or change checks. If you need more time, ask your instructor."
-              );
-            }
-            throw new Error(getStudentFacingErrorMessage(error));
+            throw new Error(
+              getStudentFacingErrorMessage(error, {
+                isStudent,
+                rubricReviewRound: rubricForCriteria?.review_round ?? null
+              })
+            );
           }
         }}
         defaultSingleLine={true}
