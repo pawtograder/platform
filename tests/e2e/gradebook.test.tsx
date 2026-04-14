@@ -627,8 +627,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     expect(studCellErr).toBeNull();
     expect(studCell).toBeNull();
 
-    // Atomic release: release + clear instructor_only in one transaction
-    const { error: releaseIoErr } = await supabase.rpc("release_instructor_only_gradebook_column", {
+    // Atomic release: release + clear instructor_only in one transaction (instructor JWT, not service role)
+    const instructorClient = await createAuthenticatedClient(instructor!);
+    const { error: releaseIoErr } = await instructorClient.rpc("release_instructor_only_gradebook_column", {
       p_column_id: ioColumnId
     });
     if (releaseIoErr) {
