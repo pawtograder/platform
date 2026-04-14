@@ -1200,12 +1200,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             await recordWorkflowRunError({
               name: mismatchMessage,
               data: {
-                type: "security_error"
+                type: "user_visible_error"
               },
-              is_private: true
+              is_private: false
             });
           } else {
-            throw new SecurityError(mismatchMessage);
+            throw new UserVisibleError(mismatchMessage, 400);
           }
         }
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
