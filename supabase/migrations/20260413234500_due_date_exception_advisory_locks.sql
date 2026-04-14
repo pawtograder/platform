@@ -34,6 +34,7 @@ $$;
 CREATE OR REPLACE FUNCTION "public"."finalize_submission_early"("this_assignment_id" bigint, "this_profile_id" uuid)
 RETURNS json
 LANGUAGE "plpgsql" SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     this_assignment public.assignments;
@@ -258,7 +259,7 @@ begin
       )
       and adde.assignment_id = _assignment_id
       and adde.class_id = _class_id
-      and adde.hours < 0
+      and (adde.hours < 0 or (adde.hours = 0 and adde.minutes < 0))
     ) into existing_negative_exception;
 
     if existing_negative_exception then
