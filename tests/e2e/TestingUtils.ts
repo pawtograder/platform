@@ -2386,6 +2386,7 @@ export async function createAssignmentsAndGradebookColumns({
     score_expression,
     dependencies,
     released = false,
+    instructor_only = false,
     sort_order,
     rateLimitManager
   }: {
@@ -2397,6 +2398,7 @@ export async function createAssignmentsAndGradebookColumns({
     score_expression?: string;
     dependencies?: { assignments?: number[]; gradebook_columns?: number[] };
     released?: boolean;
+    instructor_only?: boolean;
     sort_order?: number;
     rateLimitManager?: RateLimitManager;
   }): Promise<{
@@ -2463,6 +2465,7 @@ export async function createAssignmentsAndGradebookColumns({
           score_expression,
           dependencies: finalDependencies ? finalDependencies : null,
           released,
+          instructor_only: score_expression ? instructor_only : false,
           sort_order
         })
         .select("id, name, slug, max_score, score_expression, sort_order")
