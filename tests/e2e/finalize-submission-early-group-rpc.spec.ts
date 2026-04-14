@@ -7,8 +7,8 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   supabase
-} from "./TestingUtils";
-import type { TestingUser } from "./TestingUtils";
+} from "@/tests/e2e/TestingUtils";
+import type { TestingUser } from "@/tests/e2e/TestingUtils";
 
 type FinalizeSubmissionResponse = {
   success: boolean;

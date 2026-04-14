@@ -105,7 +105,29 @@ BEGIN
     hours_to_subtract := -1 * EXTRACT(EPOCH FROM (effective_due_date - utc_now)) / 3600;
     minutes_to_subtract := -1 * (EXTRACT(EPOCH FROM (effective_due_date - utc_now)) % 3600) / 60;
 
-    -- Insert the negative due date exception
+    -- Get the active submission id for this profile
+    SELECT id INTO this_active_submission_id
+    FROM public.submissions
+    WHERE ((profile_id IS NOT NULL AND profile_id = this_profile_id) OR (assignment_group_id IS NOT NULL AND assignment_group_id = this_group_id))
+    AND assignment_id = this_assignment_id
+    AND is_active = true
+    LIMIT 1;
+
+    -- If active submission does not exist, abort
+    IF this_active_submission_id IS NULL THEN
+        RETURN json_build_object('success', false, 'error', 'No active submission found');
+    END IF;
+
+    -- Check if there's already a review assignment for this student for this assignment
+    IF EXISTS (
+        SELECT 1 FROM review_assignments
+        WHERE assignment_id = this_assignment.id
+        AND assignee_profile_id = this_profile_id
+    ) THEN
+        RETURN json_build_object('success', false, 'error', 'Self review already assigned');
+    END IF;
+
+    -- Insert the negative due date exception only after validation checks pass
     IF this_group_id IS NOT NULL THEN
         INSERT INTO assignment_due_date_exceptions (
             class_id,
@@ -142,28 +164,6 @@ BEGIN
             minutes_to_subtract,
             0
         );
-    END IF;
-
-    -- Get the active submission id for this profile
-    SELECT id INTO this_active_submission_id
-    FROM public.submissions
-    WHERE ((profile_id IS NOT NULL AND profile_id = this_profile_id) OR (assignment_group_id IS NOT NULL AND assignment_group_id = this_group_id))
-    AND assignment_id = this_assignment_id
-    AND is_active = true
-    LIMIT 1;
-
-    -- If active submission does not exist, abort
-    IF this_active_submission_id IS NULL THEN
-        RETURN json_build_object('success', false, 'error', 'No active submission found');
-    END IF;
-
-    -- Check if there's already a review assignment for this student for this assignment
-    IF EXISTS (
-        SELECT 1 FROM review_assignments
-        WHERE assignment_id = this_assignment.id
-        AND assignee_profile_id = this_profile_id
-    ) THEN
-        RETURN json_build_object('success', false, 'error', 'Self review already assigned');
     END IF;
 
     -- Create or get existing submission review
@@ -358,6 +358,9 @@ BEGIN
     RETURN NEW;
 END;
 $function$;
+
+ALTER FUNCTION public.apply_extensions_to_new_assignment()
+  SET search_path = public, pg_temp;
 
 CREATE OR REPLACE FUNCTION public.create_assignment_exceptions_from_extension()
 RETURNS trigger
