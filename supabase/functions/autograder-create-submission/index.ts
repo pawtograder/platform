@@ -27,6 +27,23 @@ import { Buffer } from "node:buffer";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno";
 
+const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
+/**
+ * User-facing explanation when the student's workflow file hash does not match the course handout.
+ * Same text is shown to students (API error) and recorded for instructors (workflow_run_error).
+ */
+function formatGradeYmlWorkflowMismatchMessage(syncedRepoSha: string | null): string {
+  const restoreOneLiner = syncedRepoSha?.trim()
+    ? `git checkout ${syncedRepoSha.trim()} -- ${GRADE_WORKFLOW_PATH}`
+    : `git checkout $(git rev-list --max-parents=0 HEAD | tail -n 1) -- ${GRADE_WORKFLOW_PATH}`;
+  return [
+    `Your ${GRADE_WORKFLOW_PATH} file does not match the expected contents for this assignment (it may have been edited, or your copy may differ from the handout).`,
+    "Restore the file from your repository's initial commit, then commit and push. From your assignment repo:",
+    restoreOneLiner
+  ].join(" ");
+}
+
 function sha256Hex(buf: Uint8Array): string {
   const hash = createHash("sha256");
   hash.update(buf);
@@ -1177,18 +1194,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         ) {
           scope.setTag("hash_in_db", config.workflow_sha);
           scope.setTag("hash_in_student_repo", hashStr);
-          const errorMessage = `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}.`;
+          const mismatchMessage = formatGradeYmlWorkflowMismatchMessage(repoData.synced_repo_sha);
           Sentry.captureMessage("workflow sha mismatch", scope);
           if (isGraderOrInstructor) {
             await recordWorkflowRunError({
-              name: `.github/workflows/grade.yml SHA is different from that in handout!!! You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
+              name: mismatchMessage,
               data: {
                 type: "security_error"
               },
               is_private: true
             });
           } else {
-            throw new SecurityError(errorMessage);
+            throw new SecurityError(mismatchMessage);
           }
         }
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
