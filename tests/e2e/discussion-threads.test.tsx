@@ -60,9 +60,12 @@ test.describe("Discussion Thread Page", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
+    // Wait for the page to stabilize
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await page.getByText("New Post").click();
-    await argosScreenshot(page, "Create New Thread Form");
+    // Wait for the form to appear
     await expect(page.getByRole("heading", { name: "New Discussion Thread" })).toBeVisible();
+    await argosScreenshot(page, "Create New Thread Form");
     await expect(page.getByText("Topic", { exact: true })).toBeVisible();
     // await expect(page.getByText("Assignments", { exact: true })).toBeVisible(); // Too annoying to test
     await expect(page.getByText("Questions and notes about assignments.")).toBeVisible();
@@ -130,6 +133,8 @@ test.describe("Discussion Thread Page", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
+    // Wait for the page to stabilize
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await page.getByText("New Post").click();
     // Test the form with a public thread
     await page.getByText("Anything else about the class").click();
@@ -306,6 +311,7 @@ test.describe("Custom Discussion Topics", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await page.getByText("New Post").click();
     await page.waitForURL("**/discussion/new");
 
