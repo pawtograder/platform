@@ -307,7 +307,7 @@ BEGIN
   WHERE id = p_column_id AND instructor_only = true;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Column % is not an instructor-only column or does not exist', p_column_id;
+    RAISE EXCEPTION 'Column % is not an instructor-only column', p_column_id;
   END IF;
 
   -- Step 2: Clear instructor_only — column now behaves normally; triggers recalc
