@@ -28,6 +28,7 @@ import * as submissionsCommand from "./commands/submissions";
 import * as helpRequestsCommand from "./commands/help-requests";
 import * as discussionsCommand from "./commands/discussions";
 import * as reviewsCommand from "./commands/reviews";
+import * as reposCommand from "./commands/repos";
 import { startLoginFlow, logout, getCurrentUser } from "./utils/auth";
 import { getCredentialsPath } from "./utils/credentials";
 import { logger, handleError } from "./utils/logger";
@@ -106,6 +107,7 @@ yargs(hideBin(process.argv))
   .command(helpRequestsCommand)
   .command(discussionsCommand)
   .command(reviewsCommand)
+  .command(reposCommand)
   .demandCommand(1, "You must specify a command")
   .strict()
   .help()

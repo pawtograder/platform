@@ -15,6 +15,9 @@
  *     - rubrics.list
  *     - rubrics.export
  *     - flashcards.list
+ *     - repos.list
+ *     - repos.sync_grade_workflow.context
+ *     - repos.cross_assignment_copy.context
  *
  *   WRITE (cli:write):
  *     - surveys.copy
@@ -44,6 +47,7 @@ import "./commands/rubrics.ts";
 import "./commands/flashcards.ts";
 import "./commands/surveys.ts";
 import "./commands/submissions.ts";
+import "./commands/repos.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({

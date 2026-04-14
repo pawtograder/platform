@@ -303,3 +303,71 @@ export interface SubmissionsArtifactsImportParams {
   overwrite?: boolean;
   dry_run?: boolean;
 }
+
+// ─── Repos (Edge metadata + local git via CLI client) ───────────────────────
+
+export interface ReposListParams {
+  class: string;
+  assignment: string;
+}
+
+export interface ReposSyncGradeWorkflowContextParams {
+  class: string;
+  assignment: string;
+}
+
+export interface ReposCrossAssignmentCopyContextParams {
+  class: string;
+  source_assignment: string;
+  target_assignment: string;
+}
+
+export interface ReposListRepositoryRow {
+  id: number;
+  repository: string;
+  profile_id: string | null;
+  assignment_group_id: number | null;
+}
+
+export interface ReposListData {
+  class: { id: number; slug: string; name: string };
+  assignment: {
+    id: number;
+    slug: string;
+    title: string;
+    template_repo: string | null;
+  };
+  repositories: ReposListRepositoryRow[];
+}
+
+export interface ReposSyncGradeWorkflowContextData {
+  assignment_id: number;
+  class_id: number;
+  assignment_title: string;
+  template_repo: string;
+  /** UTF-8 `.github/workflows/grade.yml` from template_repo @ default branch, base64-encoded */
+  grade_yml_base64: string;
+  /** Git blob SHA of that file from the GitHub Contents API (for commit messages) */
+  grade_yml_blob_sha: string | null;
+  repositories: ReposListRepositoryRow[];
+}
+
+export interface ReposCrossAssignmentCopyPair {
+  source_repository: string;
+  target_repository: string;
+  profile_id: string;
+  assignment_group_id: number | null;
+  /** True when now is strictly after calculate_final_due_date for the source assignment */
+  eligible_for_copy: boolean;
+  final_due_iso: string;
+}
+
+export interface ReposCrossAssignmentCopyContextData {
+  source_assignment_id: number;
+  target_assignment_id: number;
+  class_id: number;
+  source_assignment_title: string;
+  target_assignment_title: string;
+  pairs: ReposCrossAssignmentCopyPair[];
+  errors: { source_repository: string; reason: string }[];
+}
