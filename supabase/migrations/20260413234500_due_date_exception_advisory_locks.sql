@@ -86,24 +86,36 @@ BEGIN
         RETURN json_build_object('success', false, 'error', 'Self reviews not enabled for this assignment');
     END IF;
 
-    -- Check if there's already a negative due date exception (already finalized)
+    -- Check if there's already a finalize exception (negative hours) for this student/group.
     IF EXISTS (
         SELECT 1 FROM assignment_due_date_exceptions
         WHERE assignment_id = this_assignment_id
         AND (
-            (student_id = this_profile_id AND hours < 0) OR
-            (assignment_group_id = this_group_id AND hours < 0)
+            student_id = this_profile_id OR
+            (this_group_id IS NOT NULL AND assignment_group_id = this_group_id)
         )
+        AND (hours < 0 OR (hours = 0 AND minutes < 0))
     ) THEN
         RETURN json_build_object('success', false, 'error', 'Submission already finalized');
     END IF;
 
-    -- Get the effective due date (lab-based or regular)
-    effective_due_date := public.calculate_effective_due_date(this_assignment_id, this_profile_id);
+    -- Get the FINAL due date including all existing extensions (late tokens, instructor grants, etc.)
+    -- calculate_effective_due_date only returns the base date; calculate_final_due_date includes extensions.
+    effective_due_date := public.calculate_final_due_date(this_assignment_id, this_profile_id, this_group_id);
 
-    -- Calculate hours and minutes to subtract from the effective due date
+    -- Reject if the student is at or past their actual deadline
+    IF utc_now >= effective_due_date THEN
+        RETURN json_build_object('success', false, 'error', 'Cannot finalize early after the due date has passed');
+    END IF;
+
+    -- Calculate hours and minutes to subtract from the final due date
     hours_to_subtract := -1 * EXTRACT(EPOCH FROM (effective_due_date - utc_now)) / 3600;
     minutes_to_subtract := -1 * (EXTRACT(EPOCH FROM (effective_due_date - utc_now)) % 3600) / 60;
+
+    -- Safety net: the result must always be negative (moving the deadline earlier)
+    IF hours_to_subtract >= 0 AND minutes_to_subtract >= 0 THEN
+        RETURN json_build_object('success', false, 'error', 'Cannot finalize early after the due date has passed');
+    END IF;
 
     -- Get the active submission id for this profile
     SELECT id INTO this_active_submission_id
