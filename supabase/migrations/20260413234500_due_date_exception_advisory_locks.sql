@@ -44,7 +44,7 @@ DECLARE
     existing_submission_review_id bigint;
     hours_to_subtract integer;
     minutes_to_subtract integer;
-    utc_now TIMESTAMP := date_trunc('minute', now() + interval '59 second');
+    utc_now TIMESTAMP WITH TIME ZONE := date_trunc('minute', now() + interval '59 second');
     effective_due_date timestamp with time zone;
 BEGIN
     -- Get the assignment first
