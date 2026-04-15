@@ -53,7 +53,7 @@ import {
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
-import { submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
+import { graderResultsHasAutograderTestsOrOutput, submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
@@ -1331,6 +1331,21 @@ function TestResults() {
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
   const hasBuildError = submission.grader_results?.lint_output === "Gradle build failed";
+  const hasRealAutograderOutput = graderResultsHasAutograderTestsOrOutput(submission.grader_results);
+
+  if (!hasRealAutograderOutput) {
+    return (
+      <Box>
+        <Heading size="md" mt={2}>
+          Automated Check Results
+        </Heading>
+        <Text fontSize="sm" color="text.muted" mt={2}>
+          No automated test results for this submission. Open the Results tab to see submission status or any reported
+          errors.
+        </Text>
+      </Box>
+    );
+  }
 
   // Get all unique error pin matches for prominent display on build errors
   const getAllMatches = () => {
@@ -1610,6 +1625,7 @@ function UnGradedGradingSummary() {
   const submission = useSubmission();
   const { assignment } = useAssignmentController();
   const gradingRubric = useRubric("grading-review");
+  const hasRealAutograderOutput = graderResultsHasAutograderTestsOrOutput(submission.grader_results);
   const graderResultsMaxScore = submission.grader_results?.max_score;
   const totalMaxScore = assignment.total_points;
   const isCapped = gradingRubric?.cap_score_to_assignment_points ?? false;
@@ -1633,9 +1649,17 @@ function UnGradedGradingSummary() {
           <Text as="span" fontWeight="bold">
             Automated Checks:
           </Text>{" "}
-          {graderResultsMaxScore} points, results shown below.
+          {hasRealAutograderOutput ? (
+            <>{graderResultsMaxScore} points, results shown below.</>
+          ) : (
+            <>
+              No automated score recorded for this submission yet (the autograder may not have finished or produced
+              tests). See the Results tab for status.
+            </>
+          )}
         </List.Item>
-        {!isCapped &&
+        {hasRealAutograderOutput &&
+          !isCapped &&
           graderResultsMaxScore !== undefined &&
           totalMaxScore !== null &&
           graderResultsMaxScore > totalMaxScore && (

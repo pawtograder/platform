@@ -29,6 +29,8 @@ export type ExpressionContext = {
 export type ResolvedExprDependencyInstance = ExprDependencyInstance & {
   value: unknown;
   is_private: boolean;
+  /** True when the gradebook column is staff-only until released (student view frozen after release). */
+  instructor_only?: boolean;
 };
 export type ExprDependencyInstance = {
   class_id: number;
@@ -172,40 +174,32 @@ abstract class DependencySourceBase implements DependencySource {
     args?: unknown[];
   }): unknown {
     if (typeof key === "object") {
+      const matchPrivate = (k: string) =>
+        this.valuesMap.get(context.student_id)?.find((value) => {
+          if (value.key !== k || value.class_id !== class_id) return false;
+          if (value.instructor_only) {
+            return value.is_private === true;
+          }
+          return value.is_private === context.is_private_calculation;
+        })?.value;
       if (Array.isArray(key)) {
-        const ret = key.map(
-          (k) =>
-            this.valuesMap
-              .get(context.student_id)
-              ?.find(
-                (value) =>
-                  value.key === k && value.class_id === class_id && value.is_private === context.is_private_calculation
-              )?.value
-        );
+        const ret = key.map((k) => matchPrivate(k as string));
         return ret;
       }
       if (isDenseMatrix(key)) {
-        const ret = (key as Matrix<string>)
-          .toArray()
-          .map(
-            (k) =>
-              this.valuesMap
-                .get(context.student_id)
-                ?.find(
-                  (value) =>
-                    value.key === k &&
-                    value.class_id === class_id &&
-                    value.is_private === context.is_private_calculation
-                )?.value
-          );
+        const ret = (key as Matrix<string>).toArray().map((k) => matchPrivate(k as string));
         return ret;
       }
       throw new Error(`Unsupported key type: ${typeof key}`);
     }
     const studentValues = this.valuesMap.get(context.student_id);
-    const matchingValue = studentValues?.find(
-      (value) => value.key === key && value.class_id === class_id && value.is_private === context.is_private_calculation
-    );
+    const matchingValue = studentValues?.find((value) => {
+      if (value.key !== key || value.class_id !== class_id) return false;
+      if (value.instructor_only) {
+        return value.is_private === true;
+      }
+      return value.is_private === context.is_private_calculation;
+    });
     return matchingValue?.value;
   }
 }
@@ -543,19 +537,24 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     }
     const ret = allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
-      .map((studentRecord) => ({
-        key: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.slug ?? "unknown",
-        student_id: studentRecord.student_id!,
-        value: {
-          ...studentRecord,
-          score: studentRecord.score_override ?? studentRecord.score ?? null,
-          max_score: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.max_score ?? 0,
-          column_slug: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.slug ?? "unknown"
-        },
-        display: studentRecord.score?.toString() ?? "",
-        class_id: studentRecord.class_id,
-        is_private: studentRecord.is_private
-      }));
+      .map((studentRecord) => {
+        const col = this.gradebookColumnMap.get(studentRecord.gradebook_column_id!);
+        const instructorOnly = Boolean(col?.instructor_only);
+        return {
+          key: col?.slug ?? "unknown",
+          student_id: studentRecord.student_id!,
+          value: {
+            ...studentRecord,
+            score: studentRecord.score_override ?? studentRecord.score ?? null,
+            max_score: col?.max_score ?? 0,
+            column_slug: col?.slug ?? "unknown"
+          },
+          display: studentRecord.score?.toString() ?? "",
+          class_id: studentRecord.class_id,
+          is_private: studentRecord.is_private,
+          instructor_only: instructorOnly
+        };
+      });
     return ret;
   }
   expandKey({ key, class_id }: { key: string; class_id: number }): string[] {
