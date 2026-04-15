@@ -18,7 +18,9 @@ DECLARE
   v_arr jsonb;
   v_new jsonb := '[]'::jsonb;
   elem jsonb;
-  found boolean := false;
+  -- Do NOT name this "found" — that shadows the PL/pgSQL automatic FOUND
+  -- variable, causing SELECT INTO to silently fail to update it.
+  feature_found boolean := false;
 BEGIN
   IF auth.uid() IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
@@ -56,13 +58,13 @@ BEGIN
   LOOP
     IF (elem->>'name') = v_name THEN
       v_new := v_new || jsonb_build_array(jsonb_build_object('name', v_name, 'enabled', p_enabled));
-      found := true;
+      feature_found := true;
     ELSE
       v_new := v_new || jsonb_build_array(elem);
     END IF;
   END LOOP;
 
-  IF NOT found THEN
+  IF NOT feature_found THEN
     v_new := v_new || jsonb_build_array(jsonb_build_object('name', v_name, 'enabled', p_enabled));
   END IF;
 
@@ -94,7 +96,7 @@ DECLARE
   v_arr jsonb;
   v_new jsonb := '[]'::jsonb;
   elem jsonb;
-  found boolean := false;
+  feature_found boolean := false;
 BEGIN
   IF auth.role() IS DISTINCT FROM 'service_role' THEN
     RAISE EXCEPTION 'merge_class_feature_as_service_role: service_role only';
@@ -129,13 +131,13 @@ BEGIN
   LOOP
     IF (elem->>'name') = v_name THEN
       v_new := v_new || jsonb_build_array(jsonb_build_object('name', v_name, 'enabled', p_enabled));
-      found := true;
+      feature_found := true;
     ELSE
       v_new := v_new || jsonb_build_array(elem);
     END IF;
   END LOOP;
 
-  IF NOT found THEN
+  IF NOT feature_found THEN
     v_new := v_new || jsonb_build_array(jsonb_build_object('name', v_name, 'enabled', p_enabled));
   END IF;
 

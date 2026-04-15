@@ -15,6 +15,7 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import Image from "next/image";
@@ -52,69 +53,74 @@ const LinkItems = (courseID: number) => [
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/assignments`
   },
-  { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion`, feature_flag: "discussion" },
+  {
+    name: "Discussion",
+    icon: FiStar,
+    target: `/course/${courseID}/discussion`,
+    feature_flag: COURSE_FEATURES.DISCUSSION
+  },
   {
     name: "Flashcards",
     icon: TbCards,
     student_only: true,
     target: `/course/${courseID}/flashcards`,
-    feature_flag: "flashcards"
+    feature_flag: COURSE_FEATURES.FLASHCARDS
   },
   {
     name: "Office Hours",
     student_only: true,
     icon: FiMessageSquare,
     target: `/course/${courseID}/office-hours`,
-    feature_flag: "office-hours"
+    feature_flag: COURSE_FEATURES.OFFICE_HOURS
   },
   {
     name: "Office Hours",
     instructors_or_graders_only: true,
     icon: FiClipboard,
     target: `/course/${courseID}/manage/office-hours`,
-    feature_flag: "office-hours"
+    feature_flag: COURSE_FEATURES.OFFICE_HOURS
   },
   {
     name: "Gradebook",
     icon: FiBookOpen,
     student_only: true,
     target: `/course/${courseID}/gradebook`,
-    feature_flag: "gradebook"
+    feature_flag: COURSE_FEATURES.GRADEBOOK
   },
   {
     name: "Gradebook",
     icon: FiBookOpen,
     instructor_only: true,
     target: `/course/${courseID}/manage/gradebook`,
-    feature_flag: "gradebook"
+    feature_flag: COURSE_FEATURES.GRADEBOOK
   },
   {
     name: "Surveys",
     icon: FiFileText,
     student_only: true,
     target: `/course/${courseID}/surveys`,
-    feature_flag: "surveys"
+    feature_flag: COURSE_FEATURES.SURVEYS
   },
   {
     name: "Surveys",
     icon: FiFileText,
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/surveys`,
-    feature_flag: "surveys"
+    feature_flag: COURSE_FEATURES.SURVEYS
   },
   {
     name: "Polls",
     icon: FiCheckSquare,
     student_only: true,
     target: `/course/${courseID}/polls`,
-    feature_flag: "polls"
+    feature_flag: COURSE_FEATURES.POLLS
   },
   {
     name: "Polls",
     icon: FiCheckSquare,
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/polls`,
-    feature_flag: "polls"
+    feature_flag: COURSE_FEATURES.POLLS
   },
   {
     name: "Course Settings",
@@ -152,14 +158,14 @@ const LinkItems = (courseID: number) => [
         icon: FiHash,
         instructors_only: true,
         target: `/course/${courseID}/manage/discussion-topics`,
-        feature_flag: "discussion"
+        feature_flag: COURSE_FEATURES.DISCUSSION
       },
       {
         name: "Discussion Engagement",
         icon: FiBarChart,
         instructors_or_graders_only: true,
         target: `/course/${courseID}/manage/discussion-engagement`,
-        feature_flag: "discussion"
+        feature_flag: COURSE_FEATURES.DISCUSSION
       },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {

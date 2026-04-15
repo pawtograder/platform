@@ -207,9 +207,20 @@ function IncompleteValuesAlert({
 }) {
   const grade = useWhatIfGrade(column_id);
   const report_only = grade?.report_only;
-  const missingGradebookColumns = incompleteValues.missing?.gradebook_columns;
-  const notReleasedGradebookColumns = incompleteValues.not_released?.gradebook_columns;
   const controller = useGradebookController();
+  const slugToName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const col of controller.columns) {
+      if (col.slug && col.name) map.set(col.slug, col.name);
+    }
+    return map;
+  }, [controller.columns]);
+  const resolveNames = useCallback(
+    (slugs: string[] | undefined) => slugs?.map((s) => slugToName.get(s) ?? s),
+    [slugToName]
+  );
+  const missingGradebookColumns = resolveNames(incompleteValues.missing?.gradebook_columns);
+  const notReleasedGradebookColumns = resolveNames(incompleteValues.not_released?.gradebook_columns);
   const column = useGradebookColumn(column_id);
   const hasRenderExpr = column.render_expression !== null;
   const renderer = controller.getRendererForColumn(column_id);

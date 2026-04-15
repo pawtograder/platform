@@ -408,8 +408,9 @@ class GradebookWhatIfController {
               }
             }
 
-            // Track not-released values the same way as backend report_only behavior.
-            if (!ret.released && !ret.is_private && (ret.score === null || ret.score === undefined)) {
+            // Track not-released values: use pre-coercion `score` (can be undefined)
+            // since ret.score is coerced via `?? 0` and would never be null/undefined.
+            if (!ret.released && !ret.is_private && (score === null || score === undefined)) {
               if (!context.incomplete_values) {
                 context.incomplete_values = {};
               }
@@ -553,7 +554,11 @@ class GradebookWhatIfController {
           }
           scores[policy as "report_only" | "assume_max" | "assume_zero"] = score;
           if (policy === "report_only") {
-            this._incompleteValues[columnId] = dedupeIncompleteValues(context.incomplete_values) ?? null;
+            const deduped = dedupeIncompleteValues(context.incomplete_values);
+            const hasMeaningful =
+              (deduped?.missing?.gradebook_columns?.length ?? 0) > 0 ||
+              (deduped?.not_released?.gradebook_columns?.length ?? 0) > 0;
+            this._incompleteValues[columnId] = hasMeaningful ? deduped! : null;
           }
         }
 

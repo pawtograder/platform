@@ -3,57 +3,84 @@
 import { Switch } from "@/components/ui/switch";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import {
+  courseFeatureEffectiveEnabled,
+  MANAGEABLE_COURSE_FEATURES,
+  type CourseFeatureName
+} from "@/lib/courseFeatures";
 import { createClient } from "@/utils/supabase/client";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Card, Heading, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+function buildFlagsFromRole(
+  features: { name: string; enabled: boolean }[] | null | undefined
+): Record<CourseFeatureName, boolean> {
+  const out = {} as Record<CourseFeatureName, boolean>;
+  for (const def of MANAGEABLE_COURSE_FEATURES) {
+    out[def.name] = courseFeatureEffectiveEnabled(features, def.name, def.defaultWhenMissing);
+  }
+  return out;
+}
 
 export default function CourseFeatureFlagsPage() {
   const { course_id } = useParams();
   const { role } = useClassProfiles();
   const courseIdNum = Number.parseInt(course_id as string, 10);
   const features = (role.classes as CourseWithFeatures).features;
-  const fromRole = features?.find((f) => f.name === COURSE_FEATURES.GRADEBOOK_WHAT_IF)?.enabled === true;
-  const [whatIfEnabled, setWhatIfEnabled] = useState(fromRole);
-  const [saving, setSaving] = useState(false);
+  const featuresSnapshot = useMemo(() => JSON.stringify(features ?? null), [features]);
+
+  const derivedFlags = useMemo(() => {
+    const parsed =
+      featuresSnapshot === "null"
+        ? null
+        : (JSON.parse(featuresSnapshot) as { name: string; enabled: boolean }[] | null);
+    return buildFlagsFromRole(parsed);
+  }, [featuresSnapshot]);
+  const [flags, setFlags] = useState<Record<CourseFeatureName, boolean>>(derivedFlags);
+  const [savingName, setSavingName] = useState<CourseFeatureName | null>(null);
 
   useEffect(() => {
-    setWhatIfEnabled(fromRole);
-  }, [fromRole]);
+    const parsed =
+      featuresSnapshot === "null"
+        ? null
+        : (JSON.parse(featuresSnapshot) as { name: string; enabled: boolean }[] | null);
+    setFlags(buildFlagsFromRole(parsed));
+  }, [featuresSnapshot]);
 
-  const onWhatIfChange = async (checked: boolean) => {
-    if (Number.isNaN(courseIdNum)) {
-      toaster.error({ title: "Invalid course" });
-      return;
-    }
-    setSaving(true);
-    try {
-      const supabase = createClient();
-      const { error } = await supabase.rpc("merge_class_feature", {
-        p_class_id: courseIdNum,
-        p_name: COURSE_FEATURES.GRADEBOOK_WHAT_IF,
-        p_enabled: checked
-      });
-      if (error) {
-        throw new Error(error.message);
+  const onFlagChange = useCallback(
+    async (name: CourseFeatureName, checked: boolean) => {
+      if (Number.isNaN(courseIdNum)) {
+        toaster.error({ title: "Invalid course" });
+        return;
       }
-      setWhatIfEnabled(checked);
-      toaster.success({
-        title: "Saved",
-        description: checked ? "Students can use What-If on the gradebook." : "Student gradebook What-If is turned off."
-      });
-    } catch (e) {
-      toaster.error({
-        title: "Could not update feature",
-        description: e instanceof Error ? e.message : "Unknown error"
-      });
-      setWhatIfEnabled(fromRole);
-    } finally {
-      setSaving(false);
-    }
-  };
+      const rollback = buildFlagsFromRole(features);
+      setSavingName(name);
+      try {
+        const supabase = createClient();
+        const { error } = await supabase.rpc("merge_class_feature", {
+          p_class_id: courseIdNum,
+          p_name: name,
+          p_enabled: checked
+        });
+        if (error) {
+          throw new Error(error.message);
+        }
+        setFlags((prev) => ({ ...prev, [name]: checked }));
+        toaster.success({ title: "Saved" });
+      } catch (e) {
+        toaster.error({
+          title: "Could not update feature",
+          description: e instanceof Error ? e.message : "Unknown error"
+        });
+        setFlags(rollback);
+      } finally {
+        setSavingName(null);
+      }
+    },
+    [courseIdNum, features]
+  );
 
   if (!role || role.role !== "instructor") {
     return (
@@ -69,31 +96,38 @@ export default function CourseFeatureFlagsPage() {
         <Box>
           <Heading size="lg">Feature flags</Heading>
           <Text fontSize="sm" color="fg.muted" mt={1}>
-            Turn course features on or off for students. Changes apply after students refresh the page.
+            Turn course features on or off. Navigation and student tools respect these flags; staff may need direct URLs
+            when a menu entry is hidden. Changes apply after people refresh the page.
           </Text>
         </Box>
 
-        <Card.Root>
-          <Card.Body>
-            <Heading size="sm" mb={2}>
-              Student gradebook What-If
-            </Heading>
-            <Text fontSize="sm" color="fg.muted" mb={4}>
-              When enabled, students can tap released grades to simulate hypothetical scores; calculated columns update
-              from those simulations. When disabled, the gradebook is view-only for students.
-            </Text>
-            <Switch
-              checked={whatIfEnabled}
-              disabled={saving}
-              onCheckedChange={(e: { checked: boolean }) => onWhatIfChange(e.checked)}
-              inputProps={{
-                "aria-label": "Enable student gradebook What-If"
-              }}
-            >
-              Allow What-If grade simulations for students
-            </Switch>
-          </Card.Body>
-        </Card.Root>
+        {MANAGEABLE_COURSE_FEATURES.map((def) => (
+          <Card.Root key={def.name}>
+            <Card.Body>
+              <Heading size="sm" mb={2}>
+                {def.title}
+              </Heading>
+              <Text fontSize="sm" color="fg.muted" mb={2}>
+                {def.description}
+              </Text>
+              {def.navAffectsStaff ? (
+                <Text fontSize="xs" color="fg.muted" mb={4}>
+                  This flag also hides matching entries from the staff course menu (not only students).
+                </Text>
+              ) : null}
+              <Switch
+                checked={flags[def.name]}
+                disabled={savingName === def.name}
+                onCheckedChange={(e: { checked: boolean }) => onFlagChange(def.name, e.checked)}
+                inputProps={{
+                  "aria-label": def.ariaLabel
+                }}
+              >
+                {def.switchLabel}
+              </Switch>
+            </Card.Body>
+          </Card.Root>
+        ))}
       </VStack>
     </Box>
   );
