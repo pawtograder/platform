@@ -49,9 +49,6 @@ test.beforeEach(async () => {
 
 test.describe("Auto-apply late tokens", () => {
   test("When require_tokens_before_due_date is false and student has tokens, submitting late auto-applies a token", async () => {
-    const FAKE_SHA = "abc123def456abc123def456abc123def456abc123";
-    const IDEMPOTENCY_KEY = `${assignment.id}-${FAKE_SHA}`;
-
     const { data: result, error: rpcError } = await supabase.rpc("apply_late_token_extension", {
       p_assignment_id: assignment.id,
       p_student_id: student!.private_profile_id,
@@ -59,8 +56,7 @@ test.describe("Auto-apply late tokens", () => {
       p_class_id: course.id,
       p_creator_id: student!.private_profile_id,
       p_hours_late: 25,
-      p_tokens_needed: 2,
-      p_idempotency_key: IDEMPOTENCY_KEY
+      p_tokens_needed: 2
     });
 
     expect(rpcError).toBeNull();
@@ -77,7 +73,6 @@ test.describe("Auto-apply late tokens", () => {
     expect(exceptions).toHaveLength(1);
     expect(exceptions![0].tokens_consumed).toBe(2);
     expect(exceptions![0].hours).toBe(25);
-    expect(exceptions![0].auto_apply_idempotency_key).toBe(IDEMPOTENCY_KEY);
     expect(exceptions![0].note).toBe("Auto-applied on late submission");
   });
 
@@ -101,8 +96,7 @@ test.describe("Auto-apply late tokens", () => {
       p_class_id: course.id,
       p_creator_id: student!.private_profile_id,
       p_hours_late: 25,
-      p_tokens_needed: 1,
-      p_idempotency_key: `${assignment.id}-no-tokens-sha`
+      p_tokens_needed: 1
     });
 
     expect(rpcError).toBeNull();
@@ -111,8 +105,7 @@ test.describe("Auto-apply late tokens", () => {
     expect(typedResult.tokens_remaining).toBe(0);
   });
 
-  test("Calling the function twice with the same SHA only consumes tokens once", async () => {
-    const IDEMPOTENCY_KEY = `${assignment.id}-idempotency-test-sha`;
+  test("Calling the function twice only consumes tokens once (second call sees student is no longer late)", async () => {
     const rpcArgs = {
       p_assignment_id: assignment.id,
       p_student_id: student!.private_profile_id,
@@ -120,16 +113,15 @@ test.describe("Auto-apply late tokens", () => {
       p_class_id: course.id,
       p_creator_id: student!.private_profile_id,
       p_hours_late: 25,
-      p_tokens_needed: 1,
-      p_idempotency_key: IDEMPOTENCY_KEY
+      p_tokens_needed: 1
     };
 
-    // First call
+    // First call — student is late, extension is applied
     const { data: result1, error: error1 } = await supabase.rpc("apply_late_token_extension", rpcArgs);
     expect(error1).toBeNull();
     expect((result1 as { success: boolean }).success).toBe(true);
 
-    // Second call with same SHA — should be a no-op
+    // Second call — extension from first call now covers the push time, so student is no longer late
     const { data: result2, error: error2 } = await supabase.rpc("apply_late_token_extension", rpcArgs);
     expect(error2).toBeNull();
     expect((result2 as { success: boolean }).success).toBe(true);

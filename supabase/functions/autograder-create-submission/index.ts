@@ -927,7 +927,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               const tokensNeeded = Math.ceil(hoursLate / 24);
 
               // Atomically check token balance and insert extension in one DB transaction.
-              // SHA is used as idempotency key so retries for the same push don't double-consume tokens.
               const { data: result, error: rpcError } = await adminSupabase.rpc("apply_late_token_extension", {
                 p_assignment_id: repoData.assignment_id,
                 p_student_id: repoData.assignment_group_id ? null : profileId,
@@ -935,8 +934,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 p_class_id: repoData.assignments.class_id!,
                 p_creator_id: profileId!,
                 p_hours_late: hoursLate,
-                p_tokens_needed: tokensNeeded,
-                p_idempotency_key: `${repoData.id}-${sha}`
+                p_tokens_needed: tokensNeeded
               });
 
               if (rpcError) {

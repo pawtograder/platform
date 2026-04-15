@@ -1,15 +1,6 @@
 ALTER TABLE assignments
   ADD COLUMN require_tokens_before_due_date boolean NOT NULL DEFAULT true;
 
--- Idempotency key for auto-applied extensions (SHA of the push that triggered it)
--- Partial unique index so manual/gifted extensions (null key) are unaffected
-ALTER TABLE public.assignment_due_date_exceptions
-  ADD COLUMN auto_apply_idempotency_key text;
-
-CREATE UNIQUE INDEX assignment_due_date_exceptions_idempotency_key_idx
-  ON public.assignment_due_date_exceptions (auto_apply_idempotency_key)
-  WHERE auto_apply_idempotency_key IS NOT NULL;
-
 -- Atomically checks token balance and inserts a due date extension in one transaction.
 -- Returns jsonb: { success: true } or
 -- { success: false, tokens_needed: integer, tokens_remaining: integer }
@@ -20,8 +11,7 @@ CREATE OR REPLACE FUNCTION public.apply_late_token_extension(
   p_class_id bigint,
   p_creator_id uuid,
   p_hours_late integer,
-  p_tokens_needed integer,
-  p_idempotency_key text
+  p_tokens_needed integer
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -36,23 +26,17 @@ DECLARE
   v_tokens_remaining_class integer;
   v_tokens_remaining integer;
 BEGIN
-  -- If this exact push already has an extension, return success immediately (idempotent retry)
-  IF EXISTS (
-    SELECT 1 FROM public.assignment_due_date_exceptions
-    WHERE auto_apply_idempotency_key = p_idempotency_key
-  ) THEN
+  -- Prevent concurrent RPC calls from same student
+  PERFORM public.acquire_assignment_due_date_exception_lock(p_assignment_id, COALESCE(p_student_id, p_creator_id), p_assignment_group_id);
+
+  -- If the student is no longer late just return success they already have extension
+  IF NOW() <= public.calculate_final_due_date(p_assignment_id, COALESCE(p_student_id, p_creator_id), p_assignment_group_id) THEN
     RETURN jsonb_build_object('success', true);
   END IF;
 
   IF p_tokens_needed <= 0 OR p_hours_late <= 0 THEN
     RAISE EXCEPTION 'p_tokens_needed and p_hours_late must be positive, got % and %', p_tokens_needed, p_hours_late;
   END IF;
-
-  -- Lock on (class, student/group) to prevent concurrent submissions from the same
-  -- student across different assignments from racing on the class-wide balance
-  PERFORM pg_advisory_xact_lock(
-    ('x' || substr(md5(p_class_id::text || '-' || COALESCE(p_assignment_group_id::text, p_student_id::text)), 1, 16))::bit(64)::bigint
-  );
 
   -- Load limits from the same assignment/class pair so the RPC cannot mix contexts
   SELECT
@@ -68,7 +52,6 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Assignment % does not belong to class %', p_assignment_id, p_class_id;
   END IF;
-
 
   -- Count tokens already used on this assignment
   SELECT COALESCE(SUM(tokens_consumed), 0) INTO v_tokens_used_assignment
@@ -102,17 +85,14 @@ BEGIN
     );
   END IF;
 
-  -- Insert the extension with idempotency key so retries are safe
   INSERT INTO public.assignment_due_date_exceptions
-    (assignment_id, student_id, assignment_group_id, class_id, creator_id, hours, minutes, tokens_consumed, note, auto_apply_idempotency_key)
+    (assignment_id, student_id, assignment_group_id, class_id, creator_id, hours, minutes, tokens_consumed, note)
   VALUES
-    (p_assignment_id, p_student_id, p_assignment_group_id, p_class_id, p_creator_id, p_hours_late, 0, p_tokens_needed, 'Auto-applied on late submission', p_idempotency_key)
-  ON CONFLICT (auto_apply_idempotency_key) WHERE auto_apply_idempotency_key IS NOT NULL
-  DO NOTHING;
+    (p_assignment_id, p_student_id, p_assignment_group_id, p_class_id, p_creator_id, p_hours_late, 0, p_tokens_needed, 'Auto-applied on late submission');
 
   RETURN jsonb_build_object('success', true);
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.apply_late_token_extension(bigint, uuid, bigint, bigint, uuid, integer, integer, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.apply_late_token_extension(bigint, uuid, bigint, bigint, uuid, integer, integer, text) TO service_role;
+REVOKE ALL ON FUNCTION public.apply_late_token_extension(bigint, uuid, bigint, bigint, uuid, integer, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.apply_late_token_extension(bigint, uuid, bigint, bigint, uuid, integer, integer) TO service_role;
