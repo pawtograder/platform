@@ -431,12 +431,15 @@ async function getOrCreateDefaultSelfReviewSetting(
   supabase: SupabaseClient<Database>,
   classId: number
 ): Promise<number> {
-  const { data: existing } = await supabase
+  const { data: existing, error } = await supabase
     .from("assignment_self_review_settings")
     .select("id")
     .eq("class_id", classId)
     .limit(1)
     .maybeSingle();
+  if (error) {
+    throw new CLICommandError(`Failed to fetch default self-review setting: ${error.message}`);
+  }
   if (existing?.id) return existing.id;
   const { data: created, error } = await supabase
     .from("assignment_self_review_settings")
@@ -496,14 +499,21 @@ async function copySingleAssignment(
 
   type AssignmentWithAutograder = AssignmentRow & { autograder?: { grader_repo?: string } | null };
 
-  const { data: existingAssignment } = sourceAssignment.slug
-    ? await supabase
-        .from("assignments")
-        .select("*, autograder(*)")
-        .eq("class_id", targetClass.id)
-        .eq("slug", sourceAssignment.slug)
-        .maybeSingle()
-    : { data: null };
+  let existingAssignment: AssignmentWithAutograder | null = null;
+  if (sourceAssignment.slug) {
+    const { data, error } = await supabase
+      .from("assignments")
+      .select("*, autograder(*)")
+      .eq("class_id", targetClass.id)
+      .eq("slug", sourceAssignment.slug)
+      .maybeSingle();
+    if (error) {
+      throw new CLICommandError(
+        `Failed to look up existing assignment (target_class_id=${targetClass.id}, source_slug=${sourceAssignment.slug}): ${error.message}`
+      );
+    }
+    existingAssignment = data as AssignmentWithAutograder | null;
+  }
 
   let newAssignment: AssignmentWithAutograder;
   const wasExisting = !!existingAssignment;

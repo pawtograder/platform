@@ -92,6 +92,7 @@ export const builder = (yargs: Argv) => {
           logger.info(`Template Repo: ${assignment.template_repo || "(not set)"}`);
           logger.info(`Grading Rubric ID: ${assignment.grading_rubric_id || "(not set)"}`);
           logger.info(`Self Review Rubric ID: ${assignment.self_review_rubric_id || "(not set)"}`);
+          logger.info(`Meta Grading Rubric ID: ${assignment.meta_grading_rubric_id || "(not set)"}`);
         } catch (error) {
           handleError(error);
         }

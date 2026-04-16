@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-import { join, resolve } from "path";
+import { isAbsolute, join, relative, resolve } from "path";
 import { existsSync, mkdirSync } from "fs";
 import {
   ensureRepoOnMainAtPath,
@@ -39,15 +39,43 @@ export interface PerPairStatus {
   message?: string;
 }
 
+/** Each path segment must look like a safe GitHub owner/repo slug fragment (no traversal). */
+const REPO_FULL_NAME_SEGMENT = /^[a-zA-Z0-9._-]+$/;
+
+function assertRepoFullNameSegments(repoFullName: string): string[] {
+  const trimmed = repoFullName.trim();
+  if (!trimmed) {
+    throw new Error("repo full name is empty");
+  }
+  if (trimmed.startsWith("/") || trimmed.includes("\\")) {
+    throw new Error(`Invalid repo full name (expected org/repo, no absolute or backslash paths): ${repoFullName}`);
+  }
+  const segments = trimmed.split("/");
+  if (segments.length < 2) {
+    throw new Error(`Invalid repo full name (expected at least org/repo): ${repoFullName}`);
+  }
+  for (const seg of segments) {
+    if (!seg || seg === "." || seg === ".." || !REPO_FULL_NAME_SEGMENT.test(seg)) {
+      throw new Error(`Invalid repo full name segment in "${repoFullName}"`);
+    }
+  }
+  return segments;
+}
+
 /**
  * Build a stable per-repo working directory under `<workDir>/<org>/<repo>`.
  * Using org-scoped subdirectories avoids collisions when source and target repos
  * share the same basename across different GitHub organizations.
  */
 function repoPath(workDir: string, repoFullName: string): string {
-  const [org, ...rest] = repoFullName.split("/");
-  const repo = rest.join("/");
-  return join(workDir, org, repo);
+  const segments = assertRepoFullNameSegments(repoFullName);
+  const resolvedWorkDir = resolve(workDir);
+  const resolvedPath = resolve(join(resolvedWorkDir, ...segments));
+  const rel = relative(resolvedWorkDir, resolvedPath);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`Resolved repo path would escape work directory for: ${repoFullName}`);
+  }
+  return resolvedPath;
 }
 
 function buildCommitMessage(sourceRepo: string): string {

@@ -116,6 +116,11 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
       }
     }
 
+    const serverCopyHadFailures = data.summary.failed > 0 || data.results.some((row) => !row.success);
+    if (serverCopyHadFailures) {
+      process.exitCode = 1;
+    }
+
     // Local repo content copy (via SSH git) — skipped if --skip-repos.
     const repoPairs = (data.repo_copy_pairs as RepoCopyPair[] | undefined) ?? [];
     if (args.skipRepos) {
