@@ -8,14 +8,26 @@ Pawtograder is a Next.js 15 + Supabase course operations platform (autograder, h
 
 ### Starting services
 
-1. **Docker daemon**: `sudo dockerd &>/tmp/dockerd.log &` — wait a few seconds, then verify with `docker info`.
-2. **Supabase**: `npx supabase start` — starts all Supabase services in Docker. Output includes local API URL and keys.
-   - **Known issue**: Migration `20260217000000_binary_submission_files.sql` may fail with `must be owner of table objects` because it creates RLS policies on `storage.objects`. Workaround: temporarily move the migration file, run `supabase start`, apply it via `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < <migration_file>`, record it in `supabase_migrations.schema_migrations`, then restore the file.
+1. **Docker daemon**: `sudo dockerd &>/tmp/dockerd.log &` — wait a few seconds, then verify with `docker info`. If `docker` commands fail with `permission denied ... /var/run/docker.sock`, run `sudo chmod 666 /var/run/docker.sock` once.
+2. **Supabase — ALWAYS START FROM A FRESH DB, NEVER RESTORE A BACKUP**:
+   - `npx supabase start` restores from the previously-saved docker volume by default. In a Cloud Agent VM that volume is typically stale (snapshotted at some older schema version) and will be missing dozens of newer migrations — tests then fail with errors like `column ... does not exist`, `no partition of relation "audit" found for row`, or `Could not find the '...' column ... in the schema cache`.
+   - **Correct sequence (do this every time before E2E):**
+     1. If Supabase is already running, stop it WITHOUT a backup: `npx supabase stop --no-backup` (this deletes the stale volume).
+     2. Also delete any leftover project volumes just to be safe: `docker volume ls --filter label=com.supabase.cli.project=pawtograder-platform -q | xargs -r docker volume rm`.
+     3. Start fresh: `npx supabase start` — this will run every migration in `supabase/migrations/` against an empty DB.
+   - **Known migration issue**: Migration `20260217000000_binary_submission_files.sql` fails during `supabase start` with `must be owner of table objects` because it creates RLS policies on `storage.objects`. Workaround (do this every fresh start):
+     1. Before `supabase start`, move the file aside: `mv supabase/migrations/20260217000000_binary_submission_files.sql /tmp/`.
+     2. Run `npx supabase start`.
+     3. Apply it as superuser: `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < /tmp/20260217000000_binary_submission_files.sql`.
+     4. Record it: `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres -c "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"`.
+     5. Restore the file: `mv /tmp/20260217000000_binary_submission_files.sql supabase/migrations/`.
+   - **Audit partitions**: The partitioned `public.audit` table only has partitions for a narrow date range out of migrations. If the current date is outside that range, inserts fail with `no partition of relation "audit" found for row`. After starting Supabase, run `docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres -c "SELECT public.audit_maintain_partitions();"` to create today's partition (and the next 7 days).
+   - **Sanity check the schema is current** before running E2E: the newest row of `supabase_migrations.schema_migrations` should match the newest file under `supabase/migrations/` (e.g. `20260413234500`). If it doesn't, the DB was restored from a backup — redo the stop/restart-without-backup sequence above.
 3. **Configure `.env.local`**: After `supabase start`, get keys with `npx supabase status -o env` and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`, `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3000`, and `ENABLE_SIGNUPS=true`.
    - **Prod E2E on port 3001**: Next.js inlines `NEXT_PUBLIC_*` at **build** time. Set `NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001` for `npm run build` (and keep it in `.env.local` while iterating) so auth redirects and magic links match `BASE_URL` / `PORT`; exporting it only when running Playwright does not change an existing bundle.
 4. **Edge Functions (recommended for local E2E/prod-mode testing)**: `npx supabase functions serve --env-file .env.local` — serves local functions at `http://127.0.0.1:54321/functions/v1/*`.
    - Required when testing flows that invoke `autograder-create-submission`, `autograder-submit-feedback`, webhooks, or async workers.
-5. **Next.js dev server**: `npm run dev` — serves at `http://localhost:3000`.
+5. **Next.js dev server (iterative dev only)**: `npm run dev` — serves at `http://localhost:3000`. Do NOT use `next dev` for E2E runs; use the prod build on port 3001 (see below). `next dev` is dramatically slower per-request and causes widespread Playwright timeouts during full-suite runs.
 
 ### Seeding the database
 
@@ -29,13 +41,12 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 
 - **Lint**: `npm run lint` (ESLint + Prettier). See `package.json` scripts.
 - **Unit tests**: `npm test` (Jest). Note: `jest.setup.ts` must exist (import `@testing-library/jest-dom`). The existing test has a pre-existing issue with `Request` not being defined in jsdom.
-- **E2E — local (recommended default for everyday dev)**: With local Supabase running and `npm run dev` (port 3000), run **`npm run test:e2e:local`** — it sets `BASE_URL=http://localhost:3000` to match the dev server (`playwright.config.ts`). Ensure **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, and **`SUPABASE_SERVICE_ROLE_KEY`** are in `.env.local` or exported: `tests/e2e/TestingUtils.ts` loads `.env.local` via dotenv and uses those values (plus the service role for the admin client) for setup and auth helpers.
-- **E2E — prod build (CI-like, fewer timing flakes)**: Prefer a production build/server over `next dev` when debugging flakes or matching CI.
-  - Never run `next dev` and `next start` at the same time in this environment. Stop all dev servers before prod E2E runs.
+- **E2E — prod build (REQUIRED for full-suite runs)**: Always use a production build + `next start` for E2E, not `next dev`. `next dev` in this environment causes widespread Playwright timeouts across the full suite (first-hit compile cost on every route).
+  - Never run `next dev` and `next start` at the same time. Stop all dev servers before prod E2E runs.
   - Build from a clean output directory with the public web URL matching the prod server port (see note above on **`NEXT_PUBLIC_PAWTOGRADER_WEB_URL` at build time**): `export NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001 && rm -rf .next && npm run build`
   - Start only the prod server: `PORT=3001 npm run start`
   - Run Playwright with matching **`BASE_URL`**: `BASE_URL=http://localhost:3001 npx playwright test ...` (the **built** app URL comes from the build step above; Playwright only needs `BASE_URL` to match where `next start` listens).
-  - If a test is flaky in dev mode, switch back to prod-build runs immediately.
+- **E2E — dev-mode (only for rapid iteration on a single test)**: With local Supabase running and `npm run dev` (port 3000), run **`npm run test:e2e:local`** — it sets `BASE_URL=http://localhost:3000` to match the dev server (`playwright.config.ts`). Ensure **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, and **`SUPABASE_SERVICE_ROLE_KEY`** are in `.env.local` or exported: `tests/e2e/TestingUtils.ts` loads `.env.local` via dotenv and uses those values (plus the service role for the admin client) for setup and auth helpers. Do not use this mode for running the whole suite.
 - **E2E prerequisites — Edge Functions and secrets**: Several E2E tests invoke Supabase Edge Functions (e.g. `autograder-create-submission`, `autograder-submit-feedback`). For these to work locally:
   1. **Serve Edge Functions**: `npx supabase functions serve --env-file .env.local`
   2. **`.env.local` must contain** (in addition to Supabase keys):
