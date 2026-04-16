@@ -136,6 +136,19 @@ export async function createClass({
     return classData;
   });
 }
+
+/** Service-role E2E helper: same atomic merge as instructor `merge_class_feature` (requires DB RPC). */
+export async function setCourseFeature(classId: number, name: string, enabled: boolean): Promise<void> {
+  const { error } = await supabase.rpc("merge_class_feature_as_service_role", {
+    p_class_id: classId,
+    p_name: name,
+    p_enabled: enabled
+  });
+  if (error) {
+    throw new Error(`setCourseFeature: ${error.message}`);
+  }
+}
+
 let sectionIdx = 1;
 export async function createClassSection({
   class_id,

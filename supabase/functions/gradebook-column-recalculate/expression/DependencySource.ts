@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { isArray, isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
+import { isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
@@ -9,6 +9,12 @@ import type {
   GradebookColumnStudent,
   GradebookColumnStudentWithMaxScore
 } from "./types.d.ts";
+import { addCommonExpressionFunctions, COMMON_CONTEXT_FUNCTIONS } from "./commonMathFunctions.ts";
+import {
+  type IncompleteValuesAdvice,
+  pickPreferredGradebookValue,
+  pushMissingDependenciesToContext
+} from "./shared.ts";
 
 export type PrivateProfileId = string;
 
@@ -20,17 +26,6 @@ export type ExpressionContext = {
   scope: Sentry.Scope;
   class_id: number;
 };
-//TODO: Move this to a shared file
-//See also in hooks/useGradebookWhatIf.tsx
-export type IncompleteValuesAdvice = {
-  missing?: {
-    gradebook_columns?: string[];
-  };
-  not_released?: {
-    gradebook_columns?: string[];
-  };
-};
-
 export type ResolvedExprDependencyInstance = ExprDependencyInstance & {
   value: unknown;
   is_private: boolean;
@@ -386,63 +381,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
   }
   private gradebookColumnMap: Map<number, GradebookColumn> = new Map();
 
-  private _pushMissingIfNeeded(
-    context: ExpressionContext,
-    ret: GradebookColumnStudentWithMaxScore | GradebookColumnStudentWithMaxScore[]
-  ) {
-    const handleOne = (ret: GradebookColumnStudentWithMaxScore) => {
-      // Handle cases where THIS gradebook column is missing
-      if (!ret || ret.is_missing || (ret.score === null && ret.score_override === null)) {
-        if (!context.incomplete_values) {
-          context.incomplete_values = {
-            missing: {
-              gradebook_columns: []
-            }
-          };
-        }
-        if (!context.incomplete_values.missing) {
-          context.incomplete_values.missing = {
-            gradebook_columns: []
-          };
-        }
-        if (!context.incomplete_values.missing.gradebook_columns) {
-          context.incomplete_values.missing.gradebook_columns = [];
-        }
-        context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
-      }
-      // Handle cases where OUR DEPENDENCIES ARE MISSING
-      if (
-        ret &&
-        ret.incomplete_values !== null &&
-        typeof ret.incomplete_values === "object" &&
-        "missing" in ret.incomplete_values
-      ) {
-        const missing = ret.incomplete_values.missing as { gradebook_columns?: string[] };
-        if (!context.incomplete_values) {
-          context.incomplete_values = {
-            missing: {
-              gradebook_columns: []
-            }
-          };
-        }
-        if (!context.incomplete_values.missing) {
-          context.incomplete_values.missing = {
-            gradebook_columns: []
-          };
-        }
-        if (!context.incomplete_values.missing.gradebook_columns) {
-          context.incomplete_values.missing.gradebook_columns = [];
-        }
-        context.incomplete_values.missing.gradebook_columns.push(...(missing.gradebook_columns ?? []));
-      }
-    };
-    if (Array.isArray(ret)) {
-      ret.forEach(handleOne);
-    } else {
-      handleOne(ret);
-    }
-  }
-
   override execute({
     function_name,
     context,
@@ -464,22 +402,18 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         super.execute({ function_name, context, key: slug, class_id }) as
           | GradebookColumnStudentWithMaxScore
           | undefined;
+      const resolveValue = (slug: string) => {
+        const overrideVal = readOverride(slug);
+        const baseVal = readBase(slug);
+        return pickPreferredGradebookValue(overrideVal, baseVal);
+      };
       if (typeof key === "object") {
         if (Array.isArray(key)) {
           const values = key.map((k) => {
             if (typeof k !== "string") return undefined;
-            const overrideVal = readOverride(k);
-            const baseVal = readBase(k);
-            // If we have an override value but base has score_override, use base's score_override
-            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
-              return {
-                ...baseVal,
-                score: baseVal.score_override
-              };
-            }
-            return overrideVal ?? baseVal;
+            return resolveValue(k);
           });
-          this._pushMissingIfNeeded(
+          pushMissingDependenciesToContext(
             context,
             values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
           );
@@ -488,42 +422,18 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         if (isDenseMatrix(key)) {
           const values = (key as Matrix<string>).toArray().map((k) => {
             if (typeof k !== "string") return undefined;
-            const overrideVal = readOverride(k);
-            const baseVal = readBase(k);
-            // If we have an override value but base has score_override, use base's score_override
-            if (overrideVal && baseVal && baseVal.score_override !== null && baseVal.score_override !== undefined) {
-              return {
-                ...baseVal,
-                score: baseVal.score_override
-              };
-            }
-            return overrideVal ?? baseVal;
+            return resolveValue(k);
           });
-          this._pushMissingIfNeeded(
+          pushMissingDependenciesToContext(
             context,
             values.filter((v): v is GradebookColumnStudentWithMaxScore => !!v)
           );
           return values;
         }
       } else if (typeof key === "string") {
-        const overrideValue = readOverride(key);
-        const baseValue = readBase(key);
-
-        // If we have an override value (freshly calculated), but the base value has a score_override,
-        // we should use the base value's score_override instead of the calculated override value
-        let value: GradebookColumnStudentWithMaxScore | undefined;
-        if (overrideValue && baseValue && baseValue.score_override !== null && baseValue.score_override !== undefined) {
-          // Use base value with its score_override
-          value = {
-            ...baseValue,
-            score: baseValue.score_override
-          };
-        } else {
-          // Use override value if available, otherwise use base value
-          value = overrideValue ?? baseValue;
-        }
+        const value = resolveValue(key);
         if (value) {
-          this._pushMissingIfNeeded(context, value);
+          pushMissingDependenciesToContext(context, value);
           return value;
         }
       }
@@ -532,7 +442,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const ret = super.execute({ function_name, context, key, class_id }) as
       | GradebookColumnStudentWithMaxScore
       | GradebookColumnStudentWithMaxScore[];
-    this._pushMissingIfNeeded(context, ret);
+    pushMissingDependenciesToContext(context, ret);
 
     return ret;
   }
@@ -659,21 +569,7 @@ export const DependencySourceMap = {
   gradebook_columns: new GradebookColumnsDependencySource()
 };
 //These functions should be called with a context object as the first argument
-export const ContextFunctions = ["mean", "countif", "sum", "drop_lowest"];
-
-function isGradebookColumnStudent(value: unknown): value is GradebookColumnStudentWithMaxScore {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "score" in value &&
-    "score_override" in value &&
-    "is_droppable" in value &&
-    "is_excused" in value &&
-    "is_missing" in value &&
-    "max_score" in value &&
-    "column_slug" in value
-  );
-}
+export const ContextFunctions = [...COMMON_CONTEXT_FUNCTIONS];
 
 export async function addDependencySourceFunctions({
   math,
@@ -697,39 +593,12 @@ export async function addDependencySourceFunctions({
     )
   );
 
-  // Union type for all possible import function signatures
-  type ImportFunction =
-    | ((context: ExpressionContext, ...args: unknown[]) => unknown) // Context functions
-    | ((
-        a: number | GradebookColumnStudentWithMaxScore,
-        b: number | GradebookColumnStudentWithMaxScore
-      ) => number | undefined) // Binary operations
-    | ((...values: (number | GradebookColumnStudentWithMaxScore)[]) => number | undefined) // Variadic functions like min
-    | ((context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => number | undefined) // sum
-    | ((value: number | GradebookColumnStudentWithMaxScore, threshold: number) => 0 | 1) // Comparison functions
-    | ((
-        context: ExpressionContext,
-        value: GradebookColumnStudentWithMaxScore[],
-        condition: (value: GradebookColumnStudentWithMaxScore) => boolean
-      ) => number | undefined) // countif
-    | ((
-        context: ExpressionContext,
-        value: GradebookColumnStudentWithMaxScore[],
-        weighted?: boolean
-      ) => number | undefined) // mean
-    | ((
-        context: ExpressionContext,
-        value: GradebookColumnStudentWithMaxScore[],
-        count: number
-      ) => GradebookColumnStudentWithMaxScore[]) // drop_lowest
-    | ((conditions: Matrix<unknown>) => number | undefined) // case_when
-    | (() => never); // Security functions that throw errors
-
+  type ImportFunction = (...args: never[]) => unknown;
   const imports: Record<string, ImportFunction> = {};
   for (const dependencySourceProvider of Object.values(batchDependencySourceMap)) {
     const functionNames = dependencySourceProvider.getFunctionNames();
     for (const functionName of functionNames) {
-      imports[functionName] = (context: ExpressionContext, ...args: unknown[]) => {
+      imports[functionName] = ((context: ExpressionContext, ...args: unknown[]) => {
         const key = args[0] as string | string[];
         const rest = args.slice(1);
         return dependencySourceProvider.execute({
@@ -739,7 +608,7 @@ export async function addDependencySourceFunctions({
           class_id: context.class_id,
           args: rest
         });
-      };
+      }) as ImportFunction;
     }
   }
 
@@ -747,462 +616,9 @@ export async function addDependencySourceFunctions({
   // during expression compilation
   (math as unknown as Record<string, unknown>)._batchDependencySourceMap = batchDependencySourceMap;
 
-  imports["divide"] = (
-    a: number | GradebookColumnStudentWithMaxScore,
-    b: number | GradebookColumnStudentWithMaxScore
-  ) => {
-    if (a === undefined || b === undefined) {
-      return undefined;
-    }
-    let a_val = 0;
-    let b_val = 0;
-    if (isGradebookColumnStudent(a)) {
-      a_val = a.score ?? 0;
-    } else if (typeof a === "number") {
-      a_val = a;
-    }
-    if (isGradebookColumnStudent(b)) {
-      b_val = b.score ?? 0;
-    } else if (typeof b === "number") {
-      b_val = b;
-    }
-    return a_val / b_val;
-  };
-  imports["subtract"] = (
-    a: number | GradebookColumnStudentWithMaxScore,
-    b: number | GradebookColumnStudentWithMaxScore
-  ) => {
-    if (a === undefined || b === undefined) {
-      return undefined;
-    }
-    let a_val = 0;
-    let b_val = 0;
-    if (isGradebookColumnStudent(a)) {
-      a_val = a.score ?? 0;
-    } else if (typeof a === "number") {
-      a_val = a;
-    }
-    if (isGradebookColumnStudent(b)) {
-      b_val = b.score ?? 0;
-    } else if (typeof b === "number") {
-      b_val = b;
-    }
-    return a_val - b_val;
-  };
-  imports["multiply"] = (
-    a: number | GradebookColumnStudentWithMaxScore,
-    b: number | GradebookColumnStudentWithMaxScore
-  ) => {
-    if (a === undefined || b === undefined) {
-      return undefined;
-    }
-    let a_val = 0;
-    let b_val = 0;
-    if (isGradebookColumnStudent(a)) {
-      a_val = a.score ?? 0;
-    } else if (typeof a === "number") {
-      a_val = a;
-    }
-    if (isGradebookColumnStudent(b)) {
-      b_val = b.score ?? 0;
-    } else if (typeof b === "number") {
-      b_val = b;
-    }
-    return a_val * b_val;
-  };
-  imports["add"] = (a: number | GradebookColumnStudentWithMaxScore, b: number | GradebookColumnStudentWithMaxScore) => {
-    if (a === undefined || b === undefined) {
-      return undefined;
-    }
-    let a_val = 0;
-    let b_val = 0;
-    if (isGradebookColumnStudent(a)) {
-      a_val = a.score ?? 0;
-    } else if (typeof a === "number") {
-      a_val = a;
-    }
-    if (isGradebookColumnStudent(b)) {
-      b_val = b.score ?? 0;
-    } else if (typeof b === "number") {
-      b_val = b;
-    }
-    return a_val + b_val;
-  };
-  imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
-    context.scope.setTag("student_id", context.student_id);
-    context.scope.setTag("class_id", context.class_id);
-    context.scope.setTag("is_private", context.is_private_calculation);
-    context.scope.addBreadcrumb({
-      message: `Sum called with value: ${JSON.stringify(value, null, 2)}`,
-      level: "debug"
-    });
-    if (isDenseMatrix(value)) {
-      const values = value.toArray();
-      return values
-        .map((v) => {
-          if (isGradebookColumnStudent(v)) {
-            return v.score ?? 0;
-          }
-          if (typeof v === "number") {
-            return v;
-          } else if (v === undefined || v === null) {
-            return undefined;
-          }
-          throw new Error(
-            `Unsupported type in matrix for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
-          );
-        })
-        .filter((v) => v !== undefined)
-        .reduce((a, b) => a + b, 0);
-    }
-    if (Array.isArray(value)) {
-      const values = value
-        .map((v) => {
-          if (isGradebookColumnStudent(v)) {
-            return v.score ?? 0;
-          }
-          if (typeof v === "number") {
-            return v;
-          }
-          if (v === undefined || v === null) {
-            return undefined;
-          }
-          throw new Error(
-            `Unsupported value type in array for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
-          );
-        })
-        .filter((v) => v !== undefined);
-      if (values.length === 0) {
-        return undefined;
-      }
-      return values.reduce((a, b) => a + b, 0);
-    }
-    throw new Error(`Sum called with non-array value: ${JSON.stringify(value, null, 2)}`);
-  };
-  imports["equal"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-    if (isGradebookColumnStudent(value)) {
-      return value.score === threshold ? 1 : 0;
-    }
-    return value === threshold ? 1 : 0;
-  };
-  imports["unequal"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-    if (isGradebookColumnStudent(value)) {
-      return value.score !== threshold ? 1 : 0;
-    }
-    return value !== threshold ? 1 : 0;
-  };
-  imports["largerEq"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-    if (isGradebookColumnStudent(value)) {
-      return value.score >= threshold ? 1 : 0;
-    }
-    return value >= threshold ? 1 : 0;
-  };
-  imports["smallerEq"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-    if (isGradebookColumnStudent(value)) {
-      return value.score <= threshold ? 1 : 0;
-    }
-    return value <= threshold ? 1 : 0;
-  };
-  // Helper to flatten and extract scalar values from mixed inputs (numbers, GradebookColumnStudent, arrays, matrices)
-  const extractScalarValues = (values: unknown[]): number[] => {
-    const result: number[] = [];
-    for (const v of values) {
-      if (v === null || v === undefined) continue;
-      if (typeof v === "number") {
-        result.push(v);
-      } else if (isGradebookColumnStudent(v)) {
-        if (v.score !== undefined && v.score !== null) {
-          result.push(v.score);
-        }
-      } else if (isDenseMatrix(v)) {
-        result.push(...extractScalarValues(v.toArray()));
-      } else if (Array.isArray(v)) {
-        result.push(...extractScalarValues(v));
-      }
-    }
-    return result;
-  };
-  imports["min"] = (...values: unknown[]) => {
-    const validValues = extractScalarValues(values);
-    if (validValues.length === 0) {
-      return undefined;
-    }
-    return Math.min(...validValues);
-  };
-  imports["max"] = (...values: unknown[]) => {
-    const validValues = extractScalarValues(values);
-    if (validValues.length === 0) {
-      return undefined;
-    }
-    return Math.max(...validValues);
-  };
-  imports["larger"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-    if (isGradebookColumnStudent(value)) {
-      return value.score > threshold ? 1 : 0;
-    }
-    return value > threshold ? 1 : 0;
-  };
-  imports["smaller"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
-    if (isGradebookColumnStudent(value)) {
-      return value.score < threshold ? 1 : 0;
-    }
-    return value < threshold ? 1 : 0;
-  };
-  imports["countif"] = (
-    context: ExpressionContext,
-    value: GradebookColumnStudentWithMaxScore[],
-    condition: (value: GradebookColumnStudentWithMaxScore) => boolean
-  ) => {
-    if (isDenseMatrix(value)) {
-      value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-    }
-    if (Array.isArray(value)) {
-      const values = value.map((v) => {
-        const ret = condition(v) ? 1 : 0;
-        return ret;
-      });
-      const validValues = values.filter((v) => v !== undefined);
-      if (validValues.length === 0) {
-        return undefined;
-      }
-      return validValues.filter((v) => v === 1).length;
-    }
-    throw new Error("Countif called with non-array value");
-  };
-
-  imports["mean"] = (
-    _context: ExpressionContext,
-    value: GradebookColumnStudentWithMaxScore[],
-    weighted: boolean = true
-  ) => {
-    if (isDenseMatrix(value)) {
-      value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-    }
-    if (Array.isArray(value)) {
-      // Log input to help diagnose issues
-      console.log(
-        `Mean called for student ${_context.student_id} with ${value.length} values (weighted=${weighted}):`,
-        JSON.stringify(
-          value.map((v) => ({
-            score: isGradebookColumnStudent(v) ? v.score : "N/A",
-            max_score: isGradebookColumnStudent(v) ? v.max_score : "N/A",
-            column_slug: isGradebookColumnStudent(v) ? (v as unknown as { column_slug?: string })?.column_slug : "N/A",
-            released: isGradebookColumnStudent(v) ? v.released : "N/A",
-            is_private: isGradebookColumnStudent(v) ? v.is_private : "N/A",
-            is_missing: isGradebookColumnStudent(v) ? v.is_missing : "N/A"
-          }))
-        )
-      );
-
-      const valuesToAverage = value.map((v) => {
-        if (isGradebookColumnStudent(v)) {
-          // Assert that we are never leaking across is_private boundaries
-          if (v.is_private !== _context.is_private_calculation) {
-            throw new Error(
-              `Mean called with gradebook column student that is_private mismatch: ${v.is_private} !== ${_context.is_private_calculation}`
-            );
-          }
-          if (v.is_missing) {
-            if (v.is_excused) {
-              return { score: undefined, max_score: v.max_score };
-            }
-            return { score: 0, max_score: v.max_score };
-          }
-          return { score: v.score, max_score: v.max_score };
-        }
-        if (isArray(v)) {
-          throw new Error("Unsupported nesting of arrays");
-        }
-        if (v === undefined || v === null) {
-          return { score: undefined, max_score: undefined };
-        }
-        throw new Error(
-          `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value.`
-        );
-      });
-      const validValues = valuesToAverage.filter(
-        (v) =>
-          v !== undefined &&
-          v.score !== undefined &&
-          v.max_score !== undefined &&
-          v.max_score !== null &&
-          v.max_score > 0 &&
-          v.score !== null
-      );
-
-      // Check for scores exceeding max_score (data integrity issue)
-      const scoresExceedingMax = validValues.filter((v) => {
-        if (!v || v.score === undefined || v.max_score === undefined) return false;
-        return v.score > v.max_score;
-      });
-      if (scoresExceedingMax.length > 0) {
-        console.warn(
-          `Mean calculation: Found ${scoresExceedingMax.length} values where score > max_score: ${JSON.stringify(
-            scoresExceedingMax.map((v) => {
-              if (!v || v.score === undefined || v.max_score === undefined) return {};
-              return {
-                score: v.score,
-                max_score: v.max_score,
-                column_slug: (v as unknown as { column_slug?: string })?.column_slug,
-                ratio: v.score / v.max_score
-              };
-            })
-          )}`
-        );
-      }
-
-      if (validValues.length === 0) {
-        console.warn(
-          `Mean calculation: No valid values after filtering. Input values: ${JSON.stringify(
-            valuesToAverage.map((v) => ({
-              score: v?.score,
-              max_score: v?.max_score,
-              column_slug: (v as unknown as { column_slug?: string })?.column_slug
-            }))
-          )}`
-        );
-        return undefined;
-      }
-      if (weighted) {
-        const totalPoints = validValues.reduce((a, b) => a + (b?.max_score ?? 0), 0);
-        const totalScore = validValues.reduce((a, b) => a + (b?.score ?? 0), 0);
-        if (totalPoints === 0) {
-          console.warn(
-            `Mean calculation: totalPoints is 0 after filtering. Input values: ${JSON.stringify(
-              valuesToAverage.map((v) => ({
-                score: v?.score,
-                max_score: v?.max_score,
-                column_slug: (v as unknown as { column_slug?: string })?.column_slug
-              }))
-            )}`
-          );
-          return undefined;
-        }
-        const ret = (100 * totalScore) / totalPoints;
-        // Log if result exceeds 100% to help diagnose issues
-        if (ret > 100) {
-          console.warn(
-            `Mean calculation resulted in score > 100%: ${ret}%. Values: ${JSON.stringify(
-              validValues.map((v) => {
-                if (!v || v.score === undefined || v.max_score === undefined) return {};
-                return {
-                  score: v.score,
-                  max_score: v.max_score,
-                  column_slug: (v as unknown as { column_slug?: string })?.column_slug,
-                  contribution_to_score: v.score,
-                  contribution_to_points: v.max_score,
-                  ratio: v.score / v.max_score
-                };
-              })
-            )}, totalScore: ${totalScore}, totalPoints: ${totalPoints}, calculation: (100 * ${totalScore}) / ${totalPoints}`
-          );
-        }
-        return ret;
-      } else {
-        const ret =
-          (100 * validValues.reduce((a, b) => a + (b && b.score ? b.score / b.max_score : 0), 0)) / validValues.length;
-        return ret;
-      }
-    }
-    throw new Error("Mean called with non-matrix value");
-  };
-  imports["drop_lowest"] = (
-    _context: ExpressionContext,
-    value: GradebookColumnStudentWithMaxScore[],
-    count: number
-  ) => {
-    if (isDenseMatrix(value)) {
-      value = value.toArray() as unknown as GradebookColumnStudentWithMaxScore[];
-    }
-    if (Array.isArray(value)) {
-      // Log input values to help diagnose issues
-      const inputSummary = value.map((v) => ({
-        score: v.score,
-        max_score: v.max_score,
-        column_slug: (v as unknown as { column_slug?: string })?.column_slug,
-        is_droppable: v.is_droppable
-      }));
-      console.log(`Drop_lowest called with ${value.length} values, dropping ${count}:`, JSON.stringify(inputSummary));
-
-      // Filter out entries with max_score <= 0 or score === null before sorting and selecting to drop
-      // These entries should be preserved and not count toward drop_lowest
-      const validEntries = value.filter((v) => (v.max_score ?? 0) > 0 && v.score !== null);
-
-      // Sort to identify which items to drop by relative score (score/max_score), but preserve original order in output
-      const sorted = [...validEntries].sort((a, b) => {
-        const aScore = a.score ?? 0;
-        const bScore = b.score ?? 0;
-        const aMaxScore = a.max_score ?? 1;
-        const bMaxScore = b.max_score ?? 1;
-        // Calculate relative scores (percentage)
-        const aRatio = aMaxScore > 0 ? aScore / aMaxScore : 0;
-        const bRatio = bMaxScore > 0 ? bScore / bMaxScore : 0;
-        return aRatio - bRatio;
-      });
-      const toDrop = new Set<GradebookColumnStudentWithMaxScore>();
-      let numDropped = 0;
-      for (const v of sorted) {
-        if (numDropped < count && v.is_droppable) {
-          toDrop.add(v);
-          numDropped++;
-        }
-      }
-
-      // Return items in original order, excluding only those marked for dropping that have max_score > 0 and score !== null
-      // Preserve all entries with max_score <= 0 untouched
-      const ret: GradebookColumnStudentWithMaxScore[] = [];
-      for (const v of value) {
-        // Only exclude items that were chosen to drop AND have max_score > 0
-        if (!toDrop.has(v) && (v.max_score ?? 0) > 0 && v.score !== null) {
-          ret.push(v);
-        }
-      }
-
-      // Log output values
-      const outputSummary = ret.map((v) => ({
-        score: v.score,
-        max_score: v.max_score,
-        column_slug: (v as unknown as { column_slug?: string })?.column_slug
-      }));
-      console.log(
-        `Drop_lowest returning ${ret.length} values after dropping ${numDropped}:`,
-        JSON.stringify(outputSummary)
-      );
-
-      // Warn if any returned values have invalid max_score
-      const invalidMaxScore = ret.filter((v) => !v.max_score || v.max_score <= 0);
-      if (invalidMaxScore.length > 0) {
-        console.warn(
-          `Drop_lowest: ${invalidMaxScore.length} returned values have invalid max_score: ${JSON.stringify(
-            invalidMaxScore.map((v) => ({
-              score: v.score,
-              max_score: v.max_score,
-              column_slug: (v as unknown as { column_slug?: string })?.column_slug
-            }))
-          )}`
-        );
-      }
-
-      return ret;
-    }
-    throw new Error("Drop_lowest called with non-matrix value");
-  };
-  imports["case_when"] = (conditions: Matrix<unknown>) => {
-    const conditionValues = conditions.toArray();
-    for (const condition of conditionValues) {
-      const [value, result] = condition as [boolean, number];
-      if (value) {
-        return result;
-      }
-    }
-    return undefined;
-  };
-  //Remove access to security-sensitive functions
-  const securityFunctions = ["import", "createUnit", "reviver", "resolve"];
-  for (const functionName of securityFunctions) {
-    imports[functionName] = () => {
-      throw new Error(`${functionName} is not allowed`);
-    };
-  }
+  addCommonExpressionFunctions(imports, {
+    enforcePrivateCalculationMatch: true,
+    includeSecurityGuards: true
+  });
   math.import(imports, { override: true });
 }

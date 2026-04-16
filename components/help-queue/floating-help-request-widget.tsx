@@ -6,6 +6,7 @@ import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
 import { useMessageNotifications } from "@/hooks/useMessageNotifications";
 import { useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import { Badge, Box, Button, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter } from "next/navigation";
@@ -31,7 +32,7 @@ export function FloatingHelpRequestWidget() {
   const pathname = usePathname();
   const { course_id } = useParams();
   const { role, private_profile_id } = useClassProfiles();
-  const featureEnabled = useFeatureEnabled("office-hours");
+  const featureEnabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS);
   const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const [isExpanded, setIsExpanded] = useState(false);
   const unreadCount = useHelpRequestUnreadCount(activeRequest?.request.id);

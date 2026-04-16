@@ -2,6 +2,7 @@
 
 import { useHelpQueueAssignments, useHelpQueues, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import {
   Badge,
@@ -33,7 +34,7 @@ export function OfficeHoursStatusCard() {
   const { course_id } = useParams();
   const router = useRouter();
   const { role } = useClassProfiles();
-  const featureEnabled = useFeatureEnabled("office-hours");
+  const featureEnabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS);
   const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();

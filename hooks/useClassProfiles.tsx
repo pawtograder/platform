@@ -3,6 +3,7 @@ import { signOutAction } from "@/app/actions";
 import Logo from "@/components/ui/logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/utils/supabase/client";
+import type { CourseFeatureName } from "@/lib/courseFeatures";
 import { CourseWithFeatures, UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
@@ -29,7 +30,7 @@ export function useClassProfiles() {
   return context;
 }
 
-export function useFeatureEnabled(feature: string) {
+export function useFeatureEnabled(feature: CourseFeatureName) {
   const { role } = useClassProfiles();
   const course = role.classes as CourseWithFeatures;
   const featureFlag = course.features?.find((f) => f.name === feature);
