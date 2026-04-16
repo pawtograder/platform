@@ -52,9 +52,7 @@ async function fetchRepositoriesForAssignment(assignmentId: number): Promise<Rep
         repository,
         profile_id,
         assignment_group_id,
-        user_roles (
-          disabled
-        )
+        user_roles!inner(disabled)
       `
       )
       .eq("assignment_id", assignmentId)

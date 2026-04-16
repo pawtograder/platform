@@ -54,7 +54,14 @@ export async function runCrossAssignmentCopy(
 
   if (allRepos.length === 0) {
     console.log("No repository pairs to sync.");
-    return { copied: 0, skipped: 0, notYetDue: 0, wouldCopy: 0, wouldSkip: 0, errors: 0 };
+    return {
+      copied: 0,
+      skipped: 0,
+      notYetDue: 0,
+      wouldCopy: 0,
+      wouldSkip: 0,
+      errors: ctx.errors.length
+    };
   }
 
   console.log(`\nCloning/updating ${allRepos.length} unique repos on main...`);
@@ -75,7 +82,7 @@ export async function runCrossAssignmentCopy(
   let notYetDue = 0;
   let wouldCopy = 0;
   let wouldSkip = 0;
-  let errors = 0;
+  let errors = ctx.errors.length;
 
   for (const pair of ctx.pairs) {
     const label = pair.source_repository;

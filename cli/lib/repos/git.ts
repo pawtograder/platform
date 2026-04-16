@@ -12,12 +12,28 @@ export function getCloneUrl(repository: string): string {
 }
 
 export function getRepoDirectoryName(repository: string): string {
-  const parts = repository.split("/");
-  return parts[parts.length - 1];
+  const parts = repository.split("/").filter((p) => p.length > 0);
+  const repo = parts[parts.length - 1] ?? "";
+  if (parts.length >= 2) {
+    const owner = parts[parts.length - 2];
+    return `${owner}_${repo}`;
+  }
+  return repo;
 }
 
-export async function runGitCommand(args: string[], cwd?: string): Promise<{ success: boolean; output: string }> {
+export type SpawnCommandResult = { success: boolean; exitCode: number | null; output: string };
+
+export async function runGitCommand(args: string[], cwd?: string): Promise<SpawnCommandResult> {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: SpawnCommandResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(result);
+    };
+
     const proc = spawn("git", args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"]
@@ -30,17 +46,38 @@ export async function runGitCommand(args: string[], cwd?: string): Promise<{ suc
     proc.stderr.on("data", (data) => {
       stderr += data.toString();
     });
+    proc.on("error", (err) => {
+      const base = stderr || stdout;
+      const sep = base && !base.endsWith("\n") ? "\n" : "";
+      finish({
+        success: false,
+        exitCode: null,
+        output: `${base}${sep}${err.message}`
+      });
+    });
     proc.on("close", (code) => {
-      resolve({
-        success: code === 0,
-        output: code === 0 ? stdout : stderr || stdout
+      const exitCode = code === null ? null : code;
+      const output = exitCode === 0 ? stdout : stderr || stdout;
+      finish({
+        success: exitCode === 0,
+        exitCode,
+        output
       });
     });
   });
 }
 
-export async function runRsync(args: string[]): Promise<{ success: boolean; output: string }> {
+export async function runRsync(args: string[]): Promise<SpawnCommandResult> {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: SpawnCommandResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(result);
+    };
+
     const proc = spawn("rsync", args, { stdio: ["pipe", "pipe", "pipe"] });
     let combined = "";
     proc.stdout.on("data", (d) => {
@@ -49,8 +86,21 @@ export async function runRsync(args: string[]): Promise<{ success: boolean; outp
     proc.stderr.on("data", (d) => {
       combined += d.toString();
     });
+    proc.on("error", (err) => {
+      const sep = combined && !combined.endsWith("\n") ? "\n" : "";
+      finish({
+        success: false,
+        exitCode: null,
+        output: `${combined}${sep}${err.message}`
+      });
+    });
     proc.on("close", (code) => {
-      resolve({ success: code === 0, output: combined });
+      const exitCode = code === null ? null : code;
+      finish({
+        success: exitCode === 0,
+        exitCode,
+        output: combined
+      });
     });
   });
 }
@@ -117,12 +167,9 @@ export async function ensureRepoOnMainAtPath(
       return { success: false, message: `fetch failed: ${fetchResult.output.trim()}` };
     }
 
-    let co = await runGitCommand(["checkout", "main"], repoDir);
+    const co = await runGitCommand(["checkout", "-B", "main", "origin/main"], repoDir);
     if (!co.success) {
-      co = await runGitCommand(["checkout", "-B", "main", "origin/main"], repoDir);
-      if (!co.success) {
-        return { success: false, message: `checkout main failed: ${co.output.trim()}` };
-      }
+      return { success: false, message: `checkout main failed: ${co.output.trim()}` };
     }
 
     const pullResult = await runGitCommand(["pull", "--ff-only", "origin", "main"], repoDir);
