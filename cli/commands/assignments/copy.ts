@@ -116,7 +116,8 @@ export async function copyAssignmentsHandler(args: ArgumentsCamelCase<CopyOption
       }
     }
 
-    const serverCopyHadFailures = data.summary.failed > 0 || data.results.some((row) => !row.success);
+    const serverCopyHadFailures =
+      data.summary.failed > 0 || data.results.some((row: { success: boolean }) => !row.success);
     if (serverCopyHadFailures) {
       process.exitCode = 1;
     }
