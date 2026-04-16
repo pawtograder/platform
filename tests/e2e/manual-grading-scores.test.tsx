@@ -179,6 +179,9 @@ test.describe("Manual grading score calculation", () => {
       }
     ]);
   });
+  test.afterEach(async ({ logMagicLinksOnFailure }) => {
+    await logMagicLinksOnFailure([instructor, studentA, studentB, studentC]);
+  });
 
   // ──────────────── Individual assignment grading ────────────────
 

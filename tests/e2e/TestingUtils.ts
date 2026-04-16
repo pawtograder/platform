@@ -7,7 +7,7 @@ import {
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { Page } from "@playwright/test";
+import { expect, Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
@@ -352,7 +352,10 @@ export async function updateClassSettings({
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient(
+    process.env.SUPABASE_URL!,
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+  );
 
   // Generate magic link using admin client (same as TestingUtils.ts does)
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -382,7 +385,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // Helper function to create a Supabase client authenticated as a specific user
 export async function createAuthenticatedClient(testingUser: TestingUser): Promise<SupabaseClient<Database>> {
   // Create a separate Supabase client for the user (using anon key)
-  const userSupabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const userSupabase = createClient<Database>(
+    process.env.SUPABASE_URL!,
+    (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
+  );
 
   // Generate magic link using admin client
   const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
@@ -453,6 +459,28 @@ export async function dismissTimeZonePreferenceModal(page: Page, timeoutMs = 100
   return true;
 }
 
+/**
+ * Navigates to a course URL and waits until the timezone preference dialog (if any) is gone
+ * and an expected heading is visible. Use after `ensureTimeZonePreferenceInitialized` for CI
+ * where the modal can mount late (e.g. Etc/Unknown browser TZ) after a short dismiss window.
+ */
+export async function gotoCourseUrlWhenHeadingVisible(
+  page: Page,
+  url: string,
+  headingName: string,
+  options?: { navigationTimeoutMs?: number; assertTimeoutMs?: number }
+): Promise<void> {
+  const navTimeout = options?.navigationTimeoutMs ?? 60_000;
+  const assertTimeout = options?.assertTimeoutMs ?? 90_000;
+
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeout });
+
+  await expect(async () => {
+    await dismissTimeZonePreferenceModal(page, 12_000);
+    await expect(page.getByRole("heading", { name: headingName })).toBeVisible({ timeout: 12_000 });
+  }).toPass({ timeout: assertTimeout });
+}
+
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
@@ -464,36 +492,69 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
       throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
     }
 
-    const magicLink = `/auth/magic-link?token_hash=${magicLinkData.properties?.hashed_token}`;
+    const magicLink = `/auth/magic-link?token_hash=${encodeURIComponent(magicLinkData.properties?.hashed_token ?? "")}`;
 
     // Use magic link for login
     await page.goto(magicLink);
     await page.getByRole("button", { name: "Sign in with magic link" }).click();
-    await page.waitForLoadState("networkidle");
 
-    const currentUrl = page.url();
-    const isSuccessful = currentUrl.includes("/course");
-    // Check to see if we got the magic link expired notice
-    if (!isSuccessful) {
-      // Magic link expired, retry if we have retries remaining
-      if (retriesRemaining > 0) {
-        return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
-      } else {
-        throw new Error("Magic link expired and no retries remaining");
+    // On slower machines (especially in dev mode), redirect can lag after submit.
+    // Wait for either successful course navigation or explicit expired-link message.
+    let outcome: "success" | "expired" | "unknown" = "unknown";
+    try {
+      await page.waitForURL(/\/course(\/|$)/, { timeout: 30_000 });
+      outcome = "success";
+    } catch {
+      const expiredMessage = page.getByText(/Email link is invalid or has expired/i);
+      try {
+        await expiredMessage.waitFor({ state: "visible", timeout: 2_000 });
+        outcome = "expired";
+      } catch {
+        outcome = "unknown";
       }
     }
 
-    if (!isSuccessful) {
-      throw new Error("Failed to sign in - neither success nor expired state detected");
+    if (outcome === "success") {
+      return;
     }
-  } catch (error) {
-    if (retriesRemaining > 0 && (error as Error).message.includes("Failed to sign in")) {
-      console.log(`Sign in failed, retrying... (${retriesRemaining} retries remaining)`);
+    if (retriesRemaining > 0) {
       return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
     }
-    throw new Error(`Failed to sign in with magic link: ${(error as Error).message}`);
+    if (outcome === "expired") {
+      throw new Error("Magic link expired and no retries remaining");
+    }
+    throw new Error(`Magic link sign-in did not complete (final URL: ${page.url()})`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to sign in with magic link: ${message}`);
   }
 }
+export async function generateMagicLink(user: TestingUser): Promise<string> {
+  const { data, error } = await supabase.auth.admin.generateLink({
+    email: user.email,
+    type: "magiclink"
+  });
+  if (error) throw new Error(`Failed to generate magic link for ${user.email}: ${error.message}`);
+  const tokenHash = data.properties?.hashed_token;
+  if (!tokenHash) throw new Error(`Failed to generate magic link for ${user.email}: missing token hash`);
+  const baseUrl = (process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return `${baseUrl}/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
+}
+
+export async function logMagicLink(users: (TestingUser | undefined)[]) {
+  if (process.env.E2E_PRINT_MAGIC_LINKS !== "true") return;
+  for (const user of users.filter(Boolean)) {
+    try {
+      const link = await generateMagicLink(user!);
+      console.log(`\nFailed test - login as ${user!.email}: ${link}`);
+    } catch (err) {
+      console.warn(
+        `\nFailed test - could not generate magic link for ${user!.email}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+}
+
 export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course, dismissTimezoneDialog = true) {
   if (dismissTimezoneDialog) {
     await ensureTimeZonePreferenceInitialized(page);
@@ -1275,7 +1336,12 @@ export async function insertAssignment({
   regrade_deadline,
   release_date,
   grader_pseudonymous_mode,
-  show_leaderboard
+  show_leaderboard,
+  group_config,
+  min_group_size,
+  max_group_size,
+  group_formation_deadline,
+  assignment_slug
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -1288,6 +1354,12 @@ export async function insertAssignment({
   release_date?: string;
   grader_pseudonymous_mode?: boolean;
   show_leaderboard?: boolean;
+  group_config?: "individual" | "groups" | "both";
+  min_group_size?: number | null;
+  max_group_size?: number | null;
+  group_formation_deadline?: string | null;
+  /** When set, used as assignments.slug instead of the global assignment index (avoids parallel E2E collisions). */
+  assignment_slug?: string;
 }): Promise<Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricCheck[] }> {
   const currentAssignmentIdx = assignmentIdx.assignment;
   const title = name ?? `Assignment #${currentAssignmentIdx}Test`;
@@ -1310,6 +1382,7 @@ export async function insertAssignment({
   }
   const selfReviewSettingData = selfReviewSettingDataList[0];
   const self_review_setting_id = selfReviewSettingData.id;
+  const slug = assignment_slug ?? `assignment-${currentAssignmentIdx}`;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
     .insert({
@@ -1323,8 +1396,11 @@ export async function insertAssignment({
       max_late_tokens: 10,
       release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: `assignment-${currentAssignmentIdx}`,
-      group_config: "individual",
+      slug,
+      group_config: group_config ?? "individual",
+      min_group_size: min_group_size ?? null,
+      max_group_size: max_group_size ?? null,
+      group_formation_deadline: group_formation_deadline ?? null,
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       permit_empty_submissions: permit_empty_submissions ?? true,
       self_review_setting_id: self_review_setting_id,
@@ -1654,6 +1730,20 @@ export async function insertSubmissionViaAPI({
     }
   });
   if (error) {
+    // Non-2xx response — try to extract structured error details from the response body
+    if (error.context instanceof Response) {
+      const rawBody = await error.context.text().catch(() => "");
+      if (rawBody) {
+        try {
+          const body = JSON.parse(rawBody) as { error?: { details?: unknown } };
+          if (body?.error?.details) {
+            throw new Error(String(body.error.details));
+          }
+        } catch (e) {
+          if (e instanceof Error && !(e instanceof SyntaxError)) throw e;
+        }
+      }
+    }
     throw new Error(`Failed to create submission: ${error.message}`);
   }
   if (data == null) {
@@ -2296,6 +2386,7 @@ export async function createAssignmentsAndGradebookColumns({
     score_expression,
     dependencies,
     released = false,
+    instructor_only = false,
     sort_order,
     rateLimitManager
   }: {
@@ -2307,6 +2398,7 @@ export async function createAssignmentsAndGradebookColumns({
     score_expression?: string;
     dependencies?: { assignments?: number[]; gradebook_columns?: number[] };
     released?: boolean;
+    instructor_only?: boolean;
     sort_order?: number;
     rateLimitManager?: RateLimitManager;
   }): Promise<{
@@ -2373,6 +2465,7 @@ export async function createAssignmentsAndGradebookColumns({
           score_expression,
           dependencies: finalDependencies ? finalDependencies : null,
           released,
+          instructor_only: score_expression ? instructor_only : false,
           sort_order
         })
         .select("id, name, slug, max_score, score_expression, sort_order")
@@ -2903,7 +2996,7 @@ export async function createAssignmentsAndGradebookColumns({
     slug: "average-assignments",
     score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
     max_score: 100,
-    sort_order: 2,
+    sort_order: numAssignments,
     rateLimitManager: DEFAULT_RATE_LIMIT_MANAGER
   });
 

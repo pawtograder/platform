@@ -7,6 +7,7 @@ import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useMentions } from "@/hooks/useMentions";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { getLanguageFromFile, isTextFile } from "@/lib/utils";
 import { getCurrentCursorPosition } from "@/utils/cursorPosition";
 import { createClient } from "@/utils/supabase/client";
@@ -450,7 +451,7 @@ export default function MessageInput(props: MessageInputProps) {
                 .catch((error) => {
                   toaster.create({
                     title: "Error sending message",
-                    description: error instanceof Error ? error.message : "Unknown error",
+                    description: getStudentFacingErrorMessage(error),
                     type: "error"
                   });
                 })
@@ -615,7 +616,7 @@ export default function MessageInput(props: MessageInputProps) {
                 } catch (error) {
                   toaster.create({
                     title: "Error sending message",
-                    description: error instanceof Error ? error.message : "Unknown error",
+                    description: getStudentFacingErrorMessage(error),
                     type: "error"
                   });
                 } finally {
@@ -851,7 +852,7 @@ export default function MessageInput(props: MessageInputProps) {
               } catch (error) {
                 toaster.create({
                   title: "Error sending message",
-                  description: error instanceof Error ? error.message : "Unknown error",
+                  description: getStudentFacingErrorMessage(error),
                   type: "error"
                 });
               } finally {

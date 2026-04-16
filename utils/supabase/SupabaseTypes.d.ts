@@ -3351,6 +3351,7 @@ export type Database = {
           external_data: Json | null;
           gradebook_id: number;
           id: number;
+          instructor_only: boolean;
           max_score: number | null;
           name: string;
           released: boolean;
@@ -3370,6 +3371,7 @@ export type Database = {
           external_data?: Json | null;
           gradebook_id: number;
           id?: number;
+          instructor_only?: boolean;
           max_score?: number | null;
           name: string;
           released?: boolean;
@@ -3389,6 +3391,7 @@ export type Database = {
           external_data?: Json | null;
           gradebook_id?: number;
           id?: number;
+          instructor_only?: boolean;
           max_score?: number | null;
           name?: string;
           released?: boolean;
@@ -8632,6 +8635,8 @@ export type Database = {
           name: string;
           per_student_grading_shared_base: number | null;
           per_student_grading_totals: Json | null;
+          per_student_tweak_notes: Json | null;
+          per_student_tweaks: Json | null;
           released: boolean;
           rubric_id: number;
           rubric_part_student_assignments: Json | null;
@@ -8639,6 +8644,7 @@ export type Database = {
           total_autograde_score: number;
           total_score: number;
           tweak: number;
+          tweak_note: string | null;
           updated_at: string;
         };
         Insert: {
@@ -8655,6 +8661,8 @@ export type Database = {
           name: string;
           per_student_grading_shared_base?: number | null;
           per_student_grading_totals?: Json | null;
+          per_student_tweak_notes?: Json | null;
+          per_student_tweaks?: Json | null;
           released?: boolean;
           rubric_id: number;
           rubric_part_student_assignments?: Json | null;
@@ -8662,6 +8670,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score: number;
           tweak: number;
+          tweak_note?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -8678,6 +8687,8 @@ export type Database = {
           name?: string;
           per_student_grading_shared_base?: number | null;
           per_student_grading_totals?: Json | null;
+          per_student_tweak_notes?: Json | null;
+          per_student_tweaks?: Json | null;
           released?: boolean;
           rubric_id?: number;
           rubric_part_student_assignments?: Json | null;
@@ -8685,6 +8696,7 @@ export type Database = {
           total_autograde_score?: number;
           total_score?: number;
           tweak?: number;
+          tweak_note?: string | null;
           updated_at?: string;
         };
         Relationships: [
@@ -10100,6 +10112,9 @@ export type Database = {
           grader_result_id: number | null;
           grader_result_max_score: number | null;
           grader_result_score: number | null;
+          grading_submission_review_completed_at: string | null;
+          grading_submission_review_id: number | null;
+          grading_total_score: number | null;
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"] | null;
           group_formation_deadline: string | null;
@@ -11163,6 +11178,16 @@ export type Database = {
         };
         Returns: Json;
       };
+      bulk_update_review_assignment_due_dates: {
+        Args: {
+          p_assignment_id: number;
+          p_class_id: number;
+          p_due_date: string;
+          p_only_incomplete?: boolean;
+          p_rubric_id: number;
+        };
+        Returns: Json;
+      };
       bulk_csv_import_enrollment: {
         Args: {
           p_class_id: number;
@@ -11987,6 +12012,10 @@ export type Database = {
         Args: { p_gradebook_id: number };
         Returns: undefined;
       };
+      gradebook_columns_reorder: {
+        Args: { p_ordered_column_ids: number[] };
+        Returns: undefined;
+      };
       gradebook_column_move_left: {
         Args: { p_column_id: number };
         Returns: {
@@ -12188,6 +12217,10 @@ export type Database = {
       queue_repository_syncs: {
         Args: { p_repository_ids: number[] };
         Returns: Json;
+      };
+      release_instructor_only_gradebook_column: {
+        Args: { p_column_id: number };
+        Returns: undefined;
       };
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };

@@ -1259,6 +1259,22 @@ async function handleWorkflowCompletionErrors(
         scope.setTag(`submission_${submission.id}_has_grader_result`, hasGraderResult.toString());
 
         if (!hasGraderResult) {
+          const { data: userVisibleErrRows, error: userVisibleErrLookupError } = await adminSupabase
+            .from("workflow_run_error")
+            .select("id")
+            .eq("repository_id", repositoryId)
+            .eq("run_number", workflowRun.id)
+            .eq("run_attempt", workflowRun.run_attempt)
+            .eq("data->>type", "user_visible_error")
+            .limit(1);
+          if (userVisibleErrLookupError) {
+            Sentry.captureException(userVisibleErrLookupError, scope);
+          }
+          if (userVisibleErrRows && userVisibleErrRows.length > 0) {
+            scope.setTag("missing_grader_result_skipped", "user_visible_error_present");
+            continue;
+          }
+
           const sentryMessage = "Workflow terminated without creating a grader result.";
           const userErrorMessage =
             "The grading container failed to terminate cleanly. This may indicate that the grading script ran out of memory or encountered an unexpected error. Please contact your instructor for assistance.";

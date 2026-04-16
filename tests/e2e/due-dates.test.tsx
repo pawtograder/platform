@@ -167,7 +167,9 @@ test.beforeEach(async () => {
     throw new Error(`Failed to add student 2 to group: ${member2Error.message}`);
   }
 });
-
+test.afterEach(async ({ logMagicLinksOnFailure }) => {
+  await logMagicLinksOnFailure([student, student2, instructor, labLeader]);
+});
 const expectedLabAssignmentDueDate =
   labAssignmentDueDate.getDay() === 1 ? labAssignmentDueDate : previousMonday(labAssignmentDueDate);
 expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);

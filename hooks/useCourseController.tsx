@@ -421,7 +421,10 @@ export class CourseController {
   private _labSectionLeaders?: TableController<"lab_section_leaders">;
   private _classSections?: TableController<"class_sections">;
   private _profiles?: TableController<"profiles">;
-  private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
+  private _userRolesWithProfiles?: TableController<
+    "user_roles",
+    "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+  >;
   private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
   private _assignmentDueDateExceptions?: TableController<"assignment_due_date_exceptions">;
   private _assignments?: TableController<"assignments">;
@@ -469,7 +472,7 @@ export class CourseController {
     // Create profiles and userRolesWithProfiles immediately
     // These are accessed frequently and should be ready
     void this.profiles; // Triggers lazy creation
-    if (this.isStaff) {
+    if (this.canViewFullClassUserRoles) {
       void this.userRolesWithProfiles; // Triggers lazy creation
     }
     // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
@@ -659,23 +662,25 @@ export class CourseController {
     return this._classSections;
   }
 
-  get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
+  get userRolesWithProfiles(): TableController<
+    "user_roles",
+    "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+  > {
     if (!this._userRolesWithProfiles) {
-      let query = this.client
-        .from("user_roles")
-        .select("*, profiles!private_profile_id(*), users(*)")
-        .eq("class_id", this.courseId);
-      if (!this.isStaff) {
+      const staffSelect =
+        "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)";
+      let query = this.client.from("user_roles").select(staffSelect).eq("class_id", this.courseId);
+      if (!this.canViewFullClassUserRoles) {
         query = query.eq("user_id", this._userId);
       }
       this._userRolesWithProfiles = new TableController({
         client: this.client,
         table: "user_roles",
         query,
-        selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
+        selectForSingleRow: staffSelect,
         classRealTimeController: this.classRealTimeController,
         initialData: this._initialData?.userRolesWithProfiles,
-        autoFetchMissingRows: this.isStaff
+        autoFetchMissingRows: this.canViewFullClassUserRoles
       });
     }
     return this._userRolesWithProfiles;
@@ -1177,6 +1182,14 @@ export class CourseController {
     return this.role === "instructor" || this.role === "grader";
   }
 
+  /**
+   * Full class roster in `user_roles` (matches `fetchCourseControllerData` / SSR `isStaff` for queries).
+   * Platform admins are not `isStaff` in the course sense but still receive the unfiltered query on the server.
+   */
+  private get canViewFullClassUserRoles(): boolean {
+    return this.role === "instructor" || this.role === "grader" || this.role === "admin";
+  }
+
   getUserRole(user_id: string) {
     const result = this.userRolesWithProfiles.list();
     return result.data.find((role) => role.user_id === user_id);
@@ -1359,7 +1372,10 @@ export class CourseController {
       | TableController<"lab_sections">
       | TableController<"class_sections">
       | TableController<"lab_section_meetings">
-      | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
+      | TableController<
+          "user_roles",
+          "*, profiles!private_profile_id(*, assignment_groups_members!assignment_groups_members_profile_id_fkey(*)), users(*)"
+        >
       | TableController<"student_deadline_extensions">
       | TableController<"assignment_due_date_exceptions">
       | TableController<"assignments">
@@ -1541,6 +1557,13 @@ export function CourseControllerProvider({
   const [courseController, setCourseController] = useState<CourseController | null>(null);
   const { user } = useAuthState();
   const userId = user?.id;
+
+  // Use ref for initialData so it doesn't trigger effect re-runs.
+  // initialData is SSR-provided and gets a new object reference on every server render,
+  // which would otherwise cause unnecessary CourseController/ClassRealTimeController recreation.
+  const initialDataRef = useRef(initialData);
+  initialDataRef.current = initialData;
+
   // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
     if (userId) {
@@ -1552,7 +1575,14 @@ export function CourseControllerProvider({
         profileId: profile_id,
         isStaff: role === "instructor" || role === "grader"
       });
-      const _courseController = new CourseController(role, course_id, client, realTimeController, userId, initialData);
+      const _courseController = new CourseController(
+        role,
+        course_id,
+        client,
+        realTimeController,
+        userId,
+        initialDataRef.current
+      );
       setCourseController(_courseController);
       const start = async () => {
         try {
@@ -1583,7 +1613,7 @@ export function CourseControllerProvider({
         realTimeController.close();
       };
     }
-  }, [course_id, profile_id, role, userId, initialData]);
+  }, [course_id, profile_id, role, userId]);
 
   if (!courseController || !userId) {
     return (

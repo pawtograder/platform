@@ -111,7 +111,14 @@ export default function SurveyAnalytics({
   );
 
   const freeTextQuestions = useMemo(() => allQuestions.filter((q) => q.type === "comment"), [allQuestions]);
-
+  const sectionFilteredResponses = useMemo(() => {
+    if (sectionFilter === "overall") return responses;
+    const [type, idStr] = sectionFilter.split(":");
+    const id = Number(idStr);
+    if (type === "lab") return responses.filter((r) => r.lab_section_id === id);
+    if (type === "class") return responses.filter((r) => r.class_section_id === id);
+    return responses;
+  }, [responses, sectionFilter]);
   const questionsByScaleGroup = useMemo(() => {
     const groups = new Map<
       string,
@@ -277,7 +284,7 @@ export default function SurveyAnalytics({
                   </Text>
                   <VStack align="stretch" gap={6}>
                     {freeTextQuestions.map((q) => {
-                      const submittedResponses = responses.filter((r) => r.is_submitted);
+                      const submittedResponses = sectionFilteredResponses.filter((r) => r.is_submitted);
                       const valueLabels = getValueLabelsFromSurveyJson(surveyJson, q.name);
                       return (
                         <Box key={q.name} borderWidth="1px" borderColor="border" borderRadius="md" p={4}>

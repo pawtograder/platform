@@ -44,6 +44,7 @@ import { toaster } from "@/components/ui/toaster";
 import {
   useAllRubricChecks,
   useAssignmentController,
+  useAssignmentData,
   useGraderPseudonymousMode,
   useReferenceCheckRecordsFromCheck,
   useReviewAssignment,
@@ -70,6 +71,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
@@ -325,18 +327,22 @@ export function CommentActions({
   const isInstructor = useIsInstructor();
   const isStudent = useIsStudent();
 
-  // Get the submission review to check if it's completed
-  const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id || -1);
+  // Get the submission review to check completion and release (issue #446: no grader edits after release)
+  const submissionReview = useSubmissionReviewOrGradingReview(comment.submission_review_id ?? undefined);
 
   // Check if current user can edit/delete this comment
   // 1. Instructors can edit all comments
-  // 2. Graders can only edit their own comments
-  // 3. Students can edit their own comments IF the review is not completed (or no review exists)
+  // 2. Graders can only edit their own comments while the review is not released to students
+  // 3. Students can edit their own comments IF the review is not completed (or no review exists),
+  //    and the review is not released
   const isCommentAuthor = comment.author === private_profile_id || comment.author === public_profile_id;
   const isReviewCompleted = comment.submission_review_id ? submissionReview?.completed_at != null : false;
+  const isReviewReleased = Boolean(submissionReview?.released);
 
   const canEditComment =
-    isInstructor || (isGraderOrInstructor && isCommentAuthor) || (isStudent && isCommentAuthor && !isReviewCompleted);
+    isInstructor ||
+    (isGraderOrInstructor && isCommentAuthor && !isReviewReleased) ||
+    (isStudent && isCommentAuthor && !isReviewCompleted && !isReviewReleased);
 
   // Don't show actions if user can't edit
   if (!canEditComment) {
@@ -505,18 +511,30 @@ export function RubricCheckComment({
     }
   }, [comment?.regrade_request_id]);
 
+  const rubricForCriteria = useRubricById(criteria?.rubric_id);
+  const isStudent = useIsStudent();
+
   const handleEditComment = useCallback(
     async (message: string) => {
-      if (comment_type === "submission") {
-        await submissionController.submission_comments.update(comment_id, { comment: message });
-      } else if (comment_type === "file") {
-        await submissionController.submission_file_comments.update(comment_id, { comment: message });
-      } else if (comment_type === "artifact") {
-        await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
+      try {
+        if (comment_type === "submission") {
+          await submissionController.submission_comments.update(comment_id, { comment: message });
+        } else if (comment_type === "file") {
+          await submissionController.submission_file_comments.update(comment_id, { comment: message });
+        } else if (comment_type === "artifact") {
+          await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
+        }
+      } catch (error: unknown) {
+        throw new Error(
+          getStudentFacingErrorMessage(error, {
+            isStudent,
+            rubricReviewRound: rubricForCriteria?.review_round ?? null
+          })
+        );
       }
       setIsEditing(false);
     },
-    [comment_id, comment_type, setIsEditing, submissionController]
+    [comment_id, comment_type, submissionController, isStudent, rubricForCriteria?.review_round]
   );
 
   const linkedFileId =
@@ -525,6 +543,8 @@ export function RubricCheckComment({
     check?.artifact && submission
       ? submission.submission_artifacts.find((a) => a.name === check.artifact)?.id
       : undefined;
+  const assignment = useAssignmentData();
+
   if (!comment) {
     return <Skeleton w="100%" h="100px" />;
   }
@@ -546,8 +566,11 @@ export function RubricCheckComment({
     }
   }
   const hasPoints = comment.points !== null;
+  const isSelfReviewComment =
+    criteria?.rubric_id !== undefined && criteria.rubric_id === assignment.self_review_rubric_id;
   // Check if student can create a regrade request
-  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
+  const canCreateRegradeRequest =
+    !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released && !isSelfReviewComment;
 
   return (
     <Box
@@ -1210,6 +1233,7 @@ export function RubricCheckGlobal({
       {isEditing && (
         <SubmissionCommentForm
           check={check}
+          criteriaRubricId={criteria.rubric_id}
           submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
@@ -1253,6 +1277,7 @@ export function RubricCheckGlobal({
  */
 function SubmissionCommentForm({
   check,
+  criteriaRubricId,
   submissionReview,
   selectedOptionIndex,
   linkedArtifactId,
@@ -1260,6 +1285,7 @@ function SubmissionCommentForm({
   onSuccess
 }: {
   check: HydratedRubricCheck;
+  criteriaRubricId: number;
   submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
@@ -1269,6 +1295,8 @@ function SubmissionCommentForm({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
   const submissionController = useSubmissionController();
+  const rubricForCriteria = useRubricById(criteriaRubricId);
+  const isStudent = useIsStudent();
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const graderPseudonymousMode = useGraderPseudonymousMode();
@@ -1334,8 +1362,16 @@ function SubmissionCommentForm({
           onSuccess();
           if (check.is_annotation) {
             throw new Error("Not implemented");
-          } else {
+          }
+          try {
             await submissionController.submission_comments.create(values);
+          } catch (error: unknown) {
+            throw new Error(
+              getStudentFacingErrorMessage(error, {
+                isStudent,
+                rubricReviewRound: rubricForCriteria?.review_round ?? null
+              })
+            );
           }
         }}
         defaultSingleLine={true}
@@ -1755,7 +1791,7 @@ function AssignToStudentPart({
       const { error } = await supabase.rpc("patch_submission_review_rubric_part_assignment", {
         p_submission_review_id: review.id,
         p_rubric_part_id: part.id,
-        p_student_profile_id: studentId
+        p_student_profile_id: studentId as string
       });
 
       if (error) {

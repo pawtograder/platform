@@ -37,7 +37,8 @@ export function OverrideScoreForm({
       is_excused: studentGradebookColumn.is_excused,
       is_missing: studentGradebookColumn.is_missing,
       score_override: studentGradebookColumn.score_override ?? undefined,
-      score: studentGradebookColumn.score ?? undefined
+      score: studentGradebookColumn.score ?? undefined,
+      score_override_note: studentGradebookColumn.score_override_note ?? undefined
     }
   });
 
