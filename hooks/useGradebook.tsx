@@ -37,17 +37,33 @@ let mathjsCache: {
 } | null = null;
 
 async function loadMathJS() {
-  if (!mathjsCache) {
-    const mathjs = await import("mathjs");
-    mathjsCache = {
-      all: mathjs.all,
-      create: mathjs.create,
-      ConstantNode: mathjs.ConstantNode,
-      FunctionNode: mathjs.FunctionNode,
-      Matrix: mathjs.Matrix
-    };
+  if (mathjsCache) {
+    return mathjsCache;
   }
-  return mathjsCache;
+  // Transient chunk-load errors can happen under `next dev` (and occasionally under
+  // `next start` after a fresh deploy invalidates cached chunks). Retry with
+  // exponential backoff so a flaky first load doesn't permanently wedge the
+  // gradebook behind an error screen.
+  const maxAttempts = 4;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const mathjs = await import("mathjs");
+      mathjsCache = {
+        all: mathjs.all,
+        create: mathjs.create,
+        ConstantNode: mathjs.ConstantNode,
+        FunctionNode: mathjs.FunctionNode,
+        Matrix: mathjs.Matrix
+      };
+      return mathjsCache;
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** (attempt - 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 // Synchronous accessor that throws if MathJS isn't loaded yet
