@@ -925,6 +925,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               const minutesLate = Math.ceil((pushTime.getTime() - finalDueDate.getTime()) / 60000);
               const hoursLate = Math.max(1, Math.ceil(minutesLate / 60));
               const tokensNeeded = Math.ceil(hoursLate / 24);
+              const hoursToGrant = tokensNeeded * 24;
 
               // Atomically check token balance and insert extension in one DB transaction.
               const { data: result, error: rpcError } = await adminSupabase.rpc("apply_late_token_extension", {
@@ -933,7 +934,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
                 p_assignment_group_id: repoData.assignment_group_id ?? null,
                 p_class_id: repoData.assignments.class_id!,
                 p_creator_id: profileId!,
-                p_hours_late: hoursLate,
+                p_hours_late: hoursToGrant,
                 p_tokens_needed: tokensNeeded
               });
 

@@ -55,7 +55,7 @@ test.describe("Auto-apply late tokens", () => {
       p_assignment_group_id: null as unknown as number,
       p_class_id: course.id,
       p_creator_id: student!.private_profile_id,
-      p_hours_late: 25,
+      p_hours_late: 48,
       p_tokens_needed: 2
     });
 
@@ -72,7 +72,7 @@ test.describe("Auto-apply late tokens", () => {
     expect(exceptionsError).toBeNull();
     expect(exceptions).toHaveLength(1);
     expect(exceptions![0].tokens_consumed).toBe(2);
-    expect(exceptions![0].hours).toBe(25);
+    expect(exceptions![0].hours).toBe(48);
     expect(exceptions![0].note).toBe("Auto-applied on late submission");
   });
 
