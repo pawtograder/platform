@@ -16,10 +16,7 @@ export function getRepoDirectoryName(repository: string): string {
   return parts[parts.length - 1];
 }
 
-export async function runGitCommand(
-  args: string[],
-  cwd?: string
-): Promise<{ success: boolean; output: string }> {
+export async function runGitCommand(args: string[], cwd?: string): Promise<{ success: boolean; output: string }> {
   return new Promise((resolve) => {
     const proc = spawn("git", args, {
       cwd,

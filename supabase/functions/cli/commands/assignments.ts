@@ -9,8 +9,8 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
 import { copyLinkedSurveysForAssignment, fetchLatestLinkedSurveysForAssignment } from "../utils/surveyCopy.ts";
-import { copyRubricTree } from "../utils/rubric.ts";
-import { repoExistsOnGitHub, copyRepoContentsViaGitHub, targetRepoHasContentFromSource } from "../utils/github.ts";
+import { copyRubricStructure, copyRubricCheckReferencesForAssignment } from "../utils/rubric.ts";
+import { repoExistsOnGitHub } from "../utils/github.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
@@ -21,6 +21,7 @@ import type {
   CopySpec,
   CopyResult,
   CopyStatus,
+  RepoCopyPair,
   ClassRow,
   AssignmentRow
 } from "../types.ts";
@@ -60,6 +61,20 @@ function createAssignmentCopyDebugLog(context: Record<string, unknown>): {
       );
     }
   };
+}
+
+/**
+ * Poll `repoExistsOnGitHub` a few times to tolerate brief propagation lag after
+ * a template-generate repo creation. Returns true if we eventually see it.
+ */
+async function verifyRepoReachable(repoFullName: string, attempts = 3, delayMs = 1000): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    if (await repoExistsOnGitHub(repoFullName)) return true;
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  return false;
 }
 
 function formatEdgeFunctionBodyForError(data: unknown): string {
@@ -336,8 +351,11 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
     new_assignment_id?: number;
     was_existing?: boolean;
     status?: CopyStatus;
+    repo_copy_pairs?: RepoCopyPair[];
     error?: string;
   }> = [];
+
+  const repoCopyPairs: RepoCopyPair[] = [];
 
   for (let i = 0; i < assignmentsToCopy.length; i++) {
     const spec = assignmentsToCopy[i];
@@ -367,8 +385,10 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
         new_assignment_id: result.assignmentId,
         was_existing: result.wasExisting,
         status: result.status,
+        repo_copy_pairs: result.repoCopyPairs,
         error: hasErrors ? result.status.errors.map((e) => `${e.step}: ${e.error}`).join("; ") : undefined
       });
+      repoCopyPairs.push(...result.repoCopyPairs);
     } catch (err) {
       if (copyDebug) {
         createAssignmentCopyDebugLog({
@@ -397,6 +417,7 @@ async function handleAssignmentsCopy(ctx: MCPAuthContext, params: Record<string,
       source_class: { id: sourceClass.id, slug: sourceClass.slug, name: sourceClass.name },
       target_class: { id: targetClass.id, slug: targetClass.slug, name: targetClass.name },
       results,
+      repo_copy_pairs: repoCopyPairs,
       summary: {
         total: assignmentsToCopy.length,
         succeeded: results.filter((r) => r.success).length,
@@ -461,12 +482,12 @@ async function copySingleAssignment(
     rubricsCopied: false,
     autograderConfigCopied: false,
     handoutRepoCreated: false,
-    handoutRepoContentsCopied: false,
     solutionRepoCreated: false,
-    solutionRepoContentsCopied: false,
     surveysCopied: false,
     errors: []
   };
+
+  const repoCopyPairs: RepoCopyPair[] = [];
 
   const addError = (step: string, err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
@@ -586,129 +607,99 @@ async function copySingleAssignment(
       meta_grading_rubric_id: sourceAssignment.meta_grading_rubric_id ?? null
     });
     try {
-      if (sourceAssignment.grading_rubric_id) {
-        const newGradingRubricId = await copyRubricTree(
+      // Shared structures for the two-phase copy. A single rubric_check_references row can
+      // cross rubrics (e.g. a self-review check can reference a grading check), so we build
+      // a shared sourceCheckId → targetCheckId map across all rubrics for this assignment,
+      // then do the reference insert in a second pass after every rubric is in place.
+      const sharedCheckIdMap = new Map<number, number>();
+      const rubricIdPairs: Array<{ sourceRubricId: number; targetRubricId: number }> = [];
+
+      const setAssignmentRubricId = async (
+        column: "grading_rubric_id" | "self_review_rubric_id" | "meta_grading_rubric_id",
+        targetRubricId: number
+      ) => {
+        const {
+          data,
+          error,
+          status: httpStatus
+        } = await supabase
+          .from("assignments")
+          .update({ [column]: targetRubricId })
+          .eq("id", newAssignment.id)
+          .select("id");
+        if (error) {
+          const detail =
+            [
+              error.code && `code=${error.code}`,
+              error.details && `details=${error.details}`,
+              error.hint && `hint=${error.hint}`
+            ]
+              .filter(Boolean)
+              .join("; ") || undefined;
+          throw new CLICommandError(
+            `Failed to set ${column} on assignment (assignment_id=${newAssignment.id}, ${column}=${targetRubricId}): ${error.message}${detail ? ` (${detail})` : ""}`
+          );
+        }
+        if (httpStatus < 200 || httpStatus >= 300) {
+          throw new CLICommandError(
+            `Failed to set ${column} on assignment (assignment_id=${newAssignment.id}, ${column}=${targetRubricId}): unexpected HTTP status ${httpStatus}`
+          );
+        }
+        if (!data?.length) {
+          throw new CLICommandError(
+            `Failed to set ${column} on assignment (assignment_id=${newAssignment.id}, ${column}=${targetRubricId}): update matched no rows`
+          );
+        }
+      };
+
+      const copyOne = async (
+        sourceRubricId: number,
+        existingTargetRubricId: number | null,
+        column: "grading_rubric_id" | "self_review_rubric_id" | "meta_grading_rubric_id"
+      ) => {
+        const targetRubricId = await copyRubricStructure(
           supabase,
-          sourceAssignment.grading_rubric_id,
+          sourceRubricId,
           newAssignment.id,
           targetClass.id,
-          newAssignment.grading_rubric_id ?? undefined
+          sharedCheckIdMap,
+          existingTargetRubricId ?? undefined
         );
-        if (!newAssignment.grading_rubric_id && newGradingRubricId) {
-          const {
-            data: gradingRubricAssignmentRows,
-            error: gradingRubricAssignmentUpdateError,
-            status: gradingRubricAssignmentUpdateStatus
-          } = await supabase
-            .from("assignments")
-            .update({ grading_rubric_id: newGradingRubricId })
-            .eq("id", newAssignment.id)
-            .select("id");
-
-          if (gradingRubricAssignmentUpdateError) {
-            const e = gradingRubricAssignmentUpdateError;
-            const detail =
-              [e.code && `code=${e.code}`, e.details && `details=${e.details}`, e.hint && `hint=${e.hint}`]
-                .filter(Boolean)
-                .join("; ") || undefined;
-            throw new CLICommandError(
-              `Failed to set grading_rubric_id on assignment (assignment_id=${newAssignment.id}, grading_rubric_id=${newGradingRubricId}): ${e.message}${detail ? ` (${detail})` : ""}`
-            );
-          }
-          if (gradingRubricAssignmentUpdateStatus < 200 || gradingRubricAssignmentUpdateStatus >= 300) {
-            throw new CLICommandError(
-              `Failed to set grading_rubric_id on assignment (assignment_id=${newAssignment.id}, grading_rubric_id=${newGradingRubricId}): unexpected HTTP status ${gradingRubricAssignmentUpdateStatus}`
-            );
-          }
-          if (!gradingRubricAssignmentRows?.length) {
-            throw new CLICommandError(
-              `Failed to set grading_rubric_id on assignment (assignment_id=${newAssignment.id}, grading_rubric_id=${newGradingRubricId}): update matched no rows`
-            );
-          }
+        rubricIdPairs.push({ sourceRubricId, targetRubricId });
+        if (!existingTargetRubricId) {
+          await setAssignmentRubricId(column, targetRubricId);
         }
+      };
+
+      if (sourceAssignment.grading_rubric_id) {
+        await copyOne(sourceAssignment.grading_rubric_id, newAssignment.grading_rubric_id ?? null, "grading_rubric_id");
       }
       if (sourceAssignment.self_review_rubric_id) {
-        const newSelfReviewRubricId = await copyRubricTree(
-          supabase,
+        await copyOne(
           sourceAssignment.self_review_rubric_id,
-          newAssignment.id,
-          targetClass.id,
-          newAssignment.self_review_rubric_id ?? undefined
+          newAssignment.self_review_rubric_id ?? null,
+          "self_review_rubric_id"
         );
-        if (!newAssignment.self_review_rubric_id && newSelfReviewRubricId) {
-          const {
-            data: selfReviewRubricAssignmentRows,
-            error: selfReviewRubricAssignmentUpdateError,
-            status: selfReviewRubricAssignmentUpdateStatus
-          } = await supabase
-            .from("assignments")
-            .update({ self_review_rubric_id: newSelfReviewRubricId })
-            .eq("id", newAssignment.id)
-            .select("id");
-
-          if (selfReviewRubricAssignmentUpdateError) {
-            const e = selfReviewRubricAssignmentUpdateError;
-            const detail =
-              [e.code && `code=${e.code}`, e.details && `details=${e.details}`, e.hint && `hint=${e.hint}`]
-                .filter(Boolean)
-                .join("; ") || undefined;
-            throw new CLICommandError(
-              `Failed to set self_review_rubric_id on assignment (assignment_id=${newAssignment.id}, self_review_rubric_id=${newSelfReviewRubricId}): ${e.message}${detail ? ` (${detail})` : ""}`
-            );
-          }
-          if (selfReviewRubricAssignmentUpdateStatus < 200 || selfReviewRubricAssignmentUpdateStatus >= 300) {
-            throw new CLICommandError(
-              `Failed to set self_review_rubric_id on assignment (assignment_id=${newAssignment.id}, self_review_rubric_id=${newSelfReviewRubricId}): unexpected HTTP status ${selfReviewRubricAssignmentUpdateStatus}`
-            );
-          }
-          if (!selfReviewRubricAssignmentRows?.length) {
-            throw new CLICommandError(
-              `Failed to set self_review_rubric_id on assignment (assignment_id=${newAssignment.id}, self_review_rubric_id=${newSelfReviewRubricId}): update matched no rows`
-            );
-          }
-        }
       }
       if (sourceAssignment.meta_grading_rubric_id) {
-        const newMetaRubricId = await copyRubricTree(
-          supabase,
+        await copyOne(
           sourceAssignment.meta_grading_rubric_id,
-          newAssignment.id,
-          targetClass.id,
-          newAssignment.meta_grading_rubric_id ?? undefined
+          newAssignment.meta_grading_rubric_id ?? null,
+          "meta_grading_rubric_id"
         );
-        if (!newAssignment.meta_grading_rubric_id && newMetaRubricId) {
-          const {
-            data: metaRubricAssignmentRows,
-            error: metaRubricAssignmentUpdateError,
-            status: metaRubricAssignmentUpdateStatus
-          } = await supabase
-            .from("assignments")
-            .update({ meta_grading_rubric_id: newMetaRubricId })
-            .eq("id", newAssignment.id)
-            .select("id");
-
-          if (metaRubricAssignmentUpdateError) {
-            const e = metaRubricAssignmentUpdateError;
-            const detail =
-              [e.code && `code=${e.code}`, e.details && `details=${e.details}`, e.hint && `hint=${e.hint}`]
-                .filter(Boolean)
-                .join("; ") || undefined;
-            throw new CLICommandError(
-              `Failed to set meta_grading_rubric_id on assignment (assignment_id=${newAssignment.id}, meta_grading_rubric_id=${newMetaRubricId}): ${e.message}${detail ? ` (${detail})` : ""}`
-            );
-          }
-          if (metaRubricAssignmentUpdateStatus < 200 || metaRubricAssignmentUpdateStatus >= 300) {
-            throw new CLICommandError(
-              `Failed to set meta_grading_rubric_id on assignment (assignment_id=${newAssignment.id}, meta_grading_rubric_id=${newMetaRubricId}): unexpected HTTP status ${metaRubricAssignmentUpdateStatus}`
-            );
-          }
-          if (!metaRubricAssignmentRows?.length) {
-            throw new CLICommandError(
-              `Failed to set meta_grading_rubric_id on assignment (assignment_id=${newAssignment.id}, meta_grading_rubric_id=${newMetaRubricId}): update matched no rows`
-            );
-          }
-        }
       }
+
+      // Second phase: copy rubric_check_references using the accumulated map.
+      // Any references that cross rubrics (e.g. self-review → grading) are resolved here
+      // because every rubric's checks are already present in sharedCheckIdMap.
+      await copyRubricCheckReferencesForAssignment(
+        supabase,
+        rubricIdPairs,
+        newAssignment.id,
+        targetClass.id,
+        sharedCheckIdMap
+      );
+
       status.rubricsCopied = true;
     } catch (err) {
       addError("rubrics", err);
@@ -779,14 +770,12 @@ async function copySingleAssignment(
 
   if (!options.skipRepos && targetClass.github_org) {
     mark("repos_start", { github_org: targetClass.github_org });
-    if (sourceAssignment.template_repo) {
-      const handoutRepoExists = !!newAssignment.template_repo;
-      const handoutContentsCopied =
-        handoutRepoExists && newAssignment.template_repo
-          ? await targetRepoHasContentFromSource(sourceAssignment.template_repo, newAssignment.template_repo)
-          : false;
 
-      if (!handoutRepoExists) {
+    // Handout repo: ensure an empty target exists; do not copy contents here — the CLI does it locally via SSH git.
+    if (sourceAssignment.template_repo) {
+      let handoutTargetRepoFullName: string | null = newAssignment.template_repo ?? null;
+
+      if (!handoutTargetRepoFullName) {
         mark("handout_repo_create_invoke", { source_template_repo: sourceAssignment.template_repo });
         try {
           const { data: handoutData } = await supabase.functions.invoke("assignment-create-handout-repo", {
@@ -805,19 +794,8 @@ async function copySingleAssignment(
               typeof repo === "string" &&
               repo.trim().length > 0
             ) {
+              handoutTargetRepoFullName = `${org.trim()}/${repo.trim()}`;
               status.handoutRepoCreated = true;
-              const targetRepoFullName = `${org.trim()}/${repo.trim()}`;
-              mark("handout_repo_copy_contents_start", {
-                from: sourceAssignment.template_repo,
-                to: targetRepoFullName
-              });
-              try {
-                await copyRepoContentsViaGitHub(sourceAssignment.template_repo, targetRepoFullName);
-                status.handoutRepoContentsCopied = true;
-              } catch (err) {
-                addError("handout_repo_contents", err);
-              }
-              mark("handout_repo_copy_contents_done", { copied: status.handoutRepoContentsCopied });
             } else {
               throw new CLICommandError(
                 `assignment-create-handout-repo returned an unexpected response (expected org_name and repo_name). Raw: ${formatEdgeFunctionBodyForError(handoutData)}`
@@ -827,28 +805,38 @@ async function copySingleAssignment(
         } catch (err) {
           addError("handout_repo_create", err);
         }
-      } else if (!handoutContentsCopied && newAssignment.template_repo) {
-        status.handoutRepoCreated = true;
-        mark("handout_repo_copy_contents_existing", {
-          from: sourceAssignment.template_repo,
-          to: newAssignment.template_repo
-        });
-        try {
-          await copyRepoContentsViaGitHub(sourceAssignment.template_repo, newAssignment.template_repo);
-          status.handoutRepoContentsCopied = true;
-        } catch (err) {
-          addError("handout_repo_contents", err);
-        }
       } else {
         status.handoutRepoCreated = true;
-        status.handoutRepoContentsCopied = true;
       }
+
+      if (handoutTargetRepoFullName) {
+        mark("handout_repo_verify_reachable", { repo: handoutTargetRepoFullName });
+        const reachable = await verifyRepoReachable(handoutTargetRepoFullName);
+        if (reachable) {
+          repoCopyPairs.push({
+            kind: "handout",
+            source_repo: sourceAssignment.template_repo,
+            target_repo: handoutTargetRepoFullName,
+            assignment_id: newAssignment.id,
+            assignment_slug: newAssignment.slug ?? null
+          });
+        } else {
+          addError(
+            "handout_repo_verify",
+            new Error(
+              `Handout repo ${handoutTargetRepoFullName} was not reachable via the GitHub API after creation; will not queue content copy.`
+            )
+          );
+        }
+      }
+
       mark("handout_repo_path_done", {
         handoutRepoCreated: status.handoutRepoCreated,
-        handoutRepoContentsCopied: status.handoutRepoContentsCopied
+        queued_for_copy: !!handoutTargetRepoFullName && repoCopyPairs.some((p) => p.kind === "handout")
       });
     }
 
+    // Solution repo: same pattern — ensure empty repo; CLI will populate content.
     const { data: sourceAutograder } = await supabase
       .from("autograder")
       .select("grader_repo")
@@ -864,14 +852,11 @@ async function copySingleAssignment(
 
       const targetRepoSet = !!targetAutograder?.grader_repo;
       let targetRepoExists = false;
-      let solutionContentsCopied = false;
       if (targetRepoSet && targetAutograder?.grader_repo) {
         targetRepoExists = await repoExistsOnGitHub(targetAutograder.grader_repo);
-        solutionContentsCopied = await targetRepoHasContentFromSource(
-          sourceAutograder.grader_repo,
-          targetAutograder.grader_repo
-        );
       }
+
+      let solutionTargetRepoFullName: string | null = targetRepoSet ? (targetAutograder?.grader_repo ?? null) : null;
 
       const needsSolution = !targetRepoSet || !targetRepoExists;
       if (needsSolution) {
@@ -893,7 +878,7 @@ async function copySingleAssignment(
               typeof repo === "string" &&
               repo.trim().length > 0
             ) {
-              const targetRepoFullName = `${org.trim()}/${repo.trim()}`;
+              solutionTargetRepoFullName = `${org.trim()}/${repo.trim()}`;
 
               const { data: afterCreate } = await supabase
                 .from("autograder")
@@ -904,22 +889,10 @@ async function copySingleAssignment(
               if (!afterCreate?.grader_repo) {
                 await supabase
                   .from("autograder")
-                  .update({ grader_repo: targetRepoFullName })
+                  .update({ grader_repo: solutionTargetRepoFullName })
                   .eq("id", newAssignment.id);
               }
               status.solutionRepoCreated = true;
-
-              mark("solution_repo_copy_contents_start", {
-                from: sourceAutograder.grader_repo,
-                to: targetRepoFullName
-              });
-              try {
-                await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetRepoFullName);
-                status.solutionRepoContentsCopied = true;
-              } catch (err) {
-                addError("solution_repo_contents", err);
-              }
-              mark("solution_repo_copy_contents_done", { copied: status.solutionRepoContentsCopied });
             } else {
               throw new CLICommandError(
                 `assignment-create-solution-repo returned an unexpected response (expected org_name and repo_name). Raw: ${formatEdgeFunctionBodyForError(solutionData)}`
@@ -929,27 +902,37 @@ async function copySingleAssignment(
         } catch (err) {
           addError("solution_repo_create", err);
         }
-      } else if (!solutionContentsCopied && targetAutograder?.grader_repo) {
-        status.solutionRepoCreated = true;
-        mark("solution_repo_copy_contents_existing", {
-          repo: targetAutograder.grader_repo
-        });
-        try {
-          await copyRepoContentsViaGitHub(sourceAutograder.grader_repo, targetAutograder.grader_repo);
-          status.solutionRepoContentsCopied = true;
-        } catch (err) {
-          addError("solution_repo_contents", err);
-        }
       } else {
         status.solutionRepoCreated = true;
-        status.solutionRepoContentsCopied = true;
       }
+
+      if (solutionTargetRepoFullName) {
+        mark("solution_repo_verify_reachable", { repo: solutionTargetRepoFullName });
+        const reachable = await verifyRepoReachable(solutionTargetRepoFullName);
+        if (reachable) {
+          repoCopyPairs.push({
+            kind: "solution",
+            source_repo: sourceAutograder.grader_repo,
+            target_repo: solutionTargetRepoFullName,
+            assignment_id: newAssignment.id,
+            assignment_slug: newAssignment.slug ?? null
+          });
+        } else {
+          addError(
+            "solution_repo_verify",
+            new Error(
+              `Solution repo ${solutionTargetRepoFullName} was not reachable via the GitHub API after creation; will not queue content copy.`
+            )
+          );
+        }
+      }
+
       mark("solution_repo_path_done", {
         solutionRepoCreated: status.solutionRepoCreated,
-        solutionRepoContentsCopied: status.solutionRepoContentsCopied
+        queued_for_copy: !!solutionTargetRepoFullName && repoCopyPairs.some((p) => p.kind === "solution")
       });
     }
-    mark("repos_done", {});
+    mark("repos_done", { repo_copy_pairs: repoCopyPairs.length });
   }
 
   if (!options.skipSurveys && !wasExisting) {
@@ -972,7 +955,7 @@ async function copySingleAssignment(
     error_steps: status.errors.map((e) => e.step)
   });
 
-  return { assignmentId: newAssignment.id, status, wasExisting };
+  return { assignmentId: newAssignment.id, status, wasExisting, repoCopyPairs };
 }
 
 registerCommand({

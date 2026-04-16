@@ -128,32 +128,35 @@ export interface CopyStatus {
   rubricsCopied: boolean;
   autograderConfigCopied: boolean;
   handoutRepoCreated: boolean;
-  handoutRepoContentsCopied: boolean;
   solutionRepoCreated: boolean;
-  solutionRepoContentsCopied: boolean;
   surveysCopied: boolean;
   errors: { step: string; error: string }[];
+}
+
+/**
+ * A (source → target) repo pair whose empty target repo has been provisioned
+ * and verified reachable on GitHub. The local CLI client is responsible for
+ * populating the target via SSH `git clone` + `rsync` + `git commit` + `git push`.
+ */
+export interface RepoCopyPair {
+  kind: "handout" | "solution";
+  source_repo: string;
+  target_repo: string;
+  assignment_id: number;
+  assignment_slug: string | null;
 }
 
 export interface CopyResult {
   assignmentId: number;
   status: CopyStatus;
   wasExisting: boolean;
+  repoCopyPairs: RepoCopyPair[];
 }
 
 export interface CopySpec {
   assignment: AssignmentRow;
   releaseDateOverride?: string;
   dueDateOverride?: string;
-}
-
-// ─── GitHub API types ────────────────────────────────────────────────────────
-
-export interface GitTreeEntry {
-  path?: string;
-  mode?: string;
-  type?: string;
-  sha?: string;
 }
 
 // ─── CLI request/response ────────────────────────────────────────────────────

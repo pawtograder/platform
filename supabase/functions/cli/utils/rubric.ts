@@ -64,17 +64,27 @@ export async function fetchRubricWithHierarchy(
   return data as RubricWithHierarchy;
 }
 
-export async function copyRubricTree(
+/**
+ * Copy a single rubric's structure (rubric → parts → criteria → checks) without
+ * copying any `rubric_check_references` rows. Populates `sharedCheckIdMap` with
+ * every sourceCheckId → targetCheckId mapping produced by this rubric so that a
+ * later second pass can resolve cross-rubric references (e.g. a self-review
+ * check that references a grading-rubric check).
+ *
+ * Returns the target rubric id (either reused from `existingRubricId` or newly
+ * created).
+ */
+export async function copyRubricStructure(
   supabase: SupabaseClient<Database>,
   sourceRubricId: number,
   newAssignmentId: number,
   targetClassId: number,
+  sharedCheckIdMap: Map<number, number>,
   existingRubricId?: number
 ): Promise<number> {
   const sourceRubric = await fetchRubricWithHierarchy(supabase, sourceRubricId);
   if (!sourceRubric) throw new CLICommandError(`Rubric not found: ${sourceRubricId}`);
 
-  const checkIdMap = new Map<number, number>();
   let targetRubricId: number;
 
   if (existingRubricId) {
@@ -255,15 +265,44 @@ export async function copyRubricTree(
             `Failed to copy rubric check "${check.name}" (source_check_id=${check.id}, source_criteria_id=${criteria.id}, target_criteria_id=${newCriteria.id}, source_rubric_id=${sourceRubricId}, target_rubric_id=${targetRubricId}, assignment_id=${newAssignmentId}, class_id=${targetClassId}): ${e?.message ?? "no row returned"}${detail ? ` (${detail})` : ""}`
           );
         }
-        checkIdMap.set(check.id, newCheck.id);
+        sharedCheckIdMap.set(check.id, newCheck.id);
       }
     }
   }
 
+  return targetRubricId;
+}
+
+/**
+ * Second-pass rubric copy. After every rubric belonging to an assignment has
+ * been copied via {@link copyRubricStructure}, this function copies all
+ * `rubric_check_references` rows from the source rubrics, remapping both
+ * `referenced_rubric_check_id` and `referencing_rubric_check_id` through the
+ * shared check-id map. This is required because a reference may legitimately
+ * cross rubrics (e.g. a self-review check referencing a grading check).
+ *
+ * `rubricIdPairs` is the `(sourceRubricId, targetRubricId)` list for all
+ * rubrics copied for this assignment. Only references whose
+ * `rubric_id` is in that list are copied (refs are owned by the rubric that
+ * contains the _referencing_ check per the DB schema's `rubric_id` column).
+ */
+export async function copyRubricCheckReferencesForAssignment(
+  supabase: SupabaseClient<Database>,
+  rubricIdPairs: Array<{ sourceRubricId: number; targetRubricId: number }>,
+  newAssignmentId: number,
+  targetClassId: number,
+  sharedCheckIdMap: Map<number, number>
+): Promise<void> {
+  if (rubricIdPairs.length === 0) return;
+
+  const sourceRubricIds = rubricIdPairs.map((p) => p.sourceRubricId);
+  const sourceToTargetRubric = new Map<number, number>();
+  for (const p of rubricIdPairs) sourceToTargetRubric.set(p.sourceRubricId, p.targetRubricId);
+
   const { data: checkReferences, error: checkReferencesError } = await supabase
     .from("rubric_check_references")
     .select("*")
-    .eq("rubric_id", sourceRubricId);
+    .in("rubric_id", sourceRubricIds);
 
   if (checkReferencesError) {
     const e = checkReferencesError;
@@ -272,20 +311,29 @@ export async function copyRubricTree(
         .filter(Boolean)
         .join("; ") || undefined;
     throw new CLICommandError(
-      `Failed to load rubric_check_references for source rubric ${sourceRubricId}: ${e.message}${detail ? ` (${detail})` : ""}`
+      `Failed to load rubric_check_references for source rubrics [${sourceRubricIds.join(",")}]: ${e.message}${detail ? ` (${detail})` : ""}`
     );
   }
 
   const refRows = checkReferences ?? [];
   for (const ref of refRows) {
-    const newReferencedId = checkIdMap.get(ref.referenced_rubric_check_id);
-    const newReferencingId = checkIdMap.get(ref.referencing_rubric_check_id);
+    const targetRubricId = sourceToTargetRubric.get(ref.rubric_id);
+    if (!targetRubricId) {
+      throw new CLICommandError(
+        `rubric_check_references row has unexpected rubric_id=${ref.rubric_id} not in the set of source rubrics copied for assignment_id=${newAssignmentId} (source rubrics=[${sourceRubricIds.join(",")}])`
+      );
+    }
+
+    const newReferencedId = sharedCheckIdMap.get(ref.referenced_rubric_check_id);
+    const newReferencingId = sharedCheckIdMap.get(ref.referencing_rubric_check_id);
 
     if (!newReferencedId || !newReferencingId) {
       throw new CLICommandError(
         `Failed to copy rubric_check_references: could not map source check ids ` +
           `(referenced=${ref.referenced_rubric_check_id}, referencing=${ref.referencing_rubric_check_id}) ` +
-          `for source_rubric_id=${sourceRubricId}, target_rubric_id=${targetRubricId}, assignment_id=${newAssignmentId}`
+          `for source_rubric_id=${ref.rubric_id}, target_rubric_id=${targetRubricId}, assignment_id=${newAssignmentId}. ` +
+          `This can happen if the reference points to a check in a rubric that was not copied (e.g. cross-rubric reference ` +
+          `where one of the rubrics is not linked from the assignment).`
       );
     }
 
@@ -304,17 +352,47 @@ export async function copyRubricTree(
           .filter(Boolean)
           .join("; ") || undefined;
       throw new CLICommandError(
-        `Failed to insert rubric_check_references row (source_rubric_id=${sourceRubricId}, target_rubric_id=${targetRubricId}, ` +
+        `Failed to insert rubric_check_references row (source_rubric_id=${ref.rubric_id}, target_rubric_id=${targetRubricId}, ` +
           `referenced_check_id=${newReferencedId}, referencing_check_id=${newReferencingId}): ${e.message}${detail ? ` (${detail})` : ""}`
       );
     }
     if (refInsertStatus < 200 || refInsertStatus >= 300) {
       throw new CLICommandError(
-        `Failed to insert rubric_check_references row (source_rubric_id=${sourceRubricId}, target_rubric_id=${targetRubricId}): ` +
+        `Failed to insert rubric_check_references row (source_rubric_id=${ref.rubric_id}, target_rubric_id=${targetRubricId}): ` +
           `unexpected HTTP status ${refInsertStatus}`
       );
     }
   }
+}
 
+/**
+ * Backwards-compatible wrapper. Copies a single rubric's full tree including
+ * its own intra-rubric references. Prefer {@link copyRubricStructure} +
+ * {@link copyRubricCheckReferencesForAssignment} when copying multiple rubrics
+ * for the same assignment so that cross-rubric references resolve.
+ */
+export async function copyRubricTree(
+  supabase: SupabaseClient<Database>,
+  sourceRubricId: number,
+  newAssignmentId: number,
+  targetClassId: number,
+  existingRubricId?: number
+): Promise<number> {
+  const sharedCheckIdMap = new Map<number, number>();
+  const targetRubricId = await copyRubricStructure(
+    supabase,
+    sourceRubricId,
+    newAssignmentId,
+    targetClassId,
+    sharedCheckIdMap,
+    existingRubricId
+  );
+  await copyRubricCheckReferencesForAssignment(
+    supabase,
+    [{ sourceRubricId, targetRubricId }],
+    newAssignmentId,
+    targetClassId,
+    sharedCheckIdMap
+  );
   return targetRubricId;
 }

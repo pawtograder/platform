@@ -1,13 +1,7 @@
 /* eslint-disable no-console */
 import { join, resolve } from "path";
 import { existsSync, mkdirSync } from "fs";
-import {
-  cloneAllReposOnMain,
-  getRepoDirectoryName,
-  runGitCommand,
-  runRsync,
-  rsyncIndicatesTransfers
-} from "./git";
+import { cloneAllReposOnMain, getRepoDirectoryName, runGitCommand, runRsync, rsyncIndicatesTransfers } from "./git";
 import type { CrossAssignmentCopyContext } from "./types";
 
 export interface CrossAssignmentCopyOptions {

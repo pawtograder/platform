@@ -41,7 +41,9 @@ export const builder = (yargs: Argv) => {
             assignment: args.assignment as string
           });
           logger.step(`Repositories — ${data.assignment.title}`);
-          logger.info(`Assignment ID: ${data.assignment.id} | template_repo: ${data.assignment.template_repo ?? "(none)"}`);
+          logger.info(
+            `Assignment ID: ${data.assignment.id} | template_repo: ${data.assignment.template_repo ?? "(none)"}`
+          );
           logger.blank();
 
           const repos = data.repositories as Array<{ id: number; repository: string }>;
@@ -111,9 +113,7 @@ export const builder = (yargs: Argv) => {
             assignment: args.assignment as string
           });
           const ctx = raw as import("../../lib/repos/types").SyncGradeWorkflowContext;
-          logger.info(
-            `Assignment: ${ctx.assignment_title} (${ctx.assignment_id}) | Handout: ${ctx.template_repo}\n`
-          );
+          logger.info(`Assignment: ${ctx.assignment_title} (${ctx.assignment_id}) | Handout: ${ctx.template_repo}\n`);
 
           const concurrency = Math.min(8, Math.max(1, Number(args.concurrency) || 2));
           const delayMs = Math.max(0, Number(args["delay-ms"]) || 0);

@@ -39,9 +39,7 @@ async function assertUserCanAccessClass(userId: string, classId: number): Promis
   }
 }
 
-async function fetchRepositoriesForAssignment(
-  assignmentId: number
-): Promise<ReposListRepositoryRow[]> {
+async function fetchRepositoriesForAssignment(assignmentId: number): Promise<ReposListRepositoryRow[]> {
   const supabase = getAdminClient();
   const out: ReposListRepositoryRow[] = [];
   let offset = 0;
@@ -85,9 +83,7 @@ async function fetchRepositoriesForAssignment(
 
 async function fetchGroupIdToName(assignmentId: number): Promise<Map<number, string>> {
   const supabase = getAdminClient();
-  const { data, error } = await supabase.from("assignment_groups")
-    .select("id, name")
-    .eq("assignment_id", assignmentId);
+  const { data, error } = await supabase.from("assignment_groups").select("id, name").eq("assignment_id", assignmentId);
 
   if (error) {
     throw new CLICommandError(`assignment_groups: ${error.message}`, 500);
@@ -145,10 +141,7 @@ async function fetchGroupRepresentativeProfiles(groupIds: number[]): Promise<Map
   return map;
 }
 
-function resolveProfileForDueRpc(
-  repo: ReposListRepositoryRow,
-  groupProfileMap: Map<number, string>
-): string | null {
+function resolveProfileForDueRpc(repo: ReposListRepositoryRow, groupProfileMap: Map<number, string>): string | null {
   if (repo.profile_id) return repo.profile_id;
   if (repo.assignment_group_id != null) {
     return groupProfileMap.get(repo.assignment_group_id) ?? null;
@@ -243,8 +236,11 @@ async function handleCrossAssignmentCopyContext(
   ctx: MCPAuthContext,
   params: Record<string, unknown>
 ): Promise<CLIResponse> {
-  const { class: classIdf, source_assignment, target_assignment } =
-    params as unknown as ReposCrossAssignmentCopyContextParams;
+  const {
+    class: classIdf,
+    source_assignment,
+    target_assignment
+  } = params as unknown as ReposCrossAssignmentCopyContextParams;
   if (!classIdf || !source_assignment || !target_assignment) {
     throw new CLICommandError("class, source_assignment, and target_assignment are required", 400);
   }

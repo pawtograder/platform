@@ -152,10 +152,31 @@ export const builder = (yargs: Argv) => {
             type: "boolean",
             default: false
           })
+          .option("workdir", {
+            alias: "w",
+            describe:
+              "Local directory for git clones (required unless --skip-repos); handout/solution content is pushed via local SSH git",
+            type: "string"
+          })
+          .option("concurrency", {
+            describe: "Parallel clone/fetch operations for local repo copy (1–8)",
+            type: "number",
+            default: 4
+          })
+          .option("delay-ms", {
+            describe: "Delay between clone batches (ms)",
+            type: "number",
+            default: 0
+          })
           .check((argv) => {
             const specifiedCount = [argv.assignment, argv.schedule, argv.all].filter(Boolean).length;
             if (specifiedCount !== 1) {
               throw new Error("Must specify exactly one of: --assignment, --schedule, or --all");
+            }
+            if (!argv.skipRepos && !argv.dryRun && !argv.workdir) {
+              throw new Error(
+                "--workdir is required unless --skip-repos is set (needed to clone source/target repos locally)"
+              );
             }
             return true;
           });
