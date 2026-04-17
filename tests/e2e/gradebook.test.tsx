@@ -996,9 +996,18 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await studentButton.click();
 
     // With a valid expression and a selected student, we should see a green
-    // evaluation status and a "Result: …" badge inside the overlay.
+    // evaluation status and a "Score: …" badge at the top of the editor.
     await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId("expression-builder-overlay")).toContainText(/Result:\s*7/);
+    await expect(page.getByTestId("expression-builder-result-badges")).toContainText(/Score\s*7/);
+    // No render expression yet — only the Score badge is shown.
+    await expect(page.getByTestId("expression-builder-rendered-badge")).toHaveCount(0);
+
+    // Setting a render expression should light up the second badge with the
+    // rendered form alongside the raw score. With score=7 and max_score=100
+    // the default `letter(score)` renders as "F".
+    await addDialog.getByLabel("Render Expression").fill("letter(score)");
+    await expect(page.getByTestId("expression-builder-rendered-badge")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-builder-rendered-badge")).toContainText(/Rendered\s*F/);
 
     // Switch to an expression that uses a real gradebook_columns slug and
     // assert that the intermediate-values panel renders the inner call. Scope

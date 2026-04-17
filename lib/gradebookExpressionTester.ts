@@ -323,6 +323,117 @@ function buildImports(math: MathJSInstance, gradebookController: GradebookContro
 }
 
 /**
+ * Breakpoints used by the default gradebook render helpers (`letter`,
+ * `check`, `checkOrX`). Mirrors the tables in `useGradebook._getSharedMath`.
+ * Keeping them here keeps the tester self-contained — the expression builder
+ * can evaluate a column's render expression without touching the shared math
+ * instance that powers the live gradebook cells (and without waiting for the
+ * controller to have wired one up yet, which matters on Add Column).
+ */
+const LETTER_BREAKPOINTS: Array<{ score: number; letter: string }> = [
+  { score: 93, letter: "A" },
+  { score: 90, letter: "A-" },
+  { score: 87, letter: "B+" },
+  { score: 83, letter: "B" },
+  { score: 80, letter: "B-" },
+  { score: 77, letter: "C+" },
+  { score: 73, letter: "C" },
+  { score: 70, letter: "C-" },
+  { score: 67, letter: "D+" },
+  { score: 63, letter: "D" },
+  { score: 60, letter: "D-" },
+  { score: 0, letter: "F" }
+];
+const CHECK_BREAKPOINTS: Array<{ score: number; mark: string }> = [
+  { score: 90, mark: "✔️+" },
+  { score: 80, mark: "✔️" },
+  { score: 70, mark: "✔️-" },
+  { score: 0, mark: "❌" }
+];
+
+export type RenderExpressionResult =
+  | { kind: "empty" }
+  | { kind: "ok"; rendered: string }
+  | { kind: "error"; message: string };
+
+/**
+ * Evaluate a column's render expression against a final score. Reuses the
+ * `letter`, `check`, `checkOrX`, and `customLabel` helpers exposed in the
+ * live gradebook so the builder's preview matches the rendered cell.
+ *
+ * @param prefix The gradebook's `expression_prefix` (may be empty).
+ * @param renderExpression The user's render expression. Empty/null → `empty`.
+ * @param score Final numeric score of the column (undefined → "(N/A)"-like).
+ * @param maxScore Max score of the column.
+ */
+export function evaluateRenderExpression(
+  math: MathJSNS,
+  prefix: string,
+  renderExpression: string | null | undefined,
+  score: number | undefined,
+  maxScore: number | undefined
+): RenderExpressionResult {
+  const raw = (renderExpression ?? "").trim();
+  if (!raw) return { kind: "empty" };
+  try {
+    const localMath: MathJSInstance = math.create(math.all, {});
+    type ImportFunction = (...args: never[]) => unknown;
+    const imports: Record<string, ImportFunction> = {};
+    imports["letter"] = ((s: number | undefined, m: number | undefined) => {
+      if (s === undefined) return "(N/A)";
+      const normalized = 100 * (s / (m ?? 100));
+      const hit = LETTER_BREAKPOINTS.find((b) => normalized >= b.score);
+      return hit ? hit.letter : "F";
+    }) as ImportFunction;
+    imports["check"] = ((s: number | undefined, m: number | undefined) => {
+      if (s === undefined) return "(N/A)";
+      const normalized = 100 * (s / (m ?? 100));
+      const hit = CHECK_BREAKPOINTS.find((b) => normalized >= b.score);
+      return hit ? hit.mark : "❌";
+    }) as ImportFunction;
+    imports["checkOrX"] = ((s: number | undefined, m: number | undefined) => {
+      if (s === undefined) return "(N/A)";
+      const normalized = 100 * (s / (m ?? 1));
+      return normalized > 0 ? "✔️" : "❌";
+    }) as ImportFunction;
+    imports["customLabel"] = ((value: number | undefined, breakpoints: { toArray?: () => unknown[] } | unknown) => {
+      if (value === undefined) return "(N/A)";
+      const arr = Array.isArray(breakpoints)
+        ? breakpoints
+        : breakpoints && typeof (breakpoints as { toArray?: () => unknown[] }).toArray === "function"
+          ? (breakpoints as { toArray: () => unknown[] }).toArray()
+          : [];
+      for (const pair of arr as [number, string][]) {
+        const [s, label] = pair;
+        if (value >= s) return label;
+      }
+      return "Error";
+    }) as ImportFunction;
+    localMath.import(imports, { override: true });
+
+    const full = (prefix ? prefix + "\n" : "") + raw;
+    const expr = localMath.parse(full);
+    const compiled = expr.compile();
+    const ret = compiled.evaluate({ score, max_score: maxScore });
+    const unwrapped =
+      ret && typeof ret === "object" && !Array.isArray(ret) && "entries" in (ret as Record<string, unknown>)
+        ? (() => {
+            const entries = (ret as { entries: unknown }).entries;
+            return Array.isArray(entries) && entries.length > 0 ? entries[entries.length - 1] : undefined;
+          })()
+        : ret;
+    if (unwrapped === undefined || unwrapped === null) return { kind: "ok", rendered: "-" };
+    if (typeof unwrapped === "number") {
+      if (!Number.isFinite(unwrapped)) return { kind: "ok", rendered: String(unwrapped) };
+      return { kind: "ok", rendered: Number(unwrapped.toFixed(4)).toString() };
+    }
+    return { kind: "ok", rendered: String(unwrapped) };
+  } catch (e) {
+    return { kind: "error", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
  * Parse, validate, and evaluate an expression against a student. Uses the
  * `report_only` incomplete-values policy so missing dependencies surface
  * rather than being silently coerced.

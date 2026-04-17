@@ -424,6 +424,8 @@ function AddColumnDialog() {
     }
   });
   const scoreExpression = watch("scoreExpression") ?? "";
+  const renderExpressionValue = watch("renderExpression") ?? "";
+  const maxScoreValue = watch("maxScore");
   const [isExpressionBuilderExpanded, setIsExpressionBuilderExpanded] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
 
@@ -578,6 +580,8 @@ function AddColumnDialog() {
                     isExpanded={isExpressionBuilderExpanded}
                     onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
                     math={null}
+                    renderExpression={renderExpressionValue}
+                    maxScore={typeof maxScoreValue === "number" ? maxScoreValue : Number(maxScoreValue) || null}
                     onValidationChange={setValidation}
                   />
                   {errors.scoreExpression && (
@@ -665,6 +669,8 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   });
 
   const scoreExpression = watch("scoreExpression");
+  const renderExpressionValue = watch("renderExpression") ?? "";
+  const maxScoreValue = watch("maxScore");
   const [isExpressionBuilderExpanded, setIsExpressionBuilderExpanded] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
 
@@ -844,6 +850,8 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                       isExpanded={isExpressionBuilderExpanded}
                       onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
                       math={null}
+                      renderExpression={renderExpressionValue}
+                      maxScore={typeof maxScoreValue === "number" ? maxScoreValue : Number(maxScoreValue) || null}
                       onValidationChange={setValidation}
                     />
                   ) : (

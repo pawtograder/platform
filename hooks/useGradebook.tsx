@@ -1505,6 +1505,11 @@ export class GradebookController {
     this._assignments = assignments;
   }
 
+  /** Expression prefix from `gradebooks.expression_prefix`, prepended to every column's render expression. */
+  public get expressionPrefix() {
+    return this._expression_prefix;
+  }
+
   // Removed old subscription methods - use TableController directly
 
   // Subscribe to a specific student/column pair using the new controller

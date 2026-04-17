@@ -5,11 +5,13 @@ import { useAllStudentRoles } from "@/hooks/useCourseController";
 import { useGradebookController, useGradebookColumns } from "@/hooks/useGradebook";
 import {
   evaluateForStudent,
+  evaluateRenderExpression,
   formatValueForOverlay,
   type IntermediateValue,
+  type RenderExpressionResult,
   type ValidationResult
 } from "@/lib/gradebookExpressionTester";
-import { Badge, Box, Button, Code, Flex, HStack, Icon, Input, Text, Textarea, VStack } from "@chakra-ui/react";
+import { Badge, Box, Button, Flex, HStack, Icon, Input, Text, Textarea, VStack } from "@chakra-ui/react";
 import type * as MathJSType from "mathjs";
 import React, { useEffect, useMemo, useState } from "react";
 import { LuArrowLeftRight, LuCheck, LuCircleAlert, LuMaximize2, LuMinimize2, LuUser } from "react-icons/lu";
@@ -25,6 +27,15 @@ type Props = {
   isExpanded: boolean;
   onExpandToggle: () => void;
   math: MathJSNS | null;
+  /**
+   * Column-level context used by the preview. The render expression and max
+   * score drive the "Rendered" preview below the editor; when both are
+   * provided and non-empty we show the final evaluation result in both its
+   * raw numeric form and the way the gradebook cell would actually render
+   * (e.g. "B-", "✔️", a bespoke label).
+   */
+  renderExpression?: string | null;
+  maxScore?: number | null;
   /**
    * Called whenever the validation result changes. Parent can use this to
    * disable the Save button when validation fails.
@@ -62,7 +73,16 @@ function useLoadedMathJS(): { math: MathJSNS | null; loadError: string | null } 
  *    every subexpression.
  */
 export function ExpressionBuilder(props: Props) {
-  const { expression, onExpressionChange, editingColumnId, isExpanded, onExpandToggle, onValidationChange } = props;
+  const {
+    expression,
+    onExpressionChange,
+    editingColumnId,
+    isExpanded,
+    onExpandToggle,
+    renderExpression,
+    maxScore,
+    onValidationChange
+  } = props;
   const gradebookController = useGradebookController();
   const gradebookColumns = useGradebookColumns();
   const { math: fallbackMath, loadError: mathLoadError } = useLoadedMathJS();
@@ -161,6 +181,19 @@ export function ExpressionBuilder(props: Props) {
   }, [validation, onValidationChange]);
 
   const selectedStudent = students.find((s) => s.private_profile_id === selectedStudentId);
+
+  // Evaluate the render expression against the current final score so the
+  // preview can show both forms side-by-side. We read `expression_prefix` off
+  // the controller since it's prepended to every column's render expression.
+  const expressionPrefix = gradebookController.expressionPrefix ?? "";
+  const rawScore =
+    validation.evaluation && !validation.evaluation.error && typeof validation.evaluation.rawResult === "number"
+      ? (validation.evaluation.rawResult as number)
+      : undefined;
+  const renderExpressionResult: RenderExpressionResult | null = useMemo(() => {
+    if (!math) return null;
+    return evaluateRenderExpression(math, expressionPrefix, renderExpression, rawScore, maxScore ?? undefined);
+  }, [math, expressionPrefix, renderExpression, rawScore, maxScore]);
 
   if (!isExpanded) {
     return (
@@ -265,111 +298,70 @@ export function ExpressionBuilder(props: Props) {
           </VStack>
         </Box>
 
-        {/* Middle: Expression editor + overlay */}
+        {/* Right side: a unified editor — the textarea flows into the list of
+            intermediate values directly below, with the final result (and its
+            rendered form, if a render expression is set) surfaced right above
+            the textarea so the reader's eye lands on it first. */}
         <VStack flex="1" align="stretch" gap={2} minW={0}>
-          <Label htmlFor="scoreExpressionFull">Score Expression</Label>
-          <Textarea
-            id="scoreExpressionFull"
-            value={expression}
-            onChange={(e) => onExpressionChange(e.target.value)}
-            placeholder="Score Expression"
-            rows={10}
-            fontFamily="mono"
-            fontSize="sm"
+          <HStack justifyContent="space-between" gap={2} wrap="wrap">
+            <Label htmlFor="scoreExpressionFull">Score Expression</Label>
+            {selectedStudent && (
+              <Text fontSize="xs" color="fg.muted">
+                Testing against {selectedStudent.profiles?.name || selectedStudent.profiles?.short_name}
+              </Text>
+            )}
+          </HStack>
+
+          <FinalResultBadges
+            validation={validation}
+            renderExpressionResult={renderExpressionResult}
+            renderExpression={renderExpression}
+          />
+
+          {/* The editor + inline annotations share a border so they read as
+              one surface — the textarea is the input row, and every captured
+              subexpression is displayed below in source order with its value,
+              visually tied to the code. */}
+          <Box
+            borderWidth="1px"
             borderColor={
               validation.parseError || validation.dependencyError || validation.evaluation?.error
                 ? "red.500"
                 : validation.isValid && !validation.isEmpty
                   ? "green.500"
-                  : undefined
+                  : "border.muted"
             }
-          />
-          <ValidationStatus validation={validation} expression={expression} />
-
-          <Box
-            mt={2}
-            borderWidth="1px"
-            borderColor="border.muted"
             rounded="md"
-            p={3}
             bg="bg.subtle"
-            overflow="auto"
-            maxH="40vh"
+            overflow="hidden"
             data-testid="expression-builder-overlay"
           >
-            <HStack mb={2} justifyContent="space-between" gap={2} wrap="wrap">
-              <Text fontSize="sm" fontWeight="semibold">
-                Annotated expression{" "}
-                {selectedStudent && (
-                  <Text as="span" color="fg.muted" fontWeight="normal">
-                    — {selectedStudent.profiles?.name || selectedStudent.profiles?.short_name}
-                  </Text>
-                )}
-              </Text>
-              {validation.evaluation && !validation.evaluation.error && (
-                <Badge colorPalette="green" variant="subtle">
-                  Result: {validation.evaluation.result}
-                </Badge>
-              )}
-            </HStack>
-            <AnnotatedExpressionView validation={validation} expression={expression} />
+            <Textarea
+              id="scoreExpressionFull"
+              value={expression}
+              onChange={(e) => onExpressionChange(e.target.value)}
+              placeholder="Score Expression"
+              rows={Math.max(6, Math.min(12, expression.split("\n").length + 2))}
+              fontFamily="mono"
+              fontSize="sm"
+              border="none"
+              borderBottomWidth="1px"
+              borderBottomColor="border.subtle"
+              rounded="none"
+              bg="bg.panel"
+              _focus={{ boxShadow: "none", outline: "none" }}
+            />
+            <InlineAnnotations
+              validation={validation}
+              hasStudent={Boolean(selectedStudentId)}
+              expression={expression}
+            />
           </Box>
-        </VStack>
 
-        {/* Right: List of intermediates */}
-        <Box
-          flex="0 0 320px"
-          borderWidth="1px"
-          borderColor="border.muted"
-          rounded="md"
-          p={3}
-          bg="bg.muted"
-          overflow="auto"
-          maxH={{ base: "200px", lg: "65vh" }}
-        >
-          <Text fontSize="sm" fontWeight="semibold" mb={2}>
-            Intermediate values
-          </Text>
-          {!selectedStudentId && (
-            <Text fontSize="sm" color="fg.muted">
-              Select a student to see live evaluation.
-            </Text>
-          )}
-          {validation.evaluation &&
-            validation.evaluation.intermediates.length === 0 &&
-            !validation.evaluation.error && (
-              <Text fontSize="sm" color="fg.muted">
-                No intermediate subexpressions.
-              </Text>
-            )}
-          {validation.evaluation?.error && (
-            <Text fontSize="sm" color="red.500">
-              Cannot evaluate: {validation.evaluation.error}
-            </Text>
-          )}
-          {validation.evaluation && (
-            <VStack align="stretch" gap={2}>
-              {validation.evaluation.intermediates.slice(0, 80).map((iv, idx) => (
-                <Box
-                  key={`${iv.start}-${iv.end}-${idx}`}
-                  borderWidth="1px"
-                  borderColor={iv.error ? "red.300" : "border.muted"}
-                  rounded="sm"
-                  p={2}
-                  bg="bg.panel"
-                >
-                  <Code fontSize="xs" wordBreak="break-all" whiteSpace="pre-wrap" bg="transparent" color="fg.muted">
-                    {iv.source}
-                  </Code>
-                  <Text fontSize="xs" fontWeight="semibold" color={iv.error ? "red.500" : "fg"}>
-                    = {iv.display}
-                  </Text>
-                </Box>
-              ))}
-            </VStack>
-          )}
+          <ValidationStatus validation={validation} expression={expression} />
+
           {validation.evaluation?.incompleteValues && (
-            <Box mt={3} borderWidth="1px" borderColor="orange.300" rounded="sm" p={2} bg="orange.50">
+            <Box borderWidth="1px" borderColor="orange.300" rounded="sm" p={2} bg="orange.50">
               <Text fontSize="xs" fontWeight="semibold" color="orange.700">
                 Incomplete dependencies
               </Text>
@@ -385,8 +377,149 @@ export function ExpressionBuilder(props: Props) {
               )}
             </Box>
           )}
-        </Box>
+        </VStack>
       </Flex>
+    </VStack>
+  );
+}
+
+/**
+ * Renders two side-by-side badges showing the final score and, if a render
+ * expression is set, its rendered form too (e.g. `81.5` and `B-`).
+ */
+function FinalResultBadges({
+  validation,
+  renderExpressionResult,
+  renderExpression
+}: {
+  validation: ValidationResult;
+  renderExpressionResult: RenderExpressionResult | null;
+  renderExpression?: string | null;
+}) {
+  const hasScore = !!validation.evaluation && !validation.evaluation.error;
+  const scoreText = hasScore ? validation.evaluation!.result : "—";
+  const hasRender = Boolean((renderExpression ?? "").trim());
+  return (
+    <HStack gap={2} wrap="wrap" data-testid="expression-builder-result-badges">
+      <Badge colorPalette={hasScore ? "green" : "gray"} variant="subtle" fontSize="sm" px={2} py={1}>
+        <Text as="span" color="fg.muted" fontWeight="normal" mr={1}>
+          Score
+        </Text>
+        <Text as="span" fontWeight="semibold" fontFamily="mono">
+          {scoreText}
+        </Text>
+      </Badge>
+      {hasRender && (
+        <Badge
+          colorPalette={
+            renderExpressionResult?.kind === "ok" ? "purple" : renderExpressionResult?.kind === "error" ? "red" : "gray"
+          }
+          variant="subtle"
+          fontSize="sm"
+          px={2}
+          py={1}
+          data-testid="expression-builder-rendered-badge"
+        >
+          <Text as="span" color="fg.muted" fontWeight="normal" mr={1}>
+            Rendered
+          </Text>
+          <Text as="span" fontWeight="semibold" fontFamily="mono">
+            {renderExpressionResult?.kind === "ok"
+              ? renderExpressionResult.rendered
+              : renderExpressionResult?.kind === "error"
+                ? `error: ${renderExpressionResult.message}`
+                : "—"}
+          </Text>
+        </Badge>
+      )}
+    </HStack>
+  );
+}
+
+/**
+ * Inline annotations directly underneath the textarea. Each captured
+ * subexpression renders as `source = value`, indented by AST containment
+ * depth so nested calls read naturally as a breakdown of the expression
+ * immediately above them.
+ */
+function InlineAnnotations({
+  validation,
+  hasStudent,
+  expression
+}: {
+  validation: ValidationResult;
+  hasStudent: boolean;
+  expression: string;
+}) {
+  const evaluation = validation.evaluation;
+
+  if (!hasStudent) {
+    return (
+      <Box p={2} bg="bg.subtle">
+        <Text fontSize="xs" color="fg.muted">
+          Select a student on the left to see intermediate values and the final score.
+        </Text>
+      </Box>
+    );
+  }
+  if (!evaluation) return null;
+  if (evaluation.error && evaluation.intermediates.length === 0) {
+    return (
+      <Box p={2} bg="bg.subtle">
+        <Text fontSize="xs" color="red.500">
+          Evaluation error: {evaluation.error}
+        </Text>
+      </Box>
+    );
+  }
+  if (evaluation.intermediates.length === 0) {
+    // Pure-arithmetic expression with no subexpressions worth labelling.
+    return (
+      <Box p={2} bg="bg.subtle">
+        <Text fontSize="xs" color="fg.muted" fontFamily="mono">
+          {expression.trim()} = {evaluation.result}
+        </Text>
+      </Box>
+    );
+  }
+  const distinct = dedupeByStartEnd(evaluation.intermediates);
+  const levels = assignLevels(distinct);
+  return (
+    <VStack align="stretch" gap={0} bg="bg.subtle" maxH="40vh" overflow="auto">
+      {distinct.slice(0, 80).map((iv, idx) => (
+        <HStack
+          key={`${iv.start}-${iv.end}-${idx}`}
+          gap={2}
+          align="flex-start"
+          px={2}
+          py={1}
+          borderBottomWidth={idx === distinct.length - 1 ? 0 : "1px"}
+          borderColor="border.subtle"
+          _hover={{ bg: "bg.muted" }}
+        >
+          <Text
+            fontSize="xs"
+            color="fg.muted"
+            fontFamily="mono"
+            flex="1"
+            wordBreak="break-all"
+            pl={`${(levels[idx] ?? 0) * 12}px`}
+          >
+            {iv.source}
+          </Text>
+          <Badge
+            colorPalette={iv.error ? "red" : "blue"}
+            variant="subtle"
+            fontFamily="mono"
+            whiteSpace="normal"
+            maxW="55%"
+            textAlign="right"
+            fontSize="xs"
+          >
+            = {iv.display}
+          </Badge>
+        </HStack>
+      ))}
     </VStack>
   );
 }
@@ -461,76 +594,6 @@ function ValidationStatus({ validation, expression }: { validation: ValidationRe
         Expression parses ({expression.length} chars). Open the Expression Builder to test on a real student.
       </Text>
     </HStack>
-  );
-}
-
-/**
- * Renders the expression with every captured subexpression highlighted and
- * overlaid with its evaluated value.
- */
-function AnnotatedExpressionView({ validation, expression }: { validation: ValidationResult; expression: string }) {
-  const evaluation = validation.evaluation;
-
-  if (!evaluation) {
-    return (
-      <Code whiteSpace="pre-wrap" wordBreak="break-all" fontSize="sm" bg="transparent">
-        {expression || (
-          <Text as="span" color="fg.muted">
-            (empty expression)
-          </Text>
-        )}
-      </Code>
-    );
-  }
-
-  // Build a simple "line by intermediate" rendering: for each distinct
-  // intermediate, show the source → value, indented by AST depth so nested
-  // calls line up under their parents.
-  // For the inline overlay, render the expression once then list the
-  // intermediate values underneath, grouped by depth inferred from their
-  // source length (longer = outer).
-  const distinct = dedupeByStartEnd(evaluation.intermediates);
-  const levels = assignLevels(distinct);
-
-  return (
-    <VStack align="stretch" gap={1}>
-      <Code
-        fontSize="sm"
-        bg="transparent"
-        whiteSpace="pre-wrap"
-        wordBreak="break-all"
-        borderWidth="1px"
-        borderColor="border.subtle"
-        rounded="sm"
-        p={2}
-      >
-        {expression}
-      </Code>
-      <VStack align="stretch" gap={0.5}>
-        {distinct.map((iv, idx) => (
-          <HStack key={`${iv.start}-${iv.end}-${idx}`} gap={2} align="flex-start" pl={`${(levels[idx] ?? 0) * 12}px`}>
-            <Text fontSize="xs" color="fg.muted" fontFamily="mono" flex="1" wordBreak="break-all">
-              {iv.source}
-            </Text>
-            <Badge
-              colorPalette={iv.error ? "red" : "blue"}
-              variant="subtle"
-              fontFamily="mono"
-              whiteSpace="normal"
-              maxW="50%"
-              textAlign="right"
-            >
-              {iv.display}
-            </Badge>
-          </HStack>
-        ))}
-        {distinct.length === 0 && !evaluation.error && (
-          <Text fontSize="xs" color="fg.muted">
-            Final value: {evaluation.result}
-          </Text>
-        )}
-      </VStack>
-    </VStack>
   );
 }
 
