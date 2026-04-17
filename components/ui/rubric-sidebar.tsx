@@ -1608,8 +1608,8 @@ function RubricMenu() {
   );
 }
 /**
- * Renders the CompleteReviewButton at the bottom of the rubric list using the
- * same gating conditions as the top toolbar in layout.tsx:
+ * Renders the CompleteReviewButton when placed after the rubric for the active
+ * submission review (same gating as the top toolbar in layout.tsx):
  *   - grader/instructor only
  *   - no assigned rubric parts (full-rubric review, not a partial assignment)
  *   - review not already completed
@@ -1633,6 +1633,12 @@ function RubricSidebarConfirmButton() {
 
 export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
   const unsortedRubrics = useRubrics();
+  const assignmentController = useAssignmentController();
+  const activeSubmissionReviewId = useActiveSubmissionReviewId();
+  const activeSubmissionReview = useSubmissionReviewOrGradingReview(activeSubmissionReviewId ?? -1);
+  /** Rubric block after which we show "Complete review" (the rubric being completed, e.g. grading vs self-review). */
+  const completeReviewAfterRubricId =
+    activeSubmissionReview?.rubric_id ?? assignmentController.assignment.grading_rubric_id ?? undefined;
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
   const activeReviewAssignment = useActiveReviewAssignment();
   const rubrics = useMemo(() => {
@@ -1760,6 +1766,9 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
     []
   );
 
+  const showCompleteReviewAtListEnd =
+    completeReviewAfterRubricId !== undefined && !rubrics.some((r) => r.id === completeReviewAfterRubricId);
+
   return (
     <VStack w="100%">
       <RubricMenu />
@@ -1775,12 +1784,13 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
           aria-label={`Rubric: ${rubric.name}`}
         >
           <RubricSidebar key={rubric.id} rubricId={rubric.id} />
+          {completeReviewAfterRubricId === rubric.id && <RubricSidebarConfirmButton />}
           {index < rubrics.length - 1 && (
             <Separator orientation="horizontal" borderTopWidth="4px" borderColor="border.emphasized" my={2} mt="50px" />
           )}
         </Box>
       ))}
-      <RubricSidebarConfirmButton />
+      {showCompleteReviewAtListEnd && <RubricSidebarConfirmButton />}
     </VStack>
   );
 }

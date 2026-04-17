@@ -51,7 +51,6 @@ import { computeRubricGradingCompletion, gradeTargetsForSubmission } from "@/lib
 import { useCallback, useMemo, useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
 import { useRouter } from "next/navigation";
-import { Switch } from "./switch";
 import PersonName from "./person-name";
 import SelfReviewDueDateInformation from "./self-review-due-date-information";
 import { Toaster, toaster } from "./toaster";
@@ -347,23 +346,6 @@ export function CompleteReviewAssignmentButton() {
  *
  * Displays missing required and optional rubric checks and criteria, and prevents completion until all required checks are addressed. On completion, updates the review status and shows a success or error notification.
  */
-function useAutoAdvance(): [boolean, (v: boolean) => void] {
-  const [on, setOn] = useState(() => {
-    try {
-      return window.localStorage.getItem("pawtograder-auto-advance-review") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const toggle = (v: boolean) => {
-    try {
-      window.localStorage.setItem("pawtograder-auto-advance-review", String(v));
-    } catch {}
-    setOn(v);
-  };
-  return [on, toggle];
-}
-
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
@@ -373,7 +355,43 @@ export function CompleteReviewButton() {
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
   const nextIncompleteUrl = useNextIncompleteReviewUrl();
-  const [autoAdvance, setAutoAdvance] = useAutoAdvance();
+
+  const markComplete = useCallback(
+    async (advanceAfter: boolean) => {
+      if (!activeSubmissionReview) {
+        toaster.error({
+          title: "Error marking review as complete",
+          description: "No active submission review found."
+        });
+        return;
+      }
+      try {
+        setIsLoading(true);
+        await submissionController.submission_reviews.update(activeSubmissionReview.id, {
+          completed_at: new Date().toISOString(),
+          completed_by: private_profile_id
+        });
+
+        toaster.success({
+          title: "Review marked as complete",
+          description: "Your review has been marked as complete."
+        });
+
+        if (advanceAfter && nextIncompleteUrl) {
+          router.push(nextIncompleteUrl);
+        }
+      } catch (error) {
+        console.error("Error marking review as complete", error);
+        toaster.error({
+          title: "Error marking review as complete",
+          description: "An error occurred while marking the review as complete."
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [activeSubmissionReview, nextIncompleteUrl, private_profile_id, router, submissionController.submission_reviews]
+  );
 
   if (
     !activeSubmissionReview ||
@@ -459,56 +477,32 @@ export function CompleteReviewButton() {
                 </Box>
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-                <Text>All checks have been applied. Click the button below to mark the review as complete.</Text>
+                <Text>
+                  All checks have been applied. Use Complete + Next to save and open the next pending review when one is
+                  available.
+                </Text>
               )}
               {missing_required_checks.length == 0 && missing_required_criteria.length == 0 && (
-                <VStack align="start" gap={2} w="100%">
-                  {nextIncompleteUrl && (
-                    <Switch checked={autoAdvance} onCheckedChange={(e) => setAutoAdvance(e.checked)} size="sm">
-                      Auto-advance to next review
-                    </Switch>
-                  )}
+                <HStack gap={2} w="100%" flexWrap="wrap">
                   <Button
                     variant="solid"
                     colorPalette="green"
                     loading={isLoading}
-                    onClick={async () => {
-                      if (!activeSubmissionReview) {
-                        toaster.error({
-                          title: "Error marking review as complete",
-                          description: "No active submission review found."
-                        });
-                        return;
-                      }
-                      try {
-                        setIsLoading(true);
-                        await submissionController.submission_reviews.update(activeSubmissionReview.id, {
-                          completed_at: new Date().toISOString(),
-                          completed_by: private_profile_id
-                        });
-
-                        toaster.success({
-                          title: "Review marked as complete",
-                          description: "Your review has been marked as complete."
-                        });
-
-                        if (autoAdvance && nextIncompleteUrl) {
-                          router.push(nextIncompleteUrl);
-                        }
-                      } catch (error) {
-                        console.error("Error marking review as complete", error);
-                        toaster.error({
-                          title: "Error marking review as complete",
-                          description: "An error occurred while marking the review as complete."
-                        });
-                      } finally {
-                        setIsLoading(false);
-                      }
-                    }}
+                    onClick={() => void markComplete(false)}
                   >
-                    Mark as Complete
+                    Complete
                   </Button>
-                </VStack>
+                  {nextIncompleteUrl && (
+                    <Button
+                      variant="solid"
+                      colorPalette="green"
+                      loading={isLoading}
+                      onClick={() => void markComplete(true)}
+                    >
+                      Complete + Next
+                    </Button>
+                  )}
+                </HStack>
               )}
             </VStack>
           </Popover.Body>

@@ -276,7 +276,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("button", { name: "Complete Review" }).click();
     await argosScreenshot(page, "Instructor completes the grading review");
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release All Submission Reviews
