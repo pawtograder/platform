@@ -108,6 +108,8 @@ WITH ur_students AS (
            repo.repository,
            repo.is_github_ready
     FROM chosen_submission cs
+    LEFT JOIN student_group sg
+      ON sg.assignment_id = cs.assignment_id AND sg.student_profile_id = cs.student_profile_id
     LEFT JOIN public.submissions sub ON sub.id = cs.submission_id
     LEFT JOIN LATERAL (
         SELECT r.id AS repository_id, r.repository, r.is_github_ready
@@ -117,7 +119,13 @@ WITH ur_students AS (
             (sub.id IS NOT NULL AND sub.assignment_group_id IS NOT NULL
              AND r.assignment_group_id = sub.assignment_group_id)
             OR (sub.id IS NOT NULL AND sub.assignment_group_id IS NULL AND r.profile_id = cs.student_profile_id AND r.assignment_group_id IS NULL)
-            OR (sub.id IS NULL)
+            OR (
+              sub.id IS NULL
+              AND (
+                (sg.assignment_group_id IS NOT NULL AND r.assignment_group_id = sg.assignment_group_id)
+                OR (r.profile_id = cs.student_profile_id AND r.assignment_group_id IS NULL)
+              )
+            )
           )
         ORDER BY
           CASE
@@ -135,16 +143,24 @@ WITH ur_students AS (
 ), review_info AS (
     SELECT a.id AS assignment_id,
            ur.student_profile_id,
-           ra.id AS review_assignment_id,
-           ra.submission_id AS review_submission_id,
-           sr.id AS submission_review_id,
-           sr.completed_at AS submission_review_completed_at
+           ri.review_assignment_id,
+           ri.review_submission_id,
+           ri.submission_review_id,
+           ri.submission_review_completed_at
     FROM public.assignments a
     JOIN ur_students ur ON ur.class_id = a.class_id
-    LEFT JOIN public.review_assignments ra
-      ON ra.assignment_id = a.id
-     AND ra.assignee_profile_id = ur.student_profile_id
-    LEFT JOIN public.submission_reviews sr ON sr.id = ra.submission_review_id
+    LEFT JOIN LATERAL (
+        SELECT ra.id AS review_assignment_id,
+               ra.submission_id AS review_submission_id,
+               sr.id AS submission_review_id,
+               sr.completed_at AS submission_review_completed_at
+        FROM public.review_assignments ra
+        LEFT JOIN public.submission_reviews sr ON sr.id = ra.submission_review_id
+        WHERE ra.assignment_id = a.id
+          AND ra.assignee_profile_id = ur.student_profile_id
+        ORDER BY ra.created_at DESC
+        LIMIT 1
+    ) ri ON TRUE
 ), due_date_ex AS (
     SELECT a.id AS assignment_id,
            ur.student_profile_id,
