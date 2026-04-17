@@ -380,7 +380,7 @@ export default function ImportGradebookColumns() {
         <Dialog.Positioner>
           <Dialog.Content maxW={"100vw"} maxH={"100vh"} overflow={"auto"} width={"fit-content"}>
             <Dialog.Header>
-              <Dialog.Title>Import Gradebook Column</Dialog.Title>
+              <Dialog.Title>Import Gradebook Columns</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
               <Toaster />
