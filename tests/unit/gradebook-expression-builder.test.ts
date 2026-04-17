@@ -360,6 +360,56 @@ describe("Expression Builder — evaluateForStudent", () => {
       const r = runExpression(controller, "countif(gradebook_columns('skill*'), f(x) = x.score == 1)", "alice");
       expect(Number(r.evaluation?.rawResult)).toBe(1);
     });
+
+    test("subexpressions inside a lambda body are never captured as intermediates", () => {
+      // The lambda `f(x) = not x.is_missing and x.score > 0` binds `x` inside
+      // its body. Evaluating `x.score > 0` at the outer scope throws
+      // "Undefined symbol x", so the preview must NOT descend into the
+      // lambda. It should still show the top-level call itself and the
+      // sibling `gradebook_columns(...)` arg alongside it.
+      const r = runExpression(
+        controller,
+        "countif(gradebook_columns('lab*'), f(x) = not x.is_missing and x.score > 0)",
+        "alice"
+      );
+      expect(r.evaluation?.error).toBeNull();
+      const im = r.evaluation!.intermediates;
+
+      // The lambda itself is skipped.
+      expect(im.find((iv) => iv.nodeType === "FunctionAssignmentNode")).toBeUndefined();
+
+      // Inner x.is_missing / x.score / x.score > 0 / not x.is_missing / the
+      // combining `and` are all inside the lambda body — none should leak in
+      // as standalone intermediates.  Check that no intermediate's source
+      // EQUALS one of those lambda-body subexpressions (the top-level
+      // countif source naturally contains the lambda as a substring — that's
+      // fine; what we're guarding against is the individual inner nodes
+      // showing up as their own entries).
+      const lambdaBodies = new Set([
+        "x.is_missing",
+        "x.score",
+        "x.score > 0",
+        "not x.is_missing",
+        "not x.is_missing and x.score > 0"
+      ]);
+      for (const iv of im) {
+        expect(lambdaBodies.has(iv.source)).toBe(false);
+      }
+      // And none of them should be reporting an "Undefined symbol x" error.
+      for (const iv of im) {
+        expect(iv.display).not.toMatch(/Undefined symbol/i);
+      }
+
+      // The top-level `countif(...)` and its `gradebook_columns('lab*')` arg
+      // ARE captured (they evaluate cleanly in the outer scope).
+      const countifCall = im.find((iv) => iv.source.startsWith("countif("));
+      expect(countifCall).toBeDefined();
+      expect(Number(countifCall?.raw)).toBe(3);
+
+      const gbcArg = findIntermediate(im, `gradebook_columns("lab*")`);
+      expect(gbcArg).toBeDefined();
+      expect(Array.isArray(gbcArg?.raw)).toBe(true);
+    });
   });
 
   describe("fixture 4 (additive via .score with score_override)", () => {

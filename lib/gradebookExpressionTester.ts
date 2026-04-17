@@ -145,7 +145,10 @@ type MathJSInstance = ReturnType<MathJSNS["create"]>;
 function shouldCaptureNode(node: MathNode): boolean {
   const t = node.type;
   // Skip pure leaves (constants / bare symbol lookups) — the overlay for
-  // `score * 2` should not repeat the constant `2` next to itself.
+  // `score * 2` should not repeat the constant `2` next to itself. We also
+  // skip `FunctionAssignmentNode` (e.g. `f(x) = ...`) because its value is a
+  // function reference, not a scalar worth displaying, and we never recurse
+  // into its body either (see `collectNodes`).
   return (
     t === "FunctionNode" ||
     t === "OperatorNode" ||
@@ -159,12 +162,21 @@ function shouldCaptureNode(node: MathNode): boolean {
   );
 }
 
-/** Ordered walk of the AST. */
+/** Ordered walk of the AST. Descendants of a `FunctionAssignmentNode` (the
+ *  body of a lambda like `f(x) = x.score > 0`) are intentionally skipped:
+ *  their free variables (`x` here) are bound inside the lambda and have no
+ *  meaningful value in the outer evaluation scope, so trying to evaluate them
+ *  produces misleading "Undefined symbol x" errors. The lambda itself — and
+ *  the top-level call that receives it, e.g. `countif(gradebook_columns(...),
+ *  f(x) = ...)` — is still captured. */
 function collectNodes(root: MathNode): MathNode[] {
   const out: MathNode[] = [];
-  root.traverse((node) => {
+  const walk = (node: MathNode) => {
     out.push(node);
-  });
+    if (node.type === "FunctionAssignmentNode") return;
+    (node as unknown as { forEach?: (cb: (child: MathNode) => void) => void }).forEach?.(walk);
+  };
+  walk(root);
   return out;
 }
 
