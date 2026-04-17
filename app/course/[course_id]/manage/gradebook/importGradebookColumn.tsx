@@ -372,7 +372,7 @@ export default function ImportGradebookColumns() {
     >
       <Dialog.Trigger asChild>
         <Button variant="outline" size="sm" onClick={() => setDialogOpen(true)}>
-          <Icon as={FiUpload} mr={2} /> Import Column
+          <Icon as={FiUpload} mr={2} /> Import Columns
         </Button>
       </Dialog.Trigger>
       <Portal>
