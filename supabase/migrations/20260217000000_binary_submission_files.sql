@@ -5,10 +5,10 @@
 ALTER TABLE public.submission_files ALTER COLUMN contents DROP NOT NULL;
 
 -- Add columns for binary file metadata
--- ALTER TABLE public.submission_files ADD COLUMN is_binary boolean NOT NULL DEFAULT false;
--- ALTER TABLE public.submission_files ADD COLUMN file_size bigint;
--- ALTER TABLE public.submission_files ADD COLUMN mime_type text;
--- ALTER TABLE public.submission_files ADD COLUMN storage_key text;
+ALTER TABLE public.submission_files ADD COLUMN is_binary boolean NOT NULL DEFAULT false;
+ALTER TABLE public.submission_files ADD COLUMN file_size bigint;
+ALTER TABLE public.submission_files ADD COLUMN mime_type text;
+ALTER TABLE public.submission_files ADD COLUMN storage_key text;
 
 -- Create the submission-files storage bucket for binary file storage
 INSERT INTO storage.buckets (id, name, public) VALUES ('submission-files', 'submission-files', false)
