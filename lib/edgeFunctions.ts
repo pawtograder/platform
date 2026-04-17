@@ -268,6 +268,18 @@ export class EdgeFunctionError extends Error {
   }
 }
 
+function normalizeBodyError(err: unknown): { message: string; details: string; recoverable: boolean } {
+  if (typeof err === "string") {
+    return { message: err, details: "", recoverable: false };
+  }
+  const e = err as { message?: string; details?: string; recoverable?: boolean };
+  return {
+    message: e.message ?? "Unknown error",
+    details: e.details ?? e.message ?? "Unknown error",
+    recoverable: e.recoverable ?? false
+  };
+}
+
 /**
  * Invoke a Supabase Edge Function and handle errors from both non-2xx responses
  * (where the SDK returns { data: null, error: FunctionsHttpError }) and 2xx responses
@@ -285,7 +297,7 @@ async function invokeEdgeFunction<T = unknown>(
       try {
         const body = await error.context.json();
         if (body?.error) {
-          throw new EdgeFunctionError(body.error);
+          throw new EdgeFunctionError(normalizeBodyError(body.error));
         }
       } catch (e) {
         if (e instanceof EdgeFunctionError) throw e;
@@ -301,13 +313,13 @@ async function invokeEdgeFunction<T = unknown>(
   // 2xx response — check for error in body (legacy pattern, shouldn't happen with status code fix)
   const response = data as FunctionTypes.GenericResponse;
   if (response?.error) {
-    throw new EdgeFunctionError(response.error);
+    throw new EdgeFunctionError(normalizeBodyError(response.error));
   }
   return data as T;
 }
 
-// MCP Token types
-export type MCPScope = "mcp:read" | "mcp:write";
+// API token scopes (MCP and CLI)
+export type MCPScope = "mcp:read" | "mcp:write" | "cli:read" | "cli:write";
 
 export interface MCPToken {
   id: string;
@@ -360,6 +372,51 @@ export async function mcpTokensRevoke(
     method: "DELETE",
     body: params
   });
+}
+
+// CLI Edge Function types
+
+export interface CLIRequest {
+  command: string;
+  params: Record<string, unknown>;
+}
+
+export interface CLIResponse {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+/**
+ * Available CLI commands:
+ *   READ (cli:read):
+ *     - classes.list
+ *     - classes.show { identifier }
+ *     - assignments.list { class }
+ *     - assignments.show { class, identifier }
+ *     - rubrics.list { class, assignment }
+ *     - rubrics.export { class, assignment, type? }
+ *     - flashcards.list { class }
+ *
+ *   WRITE (cli:write):
+ *     - surveys.copy { source_class, target_class, survey|all, target_assignment?, dry_run? }
+ *     - assignments.copy { source_class, target_class, assignment|all|schedule, skip_repos?, skip_rubrics?, skip_surveys?, dry_run?, debug? }
+ *     - assignments.delete { class, identifier }
+ *     - rubrics.import { class, assignment, rubric, type?, dry_run? }
+ *     - flashcards.copy { source_class, target_class, deck|all, dry_run? }
+ */
+export async function cliInvoke(params: CLIRequest, supabase: SupabaseClient<Database>): Promise<CLIResponse> {
+  const cli = await invokeEdgeFunction<CLIResponse>(supabase, "cli", {
+    body: params
+  });
+  if (cli.error) {
+    throw new EdgeFunctionError({
+      details: cli.error,
+      message: cli.error,
+      recoverable: false
+    });
+  }
+  return cli;
 }
 
 // AI Help Feedback types
