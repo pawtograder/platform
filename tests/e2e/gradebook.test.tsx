@@ -776,7 +776,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Check action buttons
     await expect(page.getByRole("button", { name: "Download Gradebook" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Import Column" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Import Columns" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Column" })).toBeVisible();
 
     // Check that Student 1's assignments are showing grades, final grade is calculated
@@ -881,9 +881,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass({ timeout: 60_000 });
   });
 
-  test("Import Column workflow creates a new column and populates scores", async ({ page }) => {
+  test("Import Columns workflow creates a new column and populates scores", async ({ page }) => {
     // Open import dialog
-    await page.getByRole("button", { name: "Import Column" }).click();
+    await page.getByRole("button", { name: "Import Columns" }).click();
 
     // Step 1: upload file
     const fileInput = page.locator('input[type="file"]');
