@@ -69,6 +69,21 @@ export type EvaluationResult = {
   intermediates: IntermediateValue[];
 };
 
+function maybeUnwrapMatrix(value: unknown): unknown {
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    // mathjs DenseMatrix exposes a toArray() method
+    if (typeof obj.toArray === "function") {
+      try {
+        return (obj.toArray as () => unknown)();
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+  return value;
+}
+
 /** Short, safe stringification for overlays (`mean(...) = 87.5`). */
 export function formatValueForOverlay(value: unknown): string {
   if (value === undefined) return "undefined";
@@ -83,15 +98,16 @@ export function formatValueForOverlay(value: unknown): string {
     return JSON.stringify(value);
   }
   if (typeof value === "boolean") return value ? "true" : "false";
-  if (Array.isArray(value)) {
-    if (value.length === 0) return "[]";
-    if (value.length > 4) {
-      return `[${value.slice(0, 4).map(formatValueForOverlay).join(", ")}, … ${value.length - 4} more]`;
+  const unwrapped = maybeUnwrapMatrix(value);
+  if (Array.isArray(unwrapped)) {
+    if (unwrapped.length === 0) return "[]";
+    if (unwrapped.length > 4) {
+      return `[${unwrapped.slice(0, 4).map(formatValueForOverlay).join(", ")}, … ${unwrapped.length - 4} more]`;
     }
-    return `[${value.map(formatValueForOverlay).join(", ")}]`;
+    return `[${unwrapped.map(formatValueForOverlay).join(", ")}]`;
   }
-  if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
+  if (typeof unwrapped === "object" && unwrapped !== null) {
+    const obj = unwrapped as Record<string, unknown>;
     // GradebookExpressionValue-like object
     if ("score" in obj && "column_slug" in obj) {
       const score = obj["score"];
@@ -108,14 +124,14 @@ export function formatValueForOverlay(value: unknown): string {
       }
     }
     try {
-      const json = JSON.stringify(value);
+      const json = JSON.stringify(unwrapped);
       if (json.length <= 80) return json;
       return json.slice(0, 77) + "…";
     } catch {
       return "[object]";
     }
   }
-  return String(value);
+  return String(unwrapped);
 }
 
 /**
@@ -385,15 +401,31 @@ export function evaluateForStudent(params: {
     }
   };
 
+  /** mathjs `ResultSet` shape is `{ entries: unknown[] }`, but plain Arrays
+   * also own an `entries()` method via `Array.prototype`, so we must guard
+   * `Array.isArray(...)` first. Without this guard every array-returning
+   * expression (e.g. `gradebook_columns("assignment-*")`) would be rewritten
+   * to `undefined`. */
+  const unwrapResultSet = (value: unknown): unknown => {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "entries" in (value as Record<string, unknown>)
+    ) {
+      const entries = (value as { entries: unknown }).entries;
+      if (Array.isArray(entries)) {
+        return entries.length > 0 ? entries[entries.length - 1] : undefined;
+      }
+    }
+    return value;
+  };
+
   let rawResult: unknown;
   let resultStr = "";
   let evalError: string | null = null;
   try {
-    rawResult = transformed.evaluate({ context });
-    if (typeof rawResult === "object" && rawResult !== null && "entries" in (rawResult as Record<string, unknown>)) {
-      const entries = (rawResult as { entries: unknown[] }).entries;
-      rawResult = entries.length > 0 ? entries[entries.length - 1] : undefined;
-    }
+    rawResult = unwrapResultSet(transformed.evaluate({ context }));
     resultStr = formatValueForOverlay(rawResult);
   } catch (e) {
     evalError = e instanceof Error ? e.message : String(e);
@@ -423,11 +455,7 @@ export function evaluateForStudent(params: {
       let value: unknown;
       let nodeError: string | undefined;
       try {
-        value = node.evaluate({ context });
-        if (value && typeof value === "object" && "entries" in (value as Record<string, unknown>)) {
-          const entries = (value as { entries: unknown[] }).entries;
-          value = entries.length > 0 ? entries[entries.length - 1] : undefined;
-        }
+        value = unwrapResultSet(node.evaluate({ context }));
       } catch (e) {
         nodeError = e instanceof Error ? e.message : String(e);
       }
