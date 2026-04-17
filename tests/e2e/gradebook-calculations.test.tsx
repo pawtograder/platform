@@ -17,7 +17,7 @@
  */
 
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Database, Json } from "@/utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -211,7 +211,7 @@ async function kickRecalculation(class_id: number) {
       return true;
     });
     await supabase.rpc("enqueue_gradebook_row_recalculation_batch", {
-      p_rows: deduped as unknown as Record<string, unknown>[]
+      p_rows: deduped as Json[]
     });
   }
 

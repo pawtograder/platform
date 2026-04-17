@@ -69,6 +69,18 @@ Run `npm run seed` to create a test class with students, assignments, and login 
 - **Build**: `npm run build` (requires ~8 GB memory via `NODE_OPTIONS=--max-old-space-size=8000`).
 - **Format**: `npm run format` (Prettier auto-fix).
 
+### Operator CLI (`repos` maintenance)
+
+The Pawtograder CLI (`npm run cli`) can list student assignment repositories and run **local** git/rsync workflows after fetching authorized metadata from the `cli` Edge Function. Requires **`pawtograder login`** (MCP API token with `cli:read`). Student repo writes use **SSH git on your machine**, not the Edge Function.
+
+| Command                                                                                                                      | Purpose                                                                      |
+| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `npm run cli -- repos list --class <id> --assignment <id>`                                                                   | List repos + assignment summary (metadata only).                             |
+| `npm run cli -- repos sync-grade-workflow --class <id> --assignment <id> --workdir <path>`                                   | Fetch context + sync `grade.yml` from handout to student repos.              |
+| `npm run cli -- repos copy-after-source-due --class <id> --source-assignment <id> --target-assignment <id> --workdir <path>` | After source due date, copy files from source repo to target repo per group. |
+
+Convenience: `npm run cli:repos -- …` (same as `npm run cli -- repos …`). Add `--dry-run` to preview local mutations.
+
 ### Key ports
 
 | Service                  | Port  |

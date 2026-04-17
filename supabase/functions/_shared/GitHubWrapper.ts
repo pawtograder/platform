@@ -625,7 +625,11 @@ export async function getFileFromRepo(repoName: string, path: string, scope?: Se
   if ("content" in file.data) {
     const base64Content = file.data.content;
     const content = Buffer.from(base64Content, "base64").toString("utf-8");
-    return { content };
+    const sha =
+      "sha" in file.data && typeof (file.data as { sha?: string }).sha === "string"
+        ? (file.data as { sha: string }).sha
+        : undefined;
+    return { content, sha };
   } else {
     throw new Error("File is not a file");
   }

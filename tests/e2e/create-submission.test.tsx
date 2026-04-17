@@ -229,9 +229,15 @@ test.describe("Create submission", () => {
     if (submissionFilesError || !submissionFiles) {
       throw new Error(`Failed to load submission files: ${submissionFilesError?.message}`);
     }
-    const { combined_hash, file_hashes } = computeCombinedHashFromSubmissionFiles(
-      submissionFiles.map((f) => ({ name: f.name, contents: f.contents ?? "" }))
-    );
+    const filesForHash = submissionFiles.map((f) => {
+      if (f.contents == null) {
+        throw new Error(
+          `E2E: submission file ${JSON.stringify(f.name)} has null/undefined contents; refusing to normalize to "" before computeCombinedHashFromSubmissionFiles`
+        );
+      }
+      return { name: f.name, contents: f.contents };
+    });
+    const { combined_hash, file_hashes } = computeCombinedHashFromSubmissionFiles(filesForHash);
 
     // Store as a handout version for multiple assignments.
     await supabase.from("assignment_handout_file_hashes").insert([
