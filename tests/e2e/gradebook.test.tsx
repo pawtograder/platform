@@ -940,6 +940,102 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // This column is not included in final grade so don't check that it updates
   });
 
+  test("Expression Builder: live validation, full-screen mode, and per-student evaluation", async ({ page }) => {
+    // Uses the Add Column dialog (creates a new column so it's safe even in
+    // the serial suite). Covers:
+    //   1. Live parse validation (invalid syntax).
+    //   2. Dependency validation (unknown slug) blocks save.
+    //   3. A valid expression enables save.
+    //   4. Full-screen Expression Builder opens, shows a student picker, and
+    //      evaluates the expression against a specific student with live
+    //      intermediate values.
+    await page.getByRole("button", { name: "Add Column" }).click();
+
+    const addDialog = page.getByRole("dialog").filter({ hasText: "Add Column" });
+    await expect(addDialog).toBeVisible();
+
+    await addDialog.getByLabel("Name").fill("Validated Column");
+    await addDialog.getByLabel("Max Score").fill("100");
+    await addDialog.getByLabel("Slug").fill("validated-column");
+
+    const scoreTextarea = addDialog.getByLabel("Score Expression");
+    await expect(scoreTextarea).toBeVisible();
+    const saveButton = addDialog.getByRole("button", { name: /^Save$/ });
+
+    // --- (1) Parse error ---
+    await scoreTextarea.fill("((1 +");
+    await expect(page.getByTestId("expression-parse-error")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-parse-error")).toContainText(/Parse error/i);
+    // Clicking Save while the expression is invalid must not close the dialog
+    // or create a column. The button is rendered with `disabled={true}` on
+    // Chakra when validation fails, but we belt-and-suspenders click it.
+    await saveButton.click({ force: true }).catch(() => {
+      /* Chakra may mark the button as disabled, which blocks the click. */
+    });
+    await expect(addDialog).toBeVisible();
+
+    // --- (2) Dependency error ---
+    await scoreTextarea.fill('mean(gradebook_columns("does-not-exist-xyz"))');
+    await expect(page.getByTestId("expression-dependency-error")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-dependency-error")).toContainText(/Invalid dependency/i);
+    await saveButton.click({ force: true }).catch(() => {});
+    await expect(addDialog).toBeVisible();
+
+    // --- (3) Valid arithmetic expression ---
+    await scoreTextarea.fill("1 + 2 * 3");
+    await expect(page.getByTestId("expression-ok-syntax")).toBeVisible({ timeout: 10_000 });
+
+    // --- (4) Full-screen expression builder ---
+    await addDialog.getByRole("button", { name: /Expression Builder/i }).click();
+    // The overlay region is rendered only in expanded mode.
+    await expect(page.getByTestId("expression-builder-overlay")).toBeVisible({ timeout: 10_000 });
+
+    // The student picker auto-selects the first student; verify that at least
+    // one student button is visible, and that we can pick a specific one.
+    const studentPicker = page.getByTestId("expression-builder-student-picker");
+    await expect(studentPicker).toBeVisible();
+    const studentButton = studentPicker.getByRole("button", { name: students[0].private_profile_name });
+    await expect(studentButton).toBeVisible();
+    await studentButton.click();
+
+    // With a valid expression and a selected student, we should see a green
+    // evaluation status and a "Result: …" badge inside the overlay.
+    await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-builder-overlay")).toContainText(/Result:\s*7/);
+
+    // Switch to an expression that uses a real gradebook_columns slug and
+    // assert that the intermediate-values panel renders the inner call.
+    // The helper creates a `participation` manual column which is in the
+    // beforeAll fixture above.
+    const fullScreenTextarea = page.getByLabel("Score Expression").first();
+    await fullScreenTextarea.fill('gradebook_columns("participation")');
+    await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    // The intermediate overlay panel should mention the dependency slug it
+    // just resolved (participation=…/…) rather than "undefined".
+    await expect(page.getByTestId("expression-builder-overlay")).toContainText(/participation/);
+    await expect(page.getByTestId("expression-builder-overlay")).not.toContainText(/undefined/);
+
+    // Introducing a parse error in the full-screen mode should still surface
+    // the inline error and keep Save disabled.
+    await fullScreenTextarea.fill("((1 +");
+    await expect(page.getByTestId("expression-parse-error")).toBeVisible({ timeout: 10_000 });
+
+    // Collapse back, close the dialog. No column is actually created.
+    await page.getByRole("button", { name: /Collapse/i }).click();
+    await expect(page.getByTestId("expression-builder-overlay")).toBeHidden();
+
+    await addDialog.getByRole("button", { name: /^Cancel$/ }).click();
+    await expect(addDialog).toBeHidden();
+
+    // Sanity: no column named "Validated Column" leaked into the DB.
+    const { data: leaked } = await supabase
+      .from("gradebook_columns")
+      .select("id")
+      .eq("class_id", course.id)
+      .eq("slug", "validated-column");
+    expect(leaked ?? []).toHaveLength(0);
+  });
+
   // test("Student What If page allows simulating grades and shows released grades", async ({ page }) => {
   //   // Log in as a student and navigate to the student gradebook
   //   // Didn't want to make another test suite with a different beforEach just for a single test

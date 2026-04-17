@@ -194,6 +194,7 @@ export function ExpressionBuilder(props: Props) {
           bg="bg.muted"
           overflow="auto"
           maxH={{ base: "200px", lg: "65vh" }}
+          data-testid="expression-builder-student-picker"
         >
           <HStack mb={2}>
             <Icon as={LuUser} color="fg.muted" />
