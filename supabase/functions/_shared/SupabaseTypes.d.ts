@@ -11358,6 +11358,10 @@ export type Database = {
         Returns: undefined;
       };
       cleanup_github_async_errors: { Args: never; Returns: undefined };
+      cleanup_individual_repositories_for_assignment: {
+        Args: { p_assignment_id: number; p_class_id: number };
+        Returns: Json;
+      };
       clear_all_incomplete_review_assignments: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
