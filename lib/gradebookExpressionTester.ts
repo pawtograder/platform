@@ -188,9 +188,12 @@ export function validateExpressionString(
   if (!trimmed) {
     return { parseError: null, dependencyError: null, deps: null };
   }
-  let node: MathNode;
+  // Attempt a parse first so we can distinguish a syntax error from a
+  // dependency error. `extractAndValidateDependencies` also parses internally
+  // but throws a single merged error, which the UI presents under the wrong
+  // category.
   try {
-    node = math.parse(trimmed);
+    math.parse(trimmed);
   } catch (e) {
     return {
       parseError: e instanceof Error ? e.message : String(e),
@@ -201,8 +204,6 @@ export function validateExpressionString(
 
   try {
     const deps = gradebookController.extractAndValidateDependencies(trimmed, editingColumnId ?? -1) as DepsMap | null;
-    // Check AST-wide for references we should support.
-    void node;
     return { parseError: null, dependencyError: null, deps };
   } catch (e) {
     return {
@@ -223,12 +224,7 @@ type ColumnWithEntries = GradebookColumnWithEntries;
  * All functions receive a leading `context` argument that the AST transform
  * injects before evaluation.
  */
-function buildImports(
-  math: MathJSInstance,
-  gradebookController: GradebookController,
-  studentId: string,
-  isPrivateCalculation: boolean
-) {
+function buildImports(math: MathJSInstance, gradebookController: GradebookController, studentId: string) {
   type ImportFunction = (...args: never[]) => unknown;
   const imports: Record<string, ImportFunction> = {};
   const allColumns = gradebookController.columns as ColumnWithEntries[];
@@ -323,7 +319,6 @@ function buildImports(
     enforcePrivateCalculationMatch: false
   });
   math.import(imports, { override: true });
-  void isPrivateCalculation;
   return imports;
 }
 
@@ -373,21 +368,36 @@ export function evaluateForStudent(params: {
   // Build a fresh math instance to avoid polluting the shared one used by
   // render expressions.
   const localMath: MathJSInstance = math.create(math.all, {});
-  buildImports(localMath, gradebookController, studentId, false);
+  buildImports(localMath, gradebookController, studentId);
 
   const parsed = localMath.parse(trimmed);
-  const transformed = parsed.transform((node: MathNode) => {
-    if (node.type === "FunctionNode") {
-      const fn = node as FunctionNode;
+  // For every context-aware function call, prepend the `context` symbol to
+  // the argument list.
+  //
+  // mathjs's `Node.transform(cb)` stops recursing once the callback returns a
+  // DIFFERENT node (see node_modules/mathjs/lib/esm/expression/node/Node.js),
+  // so if we naively `return new FunctionNode(...)` for the outer `sum(...)`
+  // the inner `gradebook_columns(...)` never gets its context prepended and
+  // fails at runtime with a bogus "invalid pattern" error. We recurse
+  // manually so both levels get rewritten, and we build fresh `FunctionNode`s
+  // rather than mutating `.args` in place to avoid corrupting any AST that
+  // mathjs may have cached.
+  const SymbolNodeCtor = (localMath as unknown as { SymbolNode: new (name: string) => MathNode }).SymbolNode;
+  const FunctionNodeCtor = (localMath as unknown as { FunctionNode: new (fn: unknown, args: MathNode[]) => MathNode })
+    .FunctionNode;
+  const injectContextArg = (node: MathNode): MathNode => {
+    // Recurse into children first so inner calls also get transformed.
+    const mapped = (node as unknown as { map: (cb: (child: MathNode) => MathNode) => MathNode }).map(injectContextArg);
+    if (mapped.type === "FunctionNode") {
+      const fn = mapped as FunctionNode;
       if (CONTEXT_FUNCTIONS.includes(fn.fn.name)) {
-        const SymbolNodeCtor = (localMath as unknown as { SymbolNode: new (name: string) => MathNode }).SymbolNode;
         const contextSymbol = new SymbolNodeCtor("context");
-        const newArgs: MathNode[] = [contextSymbol, ...fn.args];
-        fn.args = newArgs;
+        return new FunctionNodeCtor(fn.fn, [contextSymbol, ...fn.args]);
       }
     }
-    return node;
-  });
+    return mapped;
+  };
+  const transformed = injectContextArg(parsed);
 
   const context = {
     student_id: studentId,
@@ -441,15 +451,17 @@ export function evaluateForStudent(params: {
       } catch {
         source = node.type;
       }
-      // Strip the leading `context, ` the transform injected for known context
-      // functions so the displayed source matches what the user typed.
-      const pretty = source
-        .replace(/^mean\(context, /, "mean(")
-        .replace(/^sum\(context, /, "sum(")
-        .replace(/^countif\(context, /, "countif(")
-        .replace(/^drop_lowest\(context, /, "drop_lowest(")
-        .replace(/^gradebook_columns\(context, /, "gradebook_columns(")
-        .replace(/^assignments\(context, /, "assignments(");
+      // Strip every `context, ` the transform injected for context-aware
+      // functions so the displayed source matches what the user typed. This
+      // must be global (not anchored) because nested calls like
+      // `sum(gradebook_columns("hw-*"))` stringify to
+      // `sum(context, gradebook_columns(context, "hw-*"))` and we need to
+      // clean both levels.
+      const contextArgStrip = new RegExp(
+        `\\b(${CONTEXT_FUNCTIONS.map((fn) => fn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\(context,\\s*`,
+        "g"
+      );
+      const pretty = source.replace(contextArgStrip, "$1(");
 
       const idx = trimmed.indexOf(pretty);
       let value: unknown;

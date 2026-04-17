@@ -10,6 +10,12 @@ describe("gradebook expression tester helpers", () => {
       expect(formatValueForOverlay(true)).toBe("true");
     });
 
+    test("formats non-finite numbers (NaN / Infinity)", () => {
+      expect(formatValueForOverlay(NaN)).toBe("NaN");
+      expect(formatValueForOverlay(Infinity)).toBe("Infinity");
+      expect(formatValueForOverlay(-Infinity)).toBe("-Infinity");
+    });
+
     test("formats plain arrays without collapsing to undefined", () => {
       // Regression: `"entries" in arr` is true for plain arrays because
       // Array.prototype.entries exists. We must not mistake plain arrays

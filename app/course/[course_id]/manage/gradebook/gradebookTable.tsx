@@ -437,7 +437,7 @@ function AddColumnDialog() {
   }, [isOpen, reset]);
 
   const onSubmit = async (data: FieldValues) => {
-    if (shouldBlockSave(validation)) {
+    if (shouldBlockSave(validation, data.scoreExpression)) {
       toaster.error({
         title: "Invalid score expression",
         description: validation?.parseError || validation?.dependencyError || "Fix the expression before saving."
@@ -603,7 +603,12 @@ function AddColumnDialog() {
                   </Checkbox>
                 </Box>
                 <HStack justifyContent="flex-end">
-                  <Button type="submit" colorPalette="green" loading={isLoading} disabled={shouldBlockSave(validation)}>
+                  <Button
+                    type="submit"
+                    colorPalette="green"
+                    loading={isLoading}
+                    disabled={shouldBlockSave(validation, scoreExpression)}
+                  >
                     Save
                   </Button>
                   <Button type="button" variant="ghost" onClick={onClose}>
@@ -685,7 +690,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
 
   const onSubmit = async (data: FieldValues) => {
-    if (shouldBlockSave(validation)) {
+    if (shouldBlockSave(validation, data.scoreExpression)) {
       toaster.error({
         title: "Invalid score expression",
         description: validation?.parseError || validation?.dependencyError || "Fix the score expression before saving."
@@ -893,7 +898,12 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   </Text>
                 )}
                 <HStack justifyContent="flex-end">
-                  <Button type="submit" colorPalette="green" loading={isLoading} disabled={shouldBlockSave(validation)}>
+                  <Button
+                    type="submit"
+                    colorPalette="green"
+                    loading={isLoading}
+                    disabled={shouldBlockSave(validation, scoreExpression)}
+                  >
                     Save
                   </Button>
                   <Button type="button" variant="ghost" onClick={onClose}>

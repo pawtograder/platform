@@ -1,7 +1,6 @@
 "use client";
 
 import { Label } from "@/components/ui/label";
-import { toaster } from "@/components/ui/toaster";
 import { useAllStudentRoles } from "@/hooks/useCourseController";
 import { useGradebookController, useGradebookColumns } from "@/hooks/useGradebook";
 import {
@@ -33,18 +32,26 @@ type Props = {
   onValidationChange?: (result: ValidationResult) => void;
 };
 
-function useLoadedMathJS() {
+function useLoadedMathJS(): { math: MathJSNS | null; loadError: string | null } {
   const [math, setMath] = useState<MathJSNS | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    import("mathjs").then((mod) => {
-      if (!cancelled) setMath(mod);
-    });
+    import("mathjs")
+      .then((mod) => {
+        if (!cancelled) setMath(mod);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console -- surface chunk-load failures to the devtools console.
+        console.error("Failed to load mathjs for expression builder", err);
+        setLoadError(err instanceof Error ? err.message : String(err));
+      });
     return () => {
       cancelled = true;
     };
   }, []);
-  return math;
+  return { math, loadError };
 }
 
 /**
@@ -58,7 +65,7 @@ export function ExpressionBuilder(props: Props) {
   const { expression, onExpressionChange, editingColumnId, isExpanded, onExpandToggle, onValidationChange } = props;
   const gradebookController = useGradebookController();
   const gradebookColumns = useGradebookColumns();
-  const fallbackMath = useLoadedMathJS();
+  const { math: fallbackMath, loadError: mathLoadError } = useLoadedMathJS();
   const math = props.math ?? fallbackMath;
   const students = useAllStudentRoles();
   const [selectedStudentId, setSelectedStudentId] = useState<string>("");
@@ -94,10 +101,24 @@ export function ExpressionBuilder(props: Props) {
     [gradebookColumns]
   );
   const validation = useMemo<ValidationResult>(() => {
+    const isEmpty = expression.trim().length === 0;
+    if (mathLoadError) {
+      return {
+        // A non-empty expression cannot be validated if mathjs failed to load,
+        // so we block save to err on the safe side.
+        isValid: isEmpty,
+        isEmpty,
+        parseError: `Unable to load expression evaluator: ${mathLoadError}`,
+        dependencyError: null,
+        evaluation: null
+      };
+    }
     if (!math) {
       return {
-        isValid: true,
-        isEmpty: expression.trim().length === 0,
+        // Same reasoning as above: treat "mathjs still loading" as blocking
+        // for non-empty expressions rather than briefly showing Save enabled.
+        isValid: isEmpty,
+        isEmpty,
         parseError: null,
         dependencyError: null,
         evaluation: null
@@ -124,7 +145,16 @@ export function ExpressionBuilder(props: Props) {
     // gradebookColumnsKey is intentionally a dep so validation updates when
     // columns are added/removed in the background.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [math, gradebookController, expression, selectedStudentId, editingColumnId, isExpanded, gradebookColumnsKey]);
+  }, [
+    math,
+    mathLoadError,
+    gradebookController,
+    expression,
+    selectedStudentId,
+    editingColumnId,
+    isExpanded,
+    gradebookColumnsKey
+  ]);
 
   useEffect(() => {
     onValidationChange?.(validation);
@@ -194,7 +224,6 @@ export function ExpressionBuilder(props: Props) {
           bg="bg.muted"
           overflow="auto"
           maxH={{ base: "200px", lg: "65vh" }}
-          data-testid="expression-builder-student-picker"
         >
           <HStack mb={2}>
             <Icon as={LuUser} color="fg.muted" />
@@ -518,19 +547,22 @@ function dedupeByStartEnd(values: IntermediateValue[]): IntermediateValue[] {
 }
 
 function assignLevels(values: IntermediateValue[]): number[] {
-  // Greedy interval containment: level = deepest nesting of earlier entries
-  // whose range strictly contains this one.
+  // `values` is already sorted by start asc, then end desc (longer spans
+  // first), so a single-pass stack walk gives us the containment depth in
+  // O(n). Whenever the top of the stack no longer strictly contains the
+  // current entry, we pop it; the remaining stack size is the current depth.
   const result: number[] = [];
-  for (let i = 0; i < values.length; i++) {
-    let depth = 0;
-    for (let j = 0; j < i; j++) {
-      const a = values[j];
-      const b = values[i];
-      if (a.start <= b.start && a.end >= b.end && !(a.start === b.start && a.end === b.end)) {
-        depth = Math.max(depth, (result[j] ?? 0) + 1);
-      }
+  const stack: IntermediateValue[] = [];
+  for (const value of values) {
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      const strictlyContains =
+        top.start <= value.start && top.end >= value.end && !(top.start === value.start && top.end === value.end);
+      if (strictlyContains) break;
+      stack.pop();
     }
-    result.push(depth);
+    result.push(stack.length);
+    stack.push(value);
   }
   return result;
 }
@@ -539,9 +571,18 @@ function assignLevels(values: IntermediateValue[]): number[] {
  * Convenience helper used by parent dialogs when they want to guard their
  * onSubmit against invalid expressions. Returns `true` if the expression
  * should be blocked from saving.
+ *
+ * Pass the raw expression string so we can treat the "validation not yet
+ * computed" case as blocking for non-empty expressions (otherwise Save would
+ * briefly be enabled between the dialog opening and the first
+ * `onValidationChange` from ExpressionBuilder).
  */
-export function shouldBlockSave(validation: ValidationResult | null): boolean {
-  if (!validation) return false;
+export function shouldBlockSave(validation: ValidationResult | null, expression?: string): boolean {
+  if (!validation) {
+    // No validation yet — block only if there is something to validate.
+    const raw = expression?.trim() ?? "";
+    return raw.length > 0;
+  }
   if (validation.isEmpty) return false;
   if (validation.parseError) return true;
   if (validation.dependencyError) return true;
@@ -549,15 +590,6 @@ export function shouldBlockSave(validation: ValidationResult | null): boolean {
   // save just because one student's data trips the expression, but do surface
   // the warning.
   return false;
-}
-
-export function useExpressionValidationToaster(validation: ValidationResult | null) {
-  // Re-exported for parents that want to show a toast when the user
-  // attempts to save an invalid expression.
-  void validation;
-  return (message: string) => {
-    toaster.error({ title: "Invalid score expression", description: message });
-  };
 }
 
 // Re-export helpers so consumers don't need to dip into the tester module.
