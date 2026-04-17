@@ -8,7 +8,14 @@ Pawtograder is a Next.js 15 + Supabase course operations platform (autograder, h
 
 ### Starting services
 
-1. **Docker daemon**: `sudo dockerd &>/tmp/dockerd.log &` — wait a few seconds, then verify with `docker info`. If `docker` commands fail with `permission denied ... /var/run/docker.sock`, run `sudo chmod 666 /var/run/docker.sock` once.
+1. **Docker daemon**: `sudo dockerd &>/tmp/dockerd.log &` — wait a few seconds, then verify with `docker info`. If `docker` commands fail with `permission denied ... /var/run/docker.sock`, prefer the least-privilege fix:
+   - Make sure the socket is group-owned by `docker` and add your user to that group, then re-load the group membership for the current shell:
+     ```bash
+     sudo chown root:docker /var/run/docker.sock
+     sudo usermod -aG docker "$USER"
+     newgrp docker   # or: log out and back in to pick up the new group
+     ```
+   - Only as a last-resort temporary workaround on an ephemeral Cloud Agent VM (where the user is already root-equivalent and there is no other tenant on the machine) you may run `sudo chmod 666 /var/run/docker.sock`. **Do not use this on shared or persistent hosts**: it grants every local user full Docker daemon access, which is equivalent to root on the host.
 2. **Supabase — ALWAYS START FROM A FRESH DB, NEVER RESTORE A BACKUP**:
    - `npx supabase start` restores from the previously-saved docker volume by default. In a Cloud Agent VM that volume is typically stale (snapshotted at some older schema version) and will be missing dozens of newer migrations — tests then fail with errors like `column ... does not exist`, `no partition of relation "audit" found for row`, or `Could not find the '...' column ... in the schema cache`.
    - **Correct sequence (do this every time before E2E):**

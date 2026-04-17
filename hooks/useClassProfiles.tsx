@@ -131,7 +131,9 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
             setIsLoading(false);
             return;
           }
-          await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+          const baseDelayMs = 250 * 2 ** (attempt - 1);
+          const jitterMs = Math.random() * 100;
+          await new Promise((resolve) => setTimeout(resolve, baseDelayMs + jitterMs));
         }
       }
     }

@@ -60,7 +60,9 @@ async function loadMathJS() {
     } catch (error) {
       lastError = error;
       if (attempt === maxAttempts) break;
-      await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** (attempt - 1)));
+      const baseDelayMs = 200 * 2 ** (attempt - 1);
+      const jitterMs = Math.random() * 100;
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs + jitterMs));
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
