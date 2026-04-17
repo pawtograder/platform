@@ -11168,6 +11168,10 @@ export type Database = {
         Args: { submission_review_id: number };
         Returns: boolean;
       };
+      authorize_for_submission_review_comment_writable: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
       authorize_for_submission_reviewable: {
         Args: {
           requested_submission_id: number;
