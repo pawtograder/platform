@@ -216,6 +216,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
+    await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
     await page.getByRole("button", { name: "Files" }).click();
 
     await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
@@ -296,6 +297,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
+    await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 

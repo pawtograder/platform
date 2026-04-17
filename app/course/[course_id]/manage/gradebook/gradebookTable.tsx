@@ -374,6 +374,16 @@ function ScoreExprDocs() {
     </Text>
   );
 }
+
+function normalizeScoreExpression(scoreExpression: string | undefined): string | null {
+  const normalized = scoreExpression?.trim();
+  return normalized ? normalized : null;
+}
+
+function effectiveInstructorOnlyForSubmit(scoreExpression: string | undefined, instructorOnly: boolean | undefined) {
+  return Boolean(normalizeScoreExpression(scoreExpression)) && Boolean(instructorOnly);
+}
+
 function AddColumnDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const gradebookController = useGradebookController();
@@ -390,6 +400,7 @@ function AddColumnDialog() {
     slug: string;
     scoreExpression?: string;
     renderExpression?: string;
+    instructorOnly: boolean;
   };
 
   const {
@@ -404,9 +415,11 @@ function AddColumnDialog() {
       maxScore: 0,
       slug: "",
       scoreExpression: "",
-      renderExpression: ""
+      renderExpression: "",
+      instructorOnly: false
     }
   });
+  const scoreExpressionRegister = register("scoreExpression");
 
   // Reset form when dialog opens/closes
   useEffect(() => {
@@ -424,8 +437,9 @@ function AddColumnDialog() {
         description: data.description,
         max_score: data.maxScore,
         slug: data.slug,
-        score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
+        score_expression: normalizeScoreExpression(data.scoreExpression),
         render_expression: data.renderExpression?.length ? data.renderExpression : null,
+        instructor_only: effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly),
         dependencies,
         class_id: gradebookController.class_id,
         gradebook_id: gradebookController.gradebook_id,
@@ -535,12 +549,7 @@ function AddColumnDialog() {
                 </Box>
                 <Box>
                   <Label htmlFor="scoreExpression">Score Expression</Label>
-                  <Textarea
-                    id="scoreExpression"
-                    {...register("scoreExpression")}
-                    placeholder="Score Expression"
-                    rows={4}
-                  />
+                  <Textarea id="scoreExpression" {...scoreExpressionRegister} placeholder="Score Expression" rows={4} />
                   {errors.scoreExpression && (
                     <Text color="red.500" fontSize="sm">
                       {errors.scoreExpression.message as string}
@@ -557,6 +566,11 @@ function AddColumnDialog() {
                     </Text>
                   )}
                   <RenderExprDocs />
+                </Box>
+                <Box>
+                  <Checkbox {...register("instructorOnly")}>
+                    Staff-only column (hidden from students until you release it)
+                  </Checkbox>
                 </Box>
                 <HStack justifyContent="flex-end">
                   <Button type="submit" colorPalette="green" loading={isLoading}>
@@ -591,6 +605,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     scoreExpression?: string;
     renderExpression?: string;
     showCalculatedRanges?: boolean;
+    instructorOnly: boolean;
   };
 
   const {
@@ -608,28 +623,34 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       slug: column?.slug ?? "",
       scoreExpression: column?.score_expression ?? "",
       renderExpression: column?.render_expression ?? "",
-      showCalculatedRanges: column?.show_calculated_ranges ?? false
+      showCalculatedRanges: column?.show_calculated_ranges ?? false,
+      instructorOnly: column?.instructor_only ?? false
     }
   });
 
+  const scoreExpression = watch("scoreExpression");
+
   useEffect(() => {
     if (column) {
+      const expr = column.score_expression ?? "";
       reset({
         name: column.name ?? "",
         description: column.description ?? "",
         maxScore: column.max_score ?? 0,
         slug: column.slug ?? "",
-        scoreExpression: column.score_expression ?? "",
+        scoreExpression: expr,
         renderExpression: column.render_expression ?? "",
-        showCalculatedRanges: column.show_calculated_ranges ?? false
+        showCalculatedRanges: column.show_calculated_ranges ?? false,
+        instructorOnly: column.instructor_only ?? false
       });
     }
   }, [columnId, column, reset]);
 
+  const scoreExpressionRegister = register("scoreExpression");
+
   if (!columnId) return null;
   if (!column) throw new Error(`Column ${columnId} not found`);
 
-  const scoreExpression = watch("scoreExpression");
   const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
 
   const onSubmit = async (data: FieldValues) => {
@@ -648,10 +669,13 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       if (column.description !== data.description) settingsChanged.push("description");
       if (column.max_score !== data.maxScore) settingsChanged.push("max_score");
       if (column.slug !== data.slug) settingsChanged.push("slug");
-      if ((column.score_expression ?? "") !== (data.scoreExpression ?? "")) settingsChanged.push("score_expression");
+      const normalizedExpr = normalizeScoreExpression(data.scoreExpression);
+      if ((column.score_expression ?? null) !== normalizedExpr) settingsChanged.push("score_expression");
       if ((column.render_expression ?? "") !== (data.renderExpression ?? "")) settingsChanged.push("render_expression");
       if ((column.show_calculated_ranges ?? false) !== (data.showCalculatedRanges ?? false))
         settingsChanged.push("show_calculated_ranges");
+      const submittedInstructorOnly = effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly);
+      if ((column.instructor_only ?? false) !== submittedInstructorOnly) settingsChanged.push("instructor_only");
 
       await updateColumn({
         resource: "gradebook_columns",
@@ -661,9 +685,10 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
           description: data.description,
           max_score: data.maxScore,
           slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
+          score_expression: normalizedExpr,
           render_expression: data.renderExpression?.length ? data.renderExpression : null,
           show_calculated_ranges: data.showCalculatedRanges ?? false,
+          instructor_only: submittedInstructorOnly,
           dependencies
         }
       });
@@ -764,7 +789,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   <Textarea
                     id="scoreExpression"
                     disabled={!canEditScoreExpression}
-                    {...register("scoreExpression")}
+                    {...scoreExpressionRegister}
                     placeholder="Score Expression"
                     rows={4}
                   />
@@ -787,6 +812,11 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     )}
                   </Box>
                 )}
+                <Box>
+                  <Checkbox {...register("instructorOnly")} checked={watch("instructorOnly") ?? false}>
+                    Staff-only column (hidden from students until you release it)
+                  </Checkbox>
+                </Box>
                 <Box>
                   <Label htmlFor="renderExpression">Render Expression</Label>
                   <Input id="renderExpression" {...register("renderExpression")} placeholder="Render Expression" />
@@ -1580,11 +1610,36 @@ function GradebookColumnHeader({
   }, [column_id, column, supabase, gradebookController]);
 
   const releaseColumn = useCallback(async () => {
+    if (column.instructor_only) {
+      // Block release while grades are being recalculated
+      const hasRecalculating = allGrades.some((grade) => grade.is_recalculating);
+      if (hasRecalculating) {
+        toaster.create({
+          title: "Column is recalculating",
+          description: "Some grades are still being recalculated. Please try again in a moment.",
+          type: "error"
+        });
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Releasing "${column.name}" will make it permanently visible to students and it will behave as a normal column. This cannot be undone. Continue?`
+      );
+      if (!confirmed) return;
+    }
+
     setIsReleasing(true);
     try {
-      const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
-
-      if (error) throw error;
+      if (column.instructor_only) {
+        // Atomic: release + clear instructor_only in a single transaction
+        const { error } = await supabase.rpc("release_instructor_only_gradebook_column", {
+          p_column_id: column_id
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
+        if (error) throw error;
+      }
 
       await gradebookController.gradebook_columns.refetchByIds([column_id]);
 
@@ -1602,7 +1657,7 @@ function GradebookColumnHeader({
     } finally {
       setIsReleasing(false);
     }
-  }, [column_id, column, supabase, gradebookController]);
+  }, [column_id, column, supabase, gradebookController, allGrades]);
 
   const unreleaseColumn = useCallback(async () => {
     setIsUnreleasing(true);
@@ -1649,10 +1704,13 @@ function GradebookColumnHeader({
         ret.push(`Mixed release status: ${releasedCount}/${totalCount} students can see their grades`);
       }
     }
+    if (column.instructor_only) {
+      ret.push("Staff-only: hidden from students until released");
+    }
     if (column.render_expression) {
       ret.push(`Rendered as ${column.render_expression}`);
     }
-    if (!column.score_expression) {
+    if (!column.score_expression && !column.instructor_only) {
       if (column.released) {
         ret.push("Released to students");
       } else {
@@ -1770,7 +1828,7 @@ function GradebookColumnHeader({
                 {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
                 Move Right
               </MenuItem>
-              {!column.score_expression && (
+              {(!column.score_expression || column.instructor_only) && (
                 <>
                   <MenuSeparator />
                   <MenuItem
@@ -1871,7 +1929,13 @@ function GradebookColumnHeader({
                   </Tooltip.Root>
                 </Box>
               )}
-              {column.score_expression ? (
+              {column.instructor_only ? (
+                <Box position="relative" zIndex={10000}>
+                  <WrappedTooltip content="Staff-only: hidden from students until released">
+                    <Icon as={LucideInfo} size="sm" color="purple.500" />
+                  </WrappedTooltip>
+                </Box>
+              ) : column.score_expression ? (
                 <Box position="relative" zIndex={10000}>
                   <WrappedTooltip content="Visibility: Students see this value calculated based on released dependencies">
                     <Icon as={LucideInfo} size="sm" color="blue.500" />
@@ -2193,7 +2257,7 @@ function StudentDetailDialog() {
             </Text>
             {view && (
               <GradebookWhatIfProvider private_profile_id={view}>
-                <WhatIf private_profile_id={view} />
+                <WhatIf private_profile_id={view} whatIfEnabled={true} />
               </GradebookWhatIfProvider>
             )}
           </Dialog.Body>

@@ -13,7 +13,8 @@ import {
   TestingUser,
   createAssignmentsAndGradebookColumns,
   insertPreBakedSubmission,
-  supabase
+  supabase,
+  createAuthenticatedClient
 } from "./TestingUtils";
 // removed unused import
 
@@ -520,6 +521,17 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Public record may lag behind private due to async recalculation — poll separately
     await expect(async () => {
+      const { data: privateRecord, error: privateError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", course.id)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("gradebook_column_id", finalGradebookColumn!.id)
+        .eq("is_private", true)
+        .single();
+      if (privateError) {
+        throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
+      }
       const { data: publicRecord, error: publicError } = await supabase
         .from("gradebook_column_students")
         .select("*")
@@ -533,7 +545,176 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       // Not all dependencies are released, so the public score is different
       expect(publicRecord?.score).toBe(43.5);
+      expect(publicRecord?.score_override).toBe(privateRecord?.score_override);
+      expect(publicRecord?.is_missing).toBe(privateRecord?.is_missing);
+      expect(publicRecord?.is_droppable).toBe(privateRecord?.is_droppable);
+      expect(publicRecord?.is_excused).toBe(privateRecord?.is_excused);
     }).toPass({ timeout: 60_000 });
+
+    // Issue #520: instructor-only manual column — RLS hides until released; on release instructor_only is cleared and column behaves normally.
+    const { data: gbRow } = await supabase.from("gradebooks").select("id").eq("class_id", course.id).single();
+    if (!gbRow) {
+      throw new Error("Failed to resolve gradebook id for instructor-only column test");
+    }
+    const ioSlug = "e2e-instructor-only-participation-mirror";
+    const { data: ioCol, error: ioColErr } = await supabase
+      .from("gradebook_columns")
+      .insert({
+        class_id: course.id,
+        gradebook_id: gbRow.id,
+        name: "E2E Instructor Only",
+        slug: ioSlug,
+        max_score: 100,
+        score_expression: null,
+        dependencies: null,
+        released: false,
+        instructor_only: true,
+        sort_order: 9999
+      })
+      .select("id")
+      .single();
+    if (ioColErr || !ioCol) {
+      throw new Error(`Failed to create instructor-only column: ${ioColErr?.message}`);
+    }
+    const ioColumnId = ioCol.id;
+
+    // Wait for the private row to exist, then set a score
+    await expect(async () => {
+      const { data: priv, error } = await supabase
+        .from("gradebook_column_students")
+        .select("id")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", true)
+        .single();
+      if (error) throw new Error(error.message);
+      expect(priv).toBeTruthy();
+    }).toPass({ timeout: 30_000 });
+
+    // Set score on the private row
+    const { error: setScoreErr } = await supabase
+      .from("gradebook_column_students")
+      .update({ score: 50 })
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", true);
+    if (setScoreErr) throw new Error(`Failed to set score: ${setScoreErr.message}`);
+
+    const { data: pubBefore } = await supabase
+      .from("gradebook_column_students")
+      .select("score")
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", false)
+      .single();
+    expect(pubBefore?.score).toBeNull();
+
+    const studentClient = await createAuthenticatedClient(students[0]);
+    const { data: studCol, error: studColErr } = await studentClient
+      .from("gradebook_columns")
+      .select("id")
+      .eq("id", ioColumnId)
+      .maybeSingle();
+    expect(studColErr).toBeNull();
+    expect(studCol).toBeNull();
+
+    const { data: studCell, error: studCellErr } = await studentClient
+      .from("gradebook_column_students")
+      .select("id")
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .maybeSingle();
+    expect(studCellErr).toBeNull();
+    expect(studCell).toBeNull();
+
+    // Atomic release: release + clear instructor_only in one transaction (instructor JWT, not service role)
+    const instructorClient = await createAuthenticatedClient(instructor!);
+    const { error: releaseIoErr } = await instructorClient.rpc("release_instructor_only_gradebook_column", {
+      p_column_id: ioColumnId
+    });
+    if (releaseIoErr) {
+      throw new Error(releaseIoErr.message);
+    }
+
+    // Verify instructor_only was cleared
+    const { data: colAfterRelease } = await supabase
+      .from("gradebook_columns")
+      .select("instructor_only, released")
+      .eq("id", ioColumnId)
+      .single();
+    expect(colAfterRelease?.instructor_only).toBe(false);
+    expect(colAfterRelease?.released).toBe(true);
+
+    await expect(async () => {
+      const { data: priv, error: pErr } = await supabase
+        .from("gradebook_column_students")
+        .select("score")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", true)
+        .single();
+      if (pErr) throw new Error(pErr.message);
+      const { data: pub, error: pubErr } = await supabase
+        .from("gradebook_column_students")
+        .select("score")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", false)
+        .single();
+      if (pubErr) throw new Error(pubErr.message);
+      expect(priv?.score).toBe(50);
+      expect(pub?.score).toBe(50);
+    }).toPass();
+
+    // After release + clear instructor_only, column behaves normally: private→public sync is live.
+    const { error: bumpErr } = await supabase
+      .from("gradebook_column_students")
+      .update({ score_override: 61 })
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", true);
+    if (bumpErr) {
+      throw new Error(bumpErr.message);
+    }
+
+    // Public row should sync the overridden score (not stay frozen at 50)
+    await expect(async () => {
+      const { data: priv, error } = await supabase
+        .from("gradebook_column_students")
+        .select("score, score_override")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", true)
+        .single();
+      if (error) throw new Error(error.message);
+      expect(priv?.score_override).toBe(61);
+      const { data: pub, error: pubErr } = await supabase
+        .from("gradebook_column_students")
+        .select("score")
+        .eq("gradebook_column_id", ioColumnId)
+        .eq("student_id", students[0].private_profile_id)
+        .eq("is_private", false)
+        .single();
+      if (pubErr) throw new Error(pubErr.message);
+      expect(pub?.score).toBe(61);
+    }).toPass({ timeout: 60_000 });
+
+    const { data: studColAfter } = await studentClient
+      .from("gradebook_columns")
+      .select("id")
+      .eq("id", ioColumnId)
+      .maybeSingle();
+    expect(studColAfter?.id).toBe(ioColumnId);
+    const { data: studScoreAfter } = await studentClient
+      .from("gradebook_column_students")
+      .select("score")
+      .eq("gradebook_column_id", ioColumnId)
+      .eq("student_id", students[0].private_profile_id)
+      .eq("is_private", false)
+      .maybeSingle();
+    expect(studScoreAfter?.score).toBe(61);
+
+    await studentClient.auth.signOut();
   });
   test.afterEach(async ({ logMagicLinksOnFailure }) => {
     await logMagicLinksOnFailure([...students, instructor]);
@@ -595,7 +776,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Check action buttons
     await expect(page.getByRole("button", { name: "Download Gradebook" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Import Column" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Import Columns" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Column" })).toBeVisible();
 
     // Check that Student 1's assignments are showing grades, final grade is calculated
@@ -700,9 +881,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass({ timeout: 60_000 });
   });
 
-  test("Import Column workflow creates a new column and populates scores", async ({ page }) => {
+  test("Import Columns workflow creates a new column and populates scores", async ({ page }) => {
     // Open import dialog
-    await page.getByRole("button", { name: "Import Column" }).click();
+    await page.getByRole("button", { name: "Import Columns" }).click();
 
     // Step 1: upload file
     const fileInput = page.locator('input[type="file"]');
@@ -796,7 +977,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await tableRegion.evaluate((el) => {
       el.scrollLeft = el.scrollWidth;
     });
-    await tableRegion.locator('button[aria-label="Column options"]').last().click();
+    // Scroll area order is not guaranteed to match visual order; target Participation explicitly
+    // (`.last()` would hit the rightmost column, e.g. instructor-only test column, not Participation).
+    const participationHeader = tableRegion.locator('[role="columnheader"]').filter({ hasText: /^Participation/ });
+    await participationHeader.getByRole("button", { name: "Column options" }).click();
     const releaseItem = page.getByRole("menuitem", { name: "Release Column", exact: true });
     await releaseItem.click();
 
@@ -895,7 +1079,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await tableRegion2.evaluate((el) => {
       el.scrollLeft = el.scrollWidth;
     });
-    await tableRegion2.locator('button[aria-label="Column options"]').last().click();
+    const participationHeader2 = tableRegion2.locator('[role="columnheader"]').filter({ hasText: /^Participation/ });
+    await participationHeader2.getByRole("button", { name: "Column options" }).click();
     const unreleaseItem = page.getByRole("menuitem", { name: "Unrelease Column", exact: true });
     await unreleaseItem.click();
     //Wait for the column to unrelease
