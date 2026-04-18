@@ -44,6 +44,24 @@ export type IntermediateValue = {
   error?: string;
 };
 
+/**
+ * Per-input-line annotation used by the inline preview. For each line of the
+ * user's typed expression we report either:
+ *   - `kind: "value"` — this line ENDS a top-level statement (e.g. `T = 930`
+ *     or the final `])` of a multi-line `case_when([...])`), and `display` is
+ *     the short-form evaluated value of that statement.
+ *   - `kind: "continuation"` — this line is mid-statement (e.g. a line in the
+ *     middle of a multi-line matrix literal). No value to show yet.
+ *   - `kind: "blank"` — empty or whitespace-only line.
+ *   - `kind: "error"` — the statement ending on this line threw during eval;
+ *     `display` is the error message.
+ */
+export type LineResult =
+  | { kind: "value"; lineIndex: number; blockIndex: number; display: string; raw?: unknown }
+  | { kind: "continuation"; lineIndex: number; blockIndex: number }
+  | { kind: "blank"; lineIndex: number }
+  | { kind: "error"; lineIndex: number; blockIndex: number; display: string };
+
 export type ValidationResult = {
   /** true when the expression parses and all dependency slugs resolve */
   isValid: boolean;
@@ -67,6 +85,12 @@ export type EvaluationResult = {
   error: string | null;
   /** Per-subnode evaluation results, in source order */
   intermediates: IntermediateValue[];
+  /**
+   * Per-input-line annotations, one per `\n`-separated line of the raw
+   * expression text. Used by the Expression Builder to render an inline
+   * `= value` overlay on the line that ends each statement.
+   */
+  lineResults: LineResult[];
 };
 
 function maybeUnwrapMatrix(value: unknown): unknown {
@@ -160,6 +184,89 @@ function shouldCaptureNode(node: MathNode): boolean {
     t === "AssignmentNode" ||
     t === "BlockNode"
   );
+}
+
+/**
+ * Walk the user's raw expression character-by-character, tracking bracket
+ * depth and string state, and assign each `\n`-separated input line to a
+ * top-level statement (block) index. Returns, per input line:
+ *   `{ kind: "end", blockIndex }` — the line ENDS a top-level statement.
+ *   `{ kind: "mid", blockIndex }` — the line is mid-statement.
+ *   `{ kind: "blank" }` — whitespace/comment only.
+ *
+ * Matches mathjs's parse behaviour: newline at bracket-depth 0 terminates a
+ * statement, so does `;` at depth 0. Tracks `"` / `'` string literals and
+ * backslash-escapes so braces inside strings don't affect depth. `#`
+ * starts a line comment.
+ */
+export function mapLinesToBlocks(
+  expression: string
+): Array<{ kind: "end"; blockIndex: number } | { kind: "mid"; blockIndex: number } | { kind: "blank" }> {
+  const lines = expression.split("\n");
+  const result: Array<{ kind: "end"; blockIndex: number } | { kind: "mid"; blockIndex: number } | { kind: "blank" }> =
+    [];
+  let depth = 0;
+  let blockIndex = 0;
+  let inString = false;
+  let stringChar = "";
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let hasContent = false;
+    let endedStatement = false;
+    let assignedBlock = blockIndex;
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      if (inString) {
+        if (ch === "\\") {
+          j++;
+          continue;
+        }
+        if (ch === stringChar) inString = false;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        inString = true;
+        stringChar = ch;
+        hasContent = true;
+        continue;
+      }
+      if (ch === "#") break; // mathjs line comment
+      if (ch === "(" || ch === "[" || ch === "{") {
+        depth++;
+        hasContent = true;
+        continue;
+      }
+      if (ch === ")" || ch === "]" || ch === "}") {
+        depth--;
+        hasContent = true;
+        continue;
+      }
+      if (/\s/.test(ch)) continue;
+      if (ch === ";" && depth === 0) {
+        assignedBlock = blockIndex;
+        blockIndex++;
+        endedStatement = true;
+        hasContent = true;
+        continue;
+      }
+      hasContent = true;
+    }
+    if (!hasContent) {
+      result.push({ kind: "blank" });
+      continue;
+    }
+    if (depth === 0 && !inString) {
+      // Newline at top level → end of a statement.
+      assignedBlock = blockIndex;
+      blockIndex++;
+      endedStatement = true;
+    }
+    result.push(
+      endedStatement ? { kind: "end", blockIndex: assignedBlock } : { kind: "mid", blockIndex: assignedBlock }
+    );
+  }
+  return result;
 }
 
 /** Ordered walk of the AST. Descendants of a `FunctionAssignmentNode` (the
@@ -557,8 +664,29 @@ export function evaluateForStudent(params: {
   let rawResult: unknown;
   let resultStr = "";
   let evalError: string | null = null;
+  /** Raw per-block values from the top-level `ResultSet.entries`, if the
+   *  expression parsed as a `BlockNode`. Used to annotate each line of the
+   *  editor with the value of the statement that ends there. */
+  let blockEntries: unknown[] = [];
   try {
-    rawResult = unwrapResultSet(transformed.evaluate({ context }));
+    const topLevel = transformed.evaluate({ context });
+    if (
+      topLevel &&
+      typeof topLevel === "object" &&
+      !Array.isArray(topLevel) &&
+      "entries" in (topLevel as Record<string, unknown>)
+    ) {
+      const entries = (topLevel as { entries: unknown }).entries;
+      if (Array.isArray(entries)) {
+        blockEntries = entries;
+        rawResult = entries.length > 0 ? entries[entries.length - 1] : undefined;
+      } else {
+        rawResult = unwrapResultSet(topLevel);
+      }
+    } else {
+      rawResult = unwrapResultSet(topLevel);
+      blockEntries = [rawResult];
+    }
     resultStr = formatValueForOverlay(rawResult);
   } catch (e) {
     evalError = e instanceof Error ? e.message : String(e);
@@ -641,6 +769,36 @@ export function evaluateForStudent(params: {
     (deduped?.missing?.gradebook_columns?.length ?? 0) > 0 ||
     (deduped?.not_released?.gradebook_columns?.length ?? 0) > 0;
 
+  // Walk the raw expression text and decide, for each input line, whether it
+  // ends a statement — if so we pair it with the corresponding entry from
+  // `blockEntries` so the UI can render an inline `= value` annotation.
+  const lineMap = mapLinesToBlocks(expression);
+  const lineResults: LineResult[] = lineMap.map((entry, lineIndex) => {
+    if (entry.kind === "blank") return { kind: "blank", lineIndex } as const;
+    if (entry.kind === "mid") {
+      return { kind: "continuation", lineIndex, blockIndex: entry.blockIndex } as const;
+    }
+    // kind === "end"
+    if (evalError) {
+      // If evaluation threw, only the statement that threw should report the
+      // error. We don't know which one, but annotating the last-evaluated
+      // line with the error is a reasonable approximation.
+      const isLastBlock = entry.blockIndex === lineMap.filter((l) => l.kind === "end").length - 1;
+      if (isLastBlock) {
+        return { kind: "error", lineIndex, blockIndex: entry.blockIndex, display: evalError } as const;
+      }
+      return { kind: "continuation", lineIndex, blockIndex: entry.blockIndex } as const;
+    }
+    const rawValue = entry.blockIndex < blockEntries.length ? blockEntries[entry.blockIndex] : undefined;
+    return {
+      kind: "value",
+      lineIndex,
+      blockIndex: entry.blockIndex,
+      display: formatValueForOverlay(rawValue),
+      raw: rawValue
+    } as const;
+  });
+
   return {
     isValid: evalError === null,
     isEmpty: false,
@@ -655,7 +813,8 @@ export function evaluateForStudent(params: {
       intermediates: intermediates.sort((a, b) => {
         if (a.start === b.start) return b.end - a.end; // longer spans first
         return a.start - b.start;
-      })
+      }),
+      lineResults
     }
   };
 }

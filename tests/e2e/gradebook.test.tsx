@@ -1036,6 +1036,20 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // levels of the AST received the injected context symbol.
     await expect(page.getByTestId("expression-builder-overlay")).not.toContainText(/invalid pattern/);
 
+    // Multi-line expressions get one inline annotation per statement.
+    // Typing three assignments followed by their sum should produce four
+    // `= value` annotations inside the editor.
+    await fullScreenTextarea.fill("A = 10\nB = 20\nC = A + B\nC * 2");
+    await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    const lineValues = page.getByTestId("expression-line-value");
+    await expect(lineValues).toHaveCount(4);
+    // The overlay should carry the final value for each statement.
+    const overlayText = await page.getByTestId("expression-builder-overlay").innerText();
+    expect(overlayText).toContain("= 10");
+    expect(overlayText).toContain("= 20");
+    expect(overlayText).toContain("= 30");
+    expect(overlayText).toContain("= 60");
+
     // Introducing a parse error in the full-screen mode should still surface
     // the inline error and keep Save disabled.
     await fullScreenTextarea.fill("((1 +");

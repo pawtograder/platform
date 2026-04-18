@@ -7,7 +7,7 @@ import {
   evaluateForStudent,
   evaluateRenderExpression,
   formatValueForOverlay,
-  type IntermediateValue,
+  type LineResult,
   type RenderExpressionResult,
   type ValidationResult
 } from "@/lib/gradebookExpressionTester";
@@ -319,45 +319,12 @@ export function ExpressionBuilder(props: Props) {
             renderExpression={renderExpression}
           />
 
-          {/* The editor + inline annotations share a border so they read as
-              one surface — the textarea is the input row, and every captured
-              subexpression is displayed below in source order with its value,
-              visually tied to the code. */}
-          <Box
-            borderWidth="1px"
-            borderColor={
-              validation.parseError || validation.dependencyError || validation.evaluation?.error
-                ? "red.500"
-                : validation.isValid && !validation.isEmpty
-                  ? "green.500"
-                  : "border.muted"
-            }
-            rounded="md"
-            bg="bg.subtle"
-            overflow="hidden"
-            data-testid="expression-builder-overlay"
-          >
-            <Textarea
-              id="scoreExpressionFull"
-              value={expression}
-              onChange={(e) => onExpressionChange(e.target.value)}
-              placeholder="Score Expression"
-              rows={Math.max(6, Math.min(12, expression.split("\n").length + 2))}
-              fontFamily="mono"
-              fontSize="sm"
-              border="none"
-              borderBottomWidth="1px"
-              borderBottomColor="border.subtle"
-              rounded="none"
-              bg="bg.panel"
-              _focus={{ boxShadow: "none", outline: "none" }}
-            />
-            <InlineAnnotations
-              validation={validation}
-              hasStudent={Boolean(selectedStudentId)}
-              expression={expression}
-            />
-          </Box>
+          <InlineLineAnnotatedEditor
+            expression={expression}
+            onExpressionChange={onExpressionChange}
+            validation={validation}
+            hasStudent={Boolean(selectedStudentId)}
+          />
 
           <ValidationStatus validation={validation} expression={expression} />
 
@@ -438,100 +405,179 @@ function FinalResultBadges({
 }
 
 /**
- * Inline annotations directly underneath the textarea. Each captured
- * subexpression renders as `source = value`, indented by AST containment
- * depth so nested calls read naturally as a breakdown of the expression
- * immediately above them.
+ * The full-screen editor surface. A monospace `<textarea>` is layered over a
+ * pre-rendered mirror that shows the same text line-by-line, plus a
+ * right-aligned `= value` annotation on every line that ends a top-level
+ * statement. Both layers share the same font metrics, padding, and line
+ * height so the cursor in the textarea lines up exactly with the values in
+ * the mirror; the textarea is transparent and painted on top, so the user
+ * edits normally while seeing per-line evaluations as inline hints.
  */
-function InlineAnnotations({
+function InlineLineAnnotatedEditor({
+  expression,
+  onExpressionChange,
   validation,
-  hasStudent,
-  expression
+  hasStudent
 }: {
+  expression: string;
+  onExpressionChange: (value: string) => void;
   validation: ValidationResult;
   hasStudent: boolean;
-  expression: string;
 }) {
   const evaluation = validation.evaluation;
 
-  if (!hasStudent) {
-    return (
-      <Box p={2} bg="bg.subtle">
-        <Text fontSize="xs" color="fg.muted">
-          Select a student on the left to see intermediate values and the final score.
-        </Text>
-      </Box>
-    );
-  }
-  if (!evaluation) return null;
-  if (evaluation.error && evaluation.intermediates.length === 0) {
-    return (
-      <Box p={2} bg="bg.subtle">
-        <Text fontSize="xs" color="red.500">
-          Evaluation error: {evaluation.error}
-        </Text>
-      </Box>
-    );
-  }
-  if (evaluation.intermediates.length === 0) {
-    // Pure-arithmetic expression with no subexpressions worth labelling.
-    return (
-      <Box p={2} bg="bg.subtle">
-        <Text fontSize="xs" color="fg.muted" fontFamily="mono">
-          {expression.trim()} = {evaluation.result}
-        </Text>
-      </Box>
-    );
-  }
-  const distinct = dedupeByStartEnd(evaluation.intermediates);
-  const levels = assignLevels(distinct);
-  const MAX_VISIBLE = 80;
-  const visible = distinct.slice(0, MAX_VISIBLE);
-  const hiddenCount = Math.max(0, distinct.length - MAX_VISIBLE);
+  // Build an O(1) lookup from line-index to annotation value.
+  const lineResultsByIndex = useMemo(() => {
+    const map = new Map<number, LineResult>();
+    for (const lr of evaluation?.lineResults ?? []) {
+      map.set(lr.lineIndex, lr);
+    }
+    return map;
+  }, [evaluation?.lineResults]);
+
+  const lines = useMemo(() => expression.split("\n"), [expression]);
+  const rows = Math.max(6, Math.min(24, lines.length + 2));
+
+  // Keep the textarea and the mirror in sync on scroll. The user might type
+  // more lines than the textarea's visible height, in which case both layers
+  // need to scroll together so the annotations stay aligned with the code.
+  const scrollSync = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    if (mirrorRef.current) {
+      mirrorRef.current.scrollTop = e.currentTarget.scrollTop;
+      mirrorRef.current.scrollLeft = e.currentTarget.scrollLeft;
+    }
+  };
+  const mirrorRef = React.useRef<HTMLPreElement | null>(null);
+
+  const borderColor =
+    validation.parseError || validation.dependencyError || validation.evaluation?.error
+      ? "red.500"
+      : validation.isValid && !validation.isEmpty
+        ? "green.500"
+        : "border.muted";
+
   return (
-    <VStack align="stretch" gap={0} bg="bg.subtle" maxH="40vh" overflow="auto">
-      {visible.map((iv, idx) => (
-        <HStack
-          key={`${iv.start}-${iv.end}-${idx}`}
-          gap={2}
-          align="flex-start"
-          px={2}
+    <Box
+      position="relative"
+      borderWidth="1px"
+      borderColor={borderColor}
+      rounded="md"
+      bg="bg.panel"
+      overflow="hidden"
+      data-testid="expression-builder-overlay"
+    >
+      {/* Mirror layer: renders the user's text plus the per-line values. */}
+      <Box
+        as="pre"
+        ref={mirrorRef as React.RefObject<HTMLPreElement>}
+        aria-hidden="true"
+        position="absolute"
+        inset={0}
+        m={0}
+        px={3}
+        py={2}
+        fontFamily="mono"
+        fontSize="sm"
+        lineHeight="1.5"
+        color="fg"
+        whiteSpace="pre"
+        overflow="auto"
+        pointerEvents="none"
+      >
+        {lines.map((line, idx) => {
+          const lr = lineResultsByIndex.get(idx);
+          return (
+            <Box
+              key={idx}
+              as="div"
+              display="flex"
+              justifyContent="space-between"
+              gap={4}
+              data-testid={lr?.kind === "value" ? "expression-line-value" : undefined}
+            >
+              {/* The text content must match the textarea exactly — including
+                  trailing whitespace — so the invisible textarea text lines
+                  up underneath. Use a non-breaking content for empty lines
+                  so the div retains its height. */}
+              <Box as="span" color="transparent" whiteSpace="pre">
+                {line.length ? line : "\u200B"}
+              </Box>
+              {lr?.kind === "value" ? (
+                <Box
+                  as="span"
+                  color={lr.display === "undefined" ? "orange.500" : "green.600"}
+                  fontWeight="semibold"
+                  whiteSpace="pre"
+                  pl={2}
+                >
+                  {"= "}
+                  {lr.display}
+                </Box>
+              ) : lr?.kind === "error" ? (
+                <Box as="span" color="red.500" fontWeight="semibold" whiteSpace="pre" pl={2}>
+                  {"⚠ "}
+                  {lr.display}
+                </Box>
+              ) : null}
+            </Box>
+          );
+        })}
+      </Box>
+
+      {/* Real editor: invisible background so the mirror shines through, but
+          the textarea itself holds the caret, selection, and IME focus. */}
+      <Box position="relative">
+        <Textarea
+          id="scoreExpressionFull"
+          value={expression}
+          onChange={(e) => onExpressionChange(e.target.value)}
+          onScroll={scrollSync}
+          placeholder="Score Expression"
+          rows={rows}
+          fontFamily="mono"
+          fontSize="sm"
+          lineHeight="1.5"
+          px={3}
+          py={2}
+          border="none"
+          rounded="none"
+          bg="transparent"
+          color="fg"
+          resize="vertical"
+          whiteSpace="pre"
+          overflow="auto"
+          spellCheck={false}
+          _focus={{ boxShadow: "none", outline: "none" }}
+          /* Hide the textarea's own text so only the mirror's per-line
+             layout (with its trailing annotations) is visible — the
+             textarea retains the caret and keeps accepting input. */
+          css={{
+            color: "transparent",
+            caretColor: "var(--chakra-colors-fg)",
+            "&::placeholder": { color: "var(--chakra-colors-fg-muted)" }
+          }}
+        />
+      </Box>
+
+      {!hasStudent && (
+        <Box
+          position="absolute"
+          bottom={0}
+          left={0}
+          right={0}
+          px={3}
           py={1}
-          borderBottomWidth={idx === visible.length - 1 && hiddenCount === 0 ? 0 : "1px"}
+          bg="bg.muted"
+          borderTopWidth="1px"
           borderColor="border.subtle"
-          _hover={{ bg: "bg.muted" }}
+          pointerEvents="none"
         >
-          <Text
-            fontSize="xs"
-            color="fg.muted"
-            fontFamily="mono"
-            flex="1"
-            wordBreak="break-all"
-            pl={`${(levels[idx] ?? 0) * 12}px`}
-          >
-            {iv.source}
+          <Text fontSize="xs" color="fg.muted">
+            Select a student to see per-line values.
           </Text>
-          <Badge
-            colorPalette={iv.error ? "red" : "blue"}
-            variant="subtle"
-            fontFamily="mono"
-            whiteSpace="normal"
-            maxW="55%"
-            textAlign="right"
-            fontSize="xs"
-          >
-            = {iv.display}
-          </Badge>
-        </HStack>
-      ))}
-      {hiddenCount > 0 && (
-        <HStack px={2} py={1} justifyContent="center" bg="bg.muted">
-          <Text fontSize="xs" color="fg.muted" fontStyle="italic">
-            {hiddenCount} more intermediate {hiddenCount === 1 ? "value" : "values"} hidden
-          </Text>
-        </HStack>
+        </Box>
       )}
-    </VStack>
+    </Box>
   );
 }
 
@@ -606,39 +652,6 @@ function ValidationStatus({ validation, expression }: { validation: ValidationRe
       </Text>
     </HStack>
   );
-}
-
-function dedupeByStartEnd(values: IntermediateValue[]): IntermediateValue[] {
-  const seen = new Map<string, IntermediateValue>();
-  for (const v of values) {
-    const key = `${v.start}:${v.end}:${v.source}`;
-    if (!seen.has(key)) seen.set(key, v);
-  }
-  return Array.from(seen.values()).sort((a, b) => {
-    if (a.start === b.start) return b.end - a.end;
-    return a.start - b.start;
-  });
-}
-
-function assignLevels(values: IntermediateValue[]): number[] {
-  // `values` is already sorted by start asc, then end desc (longer spans
-  // first), so a single-pass stack walk gives us the containment depth in
-  // O(n). Whenever the top of the stack no longer strictly contains the
-  // current entry, we pop it; the remaining stack size is the current depth.
-  const result: number[] = [];
-  const stack: IntermediateValue[] = [];
-  for (const value of values) {
-    while (stack.length > 0) {
-      const top = stack[stack.length - 1];
-      const strictlyContains =
-        top.start <= value.start && top.end >= value.end && !(top.start === value.start && top.end === value.end);
-      if (strictlyContains) break;
-      stack.pop();
-    }
-    result.push(stack.length);
-    stack.push(value);
-  }
-  return result;
 }
 
 /**

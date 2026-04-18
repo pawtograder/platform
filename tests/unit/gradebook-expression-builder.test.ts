@@ -717,4 +717,115 @@ describe("Expression Builder — evaluateForStudent", () => {
       expect(r.evaluation?.result).toBe(formatValueForOverlay(r.evaluation?.rawResult));
     });
   });
+
+  describe("per-line annotations for multi-line expressions", () => {
+    // Rebuilds the real production workflow: a long block expression that
+    // uses top-level `let`-style assignments and ends in a `case_when(...)`
+    // that spans multiple lines. The Expression Builder renders the value of
+    // each statement inline on the line that ENDS it, and leaves
+    // continuation lines (e.g. rows of a multi-line matrix literal) blank.
+    const controller = createFakeController({
+      columns: [
+        { id: 1, slug: "final-course-total", name: "Final Total", max_score: 1000 },
+        { id: 2, slug: "final-individual-assignments", name: "Indiv", max_score: 300 },
+        { id: 3, slug: "final-group-assignments", name: "Group", max_score: 200 },
+        { id: 4, slug: "final-exams", name: "Exams", max_score: 400 },
+        { id: 5, slug: "final-labs", name: "Labs", max_score: 12 },
+        { id: 6, slug: "final-participation", name: "Part", max_score: 50 }
+      ],
+      entries: {
+        alice: {
+          "final-course-total": { score: 930 },
+          "final-individual-assignments": { score: 260 },
+          "final-group-assignments": { score: 170 },
+          "final-exams": { score: 300 },
+          "final-labs": { score: 11 },
+          "final-participation": { score: 45 }
+        }
+      }
+    });
+
+    test("`T = 930` style single-line statements get their value on the same line", () => {
+      const expr = `T = gradebook_columns('final-course-total').score
+IND = gradebook_columns('final-individual-assignments').score
+T + IND`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      const lines = r.evaluation!.lineResults;
+      expect(lines).toHaveLength(3);
+      expect(lines[0]).toMatchObject({ kind: "value", lineIndex: 0, display: "930" });
+      expect(lines[1]).toMatchObject({ kind: "value", lineIndex: 1, display: "260" });
+      expect(lines[2]).toMatchObject({ kind: "value", lineIndex: 2, display: "1190" });
+    });
+
+    test("case_when spanning multiple lines only annotates the closing `])`", () => {
+      const expr = `T = gradebook_columns('final-course-total').score
+case_when([
+  largerEq(T, 900), 10;
+  largerEq(T, 800), 8;
+  true, 0
+])`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      const lines = r.evaluation!.lineResults;
+      expect(lines).toHaveLength(6);
+      // Line 0: T = 930
+      expect(lines[0]).toMatchObject({ kind: "value", lineIndex: 0, display: "930" });
+      // Lines 1-4: inside the case_when literal — continuation, no value
+      for (const i of [1, 2, 3, 4]) {
+        expect(lines[i].kind).toBe("continuation");
+      }
+      // Line 5: closing `])` — the case_when evaluates to 10 (largerEq(930, 900))
+      expect(lines[5]).toMatchObject({ kind: "value", lineIndex: 5, display: "10" });
+    });
+
+    test("blank lines in the editor are flagged as blank (no value, no continuation)", () => {
+      const expr = `T = gradebook_columns('final-course-total').score
+
+T * 2`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      const lines = r.evaluation!.lineResults;
+      expect(lines[0].kind).toBe("value");
+      expect(lines[1].kind).toBe("blank");
+      expect(lines[2]).toMatchObject({ kind: "value", display: "1860" });
+    });
+
+    test("full production-style grade-boundary block evaluates cleanly end-to-end", () => {
+      // Trimmed from the user-supplied expression in the spec. Alice has
+      // T=930, IND=260, GRP=170, EXM=300, LABS=11, PART=45 → all A-ok
+      // thresholds pass, so A_ok=1 and case_when picks the `T>=930, 11` row.
+      const expr = `T = gradebook_columns('final-course-total').score
+IND = gradebook_columns('final-individual-assignments').score
+GRP = gradebook_columns('final-group-assignments').score
+EXM = gradebook_columns('final-exams').score
+LABS = gradebook_columns('final-labs').score
+PART = gradebook_columns('final-participation').score
+A_ok = largerEq(T, 900) * largerEq(IND, 240) * largerEq(GRP, 160) * largerEq(EXM, 280) * largerEq(LABS, 11) * largerEq(PART, 40)
+case_when([
+  A_ok * largerEq(T, 930), 11;
+  A_ok * largerEq(T, 900), 10;
+  true, 0
+])`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      const lines = r.evaluation!.lineResults;
+      // 7 `X = ...` statements (lines 0-6) each annotated, then a 4-line
+      // case_when(...) with the last line (line 10) carrying the final value.
+      expect(lines[0]).toMatchObject({ kind: "value", display: "930" });
+      expect(lines[1]).toMatchObject({ kind: "value", display: "260" });
+      expect(lines[2]).toMatchObject({ kind: "value", display: "170" });
+      expect(lines[3]).toMatchObject({ kind: "value", display: "300" });
+      expect(lines[4]).toMatchObject({ kind: "value", display: "11" });
+      expect(lines[5]).toMatchObject({ kind: "value", display: "45" });
+      expect(lines[6]).toMatchObject({ kind: "value", display: "1" }); // A_ok
+      expect(lines[7].kind).toBe("continuation"); // case_when([
+      expect(lines[8].kind).toBe("continuation"); //   A_ok * largerEq(T, 930), 11;
+      expect(lines[9].kind).toBe("continuation"); //   A_ok * largerEq(T, 900), 10;
+      expect(lines[10].kind).toBe("continuation"); //   true, 0
+      expect(lines[11]).toMatchObject({ kind: "value", display: "11" }); // ])
+      // And the overall `result` of the expression is the last block's value.
+      expect(r.evaluation!.result).toBe("11");
+    });
+  });
 });
