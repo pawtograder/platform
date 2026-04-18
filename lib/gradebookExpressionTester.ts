@@ -256,7 +256,14 @@ export function mapLinesToBlocks(
       result.push({ kind: "blank" });
       continue;
     }
-    if (depth === 0 && !inString) {
+    // Only promote a newline-at-depth-0 into a statement terminator when
+    // the line did NOT already end with an explicit `;`. Otherwise we'd
+    // double-count the same statement — mathjs treats `T = 10;\n` as a
+    // single statement, so a stray extra advance here would desynchronise
+    // `blockIndex` from `blockEntries` and the line would get a spurious
+    // `undefined` overlay from `blockEntries[blockIndex]` being out of
+    // range.
+    if (depth === 0 && !inString && !endedStatement) {
       // Newline at top level → end of a statement.
       assignedBlock = blockIndex;
       blockIndex++;
@@ -675,27 +682,40 @@ export function evaluateForStudent(params: {
   let rawResult: unknown;
   let resultStr = "";
   let evalError: string | null = null;
-  /** Raw per-block values from the top-level `ResultSet.entries`, if the
-   *  expression parsed as a `BlockNode`. Used to annotate each line of the
-   *  editor with the value of the statement that ends there. */
+  /** Raw per-block values, one per top-level statement in source order. We
+   *  evaluate each block individually in a shared scope so that even
+   *  semicolon-suppressed statements (e.g. `T = 930;`) — which mathjs
+   *  normally omits from `ResultSet.entries` — still produce a value for
+   *  the overlay. */
   let blockEntries: unknown[] = [];
   try {
-    const topLevel = transformed.evaluate({ context });
-    if (
-      topLevel &&
-      typeof topLevel === "object" &&
-      !Array.isArray(topLevel) &&
-      "entries" in (topLevel as Record<string, unknown>)
-    ) {
-      const entries = (topLevel as { entries: unknown }).entries;
-      if (Array.isArray(entries)) {
-        blockEntries = entries;
-        rawResult = entries.length > 0 ? entries[entries.length - 1] : undefined;
-      } else {
-        rawResult = unwrapResultSet(topLevel);
+    const topLevelAny = transformed as unknown as {
+      type?: string;
+      blocks?: Array<{ node: MathNode }>;
+    };
+    if (topLevelAny.type === "BlockNode" && Array.isArray(topLevelAny.blocks)) {
+      // Evaluate each top-level statement in a shared `scope` so that
+      // assignments from earlier statements (e.g. `T = 930`) are visible to
+      // later ones (e.g. `T * 2`). `context` is still read from the same
+      // synthetic object we passed to the AST transform.
+      const scope = { context };
+      for (const block of topLevelAny.blocks) {
+        try {
+          const v = unwrapResultSet(block.node.evaluate(scope));
+          blockEntries.push(v);
+        } catch (blockErr) {
+          // An error in any block stops evaluation — record the message on
+          // `evalError` so the UI surfaces it once, and push a sentinel for
+          // this block so the block-index alignment stays correct.
+          evalError = blockErr instanceof Error ? blockErr.message : String(blockErr);
+          blockEntries.push(undefined);
+          break;
+        }
       }
+      rawResult = blockEntries.length > 0 ? blockEntries[blockEntries.length - 1] : undefined;
     } else {
-      rawResult = unwrapResultSet(topLevel);
+      // Single-expression (non-block) input.
+      rawResult = unwrapResultSet(transformed.evaluate({ context }));
       blockEntries = [rawResult];
     }
     resultStr = formatValueForOverlay(rawResult);

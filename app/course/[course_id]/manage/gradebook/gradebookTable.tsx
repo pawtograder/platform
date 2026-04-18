@@ -114,7 +114,7 @@ import {
 } from "react-icons/lu";
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
 import { WhatIf } from "../../gradebook/whatIf";
-import { ExpressionBuilder, shouldBlockSave } from "./expressionBuilder";
+import { ExpressionBuilder, shouldBlockSave } from "@/app/course/[course_id]/manage/gradebook/expressionBuilder";
 import type { ValidationResult } from "@/lib/gradebookExpressionTester";
 import GradebookCell from "./gradebookCell";
 import { GradebookPopoverProvider, useGradebookPopover } from "./GradebookPopoverProvider";
@@ -870,19 +870,19 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     <>
                       <Label htmlFor="scoreExpression">Score Expression</Label>
                       {/*
-                        The HTML `disabled` attribute causes the browser to
-                        omit the field from form submission, which in turn
-                        makes react-hook-form hand back `undefined` for
-                        `scoreExpression` on submit. Passing `disabled: true`
-                        through `register()` keeps the value in the form
-                        state while still making the textarea read-only, so
-                        downstream `extractAndValidateDependencies(...)` and
-                        the Refine update call still see the persisted
-                        `assignments(...)` expression.
+                        Use `readOnly` instead of `disabled` — a bare HTML
+                        `disabled` attribute tells the browser to omit the
+                        field from form submission (react-hook-form then
+                        hands `undefined` back to `onSubmit`, which would
+                        wipe the persisted `assignments(...)` expression
+                        when the instructor saves a metadata-only edit).
+                        `readOnly` keeps the field non-editable while still
+                        letting react-hook-form read the registered value.
                       */}
                       <Textarea
                         id="scoreExpression"
-                        {...register("scoreExpression", { disabled: true })}
+                        readOnly
+                        {...register("scoreExpression")}
                         placeholder="Score Expression"
                         rows={4}
                       />

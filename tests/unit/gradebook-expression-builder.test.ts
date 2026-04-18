@@ -817,6 +817,35 @@ T * 2`;
       expect(lines[2]).toMatchObject({ kind: "value", display: "1860" });
     });
 
+    test("lines that end with an explicit `;` don't double-advance the block counter", () => {
+      // Regression: the previous version counted BOTH the `;` AND the
+      // newline at depth 0 as statement terminators, so `T = 930;\n` would
+      // advance the block counter twice while mathjs only produced ONE
+      // entry in `ResultSet.entries`. The line would then pull a stale /
+      // out-of-range value from `blockEntries` — typically `undefined`.
+      //
+      // This was especially noticeable for inline semicolons on the same
+      // line as a newline, e.g.:
+      //
+      //   T = gradebook_columns('final-course-total').score;
+      //   T * 2
+      //
+      // which should show `T = … = 930` on the first line and `T * 2 =
+      // 1860` on the second — not `undefined` anywhere.
+      const expr = `T = gradebook_columns('final-course-total').score;
+T * 2`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      const lines = r.evaluation!.lineResults;
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatchObject({ kind: "value", display: "930" });
+      expect(lines[1]).toMatchObject({ kind: "value", display: "1860" });
+      // And the stored block count should match the number of value lines,
+      // not double it.
+      const valueLines = lines.filter((l) => l.kind === "value");
+      expect(valueLines).toHaveLength(2);
+    });
+
     test("full production-style grade-boundary block evaluates cleanly end-to-end", () => {
       // Trimmed from the user-supplied expression in the spec. Alice has
       // T=930, IND=260, GRP=170, EXM=300, LABS=11, PART=45 → all A-ok
