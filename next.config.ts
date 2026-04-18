@@ -161,7 +161,7 @@ const sentryConfig = {
     create: !disableSentryReleaseCreate,
     finalize: !disableSentryReleaseFinalize
   },
-  silent: !process.env.CI,
+  silent: !isCi,
   disableLogger: true
 };
 
