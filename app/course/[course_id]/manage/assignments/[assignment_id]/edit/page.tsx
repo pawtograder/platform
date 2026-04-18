@@ -11,11 +11,11 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
-import AssignmentForm from "../../new/form";
+import AssignmentForm, { AssignmentFormValues } from "../../new/form";
 
 export default function EditAssignment() {
   const { course_id, assignment_id } = useParams();
-  const form = useForm<Assignment>({
+  const form = useForm<AssignmentFormValues>({
     refineCoreProps: { resource: "assignments", action: "edit", id: Number.parseInt(assignment_id as string) }
   });
   const { data } = useOne<Assignment>({ resource: "assignments", id: assignment_id as string });
@@ -39,6 +39,32 @@ export default function EditAssignment() {
       form.setValue("eval_config", selfReviewSetting?.data.enabled ? "use_eval" : "base_only");
       form.setValue("deadline_offset", selfReviewSetting?.data.deadline_offset);
       form.setValue("allow_early", selfReviewSetting?.data.allow_early);
+      form.setValue(
+        "grading_default_profile_id",
+        (queryData as AssignmentFormValues).grading_default_profile_id ?? null
+      );
+      form.setValue("auto_assign_at_deadline", (queryData as AssignmentFormValues).auto_assign_at_deadline ?? false);
+      form.setValue(
+        "auto_assign_assignee_pool",
+        (queryData as AssignmentFormValues).auto_assign_assignee_pool ?? "graders"
+      );
+      form.setValue(
+        "auto_assign_review_due_hours",
+        (queryData as AssignmentFormValues).auto_assign_review_due_hours ?? 72
+      );
+      form.setValue(
+        "late_grading_reminders_enabled",
+        (queryData as AssignmentFormValues).late_grading_reminders_enabled ?? false
+      );
+      form.setValue(
+        "late_grading_reminder_interval_hours",
+        (queryData as AssignmentFormValues).late_grading_reminder_interval_hours ?? 12
+      );
+      form.setValue("late_grading_reply_to", (queryData as AssignmentFormValues).late_grading_reply_to ?? null);
+      form.setValue(
+        "late_grading_cc_emails",
+        (queryData as AssignmentFormValues).late_grading_cc_emails ?? { emails: [] }
+      );
     }
   }, [
     queryData,
@@ -88,6 +114,11 @@ export default function EditAssignment() {
         values.eval_config = undefined;
         values.allow_early = undefined;
         values.deadline_offset = undefined;
+        values.late_grading_reminder_interval_hours = values.late_grading_reminders_enabled
+          ? (values.late_grading_reminder_interval_hours ?? 12)
+          : null;
+        values.late_grading_reply_to = values.late_grading_reply_to || null;
+        values.late_grading_cc_emails = values.late_grading_cc_emails || { emails: [] };
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {

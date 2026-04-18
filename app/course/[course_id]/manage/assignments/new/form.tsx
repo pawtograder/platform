@@ -34,6 +34,56 @@ import { useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useTableControllerTableValues } from "@/lib/TableController";
 
+type GradingAssigneePool = "graders" | "instructors" | "instructors_and_graders";
+
+type GradingCcEmails = {
+  emails: string[];
+};
+
+type GradingAssignmentDefaultProfile = {
+  id: number;
+  class_id: number;
+  name: string;
+  description: string | null;
+  auto_assign_at_deadline: boolean;
+  auto_assign_assignee_pool: GradingAssigneePool;
+  auto_assign_review_due_hours: number;
+  late_grading_reminders_enabled: boolean;
+  late_grading_reminder_interval_hours: number | null;
+  late_grading_reply_to: string | null;
+  late_grading_cc_emails: GradingCcEmails;
+};
+
+export type AssignmentFormValues = Assignment & {
+  grading_default_profile_id: number | null;
+  auto_assign_at_deadline: boolean;
+  auto_assign_assignee_pool: GradingAssigneePool;
+  auto_assign_review_due_hours: number;
+  late_grading_reminders_enabled: boolean;
+  late_grading_reminder_interval_hours: number | null;
+  late_grading_reply_to: string | null;
+  late_grading_cc_emails: GradingCcEmails;
+  copy_groups_from_assignment?: string;
+  eval_config?: "base_only" | "use_eval";
+  deadline_offset?: number | null;
+  allow_early?: boolean | null;
+};
+
+const normalizeCcEmails = (value: unknown): GradingCcEmails => {
+  if (value && typeof value === "object" && "emails" in value) {
+    const emails = (value as { emails?: unknown }).emails;
+    if (Array.isArray(emails)) {
+      return {
+        emails: emails
+          .filter((email): email is string => typeof email === "string")
+          .map((email) => email.trim())
+          .filter((email) => email.length > 0)
+      };
+    }
+  }
+  return { emails: [] };
+};
+
 // Helper function to calculate effective due date for a lab section
 function calculateLabSectionDueDate(
   labSection: LabSection,
@@ -73,7 +123,7 @@ function calculateLabSectionDueDate(
   return addMinutes(labMeetingEndTime, minutesDueAfterLab);
 }
 
-function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
+function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<AssignmentFormValues>; timezone: string }) {
   const dueDate = form.watch("due_date");
   const minutesDueAfterLab = form.watch("minutes_due_after_lab");
   const controller = useCourseController();
@@ -165,7 +215,13 @@ function LabDueDatePreview({ form, timezone }: { form: UseFormReturnType<Assignm
   );
 }
 
-function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
+function GroupConfigurationSubform({
+  form,
+  timezone
+}: {
+  form: UseFormReturnType<AssignmentFormValues>;
+  timezone: string;
+}) {
   const { course_id } = useParams();
   const { data: otherAssignments } = useList({
     resource: "assignments",
@@ -358,7 +414,7 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
   );
 }
 
-function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+function LabDueDateSubform({ form }: { form: UseFormReturnType<AssignmentFormValues> }) {
   const [withLabDueDate, setWithLabDueDate] = useState<boolean>(() => {
     const minutesDueAfterLab = form.getValues("minutes_due_after_lab");
     return minutesDueAfterLab !== null && minutesDueAfterLab !== undefined;
@@ -444,7 +500,7 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   );
 }
 
-function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+function SelfEvaluationSubform({ form }: { form: UseFormReturnType<AssignmentFormValues> }) {
   const [withEval, setWithEval] = useState<boolean>(false);
   const [allowEarly, setAllowEarly] = useState<boolean>(form.getValues("allow_early") == true);
 
@@ -542,13 +598,263 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
   );
 }
 
+function GradingAutomationSubform({
+  form,
+  courseId
+}: {
+  form: UseFormReturnType<AssignmentFormValues>;
+  courseId: number;
+}) {
+  const {
+    data: profileData,
+    isLoading: isProfileLoading,
+    error: profileError
+  } = useList<GradingAssignmentDefaultProfile>({
+    resource: "grading_assignment_default_profiles",
+    filters: [{ field: "class_id", operator: "eq", value: courseId }],
+    pagination: { pageSize: 200 }
+  });
+  const profiles = profileData?.data ?? [];
+  const profileMap = profiles.reduce(
+    (acc, profile) => {
+      acc[profile.id] = profile;
+      return acc;
+    },
+    {} as Record<number, GradingAssignmentDefaultProfile>
+  );
+  const [applyProfileOnSelect, setApplyProfileOnSelect] = useState(true);
+
+  const {
+    register,
+    watch,
+    setValue,
+    formState: { errors }
+  } = form;
+
+  const selectedProfileId = watch("grading_default_profile_id");
+  const remindersEnabled = watch("late_grading_reminders_enabled");
+  const autoAssignAtDeadline = watch("auto_assign_at_deadline");
+  const profileExists = selectedProfileId ? !!profileMap[selectedProfileId] : false;
+
+  useEffect(() => {
+    if (!profileExists || !applyProfileOnSelect || !selectedProfileId) {
+      return;
+    }
+    const selectedProfile = profileMap[selectedProfileId];
+    setValue("auto_assign_at_deadline", selectedProfile.auto_assign_at_deadline);
+    setValue("auto_assign_assignee_pool", selectedProfile.auto_assign_assignee_pool);
+    setValue("auto_assign_review_due_hours", selectedProfile.auto_assign_review_due_hours);
+    setValue("late_grading_reminders_enabled", selectedProfile.late_grading_reminders_enabled);
+    setValue("late_grading_reminder_interval_hours", selectedProfile.late_grading_reminder_interval_hours);
+    setValue("late_grading_reply_to", selectedProfile.late_grading_reply_to);
+    setValue("late_grading_cc_emails", normalizeCcEmails(selectedProfile.late_grading_cc_emails));
+  }, [selectedProfileId, profileExists, applyProfileOnSelect, profileMap, setValue]);
+
+  return (
+    <CardRoot>
+      <CardHeader>
+        <CardTitle>Grading Automation Defaults</CardTitle>
+      </CardHeader>
+      <CardBody gap="5px">
+        <Fieldset.Content>
+          <Field
+            label="Saved profile"
+            helperText="Select a class-level grading profile to load defaults, then override for this assignment if needed."
+          >
+            <NativeSelectRoot>
+              <NativeSelectField
+                value={selectedProfileId ?? ""}
+                onChange={(event) => {
+                  const rawValue = event.target.value;
+                  setValue("grading_default_profile_id", rawValue ? Number(rawValue) : null, { shouldDirty: true });
+                }}
+              >
+                <option value="">No profile selected</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </NativeSelectField>
+            </NativeSelectRoot>
+          </Field>
+        </Fieldset.Content>
+        <Fieldset.Content>
+          <Field helperText="Automatically apply selected profile settings when profile changes.">
+            <Checkbox.Root
+              checked={applyProfileOnSelect}
+              onCheckedChange={(checked) => setApplyProfileOnSelect(!!checked.checked)}
+            >
+              <Checkbox.HiddenInput />
+              <Checkbox.Control>
+                <LuCheck />
+              </Checkbox.Control>
+              <Checkbox.Label>Apply profile settings on selection</Checkbox.Label>
+            </Checkbox.Root>
+          </Field>
+        </Fieldset.Content>
+        {profileError && (
+          <Fieldset.Content>
+            <Alert
+              status="error"
+              title="Unable to load grading profiles"
+              variant="subtle"
+            >{`${profileError.message}`}</Alert>
+          </Fieldset.Content>
+        )}
+        {isProfileLoading && (
+          <Fieldset.Content>
+            <Text fontSize="sm" color="fg.muted">
+              Loading grading profiles...
+            </Text>
+          </Fieldset.Content>
+        )}
+        <Fieldset.Content>
+          <Field helperText="Automatically create grading review assignments at assignment deadline.">
+            <Controller
+              name="auto_assign_at_deadline"
+              control={form.control}
+              render={({ field }) => (
+                <Checkbox.Root
+                  checked={field.value || false}
+                  onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                >
+                  <Checkbox.HiddenInput />
+                  <Checkbox.Control>
+                    <LuCheck />
+                  </Checkbox.Control>
+                  <Checkbox.Label>Auto assign grading at deadline</Checkbox.Label>
+                </Checkbox.Root>
+              )}
+            />
+          </Field>
+        </Fieldset.Content>
+        {autoAssignAtDeadline && (
+          <>
+            <Fieldset.Content>
+              <Field
+                label="Assignee pool"
+                helperText="Who should receive auto-assigned grading work."
+                errorText={errors.auto_assign_assignee_pool?.message?.toString()}
+                invalid={!!errors.auto_assign_assignee_pool}
+              >
+                <NativeSelectRoot>
+                  <NativeSelectField {...register("auto_assign_assignee_pool", { required: true })}>
+                    <option value="graders">Graders</option>
+                    <option value="instructors">Instructors</option>
+                    <option value="instructors_and_graders">Instructors and graders</option>
+                  </NativeSelectField>
+                </NativeSelectRoot>
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                label="Review due hours after assignment deadline"
+                helperText="Due date offset for auto-assigned grading review assignments."
+                errorText={errors.auto_assign_review_due_hours?.message?.toString()}
+                invalid={!!errors.auto_assign_review_due_hours}
+              >
+                <Input
+                  type="number"
+                  {...register("auto_assign_review_due_hours", {
+                    required: autoAssignAtDeadline ? "This is required when auto assign is enabled" : false,
+                    min: { value: 0, message: "Must be at least 0 hours" },
+                    valueAsNumber: true
+                  })}
+                />
+              </Field>
+            </Fieldset.Content>
+          </>
+        )}
+        <Fieldset.Content>
+          <Field helperText="Send reminders for incomplete grading assignments after the assignment deadline.">
+            <Controller
+              name="late_grading_reminders_enabled"
+              control={form.control}
+              render={({ field }) => (
+                <Checkbox.Root
+                  checked={field.value || false}
+                  onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                >
+                  <Checkbox.HiddenInput />
+                  <Checkbox.Control>
+                    <LuCheck />
+                  </Checkbox.Control>
+                  <Checkbox.Label>Enable late grading reminders</Checkbox.Label>
+                </Checkbox.Root>
+              )}
+            />
+          </Field>
+        </Fieldset.Content>
+        {remindersEnabled && (
+          <>
+            <Fieldset.Content>
+              <Field
+                label="Reminder interval (hours)"
+                helperText="How often reminders should repeat after deadline (for example, 12)."
+                errorText={errors.late_grading_reminder_interval_hours?.message?.toString()}
+                invalid={!!errors.late_grading_reminder_interval_hours}
+              >
+                <Input
+                  type="number"
+                  {...register("late_grading_reminder_interval_hours", {
+                    required: remindersEnabled ? "This is required when reminders are enabled" : false,
+                    min: { value: 1, message: "Must be at least 1 hour" },
+                    valueAsNumber: true
+                  })}
+                />
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                label="Reply-to email"
+                helperText="Optional reply-to address for reminder emails."
+                errorText={errors.late_grading_reply_to?.message?.toString()}
+                invalid={!!errors.late_grading_reply_to}
+              >
+                <Input
+                  type="email"
+                  placeholder="instructor@example.edu"
+                  {...register("late_grading_reply_to", { required: false })}
+                />
+              </Field>
+            </Fieldset.Content>
+            <Fieldset.Content>
+              <Field label="CC emails" helperText="Comma-separated emails to CC on every reminder email.">
+                <Controller
+                  name="late_grading_cc_emails"
+                  control={form.control}
+                  render={({ field }) => (
+                    <Input
+                      value={normalizeCcEmails(field.value).emails.join(", ")}
+                      onChange={(event) => {
+                        const emails = event.target.value
+                          .split(",")
+                          .map((email) => email.trim())
+                          .filter((email) => email.length > 0);
+                        field.onChange({ emails });
+                      }}
+                      placeholder="staff1@example.edu, staff2@example.edu"
+                    />
+                  )}
+                />
+              </Field>
+            </Fieldset.Content>
+          </>
+        )}
+      </CardBody>
+    </CardRoot>
+  );
+}
+
 export default function AssignmentForm({
   form,
   onSubmit
 }: {
-  form: UseFormReturnType<Assignment>;
+  form: UseFormReturnType<AssignmentFormValues>;
   onSubmit: (values: FieldValues) => void;
 }) {
+  const { course_id } = useParams();
   const {
     handleSubmit,
     register,
@@ -818,6 +1124,7 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <GroupConfigurationSubform form={form} timezone={timezone} />
+          <GradingAutomationSubform form={form} courseId={Number(course_id)} />
           <SelfEvaluationSubform form={form} />
           <Fieldset.Content>
             <Field
