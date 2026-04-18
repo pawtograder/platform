@@ -130,6 +130,34 @@ export function useGradebookColumns() {
   return columns;
 }
 
+/**
+ * Subscribes to changes in `gradebooks.expression_prefix` so any component
+ * that depends on the prefix (e.g. the Expression Builder's render-expression
+ * preview) re-renders when the prefix is edited elsewhere. Without this a
+ * component would read `GradebookController.expressionPrefix` on first render
+ * and then drift when the value changed, because only the controller's
+ * cell-renderer cache listens to the underlying `gradebook_row` updates.
+ */
+export function useGradebookExpressionPrefix() {
+  const gradebookController = useGradebookController();
+  const [prefix, setPrefix] = useState<string>(gradebookController.expressionPrefix);
+  useEffect(() => {
+    const { unsubscribe, data } = gradebookController.gradebook_row.list((rows) => {
+      // Read the prefix directly from the freshly-listed rows rather than
+      // relying on the controller's cached `_expression_prefix` — subscriber
+      // ordering between this callback and the controller's own hydration
+      // callback is not guaranteed, and we want to render the newest value
+      // either way.
+      const row = rows.find((r) => r.id === gradebookController.gradebook_id) ?? rows[0];
+      setPrefix(row?.expression_prefix ?? "");
+    });
+    const row = data.find((r) => r.id === gradebookController.gradebook_id) ?? data[0];
+    setPrefix(row?.expression_prefix ?? "");
+    return unsubscribe;
+  }, [gradebookController]);
+  return prefix;
+}
+
 export function useGradebookColumn(column_id: number) {
   const gradebookController = useGradebookController();
   const [column, setColumn] = useState<GradebookColumn | undefined>(

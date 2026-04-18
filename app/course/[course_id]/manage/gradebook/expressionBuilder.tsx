@@ -2,7 +2,7 @@
 
 import { Label } from "@/components/ui/label";
 import { useAllStudentRoles } from "@/hooks/useCourseController";
-import { useGradebookController, useGradebookColumns } from "@/hooks/useGradebook";
+import { useGradebookColumns, useGradebookController, useGradebookExpressionPrefix } from "@/hooks/useGradebook";
 import {
   evaluateForStudent,
   evaluateRenderExpression,
@@ -183,9 +183,10 @@ export function ExpressionBuilder(props: Props) {
   const selectedStudent = students.find((s) => s.private_profile_id === selectedStudentId);
 
   // Evaluate the render expression against the current final score so the
-  // preview can show both forms side-by-side. We read `expression_prefix` off
-  // the controller since it's prepended to every column's render expression.
-  const expressionPrefix = gradebookController.expressionPrefix ?? "";
+  // preview can show both forms side-by-side. Subscribe to
+  // `gradebooks.expression_prefix` (prepended to every render expression) so
+  // the preview re-renders if another instructor edits the prefix.
+  const expressionPrefix = useGradebookExpressionPrefix();
   const rawScore =
     validation.evaluation && !validation.evaluation.error && typeof validation.evaluation.rawResult === "number"
       ? (validation.evaluation.rawResult as number)
@@ -484,16 +485,19 @@ function InlineAnnotations({
   }
   const distinct = dedupeByStartEnd(evaluation.intermediates);
   const levels = assignLevels(distinct);
+  const MAX_VISIBLE = 80;
+  const visible = distinct.slice(0, MAX_VISIBLE);
+  const hiddenCount = Math.max(0, distinct.length - MAX_VISIBLE);
   return (
     <VStack align="stretch" gap={0} bg="bg.subtle" maxH="40vh" overflow="auto">
-      {distinct.slice(0, 80).map((iv, idx) => (
+      {visible.map((iv, idx) => (
         <HStack
           key={`${iv.start}-${iv.end}-${idx}`}
           gap={2}
           align="flex-start"
           px={2}
           py={1}
-          borderBottomWidth={idx === distinct.length - 1 ? 0 : "1px"}
+          borderBottomWidth={idx === visible.length - 1 && hiddenCount === 0 ? 0 : "1px"}
           borderColor="border.subtle"
           _hover={{ bg: "bg.muted" }}
         >
@@ -520,6 +524,13 @@ function InlineAnnotations({
           </Badge>
         </HStack>
       ))}
+      {hiddenCount > 0 && (
+        <HStack px={2} py={1} justifyContent="center" bg="bg.muted">
+          <Text fontSize="xs" color="fg.muted" fontStyle="italic">
+            {hiddenCount} more intermediate {hiddenCount === 1 ? "value" : "values"} hidden
+          </Text>
+        </HStack>
+      )}
     </VStack>
   );
 }
@@ -649,6 +660,9 @@ export function shouldBlockSave(validation: ValidationResult | null, expression?
   if (validation.isEmpty) return false;
   if (validation.parseError) return true;
   if (validation.dependencyError) return true;
+  // Cover the "math still loading / failed to load" case where the synthetic
+  // result flags isValid=false with no parse/dependency error attached.
+  if (!validation.isValid) return true;
   // Evaluation errors are only shown when a student is selected; don't block
   // save just because one student's data trips the expression, but do surface
   // the warning.

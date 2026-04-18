@@ -581,7 +581,7 @@ function AddColumnDialog() {
                     onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
                     math={null}
                     renderExpression={renderExpressionValue}
-                    maxScore={typeof maxScoreValue === "number" ? maxScoreValue : Number(maxScoreValue) || null}
+                    maxScore={Number.isFinite(Number(maxScoreValue)) ? Number(maxScoreValue) : null}
                     onValidationChange={setValidation}
                   />
                   {errors.scoreExpression && (
@@ -668,7 +668,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     }
   });
 
-  const scoreExpression = watch("scoreExpression");
+  const scoreExpression = watch("scoreExpression") ?? "";
   const renderExpressionValue = watch("renderExpression") ?? "";
   const maxScoreValue = watch("maxScore");
   const [isExpressionBuilderExpanded, setIsExpressionBuilderExpanded] = useState(false);
@@ -696,7 +696,12 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
 
   const onSubmit = async (data: FieldValues) => {
-    if (shouldBlockSave(validation, data.scoreExpression)) {
+    // When the score expression is not user-editable (assignment-backed
+    // columns), ExpressionBuilder is not mounted, so `validation` never
+    // updates. Skipping the client-side guard in that case lets instructors
+    // save metadata-only edits (name, description, max_score, etc.); the
+    // server-side extractAndValidateDependencies below still runs.
+    if (canEditScoreExpression && shouldBlockSave(validation, data.scoreExpression)) {
       toaster.error({
         title: "Invalid score expression",
         description: validation?.parseError || validation?.dependencyError || "Fix the score expression before saving."
@@ -842,7 +847,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                 <Box>
                   {canEditScoreExpression ? (
                     <ExpressionBuilder
-                      expression={scoreExpression ?? ""}
+                      expression={scoreExpression}
                       onExpressionChange={(val) =>
                         setValue("scoreExpression", val, { shouldDirty: true, shouldValidate: true })
                       }
@@ -851,7 +856,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                       onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
                       math={null}
                       renderExpression={renderExpressionValue}
-                      maxScore={typeof maxScoreValue === "number" ? maxScoreValue : Number(maxScoreValue) || null}
+                      maxScore={Number.isFinite(Number(maxScoreValue)) ? Number(maxScoreValue) : null}
                       onValidationChange={setValidation}
                     />
                   ) : (
@@ -910,7 +915,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     type="submit"
                     colorPalette="green"
                     loading={isLoading}
-                    disabled={shouldBlockSave(validation, scoreExpression)}
+                    disabled={canEditScoreExpression && shouldBlockSave(validation, scoreExpression)}
                   >
                     Save
                   </Button>

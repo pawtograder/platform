@@ -566,6 +566,26 @@ export function evaluateForStudent(params: {
 
   const intermediates: IntermediateValue[] = [];
   if (params.captureIntermediates !== false) {
+    // Hoisted so it's compiled once per evaluateForStudent call instead of
+    // once per captured node. The CONTEXT_FUNCTIONS list is a hard-coded
+    // constant, so the regex is fully static — no ReDoS surface.
+    const contextArgStrip = new RegExp(
+      `\\b(${CONTEXT_FUNCTIONS.map((fn) => fn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\(context,\\s*`,
+      "g"
+    );
+    // Use the parsed AST's own `toString()` as the haystack for position
+    // lookups instead of the user's raw input. mathjs normalises string
+    // literals (e.g. single → double quotes) when stringifying, so the
+    // subnode `pretty` strings only match reliably against the same
+    // normalised form — using the raw `trimmed` input produces `-1` spans
+    // for any expression that contains a quoted slug.
+    const canonicalExpression = parsed.toString().replace(contextArgStrip, "$1(");
+    // Walk source positions greedily so repeated subexpressions (e.g.
+    // `gradebook_columns("hw-1") + gradebook_columns("hw-1")`) get DISTINCT
+    // spans. Without this, `indexOf(pretty)` always hands back the first
+    // occurrence, both instances land on `start=0` / `end=len(pretty)`, and
+    // the dedupe loop below collapses them into one entry.
+    const nextSearchFromBySource = new Map<string, number>();
     for (const node of collectNodes(transformed)) {
       if (!shouldCaptureNode(node)) continue;
       let source: string;
@@ -580,13 +600,13 @@ export function evaluateForStudent(params: {
       // `sum(gradebook_columns("hw-*"))` stringify to
       // `sum(context, gradebook_columns(context, "hw-*"))` and we need to
       // clean both levels.
-      const contextArgStrip = new RegExp(
-        `\\b(${CONTEXT_FUNCTIONS.map((fn) => fn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\(context,\\s*`,
-        "g"
-      );
       const pretty = source.replace(contextArgStrip, "$1(");
 
-      const idx = trimmed.indexOf(pretty);
+      const searchFrom = nextSearchFromBySource.get(pretty) ?? 0;
+      const idx = canonicalExpression.indexOf(pretty, searchFrom);
+      if (idx >= 0) {
+        nextSearchFromBySource.set(pretty, idx + pretty.length);
+      }
       let value: unknown;
       let nodeError: string | undefined;
       try {
@@ -606,6 +626,8 @@ export function evaluateForStudent(params: {
     }
     // Deduplicate identical (source,start) entries that the tree walk can emit
     // (e.g. BlockNode + its single child both match the whole expression).
+    // Repeated subexpressions with DIFFERENT start offsets (thanks to the
+    // greedy search above) stay distinct.
     const seen = new Set<string>();
     for (let i = intermediates.length - 1; i >= 0; i--) {
       const key = `${intermediates[i].start}:${intermediates[i].end}:${intermediates[i].source}`;

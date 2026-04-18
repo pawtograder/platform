@@ -666,6 +666,25 @@ describe("Expression Builder — evaluateForStudent", () => {
       }
     });
 
+    test("repeated identical subexpressions receive distinct source spans", () => {
+      // Regression: `trimmed.indexOf(pretty)` used to always find the first
+      // occurrence, so both copies of `gradebook_columns('hw-1')` below would
+      // land on `start=0` / `end=24` and the dedup loop would collapse them
+      // into one entry — the second instance would disappear from the
+      // annotated view entirely.
+      const r = runExpression(controller, "gradebook_columns('hw-1') + gradebook_columns('hw-1')", "alice");
+      expect(r.evaluation?.error).toBeNull();
+      // Both inner calls must appear with strictly-increasing start offsets.
+      const hits = r.evaluation!.intermediates.filter((iv) => iv.source === `gradebook_columns("hw-1")`);
+      expect(hits.length).toBe(2);
+      expect(hits[0].start).toBeGreaterThanOrEqual(0);
+      expect(hits[1].start).toBeGreaterThan(hits[0].start);
+      expect(hits[1].end).toBeGreaterThan(hits[0].end);
+      // Both land on the same `GradebookExpressionValue` shape and score.
+      expect((hits[0].raw as { score: number }).score).toBe(50);
+      expect((hits[1].raw as { score: number }).score).toBe(50);
+    });
+
     test("intermediate sources preserve positional info within the expression string", () => {
       // Positions should be ascending and within bounds of the typed string.
       const expr = "mean(gradebook_columns('hw-*')) + 5";
