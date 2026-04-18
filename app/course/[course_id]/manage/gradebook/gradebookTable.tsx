@@ -693,7 +693,14 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   if (!columnId) return null;
   if (!column) throw new Error(`Column ${columnId} not found`);
 
-  const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
+  // Pin the "is this column assignment-backed?" gate to the column's
+  // PERSISTED score expression, not the live-watched form value. Otherwise
+  // the moment an instructor types `assignments(` while editing a regular
+  // column, `canEditScoreExpression` flips to `false`, ExpressionBuilder
+  // unmounts mid-edit, and the instructor loses the full-screen state
+  // (expanded mode, selected student, and the mathjs / intermediate
+  // annotations that had already loaded).
+  const canEditScoreExpression = !(column.score_expression?.startsWith("assignments(") ?? false);
 
   const onSubmit = async (data: FieldValues) => {
     // When the score expression is not user-editable (assignment-backed
