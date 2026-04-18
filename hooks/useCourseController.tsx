@@ -279,7 +279,9 @@ type DiscussionThreadTeaser = Pick<
 
 export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
-  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>([]);
+  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>(
+    () => controller.discussionThreadTeasers.list().data as DiscussionThreadTeaser[]
+  );
   useEffect(() => {
     const { data, unsubscribe } = controller.discussionThreadTeasers.list((data) => {
       setTeasers(data as DiscussionThreadTeaser[]);

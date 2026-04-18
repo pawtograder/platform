@@ -7,6 +7,7 @@ import { TopicFollowMultiSelect } from "@/components/discussion/TopicFollowMulti
 import { useFollowedDiscussionTopicIds, useTopicFollowActions } from "@/hooks/useDiscussionTopicFollow";
 import { useCourseController, useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
 import { useTableControllerTableValues } from "@/lib/TableController";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Box, Flex, Heading, HStack, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -24,6 +25,19 @@ export default function DiscussionPage() {
   const controller = useCourseController();
   const topics = useDiscussionTopics();
   const threads = useDiscussionThreadTeasers();
+
+  const [discussionDataReady, setDiscussionDataReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([controller.discussionTopics.readyPromise, controller.discussionThreadTeasers.readyPromise]).then(
+      () => {
+        if (!cancelled) setDiscussionDataReady(true);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [controller]);
 
   const followedTopicIds = useFollowedDiscussionTopicIds();
   const { setTopicFollowStatusForId } = useTopicFollowActions();
@@ -112,6 +126,35 @@ export default function DiscussionPage() {
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       });
   }, [q, selectedTopicId, threads]);
+
+  if (!discussionDataReady) {
+    return (
+      <Box flex="1" minH={0} display="flex" flexDirection="column" aria-busy="true" aria-live="polite">
+        <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} flex="1" minH={0} align="stretch">
+          <Box flex={{ lg: 4 }} minW={0}>
+            <Stack spaceY={2}>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} height="72px" borderRadius="md" />
+              ))}
+            </Stack>
+          </Box>
+          <Box flex={{ base: 1, lg: 8 }} minW={0} display="flex" flexDirection="column">
+            <Skeleton height="32px" width="min(240px, 55%)" mb="4" borderRadius="md" />
+            <Box
+              flex="1"
+              minH="min(320px, 50dvh)"
+              borderWidth="1px"
+              borderColor="border.emphasized"
+              rounded="md"
+              overflow="hidden"
+            >
+              <Skeleton height="100%" minH="200px" borderRadius="md" />
+            </Box>
+          </Box>
+        </Flex>
+      </Box>
+    );
+  }
 
   if (view === "browse") {
     return (
