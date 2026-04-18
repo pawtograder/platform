@@ -9,7 +9,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments, useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
 import { Box, Fieldset, Flex, Heading, Icon, Input, Text, Separator } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
@@ -45,6 +45,13 @@ export default function NewDiscussionThread() {
     }
   });
 
+  /**
+   * Stays true after a successful create + router.push until unmount. RHF clears isSubmitting as soon as
+   * the submit handler promise resolves (right after push), which can re-enable the form before navigation finishes.
+   */
+  const [submitInFlight, setSubmitInFlight] = useState(false);
+  const formBusy = isSubmitting || submitInFlight;
+
   const topics = useDiscussionTopics();
   const assignments = useAssignments();
   const topicId = watch("topic_id");
@@ -76,6 +83,8 @@ export default function NewDiscussionThread() {
       return;
     }
     createInFlightRef.current = true;
+    setSubmitInFlight(true);
+    let navigationCommitted = false;
     try {
       // Prepare the thread data for creation
       const threadData = {
@@ -92,22 +101,29 @@ export default function NewDiscussionThread() {
       // Create the thread using TableController
       const createdThread = await discussionThreadTeasers.create(threadData);
 
-      // Navigate to the new thread (keep createInFlightRef true until unmount so slow navigations cannot double-post)
+      // Navigate to the new thread. RHF clears isSubmitting when this async function returns; keep
+      // submitInFlight + ref true until unmount so the form stays locked through slow client navigations.
       router.push(`/course/${course_id}/discussion/${createdThread.id}`);
+      navigationCommitted = true;
     } catch {
-      createInFlightRef.current = false;
       toaster.error({
         title: "Error creating discussion thread",
         description: "Please try again later."
       });
+    } finally {
+      // Clear only when we are not leaving the page (create failed or navigation did not start).
+      if (!navigationCommitted) {
+        createInFlightRef.current = false;
+        setSubmitInFlight(false);
+      }
     }
   });
   return (
     <Box p={{ base: "4", md: "0" }}>
       <Heading as="h1">New Discussion Thread</Heading>
       <Box maxW="4xl" w="100%">
-        <form onSubmit={onSubmit} aria-busy={isSubmitting}>
-          <Fieldset.Root bg="surface" disabled={isSubmitting}>
+        <form onSubmit={onSubmit} aria-busy={formBusy}>
+          <Fieldset.Root bg="surface" disabled={formBusy}>
             <Fieldset.Content w="100%">
               <Field
                 label="Topic"
@@ -375,7 +391,7 @@ export default function NewDiscussionThread() {
                         onChange={field.onChange}
                         value={field.value}
                         enableFilePicker={true}
-                        disabled={isSubmitting}
+                        disabled={formBusy}
                       />
                     );
                   }}
@@ -384,9 +400,9 @@ export default function NewDiscussionThread() {
             </Fieldset.Content>
             <Button
               type="submit"
-              loading={isSubmitting}
+              loading={formBusy}
               loadingText="Posting…"
-              disabled={isSubmitting}
+              disabled={formBusy}
               w="100%"
               colorPalette="green"
             >
