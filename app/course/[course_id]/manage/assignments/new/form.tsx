@@ -746,13 +746,19 @@ export default function AssignmentForm({
             <Field
               label="Max Late Tokens"
               helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
+              invalid={!!errors.max_late_tokens}
+              errorText={errors.max_late_tokens?.message?.toString()}
             >
               <Input
                 type="number"
                 defaultValue={0}
                 {...register("max_late_tokens", {
                   required: false,
-                  min: { value: 0, message: "Max late tokens must be at least 0" }
+                  min: { value: 0, message: "Max late tokens must be at least 0" },
+                  validate: (value) =>
+                    !form.getValues("require_tokens_before_due_date") && (!value || value <= 0)
+                      ? "Max late tokens must be greater than 0 when 'Require students to apply late tokens before the original due date' is unchecked"
+                      : undefined
                 })}
               />
             </Field>
