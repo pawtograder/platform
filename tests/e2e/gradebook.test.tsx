@@ -998,6 +998,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // With a valid expression and a selected student, we should see a green
     // evaluation status and a "Score: …" badge at the top of the editor.
     await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    // Wait for the result-badges container to render before asserting its
+    // text — it mounts as soon as the Expression Builder expands, which is a
+    // separate re-render from the one that flips `expression-ok` visible.
+    await expect(page.getByTestId("expression-builder-result-badges")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId("expression-builder-result-badges")).toContainText(/Score\s*7/);
     // No render expression yet — only the Score badge is shown.
     await expect(page.getByTestId("expression-builder-rendered-badge")).toHaveCount(0);
