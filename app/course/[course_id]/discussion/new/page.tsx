@@ -9,7 +9,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignments, useCourseController, useDiscussionTopics } from "@/hooks/useCourseController";
 import { Box, Fieldset, Flex, Heading, Icon, Input, Text, Separator } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
@@ -28,6 +28,8 @@ export default function NewDiscussionThread() {
   const router = useRouter();
   const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
+  /** Blocks duplicate submits before React re-renders (double-clicks, rapid Enter). */
+  const createInFlightRef = useRef(false);
 
   const {
     handleSubmit,
@@ -70,6 +72,10 @@ export default function NewDiscussionThread() {
   }, [topics]);
 
   const onSubmit = handleSubmit(async (data) => {
+    if (createInFlightRef.current) {
+      return;
+    }
+    createInFlightRef.current = true;
     try {
       // Prepare the thread data for creation
       const threadData = {
@@ -86,9 +92,10 @@ export default function NewDiscussionThread() {
       // Create the thread using TableController
       const createdThread = await discussionThreadTeasers.create(threadData);
 
-      // Navigate to the new thread
+      // Navigate to the new thread (keep createInFlightRef true until unmount so slow navigations cannot double-post)
       router.push(`/course/${course_id}/discussion/${createdThread.id}`);
     } catch {
+      createInFlightRef.current = false;
       toaster.error({
         title: "Error creating discussion thread",
         description: "Please try again later."
@@ -99,8 +106,8 @@ export default function NewDiscussionThread() {
     <Box p={{ base: "4", md: "0" }}>
       <Heading as="h1">New Discussion Thread</Heading>
       <Box maxW="4xl" w="100%">
-        <form onSubmit={onSubmit}>
-          <Fieldset.Root bg="surface">
+        <form onSubmit={onSubmit} aria-busy={isSubmitting}>
+          <Fieldset.Root bg="surface" disabled={isSubmitting}>
             <Fieldset.Content w="100%">
               <Field
                 label="Topic"
@@ -368,13 +375,21 @@ export default function NewDiscussionThread() {
                         onChange={field.onChange}
                         value={field.value}
                         enableFilePicker={true}
+                        disabled={isSubmitting}
                       />
                     );
                   }}
                 />
               </Field>
             </Fieldset.Content>
-            <Button type="submit" loading={isSubmitting} disabled={isSubmitting} w="100%" colorPalette="green">
+            <Button
+              type="submit"
+              loading={isSubmitting}
+              loadingText="Posting…"
+              disabled={isSubmitting}
+              w="100%"
+              colorPalette="green"
+            >
               Submit
             </Button>
           </Fieldset.Root>
