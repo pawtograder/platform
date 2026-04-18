@@ -480,7 +480,7 @@ BEGIN
     PERFORM cron.schedule(
       'run-assignment-grading-automation-every-5-minutes',
       '*/5 * * * *',
-      $$SELECT public.run_assignment_grading_automation();$$
+      $cron$SELECT public.run_assignment_grading_automation();$cron$
     );
   ELSE
     RAISE NOTICE 'pg_cron extension not available - grading automation schedule not created';
