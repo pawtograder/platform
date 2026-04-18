@@ -20,13 +20,13 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { appendTimezoneOffset } from "@/lib/utils";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, GradingAssignmentDefaultProfile } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
 import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { LuCheck } from "react-icons/lu";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -38,20 +38,6 @@ type GradingAssigneePool = "graders" | "instructors" | "instructors_and_graders"
 
 type GradingCcEmails = {
   emails: string[];
-};
-
-type GradingAssignmentDefaultProfile = {
-  id: number;
-  class_id: number;
-  name: string;
-  description: string | null;
-  auto_assign_at_deadline: boolean;
-  auto_assign_assignee_pool: GradingAssigneePool;
-  auto_assign_review_due_hours: number;
-  late_grading_reminders_enabled: boolean;
-  late_grading_reminder_interval_hours: number | null;
-  late_grading_reply_to: string | null;
-  late_grading_cc_emails: GradingCcEmails;
 };
 
 export type AssignmentFormValues = Assignment & {
@@ -614,13 +600,17 @@ function GradingAutomationSubform({
     filters: [{ field: "class_id", operator: "eq", value: courseId }],
     pagination: { pageSize: 200 }
   });
-  const profiles = profileData?.data ?? [];
-  const profileMap = profiles.reduce(
-    (acc, profile) => {
-      acc[profile.id] = profile;
-      return acc;
-    },
-    {} as Record<number, GradingAssignmentDefaultProfile>
+  const profiles = useMemo(() => profileData?.data ?? [], [profileData?.data]);
+  const profileMap = useMemo(
+    () =>
+      profiles.reduce(
+        (acc, profile) => {
+          acc[profile.id] = profile;
+          return acc;
+        },
+        {} as Record<number, GradingAssignmentDefaultProfile>
+      ),
+    [profiles]
   );
   const [applyProfileOnSelect, setApplyProfileOnSelect] = useState(true);
 
@@ -634,13 +624,12 @@ function GradingAutomationSubform({
   const selectedProfileId = watch("grading_default_profile_id");
   const remindersEnabled = watch("late_grading_reminders_enabled");
   const autoAssignAtDeadline = watch("auto_assign_at_deadline");
-  const profileExists = selectedProfileId ? !!profileMap[selectedProfileId] : false;
+  const selectedProfile = selectedProfileId ? profileMap[selectedProfileId] : undefined;
 
   useEffect(() => {
-    if (!profileExists || !applyProfileOnSelect || !selectedProfileId) {
+    if (!selectedProfile || !applyProfileOnSelect) {
       return;
     }
-    const selectedProfile = profileMap[selectedProfileId];
     setValue("auto_assign_at_deadline", selectedProfile.auto_assign_at_deadline);
     setValue("auto_assign_assignee_pool", selectedProfile.auto_assign_assignee_pool);
     setValue("auto_assign_review_due_hours", selectedProfile.auto_assign_review_due_hours);
@@ -648,7 +637,7 @@ function GradingAutomationSubform({
     setValue("late_grading_reminder_interval_hours", selectedProfile.late_grading_reminder_interval_hours);
     setValue("late_grading_reply_to", selectedProfile.late_grading_reply_to);
     setValue("late_grading_cc_emails", normalizeCcEmails(selectedProfile.late_grading_cc_emails));
-  }, [selectedProfileId, profileExists, applyProfileOnSelect, profileMap, setValue]);
+  }, [selectedProfile, applyProfileOnSelect, setValue]);
 
   return (
     <CardRoot>
@@ -663,7 +652,7 @@ function GradingAutomationSubform({
           >
             <NativeSelectRoot>
               <NativeSelectField
-                value={selectedProfileId ?? ""}
+                value={String(selectedProfileId ?? "")}
                 onChange={(event) => {
                   const rawValue = event.target.value;
                   setValue("grading_default_profile_id", rawValue ? Number(rawValue) : null, { shouldDirty: true });
@@ -671,7 +660,7 @@ function GradingAutomationSubform({
               >
                 <option value="">No profile selected</option>
                 {profiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
+                  <option key={profile.id} value={String(profile.id)}>
                     {profile.name}
                   </option>
                 ))}

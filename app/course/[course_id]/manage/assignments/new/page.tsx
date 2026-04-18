@@ -83,6 +83,8 @@ export default function NewAssignmentPage() {
           return;
         }
 
+        const remindersEnabled = form.getValues("late_grading_reminders_enabled") ?? false;
+
         const { data, error } = await supabase
           .from("assignments")
           .insert({
@@ -112,15 +114,15 @@ export default function NewAssignmentPage() {
             group_formation_deadline: form.getValues("group_formation_deadline")
               ? new TZDate(form.getValues("group_formation_deadline"), timezone).toISOString()
               : null,
-            grading_default_profile_id: form.getValues("grading_default_profile_id") || null,
-            auto_assign_at_deadline: form.getValues("auto_assign_at_deadline") || false,
-            auto_assign_assignee_pool: form.getValues("auto_assign_assignee_pool") || "graders",
+            grading_default_profile_id: form.getValues("grading_default_profile_id") ?? null,
+            auto_assign_at_deadline: form.getValues("auto_assign_at_deadline") ?? false,
+            auto_assign_assignee_pool: form.getValues("auto_assign_assignee_pool") ?? "graders",
             auto_assign_review_due_hours: form.getValues("auto_assign_review_due_hours") ?? 72,
-            late_grading_reminders_enabled: form.getValues("late_grading_reminders_enabled") || false,
-            late_grading_reminder_interval_hours: form.getValues("late_grading_reminders_enabled")
+            late_grading_reminders_enabled: remindersEnabled,
+            late_grading_reminder_interval_hours: remindersEnabled
               ? (form.getValues("late_grading_reminder_interval_hours") ?? 12)
               : null,
-            late_grading_reply_to: form.getValues("late_grading_reply_to") || null,
+            late_grading_reply_to: form.getValues("late_grading_reply_to") ?? null,
             late_grading_cc_emails: form.getValues("late_grading_cc_emails") ?? { emails: [] }
           })
           .select("id")

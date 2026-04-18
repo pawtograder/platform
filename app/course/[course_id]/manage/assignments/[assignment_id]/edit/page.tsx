@@ -26,7 +26,18 @@ export default function EditAssignment() {
 
   useEffect(() => {
     if (queryData) {
-      reset(queryData);
+      const values = queryData as AssignmentFormValues;
+      reset({
+        ...values,
+        grading_default_profile_id: values.grading_default_profile_id ?? null,
+        auto_assign_at_deadline: values.auto_assign_at_deadline ?? false,
+        auto_assign_assignee_pool: values.auto_assign_assignee_pool ?? "graders",
+        auto_assign_review_due_hours: values.auto_assign_review_due_hours ?? 72,
+        late_grading_reminders_enabled: values.late_grading_reminders_enabled ?? false,
+        late_grading_reminder_interval_hours: values.late_grading_reminder_interval_hours ?? 12,
+        late_grading_reply_to: values.late_grading_reply_to ?? null,
+        late_grading_cc_emails: values.late_grading_cc_emails ?? { emails: [] }
+      });
     }
   }, [queryData, reset]);
 
@@ -39,32 +50,6 @@ export default function EditAssignment() {
       form.setValue("eval_config", selfReviewSetting?.data.enabled ? "use_eval" : "base_only");
       form.setValue("deadline_offset", selfReviewSetting?.data.deadline_offset);
       form.setValue("allow_early", selfReviewSetting?.data.allow_early);
-      form.setValue(
-        "grading_default_profile_id",
-        (queryData as AssignmentFormValues).grading_default_profile_id ?? null
-      );
-      form.setValue("auto_assign_at_deadline", (queryData as AssignmentFormValues).auto_assign_at_deadline ?? false);
-      form.setValue(
-        "auto_assign_assignee_pool",
-        (queryData as AssignmentFormValues).auto_assign_assignee_pool ?? "graders"
-      );
-      form.setValue(
-        "auto_assign_review_due_hours",
-        (queryData as AssignmentFormValues).auto_assign_review_due_hours ?? 72
-      );
-      form.setValue(
-        "late_grading_reminders_enabled",
-        (queryData as AssignmentFormValues).late_grading_reminders_enabled ?? false
-      );
-      form.setValue(
-        "late_grading_reminder_interval_hours",
-        (queryData as AssignmentFormValues).late_grading_reminder_interval_hours ?? 12
-      );
-      form.setValue("late_grading_reply_to", (queryData as AssignmentFormValues).late_grading_reply_to ?? null);
-      form.setValue(
-        "late_grading_cc_emails",
-        (queryData as AssignmentFormValues).late_grading_cc_emails ?? { emails: [] }
-      );
     }
   }, [
     queryData,

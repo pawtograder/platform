@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS public.grading_assignment_default_profiles (
     AND late_grading_cc_emails ? 'emails'
     AND jsonb_typeof(late_grading_cc_emails->'emails') = 'array'
   ),
-  CONSTRAINT grading_assignment_default_profiles_class_name_unique UNIQUE (class_id, name)
+  CONSTRAINT grading_assignment_default_profiles_class_name_unique UNIQUE (class_id, name),
+  CONSTRAINT grading_assignment_default_profiles_id_class_unique UNIQUE (id, class_id)
 );
 
 ALTER TABLE public.grading_assignment_default_profiles ENABLE ROW LEVEL SECURITY;
@@ -103,9 +104,9 @@ BEGIN
   ) THEN
     ALTER TABLE public.assignments
       ADD CONSTRAINT assignments_grading_default_profile_id_fkey
-      FOREIGN KEY (grading_default_profile_id)
-      REFERENCES public.grading_assignment_default_profiles(id)
-      ON DELETE SET NULL;
+      FOREIGN KEY (grading_default_profile_id, class_id)
+      REFERENCES public.grading_assignment_default_profiles(id, class_id)
+      ON DELETE SET NULL (grading_default_profile_id);
   END IF;
 END $$;
 
@@ -160,6 +161,17 @@ CREATE TABLE IF NOT EXISTS public.assignment_grading_automation_state (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.assignment_grading_automation_state ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Service role manages assignment grading automation state" ON public.assignment_grading_automation_state;
+CREATE POLICY "Service role manages assignment grading automation state"
+ON public.assignment_grading_automation_state
+AS PERMISSIVE
+FOR ALL
+TO service_role
+USING (true)
+WITH CHECK (true);
 
 CREATE INDEX IF NOT EXISTS idx_assignment_grading_automation_state_class_id
   ON public.assignment_grading_automation_state (class_id);
@@ -296,7 +308,7 @@ BEGIN
 
   IF COALESCE((v_result->>'success')::boolean, false) IS DISTINCT FROM true THEN
     RAISE WARNING 'bulk_assign_reviews failed for assignment %: %', v_assignment.id, v_result;
-    RETURN 0;
+    RETURN -1;
   END IF;
 
   RETURN COALESCE((v_result->>'assignments_created')::integer, 0)
@@ -359,6 +371,7 @@ BEGIN
      AND ur.class_id = ra.class_id
     WHERE ra.assignment_id = v_assignment.id
       AND ra.completed_at IS NULL
+      AND COALESCE(ra.due_date, v_assignment.due_date) <= now()
       AND (v_assignment.grading_rubric_id IS NULL OR ra.rubric_id = v_assignment.grading_rubric_id)
       AND ur.disabled = false
       AND ur.role IN ('grader', 'instructor')
@@ -408,6 +421,7 @@ SET search_path TO public
 AS $$
 DECLARE
   v_assignment record;
+  v_state record;
   v_auto_assigned_count integer;
   v_reminder_count integer;
 BEGIN
@@ -431,12 +445,20 @@ BEGIN
     VALUES (v_assignment.id, v_assignment.class_id)
     ON CONFLICT (assignment_id) DO NOTHING;
 
-    IF v_assignment.auto_assign_at_deadline AND v_assignment.auto_assigned_at IS NULL THEN
+    SELECT s.auto_assigned_at, s.last_reminder_sent_at
+    INTO v_state
+    FROM public.assignment_grading_automation_state s
+    WHERE s.assignment_id = v_assignment.id
+    FOR UPDATE;
+
+    IF v_assignment.auto_assign_at_deadline AND v_state.auto_assigned_at IS NULL THEN
       v_auto_assigned_count := public.auto_assign_grading_reviews_for_assignment(v_assignment.id);
-      UPDATE public.assignment_grading_automation_state
-      SET auto_assigned_at = now(),
-          updated_at = now()
-      WHERE assignment_id = v_assignment.id;
+      IF v_auto_assigned_count >= 0 THEN
+        UPDATE public.assignment_grading_automation_state
+        SET auto_assigned_at = now(),
+            updated_at = now()
+        WHERE assignment_id = v_assignment.id;
+      END IF;
 
       RAISE LOG 'Auto-assigned grading for assignment %, created/updated=%', v_assignment.id, v_auto_assigned_count;
     END IF;
@@ -444,8 +466,8 @@ BEGIN
     IF v_assignment.late_grading_reminders_enabled
        AND COALESCE(v_assignment.late_grading_reminder_interval_hours, 0) > 0
        AND (
-         v_assignment.last_reminder_sent_at IS NULL
-         OR v_assignment.last_reminder_sent_at
+         v_state.last_reminder_sent_at IS NULL
+         OR v_state.last_reminder_sent_at
               + make_interval(hours => v_assignment.late_grading_reminder_interval_hours) <= now()
        ) THEN
       v_reminder_count := public.queue_late_grading_reminders_for_assignment(v_assignment.id);
@@ -473,15 +495,19 @@ GRANT EXECUTE ON FUNCTION public.run_assignment_grading_automation() TO service_
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'run-assignment-grading-automation-every-5-minutes') THEN
-      PERFORM cron.unschedule('run-assignment-grading-automation-every-5-minutes');
-    END IF;
+    BEGIN
+      IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'run-assignment-grading-automation-every-5-minutes') THEN
+        PERFORM cron.unschedule('run-assignment-grading-automation-every-5-minutes');
+      END IF;
 
-    PERFORM cron.schedule(
-      'run-assignment-grading-automation-every-5-minutes',
-      '*/5 * * * *',
-      $cron$SELECT public.run_assignment_grading_automation();$cron$
-    );
+      PERFORM cron.schedule(
+        'run-assignment-grading-automation-every-5-minutes',
+        '*/5 * * * *',
+        $cron$SELECT public.run_assignment_grading_automation();$cron$
+      );
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Unable to schedule grading automation cron job: %', SQLERRM;
+    END;
   ELSE
     RAISE NOTICE 'pg_cron extension not available - grading automation schedule not created';
   END IF;

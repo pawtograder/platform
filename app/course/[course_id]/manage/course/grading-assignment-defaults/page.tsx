@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import type { GradingAssignmentDefaultProfile } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   CardBody,
@@ -25,24 +26,19 @@ import { useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { LuCheck } from "react-icons/lu";
 
-type GradingAssigneePool = "graders" | "instructors" | "instructors_and_graders";
 type GradingCcEmails = { emails: string[] };
 
-type GradingAssignmentDefaultProfile = {
-  id: number;
-  class_id: number;
-  name: string;
-  description: string | null;
-  auto_assign_at_deadline: boolean;
-  auto_assign_assignee_pool: GradingAssigneePool;
-  auto_assign_review_due_hours: number;
-  late_grading_reminders_enabled: boolean;
-  late_grading_reminder_interval_hours: number | null;
-  late_grading_reply_to: string | null;
+type FormValues = {
+  name: GradingAssignmentDefaultProfile["name"];
+  description: string;
+  auto_assign_at_deadline: GradingAssignmentDefaultProfile["auto_assign_at_deadline"];
+  auto_assign_assignee_pool: GradingAssignmentDefaultProfile["auto_assign_assignee_pool"];
+  auto_assign_review_due_hours: GradingAssignmentDefaultProfile["auto_assign_review_due_hours"];
+  late_grading_reminders_enabled: GradingAssignmentDefaultProfile["late_grading_reminders_enabled"];
+  late_grading_reminder_interval_hours: GradingAssignmentDefaultProfile["late_grading_reminder_interval_hours"];
+  late_grading_reply_to: string;
   late_grading_cc_emails: GradingCcEmails;
 };
-
-type FormValues = Omit<GradingAssignmentDefaultProfile, "id" | "class_id">;
 
 const defaultValues: FormValues = {
   name: "",
@@ -63,11 +59,28 @@ const parseCcEmails = (value: string): GradingCcEmails => ({
     .filter((entry) => entry.length > 0)
 });
 
-const toCcText = (value: GradingCcEmails | null | undefined): string => (value?.emails ?? []).join(", ");
+const normalizeCcEmails = (value: unknown): GradingCcEmails => {
+  if (value && typeof value === "object" && "emails" in value) {
+    const emails = (value as { emails?: unknown }).emails;
+    if (Array.isArray(emails)) {
+      return {
+        emails: emails
+          .filter((email): email is string => typeof email === "string")
+          .map((email) => email.trim())
+          .filter((email) => email.length > 0)
+      };
+    }
+  }
+
+  return { emails: [] };
+};
+
+const toCcText = (value: unknown): string => normalizeCcEmails(value).emails.join(", ");
 
 export default function GradingAssignmentDefaultsPage() {
   const { course_id } = useParams();
   const classId = Number(course_id);
+  const isValidClassId = Number.isFinite(classId);
   const [editingId, setEditingId] = useState<number | null>(null);
 
   const form = useForm<FormValues>({ defaultValues });
@@ -90,7 +103,7 @@ export default function GradingAssignmentDefaultsPage() {
     filters: [{ field: "class_id", operator: "eq", value: classId }],
     sorters: [{ field: "name", order: "asc" }],
     pagination: { pageSize: 200 },
-    queryOptions: { enabled: Number.isFinite(classId) }
+    queryOptions: { enabled: isValidClassId }
   });
 
   const profiles = useMemo(() => profileData?.data ?? [], [profileData?.data]);
@@ -110,7 +123,7 @@ export default function GradingAssignmentDefaultsPage() {
       late_grading_reminders_enabled: profile.late_grading_reminders_enabled,
       late_grading_reminder_interval_hours: profile.late_grading_reminder_interval_hours ?? 12,
       late_grading_reply_to: profile.late_grading_reply_to ?? "",
-      late_grading_cc_emails: profile.late_grading_cc_emails ?? { emails: [] }
+      late_grading_cc_emails: normalizeCcEmails(profile.late_grading_cc_emails)
     });
   };
 
@@ -120,6 +133,14 @@ export default function GradingAssignmentDefaultsPage() {
   };
 
   const onSubmit = form.handleSubmit(async (values) => {
+    if (!isValidClassId) {
+      toaster.error({
+        title: "Invalid course",
+        description: "Cannot save grading defaults without a valid course id."
+      });
+      return;
+    }
+
     const payload = {
       class_id: classId,
       name: values.name.trim(),
@@ -132,7 +153,7 @@ export default function GradingAssignmentDefaultsPage() {
         ? (values.late_grading_reminder_interval_hours ?? 12)
         : null,
       late_grading_reply_to: values.late_grading_reply_to?.trim() || null,
-      late_grading_cc_emails: values.late_grading_cc_emails ?? { emails: [] }
+      late_grading_cc_emails: normalizeCcEmails(values.late_grading_cc_emails)
     };
 
     try {
@@ -161,6 +182,11 @@ export default function GradingAssignmentDefaultsPage() {
   });
 
   const handleDelete = async (id: number) => {
+    const confirmed = window.confirm("Delete this grading default profile?");
+    if (!confirmed) {
+      return;
+    }
+
     try {
       await deleteProfile({ resource: "grading_assignment_default_profiles", id });
       toaster.success({ title: "Profile deleted" });
@@ -175,6 +201,15 @@ export default function GradingAssignmentDefaultsPage() {
       });
     }
   };
+
+  if (!isValidClassId) {
+    return (
+      <Box p={4}>
+        <Heading size="lg">Grading Assignment Defaults</Heading>
+        <Text color="fg.error">Invalid course id.</Text>
+      </Box>
+    );
+  }
 
   return (
     <Box p={4}>
