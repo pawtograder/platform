@@ -19,6 +19,7 @@ import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster, Toaster } from "./toaster";
+import AssignmentsTable from "@/app/course/[course_id]/manage/assignments/[assignment_id]/assignmentsTable";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();
@@ -73,8 +74,11 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   }
 
   if (isAfter(new TZDate(new Date()), dueDate.dueDate)) {
-    return <Text>(Firm date: You have passed the due date)</Text>;
-  }
+    if ((assignment as Assignment & { require_tokens_before_due_date: boolean }).require_tokens_before_due_date) {
+      return <Text>(Firm date: You have passed the due date)</Text>;
+    }
+    return <Text>(Deadline passed: submitting will auto-apply a late token if you have one remaining)</Text>;
+  } 
   return (
     <Dialog.Root
       open={open}
@@ -88,12 +92,14 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
           Extend Due Date
         </Button>
       </Dialog.Trigger>
+      <Text fontSize="sm" color="fg.muted">Tokens must be applied before the due date.</Text>
       <Dialog.Backdrop />
       <Dialog.Positioner>
         <Dialog.Content>
           <Dialog.Header>
             <Dialog.Description>
               <Dialog.Title>Extend Due Date For {assignment.title}</Dialog.Title>
+              You must apply token before <TimeZoneAwareDate date={dueDate.dueDate} format="MMM d, h:mm a" /> - once the deadline passes you will no longer be able to apply tokens.
               The course late policy grants each student {course.late_tokens_per_student} late tokens. Each token
               extends the due date by 24 hours, but are not automatically applied - to use them, you must use this form
               to apply them BEFORE the assignment is due. You can apply up to {assignment.max_late_tokens} tokens to
