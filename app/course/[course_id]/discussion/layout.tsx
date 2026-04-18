@@ -84,7 +84,9 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
             </Box>
           </Flex>
         ) : (
-          children
+          <Box flex="1" minH={0} display="flex" flexDirection="column">
+            {children}
+          </Box>
         )}
       </Box>
     </Box>

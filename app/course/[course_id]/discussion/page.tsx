@@ -115,13 +115,8 @@ export default function DiscussionPage() {
 
   if (view === "browse") {
     return (
-      <Box
-        // On desktop, turn browse view into a split-pane with independent scroll areas.
-        height={{ base: "auto", lg: "100%" }}
-        minH={0}
-        overflow={{ base: "visible", lg: "hidden" }}
-      >
-        <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" height="100%" minH={0}>
+      <Box flex="1" minH={0} display="flex" flexDirection="column">
+        <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" flex="1" minH={0}>
           <Box flex={{ lg: 4 }} minW={0} overflowY={{ base: "visible", lg: "auto" }} minH={0}>
             <Stack spaceY={1}>
               {sortedTopics.map((t) => (
@@ -146,7 +141,7 @@ export default function DiscussionPage() {
             </Stack>
           </Box>
 
-          <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
+          <Box flex={{ base: 1, lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
             <HStack justify="space-between" align="center" mb="4" flexShrink={0}>
               <Heading size="md">{selectedTopic?.topic ?? "Select a topic"}</Heading>
             </HStack>
@@ -158,23 +153,21 @@ export default function DiscussionPage() {
               rounded="md"
               overflow="hidden"
               minH={0}
+              flex="1"
               display="flex"
               flexDirection="column"
             >
-              <Box
-                overflowY={
-                  browseThreads.length > 24 ? { base: "visible", lg: "visible" } : { base: "visible", lg: "auto" }
-                }
-                minH={0}
-              >
-                {browseThreads.length === 0 ? (
-                  <Text px="4" py="3" color="fg.muted" fontSize="sm">
-                    No posts match your criteria.
-                  </Text>
-                ) : (
-                  <VirtualizedPostRowList threadIds={browseThreads.map((t) => t.id)} courseId={Number(course_id)} />
-                )}
-              </Box>
+              {browseThreads.length === 0 ? (
+                <Text px="4" py="3" color="fg.muted" fontSize="sm">
+                  No posts match your criteria.
+                </Text>
+              ) : (
+                <VirtualizedPostRowList
+                  threadIds={browseThreads.map((t) => t.id)}
+                  courseId={Number(course_id)}
+                  fillHeight
+                />
+              )}
             </Box>
           </Box>
         </Flex>

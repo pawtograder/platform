@@ -11,9 +11,14 @@ const VIRTUALIZE_THRESHOLD = 24;
 type Props = {
   threadIds: number[];
   courseId: number;
-  /** Max height of the scroll region (Chakra token or CSS length). */
+  /** Max height of the scroll region (Chakra token or CSS length). Ignored when `fillHeight` is true. */
   maxHeight?: string;
   estimateRowHeight?: number;
+  /**
+   * When true, the virtualized list grows with the parent flex column (e.g. browse-by-topic)
+   * instead of using a capped max-height and its own tiny scroll viewport.
+   */
+  fillHeight?: boolean;
 };
 
 /**
@@ -24,7 +29,8 @@ export function VirtualizedPostRowList({
   threadIds,
   courseId,
   maxHeight = "min(70vh, 560px)",
-  estimateRowHeight = DEFAULT_ROW_HEIGHT
+  estimateRowHeight = DEFAULT_ROW_HEIGHT,
+  fillHeight = false
 }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -46,7 +52,12 @@ export function VirtualizedPostRowList({
   }
 
   return (
-    <Box ref={parentRef} overflowY="auto" maxH={maxHeight} minH="120px" css={{ contain: "strict" }}>
+    <Box
+      ref={parentRef}
+      overflowY="auto"
+      {...(fillHeight ? { flex: 1, minH: 0, minW: 0 } : { maxH: maxHeight, minH: "120px" })}
+      css={{ contain: "strict" }}
+    >
       <Box height={`${rowVirtualizer.getTotalSize()}px`} position="relative" width="100%">
         {rowVirtualizer.getVirtualItems().map((vi) => (
           <Box
