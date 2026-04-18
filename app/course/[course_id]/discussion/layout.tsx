@@ -62,9 +62,18 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
         discussionBaseHref={discussionBaseHref}
         currentThread={currentThread}
       />
-      <Box flex="1" minH="0" overflow="auto" px={{ base: 3, md: 6 }} pt={{ base: 3, md: 6 }} pb="80px">
+      <Box
+        flex="1"
+        minH={0}
+        overflow="auto"
+        px={{ base: 3, md: 6 }}
+        pt={{ base: 3, md: 6 }}
+        pb="80px"
+        display="flex"
+        flexDirection="column"
+      >
         {threadId ? (
-          <Flex direction="row" gap={{ base: 3, lg: 6 }} align="stretch">
+          <Flex direction="row" gap={{ base: 3, lg: 6 }} align="stretch" flex="1" minH={0}>
             <Box
               flex={{ lg: showFullSidebar ? 4 : "unset" }}
               width={{ base: "52px", lg: showFullSidebar ? "auto" : "52px" }}
@@ -79,7 +88,7 @@ const DiscussionLayout = ({ children }: Readonly<{ children: React.ReactNode }>)
                 }}
               />
             </Box>
-            <Box flex={{ lg: 8 }} minW={0}>
+            <Box flex={{ base: 1, lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
               {children}
             </Box>
           </Flex>
