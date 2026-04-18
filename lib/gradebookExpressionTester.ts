@@ -528,6 +528,17 @@ export function evaluateRenderExpression(
       }
       return "Error";
     }) as ImportFunction;
+    // Mirror the security guards used by the live gradebook cell renderer in
+    // `GradebookController._getSharedMath()`: block MathJS surface that could
+    // let a render expression redefine operators, pull arbitrary modules, or
+    // reshape the parser. This keeps the preview behaviour aligned with what
+    // the rendered cell will actually do, so instructors can't save an
+    // expression here that the real renderer would reject at runtime.
+    for (const name of ["import", "createUnit", "reviver", "resolve"]) {
+      imports[name] = (() => {
+        throw new Error(`${name} is not allowed`);
+      }) as ImportFunction;
+    }
     localMath.import(imports, { override: true });
 
     const full = (prefix ? prefix + "\n" : "") + raw;
@@ -701,19 +712,64 @@ export function evaluateForStudent(params: {
       `\\b(${CONTEXT_FUNCTIONS.map((fn) => fn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\(context,\\s*`,
       "g"
     );
-    // Use the parsed AST's own `toString()` as the haystack for position
-    // lookups instead of the user's raw input. mathjs normalises string
-    // literals (e.g. single → double quotes) when stringifying, so the
-    // subnode `pretty` strings only match reliably against the same
-    // normalised form — using the raw `trimmed` input produces `-1` spans
-    // for any expression that contains a quoted slug.
-    const canonicalExpression = parsed.toString().replace(contextArgStrip, "$1(");
+    // `start`/`end` on each intermediate need to be positions in the USER'S
+    // raw input (`trimmed`) so the UI can overlay annotations on the exact
+    // substring the user typed. MathJS's `node.toString()` normalises
+    // formatting (single → double quotes, canonical operator spacing, etc.),
+    // so the `pretty` we derive from `node.toString()` may not be a literal
+    // substring of `trimmed`. We try a few variants to locate it, and fall
+    // back to `-1` when no mapping exists — that's the documented contract
+    // and the UI falls back cleanly (the per-line annotation path doesn't
+    // depend on positions at all).
+    //
     // Walk source positions greedily so repeated subexpressions (e.g.
     // `gradebook_columns("hw-1") + gradebook_columns("hw-1")`) get DISTINCT
-    // spans. Without this, `indexOf(pretty)` always hands back the first
-    // occurrence, both instances land on `start=0` / `end=len(pretty)`, and
-    // the dedupe loop below collapses them into one entry.
+    // spans: `indexOf(pretty)` alone would always return the first
+    // occurrence, collapsing both instances into one dedup entry.
     const nextSearchFromBySource = new Map<string, number>();
+    /**
+     * Locate `pretty` inside the user's raw input (`trimmed`) starting at
+     * `searchFrom`. Returns `{ start, end }` indices into `trimmed`, or
+     * `{ start: -1, end: -1 }` when no mapping exists. Tries three
+     * progressively more forgiving matches so mathjs's formatting
+     * normalisation (e.g. `'hw-1'` → `"hw-1"`, `score*2` → `score * 2`)
+     * doesn't drop otherwise-valid spans.
+     */
+    const findRawSpan = (pretty: string, searchFrom: number): { start: number; end: number } => {
+      // 1. Literal match against the user's typed text.
+      let idx = trimmed.indexOf(pretty, searchFrom);
+      if (idx >= 0) return { start: idx, end: idx + pretty.length };
+      // 2. Swap mathjs-canonical double quotes for single quotes — common
+      //    when the user typed `'hw-1'` but mathjs stringified as `"hw-1"`.
+      if (pretty.includes('"')) {
+        const singleQuoted = pretty.replace(/"/g, "'");
+        idx = trimmed.indexOf(singleQuoted, searchFrom);
+        if (idx >= 0) return { start: idx, end: idx + singleQuoted.length };
+      }
+      // 3. Strip all whitespace and compare, character-by-character,
+      //    tolerating different whitespace in `trimmed`. This catches
+      //    `score*2` ↔ `score * 2`-style operator-spacing normalisation
+      //    without needing a second parser. Returns the exact raw span
+      //    (including any whitespace inside the matching run).
+      const squished = pretty.replace(/\s+/g, "");
+      if (squished !== pretty && squished.length > 0) {
+        for (let start = searchFrom; start + squished.length <= trimmed.length; start++) {
+          let i = start;
+          let j = 0;
+          while (i < trimmed.length && j < squished.length) {
+            if (/\s/.test(trimmed[i])) {
+              i++;
+              continue;
+            }
+            if (trimmed[i] !== squished[j]) break;
+            i++;
+            j++;
+          }
+          if (j === squished.length) return { start, end: i };
+        }
+      }
+      return { start: -1, end: -1 };
+    };
     for (const node of collectNodes(transformed)) {
       if (!shouldCaptureNode(node)) continue;
       let source: string;
@@ -731,9 +787,9 @@ export function evaluateForStudent(params: {
       const pretty = source.replace(contextArgStrip, "$1(");
 
       const searchFrom = nextSearchFromBySource.get(pretty) ?? 0;
-      const idx = canonicalExpression.indexOf(pretty, searchFrom);
-      if (idx >= 0) {
-        nextSearchFromBySource.set(pretty, idx + pretty.length);
+      const span = findRawSpan(pretty, searchFrom);
+      if (span.start >= 0) {
+        nextSearchFromBySource.set(pretty, span.end);
       }
       let value: unknown;
       let nodeError: string | undefined;
@@ -745,8 +801,8 @@ export function evaluateForStudent(params: {
       intermediates.push({
         source: pretty,
         nodeType: node.type,
-        start: idx,
-        end: idx >= 0 ? idx + pretty.length : -1,
+        start: span.start,
+        end: span.end,
         display: nodeError ? `error: ${nodeError}` : formatValueForOverlay(value),
         raw: value,
         error: nodeError

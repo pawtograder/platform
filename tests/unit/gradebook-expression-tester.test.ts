@@ -145,5 +145,19 @@ describe("gradebook expression tester helpers", () => {
       expect(r.kind).toBe("error");
       if (r.kind === "error") expect(r.message).toBeTruthy();
     });
+
+    test("dangerous MathJS surface (import / createUnit / reviver / resolve) is blocked", () => {
+      // Mirrors the live gradebook renderer's security guard in
+      // GradebookController._getSharedMath(); the preview must reject the
+      // same names so an instructor can't save an expression here that the
+      // rendered cell would throw on at runtime.
+      for (const name of ["import", "createUnit", "reviver", "resolve"]) {
+        const r = evaluateRenderExpression(mathjs, "", `${name}("foo")`, 80, 100);
+        expect(r.kind).toBe("error");
+        if (r.kind === "error") {
+          expect(r.message).toMatch(new RegExp(`${name}\\b.*not allowed`));
+        }
+      }
+    });
   });
 });

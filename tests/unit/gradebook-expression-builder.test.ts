@@ -698,6 +698,32 @@ describe("Expression Builder — evaluateForStudent", () => {
         }
       }
     });
+
+    test("start/end map back to the RAW typed input, not the mathjs-canonical form", () => {
+      // Regression: mathjs `node.toString()` normalises `score*2` →
+      // `score * 2`, single quotes → double quotes, etc.  The tester should
+      // still report positions inside the user's exact textarea text, so the
+      // UI can overlay annotations under the right characters (and so
+      // `iv.end <= expression.length` holds even for compact input).
+      const expr = "gradebook_columns('hw-1').score*2";
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      for (const iv of r.evaluation!.intermediates) {
+        if (iv.start === -1) continue;
+        expect(iv.start).toBeGreaterThanOrEqual(0);
+        expect(iv.end).toBeGreaterThan(iv.start);
+        // Hard constraint from the reviewer: spans must fit inside the
+        // user-typed string.
+        expect(iv.end).toBeLessThanOrEqual(expr.length);
+      }
+      // `gradebook_columns('hw-1')` appears at index 0 with single quotes in
+      // the typed input — even though mathjs stringifies it with double
+      // quotes. The tester must locate it anyway.
+      const innerCall = r.evaluation!.intermediates.find((iv) => iv.source === `gradebook_columns("hw-1")`);
+      expect(innerCall).toBeDefined();
+      expect(innerCall?.start).toBe(0);
+      expect(innerCall?.end).toBe("gradebook_columns('hw-1')".length);
+    });
   });
 
   describe("formatValueForOverlay agrees with the evaluator output", () => {

@@ -869,10 +869,20 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   ) : (
                     <>
                       <Label htmlFor="scoreExpression">Score Expression</Label>
+                      {/*
+                        The HTML `disabled` attribute causes the browser to
+                        omit the field from form submission, which in turn
+                        makes react-hook-form hand back `undefined` for
+                        `scoreExpression` on submit. Passing `disabled: true`
+                        through `register()` keeps the value in the form
+                        state while still making the textarea read-only, so
+                        downstream `extractAndValidateDependencies(...)` and
+                        the Refine update call still see the persisted
+                        `assignments(...)` expression.
+                      */}
                       <Textarea
                         id="scoreExpression"
-                        disabled
-                        {...register("scoreExpression")}
+                        {...register("scoreExpression", { disabled: true })}
                         placeholder="Score Expression"
                         rows={4}
                       />
