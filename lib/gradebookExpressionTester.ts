@@ -855,17 +855,30 @@ export function evaluateForStudent(params: {
       return { kind: "continuation", lineIndex, blockIndex: entry.blockIndex } as const;
     }
     // kind === "end"
+    // Per-block evaluation (above) breaks on the first throwing block and
+    // pushes an `undefined` sentinel for it, so:
+    //   - blockIndex < blockEntries.length - 1 → successfully evaluated,
+    //     show its cached value;
+    //   - blockIndex === blockEntries.length - 1 → either the only
+    //     successful block OR the throwing one (we use `evalError` to
+    //     decide);
+    //   - blockIndex >= blockEntries.length → block never ran (earlier
+    //     statement threw and stopped evaluation); stay as a continuation.
     if (evalError) {
-      // If evaluation threw, only the statement that threw should report the
-      // error. We don't know which one, but annotating the last-evaluated
-      // line with the error is a reasonable approximation.
-      const isLastBlock = entry.blockIndex === lineMap.filter((l) => l.kind === "end").length - 1;
-      if (isLastBlock) {
+      const throwingBlockIndex = blockEntries.length - 1;
+      if (entry.blockIndex === throwingBlockIndex) {
         return { kind: "error", lineIndex, blockIndex: entry.blockIndex, display: evalError } as const;
       }
+      if (entry.blockIndex > throwingBlockIndex) {
+        return { kind: "continuation", lineIndex, blockIndex: entry.blockIndex } as const;
+      }
+      // Earlier block that completed successfully before the throw — still
+      // show its captured value. Fall through to the value case below.
+    }
+    if (entry.blockIndex >= blockEntries.length) {
       return { kind: "continuation", lineIndex, blockIndex: entry.blockIndex } as const;
     }
-    const rawValue = entry.blockIndex < blockEntries.length ? blockEntries[entry.blockIndex] : undefined;
+    const rawValue = blockEntries[entry.blockIndex];
     return {
       kind: "value",
       lineIndex,

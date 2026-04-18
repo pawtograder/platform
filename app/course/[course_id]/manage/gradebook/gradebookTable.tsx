@@ -687,6 +687,10 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         showCalculatedRanges: column.show_calculated_ranges ?? false,
         instructorOnly: column.instructor_only ?? false
       });
+      // Clear any ValidationResult cached from a previously-edited column so
+      // a stale error state can't briefly gate the Save button before
+      // ExpressionBuilder's first `onValidationChange` fires for the new one.
+      setValidation(null);
     }
   }, [columnId, column, reset]);
 

@@ -882,5 +882,33 @@ case_when([
       // And the overall `result` of the expression is the last block's value.
       expect(r.evaluation!.result).toBe("11");
     });
+
+    test("runtime error attribution pins to the block that threw, not the last source line", () => {
+      // Regression: the previous error-annotation branch used
+      //   `entry.blockIndex === lineMap.filter(l => l.kind === "end").length - 1`
+      // which measured "how many lines END a block" in the user's source —
+      // that's almost always the LAST line, even when the throwing block
+      // was one of the earlier ones.  With per-block evaluation that stops
+      // on the first error, the real throwing block is
+      // `blockEntries.length - 1`.
+      //
+      // `sum` throws on non-array input ("Sum called with non-array value").
+      // Line 1 runs and assigns T = 930, then line 2 throws. The error
+      // should be attributed to line 2, not to line 3 (which never ran).
+      const expr = `T = gradebook_columns('final-course-total').score
+BAD = sum(T)
+GOOD = T * 2`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeTruthy();
+      const lines = r.evaluation!.lineResults;
+      expect(lines[0]).toMatchObject({ kind: "value", display: "930" });
+      expect(lines[1].kind).toBe("error");
+      expect(lines[2].kind).toBe("continuation");
+      // And the error message must refer to `sum`, not to the harmless
+      // multiplication on line 3.
+      if (lines[1].kind === "error") {
+        expect(lines[1].display).toMatch(/Sum.*non-array/i);
+      }
+    });
   });
 });
