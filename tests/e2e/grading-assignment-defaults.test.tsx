@@ -2,7 +2,16 @@ import { Assignment, Course, GradingAssignmentDefaultProfile } from "@/utils/sup
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import { test, expect } from "../global-setup";
-import { createClass, createUsersInClass, insertAssignment, loginAsUser, supabase, TestingUser } from "./TestingUtils";
+import {
+  createClass,
+  createLabSectionWithStudents,
+  createUsersInClass,
+  insertAssignment,
+  insertPreBakedSubmission,
+  loginAsUser,
+  supabase,
+  TestingUser
+} from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
 
@@ -165,5 +174,154 @@ test("instructors can manage grading default profiles and apply them on assignme
     expect((persistedAssignment!.late_grading_cc_emails as { emails: string[] }).emails).toEqual([
       "updated-cc@example.edu"
     ]);
+  }).toPass({ timeout: 20_000 });
+});
+
+test("deadline automation assigns grading to lab leaders and queues reminder emails", async () => {
+  test.setTimeout(120_000);
+
+  const workflowSuffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const [labLeaderA, labLeaderB, studentA, studentB] = await createUsersInClass([
+    {
+      name: `E2E Lab Leader A ${workflowSuffix}`,
+      email: `e2e-lab-leader-a-${workflowSuffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: `E2E Lab Leader B ${workflowSuffix}`,
+      email: `e2e-lab-leader-b-${workflowSuffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: `E2E Lab Student A ${workflowSuffix}`,
+      email: `e2e-lab-student-a-${workflowSuffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: `E2E Lab Student B ${workflowSuffix}`,
+      email: `e2e-lab-student-b-${workflowSuffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    }
+  ]);
+
+  await createLabSectionWithStudents({
+    class_id: course.id,
+    day_of_week: "monday",
+    lab_leaders: [labLeaderA],
+    students: [studentA],
+    name: `E2E Auto-Assign Lab A ${workflowSuffix}`
+  });
+  await createLabSectionWithStudents({
+    class_id: course.id,
+    day_of_week: "tuesday",
+    lab_leaders: [labLeaderB],
+    students: [studentB],
+    name: `E2E Auto-Assign Lab B ${workflowSuffix}`
+  });
+
+  const autoAssignment = await insertAssignment({
+    class_id: course.id,
+    due_date: addDays(new Date(), 1).toISOString(),
+    name: `E2E Deadline Automation ${workflowSuffix}`,
+    assignment_slug: `e2e-deadline-automation-${workflowSuffix}`
+  });
+
+  const reminderCcEmails = { emails: ["lab-leaders-reminders@example.edu"] };
+  const { error: assignmentConfigError } = await supabase
+    .from("assignments")
+    .update({
+      due_date: addDays(new Date(), -1).toISOString(),
+      auto_assign_at_deadline: true,
+      auto_assign_assignee_pool: "graders",
+      auto_assign_review_due_hours: 0,
+      late_grading_reminders_enabled: true,
+      late_grading_reminder_interval_hours: 12,
+      late_grading_reply_to: "lab-leaders-reply@example.edu",
+      late_grading_cc_emails: reminderCcEmails
+    })
+    .eq("id", autoAssignment.id);
+  expect(assignmentConfigError).toBeNull();
+
+  const firstSubmission = await insertPreBakedSubmission({
+    student_profile_id: studentA.private_profile_id,
+    assignment_id: autoAssignment.id,
+    class_id: course.id
+  });
+  const secondSubmission = await insertPreBakedSubmission({
+    student_profile_id: studentB.private_profile_id,
+    assignment_id: autoAssignment.id,
+    class_id: course.id
+  });
+
+  await supabase.from("emails").delete().eq("class_id", course.id);
+  await supabase.from("email_batches").delete().eq("class_id", course.id);
+
+  const { error: runAutomationError } = await supabase.rpc("run_assignment_grading_automation");
+  expect(runAutomationError).toBeNull();
+
+  const expectedSubmissionIds = [firstSubmission.submission_id, secondSubmission.submission_id].sort((a, b) => a - b);
+  const labLeaderProfileIds = [labLeaderA.private_profile_id, labLeaderB.private_profile_id];
+
+  await expect(async () => {
+    const { data: reviewAssignments, error: reviewAssignmentsError } = await supabase
+      .from("review_assignments")
+      .select("submission_id, assignee_profile_id, completed_at, due_date")
+      .eq("assignment_id", autoAssignment.id)
+      .eq("class_id", course.id)
+      .eq("rubric_id", autoAssignment.grading_rubric_id!);
+
+    expect(reviewAssignmentsError).toBeNull();
+    expect(reviewAssignments).not.toBeNull();
+    expect(reviewAssignments!.length).toBe(2);
+    expect(reviewAssignments!.map((row) => row.submission_id).sort((a, b) => a - b)).toEqual(expectedSubmissionIds);
+    for (const row of reviewAssignments!) {
+      expect(row.completed_at).toBeNull();
+      expect(labLeaderProfileIds).toContain(row.assignee_profile_id);
+      expect(new Date(row.due_date).getTime()).toBeLessThanOrEqual(Date.now());
+    }
+  }).toPass({ timeout: 20_000 });
+
+  await expect(async () => {
+    const { data: stateRow, error: stateError } = await supabase
+      .from("assignment_grading_automation_state")
+      .select("auto_assigned_at, last_reminder_sent_at, last_reminder_recipient_count")
+      .eq("assignment_id", autoAssignment.id)
+      .single();
+
+    expect(stateError).toBeNull();
+    expect(stateRow).not.toBeNull();
+    expect(stateRow!.auto_assigned_at).not.toBeNull();
+    expect(stateRow!.last_reminder_sent_at).not.toBeNull();
+    expect(stateRow!.last_reminder_recipient_count).toBeGreaterThan(0);
+  }).toPass({ timeout: 20_000 });
+
+  await expect(async () => {
+    const { data: queuedEmails, error: queuedEmailsError } = await supabase
+      .from("emails")
+      .select("batch_id, user_id, subject, reply_to, cc_emails")
+      .eq("class_id", course.id)
+      .like("subject", `Late grading reminder: ${autoAssignment.title}%`);
+    expect(queuedEmailsError).toBeNull();
+    expect(queuedEmails).not.toBeNull();
+    expect(queuedEmails!.length).toBeGreaterThan(0);
+
+    const queuedUserIds = new Set(queuedEmails!.map((row) => row.user_id));
+    const expectedUserIds = new Set([labLeaderA.user_id, labLeaderB.user_id]);
+    for (const userId of queuedUserIds) {
+      expect(expectedUserIds.has(userId)).toBe(true);
+    }
+
+    for (const row of queuedEmails!) {
+      expect(row.reply_to).toBe("lab-leaders-reply@example.edu");
+      expect((row.cc_emails as { emails: string[] }).emails).toEqual(["lab-leaders-reminders@example.edu"]);
+    }
   }).toPass({ timeout: 20_000 });
 });
