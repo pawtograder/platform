@@ -26,14 +26,20 @@ export default function DiscussionPage() {
   const topics = useDiscussionTopics();
   const threads = useDiscussionThreadTeasers();
 
-  const [discussionDataReady, setDiscussionDataReady] = useState(false);
+  const [discussionDataReady, setDiscussionDataReady] = useState(
+    () => controller.discussionTopics.ready && controller.discussionThreadTeasers.ready
+  );
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([controller.discussionTopics.readyPromise, controller.discussionThreadTeasers.readyPromise]).then(
-      () => {
+    void Promise.all([controller.discussionTopics.readyPromise, controller.discussionThreadTeasers.readyPromise])
+      .then(() => {
         if (!cancelled) setDiscussionDataReady(true);
-      }
-    );
+      })
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console -- surface load failures; page must not stay on skeleton forever
+        console.error("DiscussionPage: failed waiting for discussion data", err);
+        if (!cancelled) setDiscussionDataReady(true);
+      });
     return () => {
       cancelled = true;
     };
