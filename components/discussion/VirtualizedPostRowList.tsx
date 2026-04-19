@@ -32,31 +32,31 @@ export function VirtualizedPostRowList({
   estimateRowHeight = DEFAULT_ROW_HEIGHT,
   fillHeight = false
 }: Props) {
-  const parentRef = useRef<HTMLDivElement>(null);
+  const listRootRef = useRef<HTMLDivElement>(null);
 
   const rowVirtualizer = useVirtualizer({
     count: threadIds.length,
-    getScrollElement: () => parentRef.current,
+    getScrollElement: () => listRootRef.current,
     estimateSize: () => estimateRowHeight,
     overscan: 6
   });
 
   if (threadIds.length <= VIRTUALIZE_THRESHOLD) {
     return (
-      <>
+      <Box ref={listRootRef} width="100%" {...(fillHeight ? { flex: 1, minH: 0, minW: 0, overflowY: "auto" } : {})}>
         {threadIds.map((id) => (
           <PostRow key={id} threadId={id} href={`/course/${courseId}/discussion/${id}`} />
         ))}
-      </>
+      </Box>
     );
   }
 
   return (
     <Box
-      ref={parentRef}
+      ref={listRootRef}
       overflowY="auto"
       {...(fillHeight ? { flex: 1, minH: 0, minW: 0 } : { maxH: maxHeight, minH: "120px" })}
-      css={{ contain: "strict" }}
+      css={{ contain: "layout paint" }}
     >
       <Box height={`${rowVirtualizer.getTotalSize()}px`} position="relative" width="100%">
         {rowVirtualizer.getVirtualItems().map((vi) => (

@@ -220,10 +220,10 @@ export default function DiscussionPage() {
 
   // My Feed
   return (
-    <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch">
-      <Box flex={{ lg: 8 }} minW={0}>
-        <Stack spaceY={4}>
-          <HStack justify="space-between" align="center">
+    <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" flex="1" minH={0}>
+      <Box flex={{ base: 1, lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
+        <Stack spaceY={4} flex="1" minH={0}>
+          <HStack justify="space-between" align="center" flexShrink={0}>
             <Heading size="md">My Feed</Heading>
             <TopicFollowMultiSelect
               topics={sortedTopics}
@@ -232,14 +232,28 @@ export default function DiscussionPage() {
             />
           </HStack>
 
-          <Box borderWidth="1px" borderColor="border.emphasized" bg="bg.panel" rounded="md" overflow="hidden">
+          <Box
+            borderWidth="1px"
+            borderColor="border.emphasized"
+            bg="bg.panel"
+            rounded="md"
+            overflow="hidden"
+            flex="1"
+            minH={0}
+            display="flex"
+            flexDirection="column"
+          >
             {feedThreads.length === 0 ? (
               <Text px="4" py="3" color="fg.muted" fontSize="sm">
                 Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here. Followed posts and
                 topics will appear in My Feed.
               </Text>
             ) : (
-              <VirtualizedPostRowList threadIds={feedThreads.map((t) => t.id)} courseId={Number(course_id)} />
+              <VirtualizedPostRowList
+                threadIds={feedThreads.map((t) => t.id)}
+                courseId={Number(course_id)}
+                fillHeight
+              />
             )}
           </Box>
         </Stack>
