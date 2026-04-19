@@ -114,6 +114,8 @@ import {
 } from "react-icons/lu";
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
 import { WhatIf } from "../../gradebook/whatIf";
+import { ExpressionBuilder, shouldBlockSave } from "@/app/course/[course_id]/manage/gradebook/expressionBuilder";
+import type { ValidationResult } from "@/lib/gradebookExpressionTester";
 import GradebookCell from "./gradebookCell";
 import { GradebookPopoverProvider, useGradebookPopover } from "./GradebookPopoverProvider";
 import ImportGradebookColumn from "./importGradebookColumn";
@@ -407,6 +409,8 @@ function AddColumnDialog() {
     register,
     handleSubmit,
     reset,
+    setValue,
+    watch,
     formState: { errors }
   } = useForm<FormValues>({
     defaultValues: {
@@ -419,16 +423,29 @@ function AddColumnDialog() {
       instructorOnly: false
     }
   });
-  const scoreExpressionRegister = register("scoreExpression");
+  const scoreExpression = watch("scoreExpression") ?? "";
+  const renderExpressionValue = watch("renderExpression") ?? "";
+  const maxScoreValue = watch("maxScore");
+  const [isExpressionBuilderExpanded, setIsExpressionBuilderExpanded] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
 
   // Reset form when dialog opens/closes
   useEffect(() => {
     if (!isOpen) {
       reset();
+      setIsExpressionBuilderExpanded(false);
+      setValidation(null);
     }
   }, [isOpen, reset]);
 
   const onSubmit = async (data: FieldValues) => {
+    if (shouldBlockSave(validation, data.scoreExpression)) {
+      toaster.error({
+        title: "Invalid score expression",
+        description: validation?.parseError || validation?.dependencyError || "Fix the expression before saving."
+      });
+      return;
+    }
     setIsLoading(true);
     try {
       const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", -1);
@@ -471,7 +488,13 @@ function AddColumnDialog() {
   };
 
   return (
-    <Dialog.Root open={isOpen} size={"md"} placement={"center"} lazyMount unmountOnExit>
+    <Dialog.Root
+      open={isOpen}
+      size={isExpressionBuilderExpanded ? "cover" : "md"}
+      placement={"center"}
+      lazyMount
+      unmountOnExit
+    >
       <Dialog.Trigger asChild>
         <Button variant="surface" size="sm" colorPalette="green" onClick={() => setIsOpen(true)}>
           <Icon as={FiPlus} mr={2} /> Add Column
@@ -480,7 +503,7 @@ function AddColumnDialog() {
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content>
+          <Dialog.Content maxW={isExpressionBuilderExpanded ? "100vw" : undefined}>
             <Dialog.Header>
               <Dialog.Title>Add Column</Dialog.Title>
             </Dialog.Header>
@@ -548,8 +571,19 @@ function AddColumnDialog() {
                   )}
                 </Box>
                 <Box>
-                  <Label htmlFor="scoreExpression">Score Expression</Label>
-                  <Textarea id="scoreExpression" {...scoreExpressionRegister} placeholder="Score Expression" rows={4} />
+                  <ExpressionBuilder
+                    expression={scoreExpression}
+                    onExpressionChange={(val) =>
+                      setValue("scoreExpression", val, { shouldDirty: true, shouldValidate: true })
+                    }
+                    editingColumnId={null}
+                    isExpanded={isExpressionBuilderExpanded}
+                    onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
+                    math={null}
+                    renderExpression={renderExpressionValue}
+                    maxScore={Number.isFinite(Number(maxScoreValue)) ? Number(maxScoreValue) : null}
+                    onValidationChange={setValidation}
+                  />
                   {errors.scoreExpression && (
                     <Text color="red.500" fontSize="sm">
                       {errors.scoreExpression.message as string}
@@ -573,7 +607,12 @@ function AddColumnDialog() {
                   </Checkbox>
                 </Box>
                 <HStack justifyContent="flex-end">
-                  <Button type="submit" colorPalette="green" loading={isLoading}>
+                  <Button
+                    type="submit"
+                    colorPalette="green"
+                    loading={isLoading}
+                    disabled={shouldBlockSave(validation, scoreExpression)}
+                  >
                     Save
                   </Button>
                   <Button type="button" variant="ghost" onClick={onClose}>
@@ -613,6 +652,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     handleSubmit,
     reset,
     setError,
+    setValue,
     watch,
     formState: { errors }
   } = useForm<FormValues>({
@@ -628,7 +668,11 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     }
   });
 
-  const scoreExpression = watch("scoreExpression");
+  const scoreExpression = watch("scoreExpression") ?? "";
+  const renderExpressionValue = watch("renderExpression") ?? "";
+  const maxScoreValue = watch("maxScore");
+  const [isExpressionBuilderExpanded, setIsExpressionBuilderExpanded] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
 
   useEffect(() => {
     if (column) {
@@ -643,17 +687,38 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         showCalculatedRanges: column.show_calculated_ranges ?? false,
         instructorOnly: column.instructor_only ?? false
       });
+      // Clear any ValidationResult cached from a previously-edited column so
+      // a stale error state can't briefly gate the Save button before
+      // ExpressionBuilder's first `onValidationChange` fires for the new one.
+      setValidation(null);
     }
   }, [columnId, column, reset]);
-
-  const scoreExpressionRegister = register("scoreExpression");
 
   if (!columnId) return null;
   if (!column) throw new Error(`Column ${columnId} not found`);
 
-  const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
+  // Pin the "is this column assignment-backed?" gate to the column's
+  // PERSISTED score expression, not the live-watched form value. Otherwise
+  // the moment an instructor types `assignments(` while editing a regular
+  // column, `canEditScoreExpression` flips to `false`, ExpressionBuilder
+  // unmounts mid-edit, and the instructor loses the full-screen state
+  // (expanded mode, selected student, and the mathjs / intermediate
+  // annotations that had already loaded).
+  const canEditScoreExpression = !(column.score_expression?.startsWith("assignments(") ?? false);
 
   const onSubmit = async (data: FieldValues) => {
+    // When the score expression is not user-editable (assignment-backed
+    // columns), ExpressionBuilder is not mounted, so `validation` never
+    // updates. Skipping the client-side guard in that case lets instructors
+    // save metadata-only edits (name, description, max_score, etc.); the
+    // server-side extractAndValidateDependencies below still runs.
+    if (canEditScoreExpression && shouldBlockSave(validation, data.scoreExpression)) {
+      toaster.error({
+        title: "Invalid score expression",
+        description: validation?.parseError || validation?.dependencyError || "Fix the score expression before saving."
+      });
+      return;
+    }
     toaster.create({
       title: "Saving...",
       description: "This may take a few seconds to recalculate...",
@@ -708,13 +773,19 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   };
 
   return (
-    <Dialog.Root open={true} size={"md"} placement={"center"} lazyMount unmountOnExit>
+    <Dialog.Root
+      open={true}
+      size={isExpressionBuilderExpanded ? "cover" : "md"}
+      placement={"center"}
+      lazyMount
+      unmountOnExit
+    >
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content>
+          <Dialog.Content maxW={isExpressionBuilderExpanded ? "100vw" : undefined}>
             <Dialog.Header>
-              <Dialog.Title>Edit Column</Dialog.Title>
+              <Dialog.Title>Edit Column{isExpressionBuilderExpanded ? " — Expression Builder" : ""}</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body as="form" onSubmit={handleSubmit(onSubmit)}>
               <VStack gap={3} align="stretch">
@@ -785,14 +856,42 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   )}
                 </Box>
                 <Box>
-                  <Label htmlFor="scoreExpression">Score Expression</Label>
-                  <Textarea
-                    id="scoreExpression"
-                    disabled={!canEditScoreExpression}
-                    {...scoreExpressionRegister}
-                    placeholder="Score Expression"
-                    rows={4}
-                  />
+                  {canEditScoreExpression ? (
+                    <ExpressionBuilder
+                      expression={scoreExpression}
+                      onExpressionChange={(val) =>
+                        setValue("scoreExpression", val, { shouldDirty: true, shouldValidate: true })
+                      }
+                      editingColumnId={columnId}
+                      isExpanded={isExpressionBuilderExpanded}
+                      onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
+                      math={null}
+                      renderExpression={renderExpressionValue}
+                      maxScore={Number.isFinite(Number(maxScoreValue)) ? Number(maxScoreValue) : null}
+                      onValidationChange={setValidation}
+                    />
+                  ) : (
+                    <>
+                      <Label htmlFor="scoreExpression">Score Expression</Label>
+                      {/*
+                        Use `readOnly` instead of `disabled` — a bare HTML
+                        `disabled` attribute tells the browser to omit the
+                        field from form submission (react-hook-form then
+                        hands `undefined` back to `onSubmit`, which would
+                        wipe the persisted `assignments(...)` expression
+                        when the instructor saves a metadata-only edit).
+                        `readOnly` keeps the field non-editable while still
+                        letting react-hook-form read the registered value.
+                      */}
+                      <Textarea
+                        id="scoreExpression"
+                        readOnly
+                        {...register("scoreExpression")}
+                        placeholder="Score Expression"
+                        rows={4}
+                      />
+                    </>
+                  )}
                   {errors.scoreExpression && (
                     <Text color="red.500" fontSize="sm">
                       {errors.scoreExpression.message as string}
@@ -833,7 +932,12 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   </Text>
                 )}
                 <HStack justifyContent="flex-end">
-                  <Button type="submit" colorPalette="green" loading={isLoading}>
+                  <Button
+                    type="submit"
+                    colorPalette="green"
+                    loading={isLoading}
+                    disabled={canEditScoreExpression && shouldBlockSave(validation, scoreExpression)}
+                  >
                     Save
                   </Button>
                   <Button type="button" variant="ghost" onClick={onClose}>
