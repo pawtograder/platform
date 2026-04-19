@@ -226,7 +226,8 @@ BEGIN
   END IF;
 
   IF v_assignment.grading_rubric_id IS NULL THEN
-    RETURN 0;
+    RAISE WARNING 'auto_assign skipped for assignment %: missing grading_rubric_id', v_assignment.id;
+    RETURN -1;
   END IF;
 
   -- bulk_assign_reviews requires an instructor auth context.
@@ -240,7 +241,8 @@ BEGIN
   LIMIT 1;
 
   IF v_actor_user_id IS NULL THEN
-    RETURN 0;
+    RAISE WARNING 'auto_assign skipped for assignment %: no active instructor', v_assignment.id;
+    RETURN -1;
   END IF;
 
   PERFORM set_config('request.jwt.claim.sub', v_actor_user_id::text, true);
@@ -262,7 +264,8 @@ BEGIN
 
   v_staff_count := COALESCE(array_length(v_staff_ids, 1), 0);
   IF v_staff_count = 0 THEN
-    RETURN 0;
+    RAISE WARNING 'auto_assign skipped for assignment %: empty assignee pool (%).', v_assignment.id, v_assignment.auto_assign_assignee_pool;
+    RETURN -1;
   END IF;
 
   v_review_due_date := v_assignment.due_date + make_interval(hours => GREATEST(v_assignment.auto_assign_review_due_hours, 0));
