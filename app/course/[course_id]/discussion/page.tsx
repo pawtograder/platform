@@ -7,6 +7,7 @@ import { TopicFollowMultiSelect } from "@/components/discussion/TopicFollowMulti
 import { useFollowedDiscussionTopicIds, useTopicFollowActions } from "@/hooks/useDiscussionTopicFollow";
 import { useCourseController, useDiscussionThreadTeasers, useDiscussionTopics } from "@/hooks/useCourseController";
 import { useTableControllerTableValues } from "@/lib/TableController";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Box, Flex, Heading, HStack, Stack, Text } from "@chakra-ui/react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -24,6 +25,25 @@ export default function DiscussionPage() {
   const controller = useCourseController();
   const topics = useDiscussionTopics();
   const threads = useDiscussionThreadTeasers();
+
+  const [discussionDataReady, setDiscussionDataReady] = useState(
+    () => controller.discussionTopics.ready && controller.discussionThreadTeasers.ready
+  );
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([controller.discussionTopics.readyPromise, controller.discussionThreadTeasers.readyPromise])
+      .then(() => {
+        if (!cancelled) setDiscussionDataReady(true);
+      })
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console -- surface load failures; page must not stay on skeleton forever
+        console.error("DiscussionPage: failed waiting for discussion data", err);
+        if (!cancelled) setDiscussionDataReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [controller]);
 
   const followedTopicIds = useFollowedDiscussionTopicIds();
   const { setTopicFollowStatusForId } = useTopicFollowActions();
@@ -113,15 +133,39 @@ export default function DiscussionPage() {
       });
   }, [q, selectedTopicId, threads]);
 
+  if (!discussionDataReady) {
+    return (
+      <Box flex="1" minH={0} display="flex" flexDirection="column" aria-busy="true" aria-live="polite">
+        <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} flex="1" minH={0} align="stretch">
+          <Box flex={{ lg: 4 }} minW={0}>
+            <Stack spaceY={2}>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} height="72px" borderRadius="md" />
+              ))}
+            </Stack>
+          </Box>
+          <Box flex={{ base: 1, lg: 8 }} minW={0} display="flex" flexDirection="column">
+            <Skeleton height="32px" width="min(240px, 55%)" mb="4" borderRadius="md" />
+            <Box
+              flex="1"
+              minH="min(320px, 50dvh)"
+              borderWidth="1px"
+              borderColor="border.emphasized"
+              rounded="md"
+              overflow="hidden"
+            >
+              <Skeleton height="100%" minH="200px" borderRadius="md" />
+            </Box>
+          </Box>
+        </Flex>
+      </Box>
+    );
+  }
+
   if (view === "browse") {
     return (
-      <Box
-        // On desktop, turn browse view into a split-pane with independent scroll areas.
-        height={{ base: "auto", lg: "100%" }}
-        minH={0}
-        overflow={{ base: "visible", lg: "hidden" }}
-      >
-        <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" height="100%" minH={0}>
+      <Box flex="1" minH={0} display="flex" flexDirection="column">
+        <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" flex="1" minH={0}>
           <Box flex={{ lg: 4 }} minW={0} overflowY={{ base: "visible", lg: "auto" }} minH={0}>
             <Stack spaceY={1}>
               {sortedTopics.map((t) => (
@@ -146,7 +190,7 @@ export default function DiscussionPage() {
             </Stack>
           </Box>
 
-          <Box flex={{ lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
+          <Box flex={{ base: 1, lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
             <HStack justify="space-between" align="center" mb="4" flexShrink={0}>
               <Heading size="md">{selectedTopic?.topic ?? "Select a topic"}</Heading>
             </HStack>
@@ -158,23 +202,21 @@ export default function DiscussionPage() {
               rounded="md"
               overflow="hidden"
               minH={0}
+              flex="1"
               display="flex"
               flexDirection="column"
             >
-              <Box
-                overflowY={
-                  browseThreads.length > 24 ? { base: "visible", lg: "visible" } : { base: "visible", lg: "auto" }
-                }
-                minH={0}
-              >
-                {browseThreads.length === 0 ? (
-                  <Text px="4" py="3" color="fg.muted" fontSize="sm">
-                    No posts match your criteria.
-                  </Text>
-                ) : (
-                  <VirtualizedPostRowList threadIds={browseThreads.map((t) => t.id)} courseId={Number(course_id)} />
-                )}
-              </Box>
+              {browseThreads.length === 0 ? (
+                <Text px="4" py="3" color="fg.muted" fontSize="sm">
+                  No posts match your criteria.
+                </Text>
+              ) : (
+                <VirtualizedPostRowList
+                  threadIds={browseThreads.map((t) => t.id)}
+                  courseId={Number(course_id)}
+                  fillHeight
+                />
+              )}
             </Box>
           </Box>
         </Flex>
@@ -184,10 +226,10 @@ export default function DiscussionPage() {
 
   // My Feed
   return (
-    <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch">
-      <Box flex={{ lg: 8 }} minW={0}>
-        <Stack spaceY={4}>
-          <HStack justify="space-between" align="center">
+    <Flex direction={{ base: "column", lg: "row" }} gap={{ base: 4, lg: 6 }} align="stretch" flex="1" minH={0}>
+      <Box flex={{ base: 1, lg: 8 }} minW={0} minH={0} display="flex" flexDirection="column">
+        <Stack spaceY={4} flex="1" minH={0}>
+          <HStack justify="space-between" align="center" flexShrink={0}>
             <Heading size="md">My Feed</Heading>
             <TopicFollowMultiSelect
               topics={sortedTopics}
@@ -196,14 +238,28 @@ export default function DiscussionPage() {
             />
           </HStack>
 
-          <Box borderWidth="1px" borderColor="border.emphasized" bg="bg.panel" rounded="md" overflow="hidden">
+          <Box
+            borderWidth="1px"
+            borderColor="border.emphasized"
+            bg="bg.panel"
+            rounded="md"
+            overflow="hidden"
+            flex="1"
+            minH={0}
+            display="flex"
+            flexDirection="column"
+          >
             {feedThreads.length === 0 ? (
               <Text px="4" py="3" color="fg.muted" fontSize="sm">
                 Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here. Followed posts and
                 topics will appear in My Feed.
               </Text>
             ) : (
-              <VirtualizedPostRowList threadIds={feedThreads.map((t) => t.id)} courseId={Number(course_id)} />
+              <VirtualizedPostRowList
+                threadIds={feedThreads.map((t) => t.id)}
+                courseId={Number(course_id)}
+                fillHeight
+              />
             )}
           </Box>
         </Stack>
