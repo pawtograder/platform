@@ -20,6 +20,7 @@ AS $$
 DECLARE
   r RECORD;
 BEGIN
+  SET LOCAL search_path TO public, pg_temp;
   -- Individual submissions with changed totals, released flag, or per-student score maps
   FOR r IN (
     SELECT DISTINCT gcs.class_id, gcs.gradebook_id, gcs.student_id, gcs.is_private
