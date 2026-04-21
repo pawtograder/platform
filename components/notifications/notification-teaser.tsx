@@ -12,14 +12,22 @@ import Markdown from "../ui/markdown";
 export type NotificationEnvelope = { type: string };
 export type DiscussionThreadNotification = NotificationEnvelope & {
   type: "discussion_thread";
-  new_comment_number: number;
-  new_comment_id: number;
+  action?: "new_post" | "reply" | "marked_duplicate";
+  new_comment_number?: number;
+  new_comment_id?: number;
   root_thread_id: number;
-  reply_author_profile_id: string;
-  teaser: string;
+  reply_author_profile_id?: string;
+  teaser?: string;
 
-  thread_name: string;
-  reply_author_name: string;
+  thread_name?: string;
+  reply_author_name?: string;
+  /** When action === "marked_duplicate" */
+  duplicate_thread_id?: number;
+  original_thread_subject?: string;
+  duplicate_original_subject?: string;
+  marked_by_user_id?: string;
+  marked_by_name?: string;
+  duplicate_thread_ordinal?: number;
 };
 
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {
@@ -345,7 +353,27 @@ function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notifi
 function DiscussionThreadReplyNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as DiscussionThreadNotification;
   const rootThread = useDiscussionThreadTeaser(body.root_thread_id, ["ordinal", "subject", "class_id"]);
-  const author = useUserProfile(body.reply_author_profile_id);
+  const author = useUserProfile(body.reply_author_profile_id ?? "");
+
+  if (body.action === "marked_duplicate") {
+    const dupSubject = body.duplicate_original_subject ?? "your post";
+    const origSubject = body.original_thread_subject ?? rootThread?.subject ?? "another thread";
+    const staffName = body.marked_by_name ?? "Course staff";
+    return (
+      <HStack align="flex-start" gap="3">
+        <Box flexShrink="0" p="2" bg="orange.subtle" borderRadius="md">
+          <Text fontSize="xs" fontWeight="bold">
+            Duplicate
+          </Text>
+        </Box>
+        <VStack align="flex-start" gap="1" flex="1">
+          <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+            {`**${staffName}** marked your post **${dupSubject}** as a duplicate of **${origSubject}** and merged it into that thread.`}
+          </Markdown>
+        </VStack>
+      </HStack>
+    );
+  }
 
   if (!author || !rootThread) {
     return <Skeleton height="40px" width="100%" />;
@@ -574,6 +602,11 @@ function getNotificationUrl(notification: Notification, course_id: string): stri
     return `/course/${course_id}/assignments/${assignmentBody.assignment_id}`;
   } else if (body.type === "discussion_thread") {
     const discussionBody = body as DiscussionThreadNotification;
+    if (discussionBody.action === "marked_duplicate") {
+      const ord = discussionBody.duplicate_thread_ordinal;
+      const replyIdx = ord != null ? `#post-${ord}` : "";
+      return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
+    }
     const replyIdx = discussionBody.new_comment_number ? `#post-${discussionBody.new_comment_number}` : "";
     return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
   } else if (body.type === "course_enrollment") {
