@@ -11,6 +11,7 @@ import {
   TestingUser,
   supabase
 } from "@/tests/e2e/TestingUtils";
+import { assertStudentPageAccessible } from "@/tests/e2e/axeStudentA11y";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -127,5 +128,6 @@ test.describe("Gifted tokens bug (#648)", () => {
 
     const expectedDueDate = addHours(new TZDate(lastAssignment.due_date, "America/New_York"), 24);
     await expect(page.getByText(getDueDateString(expectedDueDate))).toBeVisible();
+    await assertStudentPageAccessible(page, "gifted tokens after extend due date");
   });
 });

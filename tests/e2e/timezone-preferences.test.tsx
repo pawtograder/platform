@@ -2,6 +2,7 @@ import { type Course } from "@/utils/supabase/DatabaseTypes";
 import dotenv from "dotenv";
 import { expect, test } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, type TestingUser } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local" });
 
@@ -53,6 +54,7 @@ test.describe("Time zone dialog and indicator", () => {
     expect(pref).toBe("browser");
 
     await expect(page.getByRole("button", { name: /Local Time Zone \(.+\)/ })).toBeVisible();
+    await assertStudentPageAccessible(page, "timezone preference local selected");
   });
 
   test("Preference persists across page reloads", async ({ page }) => {
@@ -68,6 +70,7 @@ test.describe("Time zone dialog and indicator", () => {
 
     const pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBe("browser");
+    await assertStudentPageAccessible(page, "timezone preference persisted reload");
   });
 
   test("Indicator opens dialog and toggles back to course time zone", async ({ page }) => {
@@ -96,6 +99,7 @@ test.describe("Time zone dialog and indicator", () => {
 
     pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBe("course");
+    await assertStudentPageAccessible(page, "timezone preference course selected");
   });
   test("Manually setting localStorage prevents dialog from showing", async ({ context }) => {
     // Create a new context to simulate a fresh browser session
@@ -114,6 +118,7 @@ test.describe("Time zone dialog and indicator", () => {
 
     // Indicator should show Course Time Zone
     await expect(newPage.getByRole("button", { name: /Course Time Zone \(.+\)/ })).toBeVisible();
+    await assertStudentPageAccessible(newPage, "timezone pref from localStorage no dialog");
 
     await newPage.close();
   });
@@ -138,6 +143,7 @@ test.describe("Time zone dialog and indicator", () => {
     // Should default to course timezone
     const pref = await newPage.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBeNull(); // No preference needed when they match
+    await assertStudentPageAccessible(newPage, "timezone browser matches course");
 
     await contextWithNYTime.close();
   });

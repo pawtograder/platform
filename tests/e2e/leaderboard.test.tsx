@@ -11,6 +11,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local" });
 
@@ -126,6 +127,7 @@ test.describe("Assignment Leaderboard", () => {
     // Verify the leaderboard contains the heading and student entries
     await expect(page.getByText("Top")).toBeVisible();
     await expect(page.getByText("by autograder score")).toBeVisible();
+    await assertStudentPageAccessible(page, "leaderboard assignment page");
   });
 
   test("Student sees their own pseudonym name with 'You' badge on leaderboard", async ({ page }) => {
@@ -144,6 +146,7 @@ test.describe("Assignment Leaderboard", () => {
 
     // The first place should show gold medal emoji
     await expect(page.getByText("🥇")).toBeVisible();
+    await assertStudentPageAccessible(page, "leaderboard you badge");
   });
 
   test("Instructor sees real names in parentheses on leaderboard", async ({ page }) => {
@@ -185,6 +188,7 @@ test.describe("Assignment Leaderboard", () => {
     // Student2 is logged in, so they should not see Student1 or Student3's real names
     await expect(leaderboardArea).not.toContainText("(Leaderboard Student 1)");
     await expect(leaderboardArea).not.toContainText("(Leaderboard Student 3)");
+    await assertStudentPageAccessible(page, "leaderboard pseudonyms only");
   });
 
   test("Leaderboard shows correct score ordering", async ({ page }) => {
@@ -217,6 +221,7 @@ test.describe("Assignment Leaderboard", () => {
     const thirdRow = tableRows.nth(2);
     await expect(thirdRow.getByText("🥉")).toBeVisible();
     await expect(thirdRow.getByText("70/100")).toBeVisible();
+    await assertStudentPageAccessible(page, "leaderboard score ordering");
   });
 
   test("Leaderboard updates when new submission is created", async ({ page }) => {
@@ -252,5 +257,6 @@ test.describe("Assignment Leaderboard", () => {
     await expect(firstRow.getByText("🥇")).toBeVisible();
     await expect(firstRow.getByText("You")).toBeVisible();
     await expect(firstRow.getByText("99/100")).toBeVisible();
+    await assertStudentPageAccessible(page, "leaderboard after score update");
   });
 });

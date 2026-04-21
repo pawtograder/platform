@@ -16,6 +16,7 @@ import {
   supabase,
   createAuthenticatedClient
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 // removed unused import
 
 dotenv.config({ path: ".env.local" });
@@ -1203,6 +1204,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
     // Validate that the final grade shown is correctly calcualted
     await expect(page.getByText(`Final Grade90.8`)).toBeVisible({ timeout: 70_000 });
+    await assertStudentPageAccessible(page, "student gradebook released participation");
 
     // Now unrelease the column and verify it's hidden from student
     await loginAsUser(page, instructor!, course);
@@ -1254,6 +1256,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
     await expect(unreleasedCard).toBeVisible();
     await expect(unreleasedCard).toContainText(/In Progress/i);
+    await assertStudentPageAccessible(page, "student gradebook unreleased participation");
   });
 });
 
