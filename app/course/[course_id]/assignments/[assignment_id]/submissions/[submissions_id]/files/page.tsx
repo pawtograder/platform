@@ -38,7 +38,7 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMetaFromParts,
@@ -57,6 +57,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { useFindTableControllerValue } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -467,6 +468,8 @@ function ArtifactCommentsForm({
   }
   const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+  const isTaOnly = useIsGrader();
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
   const submissionController = useSubmissionController();
 
@@ -474,21 +477,42 @@ function ArtifactCommentsForm({
     async (message: string, author_id: string) => {
       const finalSubmissionReviewId = submissionReviewId ?? reviewContext?.id;
 
-      await submissionController.submission_artifact_comments.create({
-        submission_id: submission.id,
-        submission_artifact_id: artifact.id,
-        class_id: submission.class_id,
-        author: author_id,
-        comment: message,
-        submission_review_id: finalSubmissionReviewId ?? null,
-        released: reviewContext ? reviewContext.released : true,
-        eventually_visible: eventuallyVisible,
-        rubric_check_id: null,
-        points: null,
-        regrade_request_id: null
-      });
+      try {
+        await submissionController.submission_artifact_comments.create({
+          submission_id: submission.id,
+          submission_artifact_id: artifact.id,
+          class_id: submission.class_id,
+          author: author_id,
+          comment: message,
+          submission_review_id: finalSubmissionReviewId ?? null,
+          released: reviewContext ? reviewContext.released : true,
+          eventually_visible: eventuallyVisible,
+          rubric_check_id: null,
+          points: null,
+          regrade_request_id: null
+        });
+      } catch (error: unknown) {
+        toaster.error({
+          title: "Could not save comment",
+          description: getStudentFacingErrorMessage(error, {
+            releasedReviewGraderBlocked:
+              isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(reviewContext?.released)
+          })
+        });
+        throw error;
+      }
     },
-    [submissionController, submission, artifact, reviewContext, eventuallyVisible, submissionReviewId]
+    [
+      submissionController,
+      submission,
+      artifact,
+      reviewContext,
+      eventuallyVisible,
+      submissionReviewId,
+      isGraderOrInstructor,
+      isInstructor,
+      isTaOnly
+    ]
   );
 
   return (
@@ -531,6 +555,8 @@ function ArtifactCheckPopover({
     throw new Error("No grading review ID found");
   }
   const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);
+  const isInstructor = useIsInstructor();
+  const isTaOnly = useIsGrader();
   const rubric = useRubricWithParts(reviewContext?.rubric_id);
   const rubricCriteria = useRubricCriteriaByRubric(rubric?.id);
   const rubricChecks = useRubricChecksByRubric(rubric?.id);
@@ -787,8 +813,18 @@ function ArtifactCheckPopover({
                       regrade_request_id: null,
                       target_student_profile_id: targetEff.targetId
                     };
-                    await submissionController.submission_artifact_comments.create(values);
-                    setIsOpen(false);
+                    try {
+                      await submissionController.submission_artifact_comments.create(values);
+                      setIsOpen(false);
+                    } catch (error: unknown) {
+                      toaster.error({
+                        title: "Could not save annotation",
+                        description: getStudentFacingErrorMessage(error, {
+                          releasedReviewGraderBlocked:
+                            isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(reviewContext?.released)
+                        })
+                      });
+                    }
                   }}
                 />
               </>
