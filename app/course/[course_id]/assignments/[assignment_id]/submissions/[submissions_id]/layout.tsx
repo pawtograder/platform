@@ -53,6 +53,8 @@ import {
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
+import { formatGradingReviewScoreLines } from "@/lib/formatGradingReviewForMarkdown";
+import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { graderResultsHasAutograderTestsOrOutput, submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
@@ -868,7 +870,13 @@ function generateSubmissionMarkdown(
       const review = sub.submission_reviews;
       lines.push("### Grading Review");
       lines.push("");
-      lines.push(`- **Total Score:** ${review.total_score ?? "Not graded"}`);
+      lines.push(
+        ...formatGradingReviewScoreLines({
+          total_score: review.total_score,
+          per_student_grading_totals: review.per_student_grading_totals,
+          individual_scores: review.individual_scores
+        })
+      );
       lines.push(`- **Released:** ${review.released ? "Yes" : "No"}`);
       if (review.completed_at) {
         lines.push(`- **Completed:** ${format(new Date(review.completed_at), "MMMM d, yyyy 'at' h:mm a")}`);
@@ -1070,6 +1078,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
 }
 
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  const { private_profile_id } = useClassProfiles();
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -1192,7 +1201,12 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   <Table.Cell>
                     <Link href={link}>
                       {historical_submission.submission_reviews?.completed_at &&
-                        historical_submission.submission_reviews?.total_score +
+                        (getDisplayedGradingTotalForStudent(
+                          historical_submission.submission_reviews,
+                          private_profile_id
+                        ) ??
+                          historical_submission.submission_reviews.total_score ??
+                          "—") +
                           "/" +
                           (assignment?.total_points ?? <Skeleton height="20px" />)}
                     </Link>

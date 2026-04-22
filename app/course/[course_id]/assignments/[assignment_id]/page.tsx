@@ -11,6 +11,7 @@ import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
+import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -242,7 +243,7 @@ export default function AssignmentPage() {
                   <Table.Cell>
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
                       {submission.submission_reviews?.completed_at
-                        ? `${submission.submission_reviews?.total_score}/${assignment.total_points}`
+                        ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.total_points}`
                         : submission.is_active
                           ? "Pending"
                           : submission.is_not_graded

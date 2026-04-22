@@ -14,6 +14,7 @@ import {
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import TableController from "@/lib/TableController";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
@@ -150,19 +151,31 @@ function ScoreLink({
   );
 }
 
-/** Per-student combined total from `per_student_grading_totals`, if present. */
-function getPerStudentCombinedGradingTotal(submission: ActiveSubmissionsWithGradesForAssignment): number | null {
-  const studentId = submission.student_private_profile_id;
-  if (!studentId) return null;
+/** Per-student line from `per_student_grading_totals` only (for tooltips). */
+function getPerStudentCombinedGradingTotal(
+  submission: ActiveSubmissionsWithGradesForAssignment,
+  studentId: string
+): number | null {
   const perStudentTotals = submission.per_student_grading_totals as IndividualScores | null | undefined;
   return perStudentTotals && typeof perStudentTotals[studentId] === "number"
     ? (perStudentTotals[studentId] as number)
     : null;
 }
 
-/** Same numeric total as the Total Score column (per-student combined total, else `total_score`). */
+/** Total Score column: per_student_grading_totals, else individual_scores, else total_score (see gradebook). */
 function getDisplayedTotalScore(submission: ActiveSubmissionsWithGradesForAssignment): number | null {
-  return getPerStudentCombinedGradingTotal(submission) ?? submission.total_score ?? null;
+  const studentId = submission.student_private_profile_id;
+  if (studentId) {
+    return getDisplayedGradingTotalForStudent(
+      {
+        total_score: submission.total_score,
+        per_student_grading_totals: submission.per_student_grading_totals,
+        individual_scores: submission.individual_scores
+      },
+      studentId
+    );
+  }
+  return submission.total_score ?? null;
 }
 
 /** Total score when `student_private_profile_id` is missing (no per-student obfuscation target). */
@@ -219,7 +232,7 @@ function TotalScoreCellWithStudent({
   assignment_id: string;
   studentId: string;
 }) {
-  const perStudentCombined = getPerStudentCombinedGradingTotal(row.original);
+  const perStudentCombined = getPerStudentCombinedGradingTotal(row.original, studentId);
   const individualScores = row.original.individual_scores as IndividualScores | null | undefined;
   const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
   const isObfuscated = useObfuscatedGradesMode();
