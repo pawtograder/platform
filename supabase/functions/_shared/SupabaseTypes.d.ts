@@ -10764,6 +10764,7 @@ export type Database = {
           assignedgradername: string | null;
           assignedmetagradername: string | null;
           assignment_id: number | null;
+          assignment_group_mentor_name: string | null;
           assignment_slug: string | null;
           autograder_score: number | null;
           checked_at: string | null;

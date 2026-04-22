@@ -284,8 +284,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
 
     await page.getByRole("button", { name: "All in view" }).click();
-    await page.getByRole("button", { name: /Release \d+ selected submission/ }).click();
-    await expect(page.getByRole("button", { name: /Release \d+ selected submission/ })).toBeEnabled();
+    const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
+    await expect(releaseBtn).toBeEnabled();
+    await releaseBtn.click();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
