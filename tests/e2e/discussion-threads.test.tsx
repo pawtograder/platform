@@ -355,14 +355,10 @@ test.describe("Discussion duplicate merge (grader)", () => {
   test.describe.configure({ mode: "serial" });
   test.setTimeout(120_000);
 
-  let dupCourse: Course;
-  let dupStudent: TestingUser;
-  let dupGrader: TestingUser;
-
-  test.beforeAll(async () => {
+  test("Grader marks a thread duplicate, student sees banner and notification", async ({ page }) => {
     const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    dupCourse = await createClass({ name: `E2E discussion duplicate class ${runId}` });
-    [dupStudent, dupGrader] = await createUsersInClass([
+    const dupCourse = await createClass({ name: `E2E discussion duplicate class ${runId}` });
+    const [dupStudent, dupGrader] = await createUsersInClass([
       {
         name: "DupMerge Student",
         role: "student",
@@ -379,13 +375,6 @@ test.describe("Discussion duplicate merge (grader)", () => {
       }
     ]);
     await supabase.from("users").update({ name: "E2E Dup Grader" }).eq("user_id", dupGrader.user_id);
-  });
-
-  test.afterEach(async ({ logMagicLinksOnFailure }) => {
-    await logMagicLinksOnFailure([dupStudent, dupGrader]);
-  });
-
-  test("Grader marks a thread duplicate, student sees banner and notification", async ({ page }) => {
     const { data: topicRow, error: topicErr } = await supabase
       .from("discussion_topics")
       .select("id")
@@ -462,8 +451,8 @@ test.describe("Discussion duplicate merge (grader)", () => {
     await page.waitForURL(`**/course/${dupCourse.id}/discussion/${origThread.id}`);
 
     await expect(page.getByRole("heading", { name: "E2E Dup Original Subject" })).toBeVisible();
-    await expect(page.getByText("E2E Dup Duplicate Subject")).toBeVisible();
-    await expect(page.getByText(/E2E Dup Grader.*marked it as a duplicate/)).toBeVisible();
+    await expect(page.getByText("E2E Dup Duplicate Subject").first()).toBeVisible();
+    await expect(page.getByText(/E2E Dup Grader.*marked this as a duplicate/)).toBeVisible();
     await expect(page.getByText("A reply under the duplicate root before merge.")).toBeVisible();
 
     await loginAsUser(page, dupStudent, dupCourse);

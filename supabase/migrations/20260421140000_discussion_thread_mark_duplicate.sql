@@ -29,7 +29,7 @@ DECLARE
   v_dup_class_id bigint;
   v_dup_root bigint;
   v_dup_subject text;
-  v_dup_author_profile text;
+  v_dup_author_profile uuid;
   v_orig_class_id bigint;
   v_orig_root bigint;
   v_orig_topic_id bigint;
@@ -40,6 +40,9 @@ DECLARE
   v_dup_ordinal integer;
 BEGIN
   PERFORM set_config('search_path', 'pg_catalog, public', true);
+  -- SECURITY DEFINER still applies RLS as the invoker; disable for this body so
+  -- discussion_threads SELECT policy cannot recurse (42P17) during root/parent updates.
+  PERFORM set_config('row_security', 'off', true);
 
   IF p_duplicate_root_id = p_original_root_id THEN
     RAISE EXCEPTION 'Cannot mark a thread as a duplicate of itself'
@@ -164,7 +167,6 @@ BEGIN
         'duplicate_original_subject', v_dup_subject,
         'marked_by_user_id', auth.uid(),
         'marked_by_name', v_staff_name,
-        'duplicate_original_subject', v_dup_subject,
         'duplicate_thread_ordinal', v_dup_ordinal
       ),
       'info',

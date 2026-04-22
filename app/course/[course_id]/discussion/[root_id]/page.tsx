@@ -41,7 +41,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
       <Box w="100%" mb="3" py="2" px="3" rounded="l3" bg="orange.subtle" borderWidth="1px" borderColor="orange.muted">
         <Text fontSize="sm" color="fg.default">
           This post was originally titled <strong>{thread.duplicate_original_subject}</strong>, then{" "}
-          <strong>{thread.duplicate_marked_by_display_name}</strong> marked it as a duplicate and merged it here.
+          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and merged it here.
         </Text>
       </Box>
     ) : null;
