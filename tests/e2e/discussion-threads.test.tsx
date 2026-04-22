@@ -360,21 +360,22 @@ test.describe("Discussion duplicate merge (grader)", () => {
   let dupGrader: TestingUser;
 
   test.beforeAll(async () => {
-    dupCourse = await createClass({ name: "E2E discussion duplicate class" });
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    dupCourse = await createClass({ name: `E2E discussion duplicate class ${runId}` });
     [dupStudent, dupGrader] = await createUsersInClass([
       {
         name: "DupMerge Student",
-        email: "discussion-dup-merge-student@pawtograder.net",
         role: "student",
         class_id: dupCourse.id,
-        useMagicLink: true
+        useMagicLink: true,
+        randomSuffix: `dup-stu-${runId}`
       },
       {
         name: "DupMerge Grader",
-        email: "discussion-dup-merge-grader@pawtograder.net",
         role: "grader",
         class_id: dupCourse.id,
-        useMagicLink: true
+        useMagicLink: true,
+        randomSuffix: `dup-grd-${runId}`
       }
     ]);
     await supabase.from("users").update({ name: "E2E Dup Grader" }).eq("user_id", dupGrader.user_id);
@@ -467,6 +468,8 @@ test.describe("Discussion duplicate merge (grader)", () => {
 
     await loginAsUser(page, dupStudent, dupCourse);
     await page.goto(`/course/${dupCourse.id}/notifications`);
-    await expect(page.getByText(/E2E Dup Grader.*E2E Dup Duplicate Subject.*E2E Dup Original Subject/)).toBeVisible();
+    await expect(
+      page.getByText(/E2E Dup Grader marked "E2E Dup Duplicate Subject" as a duplicate of "E2E Dup Original Subject"/)
+    ).toBeVisible();
   });
 });
