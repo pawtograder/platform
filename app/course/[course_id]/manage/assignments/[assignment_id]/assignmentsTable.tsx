@@ -298,11 +298,17 @@ export default function AssignmentsTable({
   // Get sections and assignment data for default visibility logic
   const classSections = useClassSections();
   const hasGroups = useMemo(() => assignmentGroups.length > 0, [assignmentGroups]);
+  const hasAnyGroupMentor = useMemo(
+    () => assignmentGroups.some((g) => g.mentor_profile_id != null),
+    [assignmentGroups]
+  );
+  const showGroupMentorColumn = hasGroups && hasAnyGroupMentor;
 
   // Column visibility state with dynamic defaults
   const [columnVisibility, setColumnVisibility] = useState(() => {
     return {
       groupname: false,
+      assignment_group_mentor_name: false,
       class_section_name: false,
       lab_section_name: false,
       late_due_date: false,
@@ -322,11 +328,12 @@ export default function AssignmentsTable({
       setColumnVisibility((prev) => ({
         ...prev,
         groupname: hasGroups,
+        assignment_group_mentor_name: showGroupMentorColumn,
         class_section_name: hasMultipleClassSections,
         lab_section_name: hasLabScheduling
       }));
     }
-  }, [classSections.length, assignment, hasGroups]);
+  }, [classSections.length, assignment, hasGroups, showGroupMentorColumn]);
 
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
@@ -381,6 +388,25 @@ export default function AssignmentsTable({
         accessorKey: "groupname",
         header: "Group"
       },
+      ...(showGroupMentorColumn
+        ? ([
+            {
+              id: "assignment_group_mentor_name",
+              accessorKey: "assignment_group_mentor_name",
+              header: "Group mentor",
+              enableColumnFilter: true,
+              filterFn: (row, id, filterValue) => {
+                if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+                const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+                if (!row.original.assignment_group_mentor_name) return values.includes("No mentor");
+                return values.some((val) =>
+                  row.original.assignment_group_mentor_name!.toLowerCase().includes(val.toLowerCase())
+                );
+              },
+              cell: (props) => <Text>{(props.getValue() as string | null | undefined) ?? "—"}</Text>
+            }
+          ] satisfies ColumnDef<ActiveSubmissionsWithGradesForAssignment>[])
+        : []),
       {
         id: "class_section_name",
         accessorKey: "class_section_name",
@@ -579,7 +605,7 @@ export default function AssignmentsTable({
         }
       }
     ],
-    [timeZone, course_id, assignment_id, assignment]
+    [timeZone, course_id, assignment_id, assignment, showGroupMentorColumn]
   );
 
   const [internalTableController, setInternalTableController] = useState<TableController<"submissions"> | null>(null);
@@ -750,6 +776,14 @@ export default function AssignmentsTable({
             <Checkbox checked={columnVisibility.groupname} onCheckedChange={() => toggleColumnVisibility("groupname")}>
               Group
             </Checkbox>
+            {showGroupMentorColumn && (
+              <Checkbox
+                checked={columnVisibility.assignment_group_mentor_name}
+                onCheckedChange={() => toggleColumnVisibility("assignment_group_mentor_name")}
+              >
+                Group mentor
+              </Checkbox>
+            )}
             <Checkbox
               checked={columnVisibility.class_section_name}
               onCheckedChange={() => toggleColumnVisibility("class_section_name")}
@@ -807,6 +841,9 @@ export default function AssignmentsTable({
                           h.id === "autograder_score" ||
                           h.id === "total_score" ||
                           h.id === "released" ||
+                          (h.id === "assignment_group_mentor_name" &&
+                            showGroupMentorColumn &&
+                            columnVisibility.assignment_group_mentor_name) ||
                           columnVisibility[h.id as keyof typeof columnVisibility])
                     )
                     .map((header, colIdx) => (
@@ -913,6 +950,31 @@ export default function AssignmentsTable({
                                   { label: "Not assigned", value: "Not assigned" }
                                 ]}
                                 placeholder="Filter by lab section..."
+                              />
+                            )}
+                            {header.id === "assignment_group_mentor_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getCoreRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const mentorName = row.original.assignment_group_mentor_name;
+                                        if (mentorName && !map.has(mentorName)) {
+                                          map.set(mentorName, mentorName);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((name) => ({ label: name, value: name })),
+                                  { label: "No mentor", value: "No mentor" }
+                                ]}
+                                placeholder="Filter by group mentor..."
                               />
                             )}
                             {header.id === "gradername" && (
@@ -1140,6 +1202,9 @@ export default function AssignmentsTable({
                                 header.id === "autograder_score" ||
                                 header.id === "total_score" ||
                                 header.id === "released" ||
+                                (header.id === "assignment_group_mentor_name" &&
+                                  showGroupMentorColumn &&
+                                  columnVisibility.assignment_group_mentor_name) ||
                                 columnVisibility[header.id as keyof typeof columnVisibility])
                           ).length
                       )
@@ -1195,6 +1260,9 @@ export default function AssignmentsTable({
                               c.column.id === "autograder_score" ||
                               c.column.id === "total_score" ||
                               c.column.id === "released" ||
+                              (c.column.id === "assignment_group_mentor_name" &&
+                                showGroupMentorColumn &&
+                                columnVisibility.assignment_group_mentor_name) ||
                               columnVisibility[c.column.id as keyof typeof columnVisibility])
                         )
                         .map((cell, colIdx) => (
