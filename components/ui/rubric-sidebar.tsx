@@ -1004,6 +1004,7 @@ export function RubricCheckGlobal({
     ? submission?.submission_files.find((file) => file.name === check.file)?.id
     : undefined;
   const activeAssignmentReview = useActiveReviewAssignment();
+  const taMarksLockedByRelease = isTaOnly && !isInstructor && Boolean(reviewForThisRubric?.released);
 
   // Check if this check should be visible to the current user
   const shouldShowCheck = useShouldShowRubricCheck({
@@ -1033,6 +1034,15 @@ export function RubricCheckGlobal({
     checkboxIsChecked
   ]);
 
+  useEffect(() => {
+    if (taMarksLockedByRelease) {
+      setIsEditing(false);
+      if (rubricCheckComments.length === 0) {
+        setCheckboxIsChecked(false);
+      }
+    }
+  }, [taMarksLockedByRelease, rubricCheckComments.length]);
+
   if (!shouldShowCheck) {
     return null;
   }
@@ -1040,7 +1050,6 @@ export function RubricCheckGlobal({
   const points = check.points === 0 ? "" : criteria.is_additive ? `+${check.points}` : `-${check.points}`;
   const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
   const gradingIsRequired = reviewForThisRubric && check.is_required && rubricCheckComments.length == 0;
-  const taMarksLockedByRelease = isTaOnly && !isInstructor && Boolean(reviewForThisRubric?.released);
   const gradingIsPermitted =
     (isGrader ||
       (activeAssignmentReview &&
@@ -1153,7 +1162,9 @@ export function RubricCheckGlobal({
                     aria-label={`${check.name} (${points})`}
                     onCheckedChange={(newState) => {
                       if (newState.checked) {
-                        setIsEditing(true);
+                        if (gradingIsPermitted && !taMarksLockedByRelease) {
+                          setIsEditing(true);
+                        }
                       } else {
                         setIsEditing(false);
                       }
@@ -1206,7 +1217,10 @@ export function RubricCheckGlobal({
                 borderRadius="md"
               >
                 <HStack justify="space-between" w="100%">
-                  <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
+                  <Radio
+                    value={check.id.toString()}
+                    disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
+                  >
                     <Field.Label>
                       <Text>
                         {points} {check.name}
@@ -1257,7 +1271,7 @@ export function RubricCheckGlobal({
           </HStack>
         </Link>
       )}
-      {isEditing && (
+      {isEditing && gradingIsPermitted && !taMarksLockedByRelease && (
         <SubmissionCommentForm
           check={check}
           criteriaRubricId={criteria.rubric_id}

@@ -463,10 +463,14 @@ function ArtifactCommentsForm({
   defaultValue: string;
   submissionReviewId?: number;
 }) {
-  if (!submission.grading_review_id) {
+  const fallbackGradingReviewId = submission.grading_review_id;
+  if (!fallbackGradingReviewId) {
     throw new Error("No grading review ID found");
   }
-  const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);
+  const effectiveSubmissionReviewId = submissionReviewId ?? fallbackGradingReviewId;
+  const reviewContext = useSubmissionReviewOrGradingReview(effectiveSubmissionReviewId);
+  const finalSubmissionReviewId = reviewContext?.id ?? effectiveSubmissionReviewId;
+  const releasedForWrite = finalSubmissionReviewId === reviewContext?.id ? Boolean(reviewContext?.released) : true;
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const isTaOnly = useIsGrader();
@@ -475,8 +479,6 @@ function ArtifactCommentsForm({
 
   const postComment = useCallback(
     async (message: string, author_id: string) => {
-      const finalSubmissionReviewId = submissionReviewId ?? reviewContext?.id;
-
       try {
         await submissionController.submission_artifact_comments.create({
           submission_id: submission.id,
@@ -484,8 +486,8 @@ function ArtifactCommentsForm({
           class_id: submission.class_id,
           author: author_id,
           comment: message,
-          submission_review_id: finalSubmissionReviewId ?? null,
-          released: reviewContext ? reviewContext.released : true,
+          submission_review_id: finalSubmissionReviewId,
+          released: releasedForWrite,
           eventually_visible: eventuallyVisible,
           rubric_check_id: null,
           points: null,
@@ -495,8 +497,7 @@ function ArtifactCommentsForm({
         toaster.error({
           title: "Could not save comment",
           description: getStudentFacingErrorMessage(error, {
-            releasedReviewGraderBlocked:
-              isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(reviewContext?.released)
+            releasedReviewGraderBlocked: isGraderOrInstructor && !isInstructor && isTaOnly && releasedForWrite
           })
         });
         throw error;
@@ -506,9 +507,9 @@ function ArtifactCommentsForm({
       submissionController,
       submission,
       artifact,
-      reviewContext,
+      releasedForWrite,
       eventuallyVisible,
-      submissionReviewId,
+      finalSubmissionReviewId,
       isGraderOrInstructor,
       isInstructor,
       isTaOnly
@@ -551,10 +552,14 @@ function ArtifactCheckPopover({
   submissionReviewId?: number;
 }) {
   const submission = useSubmission();
-  if (!submission.grading_review_id) {
+  const fallbackGradingReviewId = submission.grading_review_id;
+  if (!fallbackGradingReviewId) {
     throw new Error("No grading review ID found");
   }
-  const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);
+  const effectiveSubmissionReviewId = submissionReviewId ?? fallbackGradingReviewId;
+  const reviewContext = useSubmissionReviewOrGradingReview(effectiveSubmissionReviewId);
+  const finalSubmissionReviewId = reviewContext?.id ?? effectiveSubmissionReviewId;
+  const releasedForWrite = finalSubmissionReviewId === reviewContext?.id ? Boolean(reviewContext?.released) : true;
   const isInstructor = useIsInstructor();
   const isTaOnly = useIsGrader();
   const rubric = useRubricWithParts(reviewContext?.rubric_id);
@@ -780,8 +785,6 @@ function ArtifactCheckPopover({
                       commentText = selectedSubOption.comment + (commentText ? "\n" + commentText : "");
                     }
 
-                    const finalSubmissionReviewId = submissionReviewId ?? reviewContext?.id;
-
                     if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
                       toaster.error({
                         title: "Error saving comment",
@@ -806,9 +809,9 @@ function ArtifactCheckPopover({
                       submission_id: submission.id,
                       submission_artifact_id: artifact.id,
                       author: profile_id,
-                      released: reviewContext ? reviewContext.released : true,
+                      released: releasedForWrite,
                       points: points ?? null,
-                      submission_review_id: finalSubmissionReviewId ?? null,
+                      submission_review_id: finalSubmissionReviewId,
                       eventually_visible: eventuallyVisible,
                       regrade_request_id: null,
                       target_student_profile_id: targetEff.targetId
@@ -821,7 +824,7 @@ function ArtifactCheckPopover({
                         title: "Could not save annotation",
                         description: getStudentFacingErrorMessage(error, {
                           releasedReviewGraderBlocked:
-                            isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(reviewContext?.released)
+                            isGraderOrInstructor && !isInstructor && isTaOnly && releasedForWrite
                         })
                       });
                     }
