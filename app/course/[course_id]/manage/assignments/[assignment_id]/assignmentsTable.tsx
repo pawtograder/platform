@@ -156,10 +156,14 @@ function getPerStudentCombinedGradingTotal(
   submission: ActiveSubmissionsWithGradesForAssignment,
   studentId: string
 ): number | null {
-  const perStudentTotals = submission.per_student_grading_totals as IndividualScores | null | undefined;
-  return perStudentTotals && typeof perStudentTotals[studentId] === "number"
-    ? (perStudentTotals[studentId] as number)
-    : null;
+  return getDisplayedGradingTotalForStudent(
+    {
+      total_score: null,
+      per_student_grading_totals: submission.per_student_grading_totals,
+      individual_scores: undefined
+    },
+    studentId
+  );
 }
 
 /** Total Score column: per_student_grading_totals, else individual_scores, else total_score (see gradebook). */

@@ -91,8 +91,16 @@ WITH ur_students AS (
            sr.id AS grading_submission_review_id,
            sr.completed_at AS grading_submission_review_completed_at,
            COALESCE(
-             NULLIF((sr.per_student_grading_totals ->> cs.student_profile_id::text), '')::numeric,
-             NULLIF((sr.individual_scores ->> cs.student_profile_id::text), '')::numeric,
+             CASE
+               WHEN NULLIF(sr.per_student_grading_totals ->> cs.student_profile_id::text, '') ~ '^[+-]?[0-9]+(\.[0-9]+)?$'
+               THEN (NULLIF(sr.per_student_grading_totals ->> cs.student_profile_id::text, ''))::numeric
+               ELSE NULL
+             END,
+             CASE
+               WHEN NULLIF(sr.individual_scores ->> cs.student_profile_id::text, '') ~ '^[+-]?[0-9]+(\.[0-9]+)?$'
+               THEN (NULLIF(sr.individual_scores ->> cs.student_profile_id::text, ''))::numeric
+               ELSE NULL
+             END,
              sr.total_score
            ) AS grading_total_score
     FROM chosen_submission cs
