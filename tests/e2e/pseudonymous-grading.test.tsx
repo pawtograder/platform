@@ -197,11 +197,12 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Mark as Complete" }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
-    // Release All Submission Reviews
+    // Release selected submission reviews (select all in filtered view, then release)
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
 
-    await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "All in view" }).click();
+    await page.getByRole("button", { name: /Release \d+ selected submission/ }).click();
+    await expect(page.getByRole("button", { name: /Release \d+ selected submission/ })).toBeEnabled();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });

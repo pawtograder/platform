@@ -5,7 +5,11 @@ import {
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
-  TableOptions
+  TableOptions,
+  Row,
+  RowSelectionState,
+  OnChangeFn,
+  Updater
 } from "@tanstack/react-table";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Sentry from "@sentry/react";
@@ -27,7 +31,10 @@ export interface UseTableControllerTableProps<
   columns: ColumnDef<TData>[];
   tableController?: TableController<RelationName, Query, IDType, TData>;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
-  enableRowSelection?: boolean;
+  enableRowSelection?: boolean | ((row: Row<TData>) => boolean);
+  getRowId?: (originalRow: TData, index: number) => string;
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: (updater: Updater<RowSelectionState>) => void;
 }
 
 /**
@@ -78,7 +85,10 @@ export function useTableControllerTable<
   columns,
   tableController,
   initialState = {},
-  enableRowSelection = false
+  enableRowSelection = false,
+  getRowId,
+  rowSelection: controlledRowSelection,
+  onRowSelectionChange
 }: UseTableControllerTableProps<RelationName, Query, IDType, TData>) {
   const [data, setData] = useState<PossiblyTentativeResult<TData>[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -210,6 +220,7 @@ export function useTableControllerTable<
   const table = useReactTable({
     data,
     columns,
+    ...(getRowId ? { getRowId } : {}),
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -219,6 +230,12 @@ export function useTableControllerTable<
     manualSorting: false,
     filterFromLeafRows: true,
     enableRowSelection,
+    ...(controlledRowSelection !== undefined && onRowSelectionChange !== undefined
+      ? {
+          state: { rowSelection: controlledRowSelection },
+          onRowSelectionChange
+        }
+      : {}),
     initialState: {
       pagination: {
         pageIndex: 0,

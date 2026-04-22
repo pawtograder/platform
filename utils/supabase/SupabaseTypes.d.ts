@@ -12360,6 +12360,10 @@ export type Database = {
         Args: { assignment_id: number };
         Returns: number;
       };
+      release_grading_reviews_for_submissions: {
+        Args: { p_assignment_id: number; p_submission_ids: number[] };
+        Returns: number;
+      };
       reorder_surveys_in_series: {
         Args: { p_ordinal_updates: Json; p_series_id: string };
         Returns: undefined;
@@ -12484,6 +12488,10 @@ export type Database = {
       };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
+        Returns: number;
+      };
+      unrelease_grading_reviews_for_submissions: {
+        Args: { p_assignment_id: number; p_submission_ids: number[] };
         Returns: number;
       };
       update_api_gateway_call: {
