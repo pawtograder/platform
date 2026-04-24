@@ -241,14 +241,17 @@ export default function AssignmentPage() {
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
-                    <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
+                    <Link
+                      href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}
+                      aria-label={`Submission #${submission.ordinal} grade`}
+                    >
                       {submission.submission_reviews?.completed_at
                         ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.total_points}`
                         : submission.is_active
                           ? "Pending"
                           : submission.is_not_graded
                             ? "Not for grading"
-                            : ""}
+                            : "—"}
                     </Link>
                   </Table.Cell>
                 </Table.Row>
