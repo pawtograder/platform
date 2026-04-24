@@ -13,16 +13,18 @@ export interface AvatarProps extends ChakraAvatar.RootProps {
   loading?: ImageProps["loading"];
   icon?: React.ReactElement;
   fallback?: React.ReactNode;
+  /** Override the generated `alt`. Defaults to `${name}'s avatar` or "" when there's no name. */
+  alt?: string;
 }
 
 export const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(function Avatar(props, ref) {
-  const { name, src, srcSet, loading, icon, fallback, children, ...rest } = props;
+  const { name, src, srcSet, loading, icon, fallback, children, alt, ...rest } = props;
   return (
     <ChakraAvatar.Root ref={ref} {...rest}>
       <AvatarFallback name={name} icon={icon}>
         {fallback}
       </AvatarFallback>
-      <ChakraAvatar.Image src={src} srcSet={srcSet} loading={loading} />
+      <ChakraAvatar.Image src={src} srcSet={srcSet} loading={loading} alt={alt ?? (name ? `${name}'s avatar` : "")} />
       {children}
     </ChakraAvatar.Root>
   );

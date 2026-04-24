@@ -286,7 +286,10 @@ const DiscussionThreadContent = memo(
               {authorProfile ? (
                 <Avatar.Root size="sm" variant="outline" shape="square">
                   <Avatar.Fallback name={authorProfile.name} />
-                  <Avatar.Image src={authorProfile.avatar_url} />
+                  <Avatar.Image
+                    src={authorProfile.avatar_url}
+                    alt={authorProfile.name ? `${authorProfile.name}'s avatar` : ""}
+                  />
                 </Avatar.Root>
               ) : (
                 <SkeletonCircle width="40px" height="40px" />
@@ -378,7 +381,7 @@ const DiscussionThreadContent = memo(
                     </Link>
                   )}
                   {root_thread?.is_question && canEdit && !isAnswered && (
-                    <Button variant="surface" onClick={toggleAnswered} size="xs" colorPalette="green">
+                    <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
                       Mark as Answer
                     </Button>
                   )}

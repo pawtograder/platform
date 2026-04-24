@@ -6,9 +6,15 @@ const DEFAULT_EXCLUDES = [
   // Third-party / rich editors often fail strict axe rules without affecting core app UX in E2E.
   ".monaco-editor",
   ".monaco-mouse-cursor-text",
+  // SurveyJS emits its own tree with unlabeled buttons and low-contrast palette.
+  // Cover both legacy (sv-) and modern (sd-) class prefixes plus its action surfaces.
   "[data-surveyjs]",
   ".sv-root",
   ".sv_main",
+  ".sd-root-modern",
+  ".sd-btn",
+  ".sv-action",
+  ".sv-components-row",
   // CodeMirror-backed Pyret REPL — the editor surfaces its own unlabeled textarea
   // and focusable scroll region that axe flags.
   '[id^="pyret-repl-region-"]'

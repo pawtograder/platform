@@ -286,6 +286,7 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
                   content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                 >
                   <Button
+                    aria-label={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                     variant={expanded.length > 0 ? "solid" : "outline"}
                     size="xs"
                     p={0}

@@ -115,7 +115,10 @@ export function DiscussionPostSummary({
               <HStack>
                 <Avatar.Root size="sm" variant="outline" shape="square">
                   <Avatar.Fallback name={userProfile?.name} />
-                  <Avatar.Image src={userProfile?.avatar_url} />
+                  <Avatar.Image
+                    src={userProfile?.avatar_url}
+                    alt={userProfile?.name ? `${userProfile.name}'s avatar` : ""}
+                  />
                 </Avatar.Root>
                 <Text textStyle="sm" hideBelow="sm">
                   {userProfile?.name}

@@ -335,6 +335,7 @@ export default function DynamicCourseNav() {
                       <Menu.Root>
                         <Menu.Trigger asChild>
                           <Button
+                            aria-label={`${link.name} menu`}
                             colorPalette="gray"
                             size="xs"
                             fontSize="xs"
@@ -444,7 +445,15 @@ export default function DynamicCourseNav() {
                     >
                       <Menu.Root>
                         <Menu.Trigger asChild>
-                          <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
+                          <Button
+                            aria-label={`${link.name} menu`}
+                            colorPalette="gray"
+                            size="xs"
+                            fontSize="sm"
+                            pt="0"
+                            variant="ghost"
+                            asChild
+                          >
                             <Flex align="center" role="group">
                               <HStack>
                                 {React.createElement(link.icon)}
