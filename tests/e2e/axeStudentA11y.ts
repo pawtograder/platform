@@ -189,6 +189,16 @@ export async function assertStudentPageAccessible(
   contextLabel?: string,
   options: AxeAssertOptions = {}
 ): Promise<void> {
+  // Guard against a flake class: on client-side Next.js nav, the `<title>`
+  // can briefly be empty until the new route's metadata resolves. axe's
+  // `document-title` rule fails if we scan during that window. Wait for a
+  // non-empty <title> (up to 10s) before scanning.
+  await page
+    .waitForFunction(() => document.title.trim().length > 0, undefined, { timeout: 10000 })
+    .catch(() => {
+      /* fall through — let axe report the real issue if it really is empty */
+    });
+
   // @axe-core/playwright types against playwright-core's Page; cast for compatibility with test fixtures.
   let builder = new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(
     options.tags ?? DEFAULT_WCAG_TAGS
