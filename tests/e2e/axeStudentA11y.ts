@@ -1,5 +1,7 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, Page } from "@playwright/test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { Page as PlaywrightCorePage } from "playwright-core";
 
 const DEFAULT_EXCLUDES = [
@@ -53,6 +55,131 @@ function formatViolations(violations: Awaited<ReturnType<AxeBuilder["analyze"]>>
 }
 
 /**
+ * For each axe violation, capture the offending element's outerHTML, three
+ * ancestors up, computed styles, position, and any nearby `data-testid` —
+ * everything you need to map an opaque emotion class hash back to a JSX site.
+ * Writes one JSON dump per call to `axe-debug/` next to the Playwright report.
+ *
+ * Opt-in via `DEBUG_AXE=1`. Off by default so it doesn't bloat normal runs.
+ */
+async function dumpViolationDebug(
+  page: Page,
+  contextLabel: string | undefined,
+  violations: Awaited<ReturnType<AxeBuilder["analyze"]>>["violations"]
+): Promise<string | null> {
+  if (process.env.DEBUG_AXE !== "1") return null;
+
+  const url = page.url();
+  const enriched = [];
+  for (const v of violations) {
+    for (const node of v.nodes) {
+      const selector = Array.isArray(node.target) ? node.target.join(" ") : String(node.target);
+      const detail = await page
+        .evaluate(
+          ({ sel }) => {
+            // axe targets can include ":" without escaping; try the raw selector first,
+            // then fall back to brute-forcing by id from a `#id` prefix.
+            let el: Element | null = null;
+            try {
+              el = document.querySelector(sel);
+            } catch {
+              /* invalid selector */
+            }
+            if (!el) {
+              const idMatch = /^#([^\s>+~]+)/.exec(sel);
+              if (idMatch) el = document.getElementById(idMatch[1]) ?? null;
+              if (!el) {
+                // try the textual id without the CSS escape
+                const m = /^#([^\s>+~]+)/.exec(sel.replaceAll("\\", ""));
+                if (m) el = document.getElementById(m[1]) ?? null;
+              }
+            }
+            if (!el) return { found: false as const, selector: sel };
+
+            const ancestors: { tag: string; html: string; testId: string | null; ariaLabel: string | null }[] = [];
+            let cur: Element | null = el.parentElement;
+            for (let i = 0; i < 4 && cur; i++) {
+              ancestors.push({
+                tag: cur.tagName.toLowerCase(),
+                html: cur.outerHTML.slice(0, 400),
+                testId: cur.getAttribute("data-testid"),
+                ariaLabel: cur.getAttribute("aria-label")
+              });
+              cur = cur.parentElement;
+            }
+
+            const cs = window.getComputedStyle(el as Element);
+            const rect = el.getBoundingClientRect();
+            const innerText = (el as HTMLElement).innerText?.trim() ?? "";
+
+            // Walk up to find the nearest data-testid / role landmark / heading
+            const findUp = (predicate: (e: Element) => boolean): { tag: string; html: string } | null => {
+              let walker: Element | null = el!.parentElement;
+              while (walker) {
+                if (predicate(walker)) {
+                  return { tag: walker.tagName.toLowerCase(), html: walker.outerHTML.slice(0, 200) };
+                }
+                walker = walker.parentElement;
+              }
+              return null;
+            };
+
+            return {
+              found: true as const,
+              selector: sel,
+              outerHTML: (el as HTMLElement).outerHTML,
+              innerText,
+              attributes: Array.from((el as HTMLElement).attributes).reduce<Record<string, string>>((acc, a) => {
+                acc[a.name] = a.value;
+                return acc;
+              }, {}),
+              computed: {
+                color: cs.color,
+                background: cs.backgroundColor,
+                opacity: cs.opacity,
+                visibility: cs.visibility,
+                display: cs.display,
+                pointerEvents: cs.pointerEvents,
+                fontSize: cs.fontSize,
+                fontWeight: cs.fontWeight
+              },
+              rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+              ancestors,
+              nearestTestId: findUp((e) => e.hasAttribute("data-testid")),
+              nearestRoleRegion: findUp((e) =>
+                ["region", "main", "navigation", "banner", "contentinfo", "complementary", "form"].includes(
+                  (e.getAttribute("role") || "").toLowerCase()
+                )
+              ),
+              nearestHeading: findUp((e) => /^h[1-6]$/.test(e.tagName.toLowerCase()))
+            };
+          },
+          { sel: selector }
+        )
+        .catch((err) => ({ found: false as const, selector, error: String(err) }));
+
+      enriched.push({
+        rule: v.id,
+        impact: v.impact,
+        help: v.help,
+        helpUrl: v.helpUrl,
+        failureSummary: node.failureSummary,
+        target: node.target,
+        ...detail
+      });
+    }
+  }
+
+  const slug = (contextLabel || "axe").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dir = path.resolve(process.cwd(), "axe-debug");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${slug}-${stamp}.json`);
+  fs.writeFileSync(file, JSON.stringify({ url, contextLabel, violations: enriched }, null, 2));
+  return file;
+}
+
+/**
  * Runs axe-core against the current page with WCAG 2.1 AA rules and fails the
  * test if any violations are found. Call after navigations and key UI settles
  * (e.g. after expect().toBeVisible() on main content).
@@ -79,7 +206,11 @@ export async function assertStudentPageAccessible(
 
   const summary = formatViolations(violations);
   const prefix = contextLabel ? `[${contextLabel}] ` : "";
-  expect(violations, `${prefix}axe-core WCAG 2.1 AA violations:\n${summary}`).toEqual([]);
+
+  const debugFile = await dumpViolationDebug(page, contextLabel, violations);
+  const debugLine = debugFile ? `\nDEBUG_AXE dump: ${debugFile}` : "";
+
+  expect(violations, `${prefix}axe-core WCAG 2.1 AA violations:\n${summary}${debugLine}`).toEqual([]);
 }
 
 /**
