@@ -1,5 +1,9 @@
 export const dynamic = "force-dynamic";
 
+export const metadata = {
+  title: "Your courses · Pawtograder"
+};
+
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import { termToTermText } from "@/components/ui/semesterText";
@@ -41,31 +45,43 @@ export default async function ProtectedPage() {
   }
   return (
     <VStack>
-      <VStack px={{ base: 4, md: 4 }} bg="bg.subtle" borderBottomWidth="1px" borderBottomColor="border.emphasized">
+      <Box
+        as="header"
+        role="banner"
+        width="100%"
+        px={{ base: 4, md: 4 }}
+        bg="bg.subtle"
+        borderBottomWidth="1px"
+        borderBottomColor="border.emphasized"
+      >
         <Flex width="100%" height="20" alignItems="center" justifyContent={{ base: "space-between" }}>
           <Box fontSize="2xl" fontWeight="bold">
             Pawtograder
           </Box>
           <Button onClick={signOutAction}>Sign out</Button>
         </Flex>
-        <Heading size="xl">Your courses</Heading>
-        <Flex>
-          <Stack gap="4" direction="row" wrap="wrap">
-            {(sortedRoles ?? []).map((role) => (
-              <Link key={role.classes.id} href={`/course/${role.classes.id}`}>
-                <Card.Root key={role.classes.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
-                  <Card.Body>
-                    <Card.Title>
-                      {role.classes.name}, {termToTermText(role.classes.term ?? 0)}
-                    </Card.Title>
-                    <Card.Description>{role.classes.course_title ?? role.classes.name}</Card.Description>
-                  </Card.Body>
-                </Card.Root>
-              </Link>
-            ))}
-          </Stack>
-        </Flex>
-      </VStack>
+      </Box>
+      <Box as="main" id="main-content" tabIndex={-1} width="100%" px={{ base: 4, md: 4 }}>
+        <VStack>
+          <Heading size="xl">Your courses</Heading>
+          <Flex>
+            <Stack gap="4" direction="row" wrap="wrap">
+              {(sortedRoles ?? []).map((role) => (
+                <Link key={role.classes.id} href={`/course/${role.classes.id}`}>
+                  <Card.Root key={role.classes.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
+                    <Card.Body>
+                      <Card.Title>
+                        {role.classes.name}, {termToTermText(role.classes.term ?? 0)}
+                      </Card.Title>
+                      <Card.Description>{role.classes.course_title ?? role.classes.name}</Card.Description>
+                    </Card.Body>
+                  </Card.Root>
+                </Link>
+              ))}
+            </Stack>
+          </Flex>
+        </VStack>
+      </Box>
     </VStack>
   );
 }

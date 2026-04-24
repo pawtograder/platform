@@ -279,6 +279,8 @@ export default function DynamicCourseNav() {
 
   return (
     <Box
+      as="header"
+      role="banner"
       px={{ base: 2, md: 4 }}
       py={{ base: 2, md: 2 }}
       ref={courseNavRef}
@@ -307,11 +309,20 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <UserMenu />
+            <Box data-landmark="user-menu">
+              <UserMenu />
+            </Box>
           </HStack>
 
           {/* Navigation links - horizontal scroll on mobile */}
-          <Box overflowX="auto" overflowY="hidden" pb={1}>
+          <Box
+            as="nav"
+            data-landmark="primary-nav"
+            aria-label="Course navigation"
+            overflowX="auto"
+            overflowY="hidden"
+            pb={1}
+          >
             <HStack gap={1} minWidth="max-content">
               {filteredLinks.map((link) => {
                 if (link.submenu) {
@@ -385,7 +396,10 @@ export default function DynamicCourseNav() {
                         whiteSpace="nowrap"
                         asChild
                       >
-                        <NextLink href={link.target || "#"}>
+                        <NextLink
+                          href={link.target || "#"}
+                          aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+                        >
                           <HStack gap={1}>
                             {React.createElement(link.icon, { size: 14 })}
                             <Text>{link.name}</Text>
@@ -420,7 +434,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <HStack width="100%" mt={2}>
+            <HStack as="nav" id="primary-nav" aria-label="Course navigation" width="100%" mt={2}>
               {filteredLinks.map((link) => {
                 if (link.submenu) {
                   return (
@@ -476,7 +490,10 @@ export default function DynamicCourseNav() {
                       borderColor="orange.600"
                     >
                       <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
-                        <NextLink href={link.target || "#"}>
+                        <NextLink
+                          href={link.target || "#"}
+                          aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+                        >
                           <Flex align="center" role="group">
                             <HStack>
                               {React.createElement(link.icon)}
@@ -491,7 +508,9 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <UserMenu />
+          <Box id="user-menu">
+            <UserMenu />
+          </Box>
         </Flex>
       </Box>
     </Box>
