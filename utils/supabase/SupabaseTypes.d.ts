@@ -2435,6 +2435,10 @@ export type Database = {
           subject: string;
           topic_id: number;
           updated_at: string;
+          duplicate_marked_at: string | null;
+          duplicate_marked_by_display_name: string | null;
+          duplicate_marked_by_user_id: string | null;
+          duplicate_original_subject: string | null;
         };
         Insert: {
           answer?: number | null;
@@ -2457,6 +2461,10 @@ export type Database = {
           subject: string;
           topic_id: number;
           updated_at?: string;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
         };
         Update: {
           answer?: number | null;
@@ -2479,6 +2487,10 @@ export type Database = {
           subject?: string;
           topic_id?: number;
           updated_at?: string;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
         };
         Relationships: [
           {
@@ -12401,6 +12413,10 @@ export type Database = {
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
+      };
+      mark_discussion_thread_duplicate: {
+        Args: { p_duplicate_root_id: number; p_original_root_id: number };
+        Returns: undefined;
       };
       set_discussion_thread_topic: {
         Args: { p_thread_id: number; p_topic_id: number };

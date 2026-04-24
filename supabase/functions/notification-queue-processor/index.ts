@@ -36,17 +36,23 @@ export type NotificationEnvelope = {
 };
 export type DiscussionThreadNotification = NotificationEnvelope & {
   type: "discussion_thread";
-  action: "new_post" | "reply";
-  new_comment_number: number;
-  new_comment_id: number;
+  action: "new_post" | "reply" | "marked_duplicate";
+  new_comment_number?: number;
+  new_comment_id?: number;
   root_thread_id: number;
-  reply_author_profile_id: string;
-  teaser: string;
+  reply_author_profile_id?: string;
+  teaser?: string;
   message_body?: string;
-  thread_name: string;
-  reply_author_name: string;
+  thread_name?: string;
+  reply_author_name?: string;
   topic_id?: number;
   notification_reason?: "topic_follow" | "thread_watch";
+  duplicate_thread_id?: number;
+  original_thread_subject?: string;
+  duplicate_original_subject?: string;
+  marked_by_user_id?: string;
+  marked_by_name?: string;
+  duplicate_thread_ordinal?: number;
 };
 
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {
@@ -252,7 +258,15 @@ function buildEmailUrls(
   }
 
   if ("root_thread_id" in body) {
-    urls.thread_url = `https://${Deno.env.get("APP_URL")}/course/${classId}/discussion/${body.root_thread_id}`;
+    const d = body as DiscussionThreadNotification;
+    const hash =
+      d.type === "discussion_thread" &&
+      d.action === "marked_duplicate" &&
+      d.duplicate_thread_ordinal != null &&
+      d.duplicate_thread_ordinal !== undefined
+        ? `#post-${d.duplicate_thread_ordinal}`
+        : "";
+    urls.thread_url = `https://${Deno.env.get("APP_URL")}/course/${classId}/discussion/${body.root_thread_id}${hash}`;
   }
 
   if ("regrade_request_id" in body) {
