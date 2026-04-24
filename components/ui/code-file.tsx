@@ -9,7 +9,7 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMeta,
@@ -25,6 +25,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import {
   Json,
   RubricCheck,
@@ -751,6 +752,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
   const [selectOpen, setSelectOpen] = useState(true);
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+  const isTaOnly = useIsGrader();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -1188,7 +1191,10 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                 } catch (e) {
                   toaster.error({
                     title: "Error saving annotation",
-                    description: e instanceof Error ? e.message : "Unknown error"
+                    description: getStudentFacingErrorMessage(e, {
+                      releasedReviewGraderBlocked:
+                        isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(review?.released)
+                    })
                   });
                 }
               }}

@@ -34,6 +34,7 @@ import {
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { createClient } from "@/utils/supabase/client";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
@@ -56,7 +57,13 @@ import {
   useRubricParts,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor, useIsStudent } from "@/hooks/useClassProfiles";
+import {
+  useClassProfiles,
+  useIsGrader,
+  useIsGraderOrInstructor,
+  useIsInstructor,
+  useIsStudent
+} from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers, useCourseController } from "@/hooks/useCourseController";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
@@ -71,7 +78,10 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
+import {
+  getStudentFacingErrorMessage,
+  GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE
+} from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
@@ -491,7 +501,9 @@ export function RubricCheckComment({
   const boxRef = useRef<HTMLDivElement>(null);
 
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
   const pathname = usePathname();
+  const submissionReviewForComment = useSubmissionReviewOrGradingReview(comment?.submission_review_id ?? undefined);
 
   // Auto-scroll to this regrade request if the URL hash matches
   useEffect(() => {
@@ -528,13 +540,24 @@ export function RubricCheckComment({
         throw new Error(
           getStudentFacingErrorMessage(error, {
             isStudent,
-            rubricReviewRound: rubricForCriteria?.review_round ?? null
+            rubricReviewRound: rubricForCriteria?.review_round ?? null,
+            releasedReviewGraderBlocked:
+              isGraderOrInstructor && !isInstructor && Boolean(submissionReviewForComment?.released)
           })
         );
       }
       setIsEditing(false);
     },
-    [comment_id, comment_type, submissionController, isStudent, rubricForCriteria?.review_round]
+    [
+      comment_id,
+      comment_type,
+      submissionController,
+      isStudent,
+      rubricForCriteria?.review_round,
+      isGraderOrInstructor,
+      isInstructor,
+      submissionReviewForComment?.released
+    ]
   );
 
   const linkedFileId =
@@ -970,6 +993,8 @@ export function RubricCheckGlobal({
 
   const submission = useSubmissionMaybe();
   const isGrader = useIsGraderOrInstructor();
+  const isTaOnly = useIsGrader();
+  const isInstructor = useIsInstructor();
   const pathname = usePathname();
   const isPreviewMode = !submission;
   const linkedAritfactId = check.artifact
@@ -979,6 +1004,7 @@ export function RubricCheckGlobal({
     ? submission?.submission_files.find((file) => file.name === check.file)?.id
     : undefined;
   const activeAssignmentReview = useActiveReviewAssignment();
+  const taMarksLockedByRelease = isTaOnly && !isInstructor && Boolean(reviewForThisRubric?.released);
 
   // Check if this check should be visible to the current user
   const shouldShowCheck = useShouldShowRubricCheck({
@@ -1008,6 +1034,15 @@ export function RubricCheckGlobal({
     checkboxIsChecked
   ]);
 
+  useEffect(() => {
+    if (taMarksLockedByRelease) {
+      setIsEditing(false);
+      if (rubricCheckComments.length === 0) {
+        setCheckboxIsChecked(false);
+      }
+    }
+  }, [taMarksLockedByRelease, rubricCheckComments.length]);
+
   if (!shouldShowCheck) {
     return null;
   }
@@ -1020,6 +1055,7 @@ export function RubricCheckGlobal({
       (activeAssignmentReview &&
         reviewForThisRubric &&
         activeAssignmentReview.submission_review_id === reviewForThisRubric.id)) &&
+    !taMarksLockedByRelease &&
     reviewForThisRubric &&
     (criteria.max_checks_per_submission === null ||
       criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000));
@@ -1126,7 +1162,9 @@ export function RubricCheckGlobal({
                     aria-label={`${check.name} (${points})`}
                     onCheckedChange={(newState) => {
                       if (newState.checked) {
-                        setIsEditing(true);
+                        if (gradingIsPermitted && !taMarksLockedByRelease) {
+                          setIsEditing(true);
+                        }
                       } else {
                         setIsEditing(false);
                       }
@@ -1179,7 +1217,10 @@ export function RubricCheckGlobal({
                 borderRadius="md"
               >
                 <HStack justify="space-between" w="100%">
-                  <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
+                  <Radio
+                    value={check.id.toString()}
+                    disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
+                  >
                     <Field.Label>
                       <Text>
                         {points} {check.name}
@@ -1230,7 +1271,7 @@ export function RubricCheckGlobal({
           </HStack>
         </Link>
       )}
-      {isEditing && (
+      {isEditing && gradingIsPermitted && !taMarksLockedByRelease && (
         <SubmissionCommentForm
           check={check}
           criteriaRubricId={criteria.rubric_id}
@@ -1299,6 +1340,8 @@ function SubmissionCommentForm({
   const isStudent = useIsStudent();
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+  const isTaOnly = useIsGrader();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -1369,7 +1412,9 @@ function SubmissionCommentForm({
             throw new Error(
               getStudentFacingErrorMessage(error, {
                 isStudent,
-                rubricReviewRound: rubricForCriteria?.review_round ?? null
+                rubricReviewRound: rubricForCriteria?.review_round ?? null,
+                releasedReviewGraderBlocked:
+                  isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(submissionReview?.released)
               })
             );
           }
@@ -1457,6 +1502,8 @@ export function RubricCriteria({
     }
   }
   const isGrader = useIsGraderOrInstructor();
+  const isTaOnly = useIsGrader();
+  const isInstructor = useIsInstructor();
   const gradingIsRequired =
     isGrader && reviewForThisRubric && comments.length < (criteria.min_checks_per_submission || 0);
   let instructions = "";
@@ -1505,6 +1552,11 @@ export function RubricCriteria({
             {criteria.description}
           </Markdown>
         </Fieldset.HelperText>
+        {isTaOnly && !isInstructor && reviewForThisRubric?.released && (
+          <Alert status="warning" variant="subtle" borderRadius="md" mb={2} title="Grading is locked">
+            {GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE}
+          </Alert>
+        )}
         <Fieldset.Content>
           <VStack align="flex-start" w="100%" gap={0}>
             <Heading size="sm">Checks</Heading>
@@ -1804,7 +1856,7 @@ function AssignToStudentPart({
         });
       }
     },
-    [review?.id, part.id]
+    [review, part.id]
   );
 
   if (!isGrader) {

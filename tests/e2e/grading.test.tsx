@@ -48,6 +48,8 @@ let assignment: (Assignment & { rubricParts: RubricPart[]; rubricChecks: RubricC
 let grader: TestingUser | undefined;
 let student2: TestingUser | undefined;
 let submission_id2: number | undefined;
+/** Grading review row for submission_id2 — used to unreleased after "Release All" from an earlier serial test */
+let submission2_grading_review_id: number | undefined;
 test.beforeAll(async () => {
   course = await createClass();
   [student, instructor, grader, student2] = await createUsersInClass([
@@ -99,6 +101,7 @@ test.beforeAll(async () => {
     class_id: course.id
   });
   submission_id2 = submission_res2.submission_id;
+  submission2_grading_review_id = submission_res2.grading_review_id!;
   // Assign grader to the first rubric part
   const private_profile_id = grader!.private_profile_id;
   const review_assignment_res = await supabase
@@ -432,6 +435,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
   });
   test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {
+    // Earlier test releases all submission reviews on this assignment; second submission gets released too,
+    // which blocks TA grading. Unrelease only this review so the grader can apply marks for E2E.
+    const { error } = await supabase
+      .from("submission_reviews")
+      .update({ released: false })
+      .eq("id", submission2_grading_review_id!);
+    if (error) {
+      throw new Error(`Failed to unrelease grading review for submission 2 (grader test): ${error.message}`);
+    }
+
     await loginAsUser(page, grader!, course);
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id2}/files`);

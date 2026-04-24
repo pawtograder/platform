@@ -8,7 +8,7 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMeta,
@@ -22,6 +22,7 @@ import { RubricCheck, RubricCriteria, SubmissionFile, SubmissionFileComment } fr
 import type { SubmissionWithGraderResultsAndFiles } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import rehypeSourcePositions from "@/lib/rehype-source-positions";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import {
   Box,
   Badge,
@@ -312,6 +313,8 @@ function MarkdownLineActionPopup({
   const [selectOpen, setSelectOpen] = useState(true);
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+  const isTaOnly = useIsGrader();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
 
@@ -631,7 +634,10 @@ function MarkdownLineActionPopup({
                 } catch (e) {
                   toaster.error({
                     title: "Error saving annotation",
-                    description: e instanceof Error ? e.message : "Unknown error"
+                    description: getStudentFacingErrorMessage(e, {
+                      releasedReviewGraderBlocked:
+                        isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(review?.released)
+                    })
                   });
                 }
               }}
