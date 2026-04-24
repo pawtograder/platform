@@ -6,7 +6,7 @@ import { Select } from "chakra-react-select";
 import { hasRubricUnsavedChangesFlag, RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE } from "@/lib/rubricUnsavedChanges";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import React, { useCallback, useState } from "react";
+import React, { useCallback } from "react";
 import {
   FaCalendar,
   FaChartBar,
@@ -105,8 +105,28 @@ export function ManageAssignmentNav({
   const isInstructor = useIsInstructor();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const pathname = usePathname();
-  const [selectedPage, setSelectedPage] = useState<string>("");
   const router = useRouter();
+
+  const filteredLinkItems = React.useMemo(
+    () =>
+      LinkItems(parseInt(course_id as string), parseInt(assignment_id as string)).filter((item) => {
+        if (!item.instructorsOnly) return true;
+        if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
+        return isInstructor;
+      }),
+    [course_id, assignment_id, isGraderOrInstructor, isInstructor]
+  );
+  const selectOptions = React.useMemo(
+    () => filteredLinkItems.map((item) => ({ label: item.label, value: item.href })),
+    [filteredLinkItems]
+  );
+  const selectedOption = React.useMemo(() => {
+    // Longest-prefix match so nested sub-routes reflect the parent nav entry.
+    const match = selectOptions
+      .filter((o) => pathname === o.value || pathname.startsWith(o.value + "/"))
+      .reduce<(typeof selectOptions)[number] | null>((a, b) => (a && a.value.length >= b.value.length ? a : b), null);
+    return match ?? null;
+  }, [selectOptions, pathname]);
   const confirmRubricNavigation = useCallback(
     (nextHref: string) => {
       if (!pathname.includes("/rubric")) return true;
@@ -122,34 +142,34 @@ export function ManageAssignmentNav({
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
         <Box as="nav" aria-label="Assignment management" w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
-            {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string))
-              .filter((item) => {
-                if (!item.instructorsOnly) return true;
-                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
-                return isInstructor;
-              })
-              .map((item) => {
-                const isActive = pathname.endsWith(item.href);
-                return (
-                  <Button
-                    key={item.label}
-                    variant={isActive ? "solid" : "ghost"}
-                    w="100%"
-                    size="xs"
-                    pt="0"
-                    fontSize="sm"
-                    justifyContent="flex-start"
-                    asChild
-                  >
-                    <NextLink href={item.href} aria-current={isActive ? "page" : undefined}>
-                      <HStack textAlign="left" w="100%" justify="flex-start">
-                        {React.createElement(item.icon)}
-                        {item.label}
-                      </HStack>
-                    </NextLink>
-                  </Button>
-                );
-              })}
+            {filteredLinkItems.map((item, _idx, arr) => {
+              // Exact match wins; otherwise longest-prefix so nested sub-routes
+              // (e.g. .../rubric/criteria/123) still highlight their parent entry.
+              const longestPrefixHref = arr
+                .map((i) => i.href)
+                .filter((h) => pathname === h || pathname.startsWith(h + "/"))
+                .reduce((a, b) => (b.length > a.length ? b : a), "");
+              const isActive = pathname === item.href || item.href === longestPrefixHref;
+              return (
+                <Button
+                  key={item.label}
+                  variant={isActive ? "solid" : "ghost"}
+                  w="100%"
+                  size="xs"
+                  pt="0"
+                  fontSize="sm"
+                  justifyContent="flex-start"
+                  asChild
+                >
+                  <NextLink href={item.href} aria-current={isActive ? "page" : undefined}>
+                    <HStack textAlign="left" w="100%" justify="flex-start">
+                      {React.createElement(item.icon)}
+                      {item.label}
+                    </HStack>
+                  </NextLink>
+                </Button>
+              );
+            })}
             {isInstructor && (
               <DeleteAssignmentButton
                 assignmentId={Number.parseInt(assignment_id as string)}
@@ -164,34 +184,20 @@ export function ManageAssignmentNav({
         </Box>
       </Flex>
       <Flex display={{ base: "flex", lg: "none" }} flexDir={"column"}>
-        <Box width="100%" marginTop="5">
-          <Heading size="md">Select assignment page</Heading>
+        <Box as="nav" aria-label="Assignment management" width="100%" marginTop="5">
+          <Heading size="md" id="manage-assignment-mobile-nav-heading">
+            Select assignment page
+          </Heading>
           <Select
+            aria-labelledby="manage-assignment-mobile-nav-heading"
             onChange={(e) => {
               if (e) {
                 if (!confirmRubricNavigation(e.value)) return;
-                setSelectedPage(e.value);
-                router.replace(e.value);
+                router.push(e.value);
               }
             }}
-            value={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
-              .filter((item) => {
-                if (!item.instructorsOnly) return true;
-                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
-                return isInstructor;
-              })
-              .map((item) => ({ label: item.label, value: item.href }))
-              .find((option) => option.value === selectedPage)}
-            options={LinkItems(parseInt(course_id as string), parseInt(assignment_id as string))
-              .filter((item) => {
-                if (!item.instructorsOnly) return true;
-                if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
-                return isInstructor;
-              })
-              .map((item) => ({
-                label: item.label,
-                value: item.href
-              }))}
+            value={selectedOption}
+            options={selectOptions}
           />
         </Box>
         <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2}>

@@ -433,7 +433,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <HStack as="nav" id="primary-nav" aria-label="Course navigation" width="100%" mt={2}>
+            <HStack as="nav" data-landmark="primary-nav" aria-label="Course navigation" width="100%" mt={2}>
               {filteredLinks.map((link) => {
                 if (link.submenu) {
                   return (
@@ -507,7 +507,7 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <Box id="user-menu">
+          <Box data-landmark="user-menu">
             <UserMenu />
           </Box>
         </Flex>

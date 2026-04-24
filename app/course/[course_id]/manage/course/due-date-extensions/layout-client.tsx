@@ -73,17 +73,20 @@ export default function DueDateExtensionsLayoutClient({ children }: { children: 
           </VStack>
         </Box>
         <Box borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4} flexGrow={1} minWidth="0">
-          <Heading size="lg">Due Date Exceptions</Heading>
+          <Heading size="lg">Due Date Extensions</Heading>
           <Box>{children}</Box>
         </Box>
       </Flex>
       <Flex display={{ base: "flex", lg: "none" }} flexDir={"column"}>
-        <Box width="100%" marginTop="5">
-          <Heading size="md">Select due date extensions page</Heading>
+        <Box as="nav" aria-label="Due date extensions" width="100%" marginTop="5">
+          <Heading size="md" id="dde-mobile-nav-heading">
+            Select due date extensions page
+          </Heading>
           <Select
+            aria-labelledby="dde-mobile-nav-heading"
             onChange={(e) => {
               if (e) {
-                router.replace(e.value);
+                router.push(e.value);
               }
             }}
             value={linkItems
@@ -96,7 +99,7 @@ export default function DueDateExtensionsLayoutClient({ children }: { children: 
           />
         </Box>
         <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2}>
-          <Heading size="lg">Due Date Exceptions</Heading>
+          <Heading size="lg">Due Date Extensions</Heading>
           <Box>{children}</Box>
         </Box>
       </Flex>

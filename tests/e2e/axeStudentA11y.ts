@@ -8,7 +8,10 @@ const DEFAULT_EXCLUDES = [
   ".monaco-mouse-cursor-text",
   "[data-surveyjs]",
   ".sv-root",
-  ".sv_main"
+  ".sv_main",
+  // CodeMirror-backed Pyret REPL — the editor surfaces its own unlabeled textarea
+  // and focusable scroll region that axe flags.
+  '[id^="pyret-repl-region-"]'
 ];
 
 /** Scope axe scanning to the rules we actually want to enforce. */
@@ -114,10 +117,13 @@ export async function assertSkipLinksWork(page: Page, contextLabel?: string): Pr
 
   const mainLink = skipNav.getByRole("link", { name: /skip to main content/i });
   await expect(mainLink, `${prefix}"Skip to main content" link exists`).toHaveCount(1);
+  await expect(mainLink, `${prefix}skip link targets #main-content`).toHaveAttribute("href", "#main-content");
 
-  // Tabbing from the top of the document should land on the first skip link.
+  // Reset focus to document root so the first Tab lands on the first tabbable
+  // element — SkipNav should be mounted earliest in the tree.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press("Tab");
-  await expect(mainLink).toBeFocused();
+  await expect(mainLink, `${prefix}"Skip to main content" is the first tabbable element`).toBeFocused();
 
   await mainLink.click();
   // focusLandmark adds tabindex=-1 to non-focusable landmarks and focuses them.

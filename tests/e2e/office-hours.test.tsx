@@ -137,6 +137,9 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await page.getByRole("button", { name: "Send" }).click();
+    // Wait for the message to post before axe runs so we don't catch the transient
+    // optimistic/"Submitting…" state.
+    await expect(page.getByText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1)).toBeVisible();
     await assertStudentPageAccessible(page, "office hours student queue");
   });
   test("Another student can view the public request and comment on it, but cant see the private", async ({ page }) => {
@@ -153,6 +156,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);
     await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1)).toBeVisible();
     await assertStudentPageAccessible(page, "office hours second student chat");
   });
   test("Instructor can view all, comment, and start a video call", async ({ page }) => {

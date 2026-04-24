@@ -3,7 +3,7 @@ import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import React, { useState } from "react";
+import React, { useMemo } from "react";
 import { FiBarChart, FiZap, FiAlertTriangle } from "react-icons/fi";
 
 const LinkItems = (courseId: number) => [
@@ -35,16 +35,23 @@ const LinkItems = (courseId: number) => [
 export default function WorkflowRunsLayoutClient({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const pathname = usePathname();
-  const [selectedPage, setSelectedPage] = useState<string>("");
   const router = useRouter();
+
+  const courseIdNum = Number.parseInt(course_id as string, 10);
+  const linkItems = useMemo(() => LinkItems(courseIdNum), [courseIdNum]);
+  const selectOptions = useMemo(() => linkItems.map((item) => ({ label: item.label, value: item.href })), [linkItems]);
+  const selectedOption = useMemo(
+    () => selectOptions.find((o) => o.value === pathname || pathname.startsWith(o.value + "/")) ?? null,
+    [selectOptions, pathname]
+  );
 
   return (
     <>
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
         <Box as="nav" aria-label="Workflow runs" w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
-            {LinkItems(Number.parseInt(course_id as string)).map((item) => {
-              const isActive = pathname.endsWith(item.href);
+            {linkItems.map((item) => {
+              const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
               return (
                 <Button
                   key={item.label}
@@ -73,22 +80,17 @@ export default function WorkflowRunsLayoutClient({ children }: { children: React
         </Box>
       </Flex>
       <Flex display={{ base: "flex", lg: "none" }} flexDir={"column"}>
-        <Box width="100%" marginTop="5">
-          <Heading size="md">Select workflow page</Heading>
+        <Box as="nav" aria-label="Workflow runs" width="100%" marginTop="5">
+          <Heading size="md" id="workflow-mobile-nav-heading">
+            Select workflow page
+          </Heading>
           <Select
+            aria-labelledby="workflow-mobile-nav-heading"
             onChange={(e) => {
-              if (e) {
-                setSelectedPage(e.value);
-                router.replace(e.value);
-              }
+              if (e) router.push(e.value);
             }}
-            value={LinkItems(parseInt(course_id as string))
-              .map((item) => ({ label: item.label, value: item.href }))
-              .find((option) => option.value === selectedPage)}
-            options={LinkItems(parseInt(course_id as string)).map((item) => ({
-              label: item.label,
-              value: item.href
-            }))}
+            value={selectedOption}
+            options={selectOptions}
           />
         </Box>
         <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2}>

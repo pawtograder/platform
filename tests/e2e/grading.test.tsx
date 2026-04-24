@@ -403,6 +403,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Escalate to Instructor" }).click();
     await argosScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
+    // Wait for the escalation to settle before axe runs — otherwise axe races
+    // the closing popover / toast and reports transient focus-trap / labeling violations.
+    await expect(
+      page.getByRole("button", { name: "Escalate Request" }),
+      "Escalate Request button is removed after escalation"
+    ).toHaveCount(0);
     await assertStudentPageAccessible(page, "grading regrade appeal escalated");
   });
   test("Instructors can view the student's regrade appeal and resolve it", async ({ page }) => {

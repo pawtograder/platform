@@ -70,7 +70,13 @@ export function useKeyboardShortcuts() {
 export function KeyboardShortcutsProvider({ children, courseId }: { children: React.ReactNode; courseId: number }) {
   const router = useRouter();
   const { role } = useClassProfiles();
-  const course = role.classes as CourseWithFeatures;
+  // The shape from useClassProfiles isn't guaranteed at the type level to include the
+  // features join, so narrow via a runtime guard rather than an unchecked cast.
+  const rawFeatures = (role?.classes as Partial<CourseWithFeatures> | undefined)?.features;
+  const features = React.useMemo<CourseWithFeatures["features"]>(
+    () => (Array.isArray(rawFeatures) ? rawFeatures : []),
+    [rawFeatures]
+  );
 
   const [helpOpen, setHelpOpen] = React.useState(false);
   const openHelp = React.useCallback(() => setHelpOpen(true), []);
@@ -79,10 +85,10 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
   const isFeatureEnabled = React.useCallback(
     (name?: CourseFeatureName) => {
       if (!name) return true;
-      const flag = course.features?.find((f) => f.name === name);
+      const flag = features.find((f) => f.name === name);
       return flag ? flag.enabled : true;
     },
-    [course.features]
+    [features]
   );
 
   const enabledGoShortcuts = React.useMemo(

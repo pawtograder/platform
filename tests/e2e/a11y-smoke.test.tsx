@@ -67,7 +67,10 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     await page.goto(`/course/${course.id}`);
     await assertPageHasLandmarks(page, "dashboard pre-chord");
 
-    await page.locator("body").click({ position: { x: 1, y: 1 } });
+    // Blur the focused skip link before sending the chord — clicking near the corner
+    // can land on the revealed SkipNav and swallow subsequent keystrokes.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.locator("#main-content").focus();
     await page.keyboard.press("g");
     await page.keyboard.press("a");
 
