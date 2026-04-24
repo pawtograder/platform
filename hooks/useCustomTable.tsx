@@ -17,6 +17,13 @@ export interface ServerFilter {
   value: string | number | boolean | string[] | number[];
 }
 
+/** Negated PostgREST filter (`.not(column, operator, value)`). Value must follow PostgREST syntax for the operator. */
+export interface ServerNotFilter {
+  field: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "like" | "ilike" | "in" | "is";
+  value: string | number | boolean | string[] | number[];
+}
+
 export interface ServerOrderBy {
   field: string;
   direction: "asc" | "desc";
@@ -25,6 +32,8 @@ export interface UseCustomTableProps<TData> {
   columns: ColumnDef<TData>[];
   resource: keyof Database["public"]["Tables"];
   serverFilters?: ServerFilter[];
+  /** Applied as `.not(field, operator, value)` on the query (PostgREST `not.*` syntax). */
+  serverNotFilters?: ServerNotFilter[];
   serverOrderBys?: ServerOrderBy[];
   select?: string;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
@@ -33,6 +42,7 @@ export interface UseCustomTableProps<TData> {
 // Stable default values to prevent infinite re-rendering
 // These must be defined outside the hook to maintain referential equality
 const DEFAULT_SERVER_FILTERS: ServerFilter[] = [];
+const DEFAULT_SERVER_NOT_FILTERS: ServerNotFilter[] = [];
 const DEFAULT_SERVER_ORDER_BYS: ServerOrderBy[] = [];
 const DEFAULT_INITIAL_STATE = {};
 
@@ -93,6 +103,7 @@ export function useCustomTable<TData>({
   columns,
   resource,
   serverFilters = DEFAULT_SERVER_FILTERS,
+  serverNotFilters = DEFAULT_SERVER_NOT_FILTERS,
   serverOrderBys = DEFAULT_SERVER_ORDER_BYS,
   select = "*",
   initialState = DEFAULT_INITIAL_STATE
@@ -142,6 +153,10 @@ export function useCustomTable<TData>({
         }
       });
 
+      serverNotFilters.forEach((filter) => {
+        query = query.not(filter.field, filter.operator, filter.value);
+      });
+
       // Apply server order bys
       serverOrderBys.forEach((orderBy) => {
         query = query.order(orderBy.field, orderBy.direction === "asc" ? { ascending: true } : { ascending: false });
@@ -159,7 +174,7 @@ export function useCustomTable<TData>({
     } finally {
       setIsLoading(false);
     }
-  }, [resource, serverFilters, select, serverOrderBys]);
+  }, [resource, serverFilters, serverNotFilters, select, serverOrderBys]);
 
   // Re-fetch data when server filters, resource, or select clause changes
   // The useCallback dependencies ensure fetchData is recreated only when necessary
