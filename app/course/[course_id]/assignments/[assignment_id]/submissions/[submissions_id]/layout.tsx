@@ -2061,7 +2061,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </VStack>
         </Box>
         {submission.is_not_graded && (
-          <Box flexShrink={1} maxW="lg" rounded="sm" bg="fg.warning" color="fg.inverted" p={2} textAlign="center" m={0}>
+          <Box
+            flexShrink={1}
+            maxW="lg"
+            rounded="sm"
+            colorPalette="orange"
+            bg="colorPalette.solid"
+            color="white"
+            p={2}
+            textAlign="center"
+            m={0}
+          >
             <Heading size="md">Viewing a not-for-grading submission.</Heading>
             <Text fontSize="xs">
               This submission was created with #NOT-GRADED in the commit message and cannot ever become active. It will
@@ -2070,7 +2080,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </Box>
         )}
         {!submission.is_active && !submission.is_not_graded && (
-          <Box rounded="sm" bg="red.fg" color="fg.inverted" px={6} py={2} textAlign="center" m={0}>
+          <Box
+            rounded="sm"
+            colorPalette="red"
+            bg="colorPalette.solid"
+            color="white"
+            px={6}
+            py={2}
+            textAlign="center"
+            m={0}
+          >
             <Heading size="md">Viewing a previous submission.</Heading>
             <Text fontSize="xs">
               Use the submission history to view or change the active submission. The active submission is the one that

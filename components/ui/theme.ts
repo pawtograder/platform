@@ -24,6 +24,9 @@ const config = defineConfig({
         blue: {
           solid: { value: { base: "{colors.blue.700}", _dark: "{colors.blue.400}" } }
         },
+        orange: {
+          solid: { value: { base: "{colors.orange.700}", _dark: "{colors.orange.400}" } }
+        },
         // Chakra's default fg.success / fg.error pair with bg.success / bg.error at
         // ~3.1:1 (green.600 on green.50, red.600 on red.50) — below AA. Remap to
         // {green,red}.700 so status-tinted text cards (e.g. test-result headings)
