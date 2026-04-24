@@ -176,9 +176,12 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
           </Box>
         </Float>
       )}
+
       <Text>
         {hasRenderableScore
-          ? gradebookController.getRendererForColumn(column.id)({
+          ? studentGradebookColumn?.is_missing
+            ? "X"
+            : gradebookController.getRendererForColumn(column.id)({
               ...studentGradebookColumn,
               max_score: column.max_score
             })
