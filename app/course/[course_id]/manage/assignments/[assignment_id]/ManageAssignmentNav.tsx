@@ -120,7 +120,7 @@ export function ManageAssignmentNav({
   return (
     <>
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
-        <Box w="xs" pr={2} flex={0}>
+        <Box as="nav" aria-label="Assignment management" w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
             {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string))
               .filter((item) => {
@@ -128,25 +128,28 @@ export function ManageAssignmentNav({
                 if (item.instructorsOnly === "graderOrInstructor") return isGraderOrInstructor;
                 return isInstructor;
               })
-              .map((item) => (
-                <Button
-                  key={item.label}
-                  variant={pathname.endsWith(item.href) ? "solid" : "ghost"}
-                  w="100%"
-                  size="xs"
-                  pt="0"
-                  fontSize="sm"
-                  justifyContent="flex-start"
-                  asChild
-                >
-                  <NextLink href={item.href}>
-                    <HStack textAlign="left" w="100%" justify="flex-start">
-                      {React.createElement(item.icon)}
-                      {item.label}
-                    </HStack>
-                  </NextLink>
-                </Button>
-              ))}
+              .map((item) => {
+                const isActive = pathname.endsWith(item.href);
+                return (
+                  <Button
+                    key={item.label}
+                    variant={isActive ? "solid" : "ghost"}
+                    w="100%"
+                    size="xs"
+                    pt="0"
+                    fontSize="sm"
+                    justifyContent="flex-start"
+                    asChild
+                  >
+                    <NextLink href={item.href} aria-current={isActive ? "page" : undefined}>
+                      <HStack textAlign="left" w="100%" justify="flex-start">
+                        {React.createElement(item.icon)}
+                        {item.label}
+                      </HStack>
+                    </NextLink>
+                  </Button>
+                );
+              })}
             {isInstructor && (
               <DeleteAssignmentButton
                 assignmentId={Number.parseInt(assignment_id as string)}

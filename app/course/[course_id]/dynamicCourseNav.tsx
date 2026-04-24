@@ -280,7 +280,6 @@ export default function DynamicCourseNav() {
   return (
     <Box
       as="header"
-      role="banner"
       px={{ base: 2, md: 4 }}
       py={{ base: 2, md: 2 }}
       ref={courseNavRef}

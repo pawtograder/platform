@@ -47,7 +47,6 @@ export default async function ProtectedPage() {
     <VStack>
       <Box
         as="header"
-        role="banner"
         width="100%"
         px={{ base: 4, md: 4 }}
         bg="bg.subtle"
