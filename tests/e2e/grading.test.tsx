@@ -13,6 +13,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local" });
 
@@ -209,6 +210,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await argosScreenshot(page, "Self-Review Rubric completed");
+    await assertStudentPageAccessible(page, "grading self-review completed");
   });
 
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
@@ -313,6 +315,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     });
     await page.waitForTimeout(100); // Ensure scroll completes before screenshot
     await argosScreenshot(page, "Student can view their grading results");
+    await assertStudentPageAccessible(page, "grading results submission files");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
     // Find the region with aria-label 'Grading checks on line 4'
@@ -400,6 +403,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Escalate to Instructor" }).click();
     await argosScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
+    await assertStudentPageAccessible(page, "grading regrade appeal escalated");
   });
   test("Instructors can view the student's regrade appeal and resolve it", async ({ page }) => {
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });

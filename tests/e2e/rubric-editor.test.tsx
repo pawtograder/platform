@@ -12,6 +12,7 @@ import {
   loginAsUser,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local" });
 
@@ -149,5 +150,6 @@ test.describe("Rubric editor", () => {
     await expect(
       page.getByText(/The final score \(manual \+ autograder\) will be capped to \d+ points maximum\./)
     ).toBeVisible();
+    await assertStudentPageAccessible(page, "student submission score capping copy");
   });
 });

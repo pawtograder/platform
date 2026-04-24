@@ -13,6 +13,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local" });
 
@@ -270,6 +271,7 @@ test.describe("Manual grading score calculation", () => {
       const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
       await expect(scoreHeading).toBeVisible({ timeout: 15000 });
       await argosScreenshot(page, "Individual grading - student view with score");
+      await assertStudentPageAccessible(page, "manual grading individual student score");
     });
   });
 
@@ -350,6 +352,7 @@ test.describe("Manual grading score calculation", () => {
       const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
       await expect(scoreHeading).toBeVisible({ timeout: 15000 });
       await argosScreenshot(page, "Group grading shared - student view with score");
+      await assertStudentPageAccessible(page, "manual grading group shared student score");
     });
   });
 
@@ -550,6 +553,7 @@ test.describe("Manual grading score calculation", () => {
       await expect(page.getByRole("heading", { name: /Overall Score/ })).not.toBeVisible();
       await expect(page.getByText("(You)")).toBeVisible();
       await argosScreenshot(page, "Group individual grading - student view with individual score");
+      await assertStudentPageAccessible(page, "manual grading group individual student score");
     });
 
     test("instructor sees all individual scores", async ({ page }) => {
