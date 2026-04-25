@@ -1076,7 +1076,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByTestId("expression-builder-overlay")).toBeHidden();
 
     await addDialog.getByRole("button", { name: /^Cancel$/ }).click();
-    await expect(addDialog).toBeHidden();
+    // The Chakra dialog flips data-state="closed" the instant the close
+    // dispatches, but `toBeHidden` waits for the bounding box to collapse,
+    // which on webkit can lag the exit animation enough to time out.
+    await expect(addDialog).toHaveAttribute("data-state", "closed");
 
     // Sanity: no column named "Validated Column" leaked into the DB.
     const { data: leaked } = await supabase

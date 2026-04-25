@@ -86,9 +86,11 @@ test.describe("Lab Sections Page", () => {
     await page.waitForURL("**/manage/course/lab-sections");
   });
   test("Instructors can view lab section contents", async ({ page }) => {
-    // Check Lab Sections Page Contents
-    await expect(page.getByRole("heading", { name: "Lab Sections" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();
+    // Check Lab Sections Page Contents. The lab-roster page we just left also
+    // has a "Lab Sections" heading, so don't trust that as a "page loaded"
+    // signal — the page itself shows a "Loading lab sections..." spinner until
+    // both the labSections and labSectionMeetings TableControllers are ready.
+    await expect(page.getByText("Loading lab sections...")).toBeHidden();
     await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();
     await expect(page.getByText("<Lab Section 1>", { exact: true })).toBeVisible();
     await page.getByText("No upcoming meetings").first().waitFor({ state: "hidden" });

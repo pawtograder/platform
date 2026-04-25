@@ -162,6 +162,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await argosScreenshot(page, "Student can submit self-review early");
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
+    // The "Submission finalized" success toast is the explicit signal that
+    // finalize_submission_early completed and reviewAssignments has been
+    // refetched (see finalizeSubmissionEarly.tsx). Without this, the test
+    // races the "Complete Self Review" button into existence.
+    await expect(page.getByText("Submission finalized")).toBeVisible();
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
@@ -227,12 +232,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
-    // The rubric panel hydrates progressively (realtime stream populates each
-    // check's comment after the panel renders). The second check's comment
-    // lands last; webkit can need >20s, so scope to the rubric region and
-    // give it more time.
-    const selfReviewRubric = page.getByRole("region", { name: "Self-Review Rubric" });
-    await expect(selfReviewRubric.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible({ timeout: 45_000 });
+    // Wait for the applied checks (which carry COMMENT_2) to land before
+    // asserting on the comment text itself — this avoids racing the rubric
+    // sidebar's progressive hydration of comments.
+    await expect(page.getByLabel("Self Review Check 2", { exact: false })).toBeVisible();
+    await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
       el.scrollIntoView({ block: "start", behavior: "instant" });
