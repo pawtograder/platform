@@ -4,6 +4,8 @@ on:
     branches:
       - main
       - staging
+      # TODO(remove-before-merge): test the new e2e-local job from this branch.
+      - ci/parallel-e2e-local-supabase
   pull_request_target:
   workflow_dispatch:
 
