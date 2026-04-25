@@ -68,7 +68,7 @@ jobs:
   # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
   # the Playwright suite against it — independent of the Coolify preview above.
   e2e-local:
-    runs-on: pawtograder-ci
+    runs-on: pawtograder-e2e
     timeout-minutes: 75
     permissions:
       contents: read
