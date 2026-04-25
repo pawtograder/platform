@@ -114,6 +114,12 @@ test.describe("Office Hours", () => {
     await argosScreenshot(page, "Office Hours - Submit a Private Request");
     await page.getByRole("button", { name: "Submit Request" }).click();
 
+    // newRequestForm.tsx awaits helpRequests.create() then router.push() to
+    // /office-hours/{queue_id}/{request_id}. The "Your position in the queue"
+    // text only renders once that request page mounts AND the row is in the
+    // queue/user-requests controllers. waitForURL is the explicit signal that
+    // navigation completed; without it we race the post-submit navigation.
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
     //Add a comment on it
     await page.getByRole("textbox", { name: "Type your message" }).click();
@@ -130,6 +136,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(HELP_REQUEST_MESSAGE_1);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
 
     //Add a comment on it

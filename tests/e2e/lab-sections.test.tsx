@@ -79,8 +79,12 @@ test.describe("Lab Sections Page", () => {
     await page.getByRole("menuitem", { name: "Lab Sections" }).click();
     // Menu click navigates to lab-roster; only THEN does the "Manage lab sections"
     // link render. Without an explicit wait, webkit races the navigation and the
-    // click times out searching the previous page's DOM.
+    // click times out searching the previous page's DOM. The lab-roster page
+    // also has its own "Loading lab roster..." spinner that hides only once
+    // its data hooks resolve — that's the real signal that the page header
+    // (with the "Manage lab sections" link) has rendered.
     await page.waitForURL("**/manage/course/lab-roster");
+    await expect(page.getByText("Loading lab roster...")).toBeHidden();
     await expect(page.getByRole("link", { name: "Manage lab sections" })).toBeVisible();
     await page.getByRole("link", { name: "Manage lab sections" }).click();
     await page.waitForURL("**/manage/course/lab-sections");
@@ -90,8 +94,15 @@ test.describe("Lab Sections Page", () => {
     // has a "Lab Sections" heading, so don't trust that as a "page loaded"
     // signal — the page itself shows a "Loading lab sections..." spinner until
     // both the labSections and labSectionMeetings TableControllers are ready.
+    // useIsTableControllerReady (lib/TableController.ts) flips ready=true once
+    // the initial fetch resolves, EVEN WITH ZERO ROWS — so the spinner can
+    // hide while the realtime broadcast for the 20 inserted lab sections
+    // hasn't arrived yet, leaving the page showing "No lab sections created
+    // yet." Wait for the actual row count to settle (20 inserted in beforeAll
+    // + 1 header row = 21 rows).
     await expect(page.getByText("Loading lab sections...")).toBeHidden();
     await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();
+    await expect(page.getByRole("row")).toHaveCount(21, { timeout: 30_000 });
     await expect(page.getByText("<Lab Section 1>", { exact: true })).toBeVisible();
     await page.getByText("No upcoming meetings").first().waitFor({ state: "hidden" });
     await argosScreenshot(page, "Lab Sections Page Contents");

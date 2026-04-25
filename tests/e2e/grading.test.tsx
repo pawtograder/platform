@@ -234,13 +234,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
-    // Wait for the applied checks (which carry COMMENT_2) to land before
-    // asserting on the comment text itself — this avoids racing the rubric
-    // sidebar's progressive hydration of comments. Multiple elements share
-    // the "Self Review Check 2" label (the rubric checkbox label, the
-    // checkbox input, and the comment region); .first() picks the label,
-    // which is rendered first.
-    await expect(page.getByLabel("Self Review Check 2", { exact: false }).first()).toBeVisible();
+    // Wait for the applied "Self Review Check 2" comment region to render.
+    // The rubric-sidebar emits a `<Box role="region"
+    // aria-label="Grading check {check.name}">` per applied check (see
+    // components/ui/rubric-sidebar.tsx), and that region only mounts once
+    // the SubmissionFileComment row has hydrated into the controller —
+    // unlike the rubric-definition labels which are present from page load.
+    // This is the real "comment hydrated" signal; without it the next
+    // assertion races the rubric sidebar's progressive comment hydration.
+    await expect(page.getByRole("region", { name: "Grading check Self Review Check 2" }).first()).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
