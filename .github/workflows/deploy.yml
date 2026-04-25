@@ -138,7 +138,13 @@ jobs:
 
       - name: Write .env.local
         env:
-          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+          GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
+          GITHUB_PRIVATE_KEY_STRING: ${{ secrets.PAWTOGRADER_GITHUB_PRIVATE_KEY_STRING }}
+          GITHUB_OAUTH_CLIENT_ID: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
+          GITHUB_OAUTH_CLIENT_SECRET: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_SECRET }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           set -euo pipefail
           eval "$(npx supabase status -o env)"
@@ -153,14 +159,18 @@ jobs:
           E2E_ENABLE=true
           END_TO_END_SECRET=not-a-secret
           EDGE_FUNCTION_SECRET=some-secret-value
-          GITHUB_APP_ID=1
+          GITHUB_APP_ID=${GITHUB_APP_ID}
+          GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
+          GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
+          UPSTASH_REDIS_REST_URL=${UPSTASH_REDIS_REST_URL}
+          UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN}
+          SENTRY_DSN=${SENTRY_DSN}
           EOF
-          # GitHub App needs a parseable RSA key at Edge-Function boot; E2E tests
-          # bypass GitHub, so a throwaway key is fine here.
+          # Multiline PEM — wrap in double quotes so dotenv preserves newlines.
           {
-            echo 'GITHUB_PRIVATE_KEY_STRING="'
-            openssl genrsa 2048 2>/dev/null
-            echo '"'
+            printf 'GITHUB_PRIVATE_KEY_STRING="'
+            printf '%s' "${GITHUB_PRIVATE_KEY_STRING}"
+            printf '"\n'
           } >> .env.local
 
       - name: Build Next.js (prod, port 3001)
@@ -204,7 +214,7 @@ jobs:
           export END_TO_END_SECRET=not-a-secret
           npx playwright test
 
-      - name: Collect server logs on failure
+      - name: Tail server logs on failure
         if: failure()
         run: |
           echo '--- edge-functions.log ---'; tail -n 500 /tmp/edge-functions.log || true
@@ -215,7 +225,22 @@ jobs:
         run: |
           kill "$(cat /tmp/edge-functions.pid 2>/dev/null)" 2>/dev/null || true
           kill "$(cat /tmp/next-server.pid 2>/dev/null)" 2>/dev/null || true
+          # Capture full Supabase container logs while the stack is still up.
+          mkdir -p server-logs
+          for c in $(docker ps --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" --format '{{.Names}}'); do
+            docker logs "$c" > "server-logs/${c}.log" 2>&1 || true
+          done
+          cp -f /tmp/edge-functions.log server-logs/edge-functions.log 2>/dev/null || true
+          cp -f /tmp/next-server.log    server-logs/next-server.log    2>/dev/null || true
           npx supabase stop --no-backup || true
+
+      - name: Upload server logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-logs
+          path: server-logs/
+          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
