@@ -1068,7 +1068,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByTestId("expression-builder-overlay")).toBeHidden();
 
     await addDialog.getByRole("button", { name: /^Cancel$/ }).click();
-    await expect(addDialog).toHaveAttribute("data-state", "closed");
+    await expect(addDialog).toBeHidden();
 
     // Sanity: no column named "Validated Column" leaked into the DB.
     const { data: leaked } = await supabase

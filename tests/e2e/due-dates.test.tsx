@@ -402,7 +402,9 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await studentExtRow.getByLabel("Delete").click();
     const confirmDialog = page.getByRole("alertdialog");
     await page.getByRole("button", { name: "Confirm action" }).click();
-    await expect(confirmDialog).toHaveAttribute("data-state", "closed");
+    // alertdialog unmounts cleanly on dismiss (unlike the regular dialog used
+    // earlier in this test), so visibility resolves correctly to "not found".
+    await expect(confirmDialog).not.toBeVisible();
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
