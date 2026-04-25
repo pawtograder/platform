@@ -11,7 +11,7 @@ import {
   supabase
 } from "./TestingUtils";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 test.describe("Student assignments dashboard score display", () => {
   test("Latest Submission shows autograder while pending, then total after grading completes", async ({ page }) => {

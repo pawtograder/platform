@@ -18,7 +18,7 @@ import {
 } from "./TestingUtils";
 // removed unused import
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let students: TestingUser[] = [];

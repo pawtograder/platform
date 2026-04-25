@@ -14,7 +14,7 @@ import {
 } from "./TestingUtils";
 import { SupabaseClient } from "@supabase/supabase-js";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student: TestingUser | undefined;

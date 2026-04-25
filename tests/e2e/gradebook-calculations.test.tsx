@@ -23,7 +23,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser, supabase } from "./TestingUtils";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers

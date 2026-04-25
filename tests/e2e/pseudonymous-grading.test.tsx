@@ -13,7 +13,7 @@ import {
   TestingUser
 } from "./TestingUtils";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(

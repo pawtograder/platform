@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import { expect, test } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, type TestingUser } from "./TestingUtils";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // Use a browser timezone different from the course's default (America/New_York)
 test.use({ timezoneId: "America/Los_Angeles" });

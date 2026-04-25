@@ -4,8 +4,8 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { CanvasApi } from "@kth/canvas-api";
 import { createObjectCsvWriter } from "csv-writer";
 import dotenv from "dotenv";
-dotenv.config({ path: "./supabase/functions/.env" });
-dotenv.config({ path: "./.env.local.prod" });
+dotenv.config({ path: "./supabase/functions/.env", quiet: true });
+dotenv.config({ path: "./.env.local.prod", quiet: true });
 
 /**
  * This script connects to Canvas and finds users that are not in Pawtograder, exporting a CSV of the users that are missing.
