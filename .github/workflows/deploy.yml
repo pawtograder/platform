@@ -74,7 +74,6 @@ jobs:
       contents: read
     env:
       SUPABASE_PROJECT: pawtograder-platform
-      STORAGE_MIGRATION: 20260217000000_binary_submission_files.sql
       # Supabase local-dev keys are deterministic (signed with the public
       # "supabase-demo" JWT secret). Hardcoding lets us write .env.local — and
       # therefore start `next build` — before `supabase start` finishes.
@@ -159,21 +158,37 @@ jobs:
           docker volume ls --filter label=com.supabase.cli.project=${SUPABASE_PROJECT} -q \
             | xargs -r docker volume rm || true
 
-          # Move the storage-objects migration aside; the supabase CLI's DB role
-          # can't own RLS policies on storage.objects, so we apply it as superuser
-          # after start.
-          mv "supabase/migrations/${STORAGE_MIGRATION}" "/tmp/${STORAGE_MIGRATION}"
-
           nohup npx supabase start > /tmp/supabase-start.log 2>&1 &
           echo $! > /tmp/supabase-start.pid
 
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
+      # Background the browser install (~30-90s, mostly downloads + apt-get).
+      - name: Install Playwright Browsers (background)
+        run: |
+          set -euo pipefail
+          rm -f /tmp/playwright-install.exitcode
+          nohup bash -c 'npx playwright install --with-deps \
+            > /tmp/playwright-install.log 2>&1; \
+            echo $? > /tmp/playwright-install.exitcode' &
 
       - name: Build Next.js (prod, port 3001)
         env:
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
         run: npm run build
+
+      - name: Wait for Playwright install
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 600); do
+            [ -f /tmp/playwright-install.exitcode ] && break
+            sleep 1
+          done
+          rc="$(cat /tmp/playwright-install.exitcode 2>/dev/null || echo 'timeout')"
+          if [ "$rc" != "0" ]; then
+            echo "playwright install failed (rc=$rc)"
+            echo '--- playwright-install.log ---'
+            cat /tmp/playwright-install.log || true
+            exit 1
+          fi
 
       - name: Wait for Supabase + finalize schema
         run: |
@@ -200,13 +215,6 @@ jobs:
           curl -sf -o /dev/null \
             -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
             "${LOCAL_SUPABASE_URL}/rest/v1/"
-
-          # Apply the held-back migration as superuser and record it.
-          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres \
-            < "/tmp/${STORAGE_MIGRATION}"
-          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
-            "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"
-          mv "/tmp/${STORAGE_MIGRATION}" "supabase/migrations/${STORAGE_MIGRATION}"
 
           # Audit table is partitioned; seed today's partition (and the next 7 days).
           docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
