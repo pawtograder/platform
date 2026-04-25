@@ -89,7 +89,13 @@ export default function FinalizeSubmissionEarly({
         });
         return;
       }
-      reviewAssignments.refetchAll();
+      // Await the refetch so the success toast is a true "data ready" signal:
+      // the self-review review_assignment row created by finalize_submission_early
+      // must be in the controller's cache before the UI can render the
+      // "Complete Self Review" button. Without await, callers (including
+      // playwright tests) race the toast against the still-in-flight refetch.
+      // refetchAll resolves after the new rows are loaded into the controller.
+      await reviewAssignments.refetchAll();
       toaster.success({
         title: "Submission finalized",
         description: "Your submission time is set. You can continue with self-review if your course uses it."
