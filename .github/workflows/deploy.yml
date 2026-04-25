@@ -1,4 +1,4 @@
-name: Deploy Branch Preview & E2E
+name: E2E Tests
 on:
   push:
     branches:
@@ -13,60 +13,10 @@ on:
 permissions: {}
 
 jobs:
-  # Deploys a Coolify branch preview. Runs in parallel with e2e-local — not a
-  # blocker for E2E anymore, so tests can fail/pass without waiting on Coolify.
-  deploy-preview:
-    runs-on: pawtograder-ci
-    environment: staging
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-node-22-
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
-      - name: Deploy a branch preview environment
-        id: deploy
-        uses: pawtograder/coolify-supabase-deployment-action@main
-        with:
-          ephemeral: false
-          coolify_api_url: https://coolify.in.ripley.cloud/api/v1
-          coolify_server_uuid: ${{ secrets.COOLIFY_SERVER_UUID }}
-          coolify_api_token: ${{ secrets.COOLIFY_API_TOKEN }}
-          coolify_project_uuid: ${{ secrets.COOLIFY_PROJECT_UUID }}
-          coolify_environment_name: ${{ vars.COOLIFY_ENVIRONMENT_NAME }}
-          coolify_environment_uuid: ${{ secrets.COOLIFY_ENVIRONMENT_UUID }}
-          coolify_supabase_api_url: ${{ secrets.COOLIFY_SUPABASE_API_URL }}
-          deployment_app_uuid: ${{ secrets.COOLIFY_DEPLOYMENT_APP_UUID }}
-          bugsink_dsn: ${{ secrets.BUGSINK_DSN }}
-          discord_webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          frontend_image_repo: ghcr.io/${{ github.repository_owner }}/platform-frontend
-          dockerfile_path: ./Dockerfile
-          docker_registry_username: ${{ github.actor }}
-          docker_registry_password: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
-          GITHUB_OAUTH_CLIENT_ID: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
-          GITHUB_OAUTH_CLIENT_SECRET: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_SECRET }}
-          GITHUB_PRIVATE_KEY_STRING: ${{ secrets.PAWTOGRADER_GITHUB_PRIVATE_KEY_STRING }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
-          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-
   # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
-  # the Playwright suite against it — independent of the Coolify preview above.
+  # the Playwright suite against it. The Coolify branch-preview job that used to
+  # run alongside this one is gone — it'll come back once the deployment target
+  # moves into the same k8s cluster as this runner.
   e2e-local:
     runs-on: pawtograder-e2e
     timeout-minutes: 75
