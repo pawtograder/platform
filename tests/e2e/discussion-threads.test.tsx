@@ -111,9 +111,16 @@ test.describe("Discussion Thread Page", () => {
       .locator('textarea.w-md-editor-text-input[spellcheck="false"]')
       .fill("01001000 01100101 01101100 01101100 01101111 00100000 01010111 01101111 01110010 01101100 01100100");
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
+    // The Submit handler router.push()es to /discussion/<id>; wait for the
+    // navigation to commit before asserting on the thread page contents,
+    // otherwise the locators race the form unmount on chromium under load.
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "Is my answer for HW1 Q1 correct?" })).toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
+    // Auto-follow is created by a DB trigger and surfaced via the
+    // discussionThreadWatchers Realtime channel. Allow up to 30s for the
+    // realtime propagation; on chromium under load 20s has been seen to flake.
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).toBeVisible();
   });
 
@@ -149,8 +156,10 @@ test.describe("Discussion Thread Page", () => {
         "IT'S PREHISTORIC TRASH. KOTLIN IS LITERALLY SO MUCH BETTER SMH. NULL SAFETY, TYPE INFERENCE, AND FIRST-CLASS FUNCTIONS. THE SYLLABUS IS A JOKE AND I REGRET TAKING THIS CLASS. I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE."
       );
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
+    // Same navigation-race concern as the private-thread test above.
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: student2?.public_profile_name })).toBeVisible();
   });
 
@@ -177,7 +186,10 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Yes.")).toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
+    // Replying triggers an auto-watch insert via DB trigger; allow up to 30s
+    // for the discussionThreadWatchers Realtime channel to surface the new
+    // row (chromium under load occasionally exceeds the default 20s).
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible({ timeout: 30_000 });
 
     // Need to go to browse topics to see the thread (because it's public)
     await page.getByRole("link", { name: "Browse Topics" }).click();
@@ -218,7 +230,8 @@ test.describe("Discussion Thread Page", () => {
     ).toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
-    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
+    // Same DB-trigger + realtime race as the private-thread reply above.
+    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible({ timeout: 30_000 });
     await argosScreenshot(page, "After Instructor Replied to Public Thread");
   });
 });

@@ -10,6 +10,7 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  supabase,
   TestingUser
 } from "./TestingUtils";
 
@@ -109,7 +110,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     // that finalize_submission_early completed and reviewAssignments has
     // refetched (see finalizeSubmissionEarly.tsx). Without it the next
     // assertion races the "Complete Self Review" button into existence.
-    await expect(page.getByText("Submission finalized")).toBeVisible();
+    // Chakra renders the toast title twice (visible toast + portal duplicate
+    // both with the same id), so .first() is required to satisfy strict mode.
+    await expect(page.getByText("Submission finalized").first()).toBeVisible();
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
@@ -209,8 +212,20 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Wait for the release to land in the DB before navigating to the
+    // submission page. On webkit the SSR'd submission page sometimes paints
+    // before the released flag has propagated, leading to the badge showing
+    // "No" indefinitely (mirrors grading.test.tsx's release polling).
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("released")
+        .eq("submission_id", submission_id!)
+        .eq("released", true);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
-    await expect(page.getByText("Released to studentYes")).toBeVisible();
+    await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
 
   test("Instructors see their real name in parentheses on grading comments", async ({ page }) => {

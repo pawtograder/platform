@@ -166,7 +166,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // finalize_submission_early completed and reviewAssignments has been
     // refetched (see finalizeSubmissionEarly.tsx). Without this, the test
     // races the "Complete Self Review" button into existence.
-    await expect(page.getByText("Submission finalized")).toBeVisible();
+    // Chakra renders the toast title twice (visible toast + portal duplicate
+    // both with the same id), so .first() is required to satisfy strict mode.
+    await expect(page.getByText("Submission finalized").first()).toBeVisible();
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
@@ -234,8 +236,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
     // Wait for the applied checks (which carry COMMENT_2) to land before
     // asserting on the comment text itself — this avoids racing the rubric
-    // sidebar's progressive hydration of comments.
-    await expect(page.getByLabel("Self Review Check 2", { exact: false })).toBeVisible();
+    // sidebar's progressive hydration of comments. Multiple elements share
+    // the "Self Review Check 2" label (the rubric checkbox label, the
+    // checkbox input, and the comment region); .first() picks the label,
+    // which is rendered first.
+    await expect(page.getByLabel("Self Review Check 2", { exact: false }).first()).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {

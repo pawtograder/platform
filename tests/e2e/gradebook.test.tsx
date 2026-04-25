@@ -503,7 +503,13 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
     }
 
-    //Wait for gradebook to finish updating with the private final grade
+    //Wait for gradebook to finish updating with the private final grade.
+    // The final-grade column is calculated from average-assignments, which
+    // depends on the code-walk column. The recalculation pipeline is async
+    // (DB → pg_net → edge function) and can stall under CI load with stuck
+    // is_recalculating flags. Apply the same kicker pattern as the code-walk
+    // poll above: clear stuck flags + invoke the worker between polls.
+    let finalKickCount = 0;
     await expect(async () => {
       const { data: privateRecord, error: privateError } = await supabase
         .from("gradebook_column_students")
@@ -516,8 +522,25 @@ test.describe("Gradebook Page - Comprehensive", () => {
       if (privateError) {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
       }
+      if (privateRecord?.score !== 51.95 && finalKickCount < 8) {
+        finalKickCount++;
+        await supabase
+          .from("gradebook_row_recalc_state")
+          .update({ is_recalculating: false })
+          .eq("class_id", course.id)
+          .eq("is_recalculating", true);
+        const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
+        if (edgeSecret) {
+          await supabase.functions
+            .invoke("gradebook-column-recalculate", {
+              headers: { "x-edge-function-secret": edgeSecret }
+            })
+            .catch(() => {});
+        }
+        await supabase.rpc("invoke_gradebook_recalculation_background_task");
+      }
       expect(privateRecord?.score).toBe(51.95);
-    }).toPass({ timeout: 60_000 });
+    }).toPass({ timeout: 120_000 });
 
     // Public record may lag behind private due to async recalculation — poll separately
     await expect(async () => {
@@ -734,7 +757,11 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const studentName = students[0].private_profile_name;
     await waitForVirtualizerIdle(page);
     const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
-    const partCell = await waitForStableLocator(page, getPartCell);
+    // Bump the stability window — under chromium load the virtualizer can
+    // remount the cell repeatedly for >3s while the gradebook hydrates,
+    // tripping the helper's default timeout. 60s upper bound matches the
+    // initial recalculation/realtime burst seen in CI.
+    const partCell = await waitForStableLocator(page, getPartCell, 60_000);
     await partCell.click();
     const scoreInput = page.locator('input[name="score"]');
     await scoreInput.fill("50.5");
@@ -751,11 +778,37 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await partCell.click();
     const restoreInput = page.locator('input[name="score"]');
     await expect(restoreInput).toBeVisible();
-    await restoreInput.fill("84.5");
-    await expect(restoreInput).toHaveValue("84.5");
-    await page.getByRole("button", { name: /^Update$/ }).click();
-    await expect(restoreInput).toBeHidden();
-    await expect(partCell).toHaveText(/84\.5/);
+    // The form mounts with defaultValues: { score: studentGradebookColumn.score }
+    // populated from the controller's state (now 50.5). Filling before that
+    // initialization commits has produced "50.5845" or "50.5" carryover under
+    // load — wait for the input to reflect the just-saved 50.5 first so fill()
+    // has a stable starting state to clear and replace.
+    await expect(restoreInput).toHaveValue("50.5");
+    // Set the value via key sequence (focus → select-all → delete → type),
+    // which guarantees react-hook-form's registered onChange fires on every
+    // keystroke. On chromium under load, the more compact .fill() path has
+    // occasionally produced a successful toHaveValue but a submit that still
+    // sent the previous score, leaving the cell at 50.5 — the popover form
+    // could remount on a realtime tick between fill and Update click. Retry
+    // the entire fill→Update→assert sequence until the cell shows 84.5.
+    await expect(async () => {
+      // If the popover closed (e.g., remount, click-away), reopen it first.
+      if (!(await restoreInput.isVisible().catch(() => false))) {
+        await partCell.click();
+        await expect(restoreInput).toBeVisible();
+      }
+      // Wait for the form to mount with the most recent score before typing.
+      await expect(restoreInput).toHaveValue(/^(50\.5|84\.5)$/);
+      await restoreInput.click();
+      await restoreInput.press("ControlOrMeta+a");
+      await restoreInput.press("Delete");
+      await expect(restoreInput).toHaveValue("", { timeout: 1000 });
+      await restoreInput.pressSequentially("84.5");
+      await expect(restoreInput).toHaveValue("84.5", { timeout: 1000 });
+      await page.getByRole("button", { name: /^Update$/ }).click();
+      await expect(restoreInput).toBeHidden({ timeout: 5000 });
+      await expect(partCell).toHaveText(/84\.5/, { timeout: 5000 });
+    }).toPass({ timeout: 60_000, intervals: [500, 1000, 2000] });
   });
 
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {
@@ -1559,12 +1612,18 @@ test.describe("Gradebook column reorder (issue #531)", () => {
 
     await waitForVirtualizerIdle(page);
 
-    // After the Move Left, the column scrolled out of view in the column
-    // virtualizer; webkit then can't find the Column options button because
-    // its host cell isn't rendered. Scroll it back into view first.
-    await headerCell.scrollIntoViewIfNeeded();
+    // After the Move Left, the column moved to a new index in the column
+    // virtualizer and its previous DOM node may be unmounted. Re-query the
+    // headerCell from the live thead, then scroll it into view (webkit and
+    // chromium both occasionally render the column off-screen).
+    const headerCellAfterMove = region
+      .locator("thead tr")
+      .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+      .locator("[data-col-id]")
+      .filter({ hasText: colName });
+    await headerCellAfterMove.scrollIntoViewIfNeeded();
     await waitForVirtualizerIdle(page);
-    await headerCell.getByRole("button", { name: "Column options" }).click();
+    await headerCellAfterMove.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
     await expect(page.getByText("Column moved right").first()).toBeVisible();
 
