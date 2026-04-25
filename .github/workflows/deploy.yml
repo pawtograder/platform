@@ -75,6 +75,12 @@ jobs:
     env:
       SUPABASE_PROJECT: pawtograder-platform
       STORAGE_MIGRATION: 20260217000000_binary_submission_files.sql
+      # Supabase local-dev keys are deterministic (signed with the public
+      # "supabase-demo" JWT secret). Hardcoding lets us write .env.local — and
+      # therefore start `next build` — before `supabase start` finishes.
+      LOCAL_SUPABASE_URL: http://127.0.0.1:54321
+      LOCAL_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      LOCAL_SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,36 +114,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
-
-      - name: Start local Supabase (fresh, no backup restore)
-        run: |
-          set -euo pipefail
-          # Stop any previous run without saving a backup, then drop lingering volumes.
-          npx supabase stop --no-backup || true
-          docker volume ls --filter label=com.supabase.cli.project=${SUPABASE_PROJECT} -q \
-            | xargs -r docker volume rm || true
-
-          # Work around a known migration that fails under the supabase CLI's DB role
-          # (it creates RLS policies on storage.objects which only the superuser owns).
-          mv "supabase/migrations/${STORAGE_MIGRATION}" "/tmp/${STORAGE_MIGRATION}"
-
-          npx supabase start
-
-          # Apply the held-back migration as superuser and record it.
-          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres \
-            < "/tmp/${STORAGE_MIGRATION}"
-          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
-            "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"
-
-          # Restore the file so the checkout is clean.
-          mv "/tmp/${STORAGE_MIGRATION}" "supabase/migrations/${STORAGE_MIGRATION}"
-
-          # Audit table is partitioned; seed today's partition (and the next 7 days).
-          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
-            "SELECT public.audit_maintain_partitions();"
-
       - name: Write .env.local
         env:
           GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
@@ -149,13 +125,12 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           set -euo pipefail
-          eval "$(npx supabase status -o env)"
           cat > .env.local <<EOF
-          NEXT_PUBLIC_SUPABASE_URL=${API_URL}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY=${ANON_KEY}
-          SUPABASE_URL=${API_URL}
-          SUPABASE_ANON_KEY=${ANON_KEY}
-          SUPABASE_SERVICE_ROLE_KEY=${SERVICE_ROLE_KEY}
+          NEXT_PUBLIC_SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          SUPABASE_SERVICE_ROLE_KEY=${LOCAL_SUPABASE_SERVICE_ROLE_KEY}
           ENABLE_SIGNUPS=true
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
           E2E_ENABLE=true
@@ -175,10 +150,67 @@ jobs:
             printf '"\n'
           } >> .env.local
 
+      # Kick Supabase off in the background so its container pulls + migration
+      # run overlap with `next build` and `playwright install`.
+      - name: Start local Supabase (background, fresh)
+        run: |
+          set -euo pipefail
+          npx supabase stop --no-backup || true
+          docker volume ls --filter label=com.supabase.cli.project=${SUPABASE_PROJECT} -q \
+            | xargs -r docker volume rm || true
+
+          # Move the storage-objects migration aside; the supabase CLI's DB role
+          # can't own RLS policies on storage.objects, so we apply it as superuser
+          # after start.
+          mv "supabase/migrations/${STORAGE_MIGRATION}" "/tmp/${STORAGE_MIGRATION}"
+
+          nohup npx supabase start > /tmp/supabase-start.log 2>&1 &
+          echo $! > /tmp/supabase-start.pid
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+
       - name: Build Next.js (prod, port 3001)
         env:
           NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
         run: npm run build
+
+      - name: Wait for Supabase + finalize schema
+        run: |
+          set -euo pipefail
+          PID="$(cat /tmp/supabase-start.pid)"
+          # `wait` is useless here — the bg process was launched in a previous
+          # step's shell and is reparented to PID 1. Poll: ready when the API
+          # answers, fail fast if the start process exited without bringing it up.
+          for i in $(seq 1 600); do
+            if curl -sf -o /dev/null \
+                 -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+                 "${LOCAL_SUPABASE_URL}/rest/v1/"; then
+              break
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo 'supabase start exited before the API came up'
+              echo '--- supabase-start.log ---'
+              cat /tmp/supabase-start.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+          # Final readiness check — fail loudly if we fell out of the loop.
+          curl -sf -o /dev/null \
+            -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+            "${LOCAL_SUPABASE_URL}/rest/v1/"
+
+          # Apply the held-back migration as superuser and record it.
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres \
+            < "/tmp/${STORAGE_MIGRATION}"
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
+            "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"
+          mv "/tmp/${STORAGE_MIGRATION}" "supabase/migrations/${STORAGE_MIGRATION}"
+
+          # Audit table is partitioned; seed today's partition (and the next 7 days).
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
+            "SELECT public.audit_maintain_partitions();"
 
       - name: Serve Edge Functions
         run: |
@@ -203,18 +235,15 @@ jobs:
       - name: Run Playwright tests
         env:
           BASE_URL: http://localhost:3001
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+          EDGE_FUNCTION_SECRET: some-secret-value
+          END_TO_END_SECRET: not-a-secret
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          eval "$(npx supabase status -o env)"
-          export SUPABASE_URL="${API_URL}"
-          export SUPABASE_ANON_KEY="${ANON_KEY}"
-          export SUPABASE_SERVICE_ROLE_KEY="${SERVICE_ROLE_KEY}"
-          export EDGE_FUNCTION_SECRET=some-secret-value
-          export END_TO_END_SECRET=not-a-secret
-          npx playwright test
+        run: npx playwright test
 
       - name: Tail server logs on failure
         if: failure()
