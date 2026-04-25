@@ -883,6 +883,57 @@ case_when([
       expect(r.evaluation!.result).toBe("11");
     });
 
+    test("bare identifiers and largerEq see prior assignments; no SymbolNode intermediate for function name", () => {
+      const expr = `T = gradebook_columns('final-course-total').score
+IND = gradebook_columns('final-individual-assignments').score
+largerEq(T, 900) * largerEq(IND, 240)`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      const im = r.evaluation!.intermediates;
+
+      const tSym = im.find((iv) => iv.source === "T" && iv.nodeType === "SymbolNode");
+      expect(tSym?.error).toBeUndefined();
+      expect(tSym?.raw).toBe(930);
+
+      const indSym = im.find((iv) => iv.source === "IND" && iv.nodeType === "SymbolNode");
+      expect(indSym?.error).toBeUndefined();
+      expect(indSym?.raw).toBe(260);
+
+      const leT = findIntermediate(im, `largerEq(T, 900)`);
+      expect(leT?.error).toBeUndefined();
+      expect(leT?.raw).toBe(1);
+
+      const leInd = findIntermediate(im, `largerEq(IND, 240)`);
+      expect(leInd?.error).toBeUndefined();
+      expect(leInd?.raw).toBe(1);
+
+      expect(im.some((iv) => iv.source === "largerEq" && iv.nodeType === "SymbolNode")).toBe(false);
+    });
+
+    test("grade-boundary block exposes intermediate for A_ok * largerEq(T, 930) as 1", () => {
+      const expr = `T = gradebook_columns('final-course-total').score
+IND = gradebook_columns('final-individual-assignments').score
+GRP = gradebook_columns('final-group-assignments').score
+EXM = gradebook_columns('final-exams').score
+LABS = gradebook_columns('final-labs').score
+PART = gradebook_columns('final-participation').score
+A_ok = largerEq(T, 900) * largerEq(IND, 240) * largerEq(GRP, 160) * largerEq(EXM, 280) * largerEq(LABS, 11) * largerEq(PART, 40)
+case_when([
+  A_ok * largerEq(T, 930), 11;
+  A_ok * largerEq(T, 900), 10;
+  true, 0
+])`;
+      const r = runExpression(controller, expr, "alice");
+      expect(r.evaluation?.error).toBeNull();
+      const im = r.evaluation!.intermediates;
+      const row =
+        findIntermediate(im, "A_ok * largerEq(T, 930)") ??
+        im.find((iv) => iv.source.replace(/\s+/g, "") === "A_ok*largerEq(T,930)");
+      expect(row).toBeDefined();
+      expect(row?.error).toBeUndefined();
+      expect(row?.raw).toBe(1);
+    });
+
     test("runtime error attribution pins to the block that threw, not the last source line", () => {
       // Regression: the previous error-annotation branch used
       //   `entry.blockIndex === lineMap.filter(l => l.kind === "end").length - 1`

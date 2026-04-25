@@ -1017,7 +1017,8 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // assert that the intermediate-values panel renders the inner call. Scope
     // to the full-screen id so we don't hit the compact-mode textarea if both
     // are ever mounted simultaneously.
-    const fullScreenTextarea = addDialog.locator("#scoreExpressionFull");
+    // Full-screen editor is Monaco; the hidden textarea used for input lives inside the wrapper.
+    const fullScreenTextarea = addDialog.locator("#scoreExpressionFull textarea");
     await expect(fullScreenTextarea).toBeVisible();
     await fullScreenTextarea.fill('gradebook_columns("participation")');
     await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
