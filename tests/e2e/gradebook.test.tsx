@@ -740,13 +740,21 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await scoreInput.fill("50.5");
     await expect(scoreInput).toHaveValue("50.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
+    // Wait for the editor popover to fully close before reopening; otherwise
+    // the next click lands on the open popover instead of the cell, the
+    // restore Update fires against the stale 50.5 form, and the cell never
+    // moves to 84.5.
+    await expect(scoreInput).toBeHidden();
     await expect(partCell).toHaveText(/50\.5/);
 
     // Restore original value so subsequent serial tests see the expected score
     await partCell.click();
     const restoreInput = page.locator('input[name="score"]');
+    await expect(restoreInput).toBeVisible();
     await restoreInput.fill("84.5");
+    await expect(restoreInput).toHaveValue("84.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(restoreInput).toBeHidden();
     await expect(partCell).toHaveText(/84\.5/);
   });
 
@@ -1548,6 +1556,11 @@ test.describe("Gradebook column reorder (issue #531)", () => {
 
     await waitForVirtualizerIdle(page);
 
+    // After the Move Left, the column scrolled out of view in the column
+    // virtualizer; webkit then can't find the Column options button because
+    // its host cell isn't rendered. Scroll it back into view first.
+    await headerCell.scrollIntoViewIfNeeded();
+    await waitForVirtualizerIdle(page);
     await headerCell.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
     await expect(page.getByText("Column moved right").first()).toBeVisible();

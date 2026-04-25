@@ -77,7 +77,13 @@ test.describe("Lab Sections Page", () => {
     await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
     await expect(page.getByRole("menuitem", { name: "Lab Sections" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Lab Sections" }).click();
+    // Menu click navigates to lab-roster; only THEN does the "Manage lab sections"
+    // link render. Without an explicit wait, webkit races the navigation and the
+    // click times out searching the previous page's DOM.
+    await page.waitForURL("**/manage/course/lab-roster");
+    await expect(page.getByRole("link", { name: "Manage lab sections" })).toBeVisible();
     await page.getByRole("link", { name: "Manage lab sections" }).click();
+    await page.waitForURL("**/manage/course/lab-sections");
   });
   test("Instructors can view lab section contents", async ({ page }) => {
     // Check Lab Sections Page Contents

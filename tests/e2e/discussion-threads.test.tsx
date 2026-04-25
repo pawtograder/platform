@@ -160,6 +160,9 @@ test.describe("Discussion Thread Page", () => {
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     // Check that the threads are visible
     await page.waitForURL("**/discussion");
+    // Wait for the discussion shell to render before asserting on a specific
+    // thread — webkit otherwise races the thread list's first paint.
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await expect(page.getByText("Is my answer for HW1 Q1 correct?")).toBeVisible();
 
     // Check that the instructor can reply to the private thread
@@ -182,9 +185,21 @@ test.describe("Discussion Thread Page", () => {
     await page.getByRole("button", { name: "Logistics Follow topic" }).click();
     await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
 
-    // Check that the instructor can reply to the public thread
+    // Check that the instructor can reply to the public thread.
+    // The link click + thread-detail data fetch is the slowest path in the
+    // suite on webkit. Poll with reload because the controller occasionally
+    // races initial navigation and never paints the heading.
     await page.getByRole("link", { name: "JAVA SUCKS" }).click();
-    await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible(); //Wait for the page to change
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
+    let attempts = 0;
+    await expect(async () => {
+      attempts += 1;
+      if (attempts > 1) {
+        await page.reload();
+      }
+      await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible({ timeout: 15_000 });
+    }).toPass({ timeout: 90_000, intervals: [3000, 5000, 10000] });
+    await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page

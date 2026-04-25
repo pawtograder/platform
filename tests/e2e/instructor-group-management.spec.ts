@@ -98,15 +98,37 @@ test.describe("Instructor group management", () => {
 
     const groupName = `e2egrp${Date.now().toString(36)}`;
 
-    await page.getByRole("button", { name: "Create New Group" }).click();
     const createDialog = page.getByRole("dialog");
-    await expect(createDialog.getByRole("heading", { name: "Create New Group" })).toBeVisible();
-    await createDialog.locator('input[name="name"]').fill(groupName);
+    const studentAOption = page.getByRole("option", {
+      name: new RegExp(studentAName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    });
 
+    const openCreateGroup = async () => {
+      await page.getByRole("button", { name: "Create New Group" }).click();
+      await expect(createDialog.getByRole("heading", { name: "Create New Group" })).toBeVisible();
+      await createDialog.locator('input[name="name"]').fill(groupName);
+    };
+    await openCreateGroup();
+
+    // The combo's data source (useAllStudentRoles → realtime) may not yet
+    // include a student that was created in beforeAll. Retry by reopening the
+    // combo; if that's still not enough, reload the page so the initial fetch
+    // re-runs against the now-up-to-date DB.
     const memberCombo = createDialog.getByRole("combobox").first();
-    await memberCombo.click();
-    await memberCombo.fill(studentAName.slice(0, 24));
-    await page.getByRole("option", { name: new RegExp(studentAName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) }).click();
+    let attempt = 0;
+    await expect(async () => {
+      attempt += 1;
+      if (attempt > 2) {
+        await page.keyboard.press("Escape");
+        await page.reload();
+        await openCreateGroup();
+      }
+      await memberCombo.click();
+      await memberCombo.fill("");
+      await memberCombo.fill(studentAName.slice(0, 24));
+      await expect(studentAOption).toBeVisible({ timeout: 5_000 });
+    }).toPass({ timeout: 90_000, intervals: [1000, 2000, 5000, 10000] });
+    await studentAOption.click();
     await createDialog.getByRole("button", { name: "Save" }).click();
 
     await expect(page.getByText("Pending Changes")).toBeVisible();

@@ -105,7 +105,14 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
-    await page.getByRole("button", { name: "Complete Self Review" }).click();
+    // Confirm action triggers an async finalize → submission/review-state
+    // transition. Wait for the resulting Complete Self Review button to be
+    // attached & enabled before clicking; webkit otherwise times out the
+    // 60s test budget on a still-rendering page.
+    const completeBtn = page.getByRole("button", { name: "Complete Self Review" });
+    await expect(completeBtn).toBeVisible({ timeout: 30_000 });
+    await expect(completeBtn).toBeEnabled();
+    await completeBtn.click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
     // Scroll self-review rubric to top of its container

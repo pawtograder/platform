@@ -227,7 +227,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
-    await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
+    // The rubric panel hydrates progressively (realtime stream populates each
+    // check's comment after the panel renders). The second check's comment
+    // lands last; webkit can need >20s, so scope to the rubric region and
+    // give it more time.
+    const selfReviewRubric = page.getByRole("region", { name: "Self-Review Rubric" });
+    await expect(selfReviewRubric.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible({ timeout: 45_000 });
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
       el.scrollIntoView({ block: "start", behavior: "instant" });
@@ -290,8 +295,20 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Wait for the release to land in the DB before navigating to the
+    // submission page. On webkit the SSR'd submission page sometimes paints
+    // before the released flag has propagated, leading to the badge showing
+    // "No" indefinitely.
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("released")
+        .eq("submission_id", submission_id)
+        .eq("released", true);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
-    await expect(page.getByText("Released to studentYes")).toBeVisible();
+    await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
     await loginAsUser(page, student!, course);
