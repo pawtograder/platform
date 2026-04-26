@@ -76,7 +76,6 @@ export default function HelpRequestForm() {
     control,
     getValues,
     watch,
-    reset,
     setError,
     clearErrors,
     formState: { errors, isSubmitting },
@@ -606,24 +605,14 @@ export default function HelpRequestForm() {
               description: "Help request successfully created. Redirecting to queue view..."
             });
 
-            // Reset form state after successful submission
-            reset({
-              help_queue: Number.parseInt(queue_id as string),
-              file_references: [],
-              location_type: "remote" as HelpRequestLocationType,
-              request: "",
-              is_private: false,
-              template_id: undefined,
-              referenced_submission_id: undefined,
-              followup_to: undefined
-            });
-
-            // Reset local state variables
-            setSelectedStudents(private_profile_id ? [private_profile_id] : []);
-            setSelectedAssignmentId(null);
-            setSelectedSubmissionId(null);
-
-            // Navigate to queue view
+            // Navigate to queue view BEFORE any state-clearing work. The form is
+            // about to unmount, so resetting state first is unnecessary and risky:
+            // each setState triggers a re-render whose effects (validation, error
+            // clearing, useList refetches) can run on the same microtask as
+            // router.push and silently swallow the navigation under load. This
+            // was observed on webkit in CI where the success toast fired but the
+            // URL never changed (issue tracked: form's post-create writes should
+            // be collapsed into a single RPC; see TODO at top of file).
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
           } catch (error) {
             toaster.error({
@@ -656,7 +645,6 @@ export default function HelpRequestForm() {
       queue_id,
       controller,
       router,
-      reset,
       submissions?.data,
       studentHelpActivity,
       templates.length

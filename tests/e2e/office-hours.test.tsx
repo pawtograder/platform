@@ -97,60 +97,6 @@ const PRIVATE_HELP_REQUEST_FOLLOW_UP_MESSAGE_1 = "Hmmm... Have you thought about
 const HELP_REQUEST_RESPONSE_1 = "Great question! Let's debug this step by step together 🚀";
 const HELP_REQUEST_OTHER_STUDENT_MESSAGE_1 = "Same boat here! Would love to learn from this discussion 📚";
 
-// Wait for the help_request row to land in the DB (service-role poll), then
-// give the client router a short window to navigate. If the row is in the DB
-// but the URL hasn't changed, the form's router.push lost the navigation
-// (seen on webkit under CI load when the post-create awaits race with the
-// realtime worker establishing channels for the new row). A page.goto to the
-// canonical request URL is the explicit recovery — once the row exists, the
-// destination page is fully renderable.
-async function waitForHelpRequestAndNavigate(
-  page: import("@playwright/test").Page,
-  args: {
-    courseId: number;
-    queueId: number;
-    studentProfileId: string;
-    request: string;
-    isPrivate: boolean;
-  }
-) {
-  let helpRequestId: number | undefined;
-  await expect
-    .poll(
-      async () => {
-        const { data, error } = await supabase
-          .from("help_requests")
-          .select("id")
-          .eq("class_id", args.courseId)
-          .eq("help_queue", args.queueId)
-          .eq("created_by", args.studentProfileId)
-          .eq("is_private", args.isPrivate)
-          .eq("request", args.request)
-          .order("id", { ascending: false })
-          .limit(1);
-        if (error) throw error;
-        helpRequestId = data?.[0]?.id;
-        return helpRequestId ?? 0;
-      },
-      {
-        message: `help_requests row not found for student=${args.studentProfileId} request="${args.request}"`,
-        timeout: 30_000,
-        intervals: [200, 500, 1000]
-      }
-    )
-    .toBeGreaterThan(0);
-
-  // Try waiting for the form's router.push to land. If it doesn't within 10s
-  // (router.push call lost — observed on webkit), navigate explicitly using
-  // the DB-confirmed id.
-  try {
-    await page.waitForURL(/\/office-hours\/\d+\/\d+$/, { timeout: 10_000 });
-  } catch {
-    await page.goto(`/course/${args.courseId}/office-hours/${args.queueId}/${helpRequestId!}`);
-    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
-  }
-}
-
 test.describe("Office Hours", () => {
   test.describe.configure({ mode: "serial" });
   test("Student can request help", async ({ page }) => {
@@ -158,12 +104,6 @@ test.describe("Office Hours", () => {
     const navRegion = page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.waitForURL("**/office-hours/**");
-
-    // Capture queue id from the URL (the form's queue_id route param).
-    const queueIdFromUrl = Number(new URL(page.url()).pathname.match(/\/office-hours\/(\d+)/)?.[1] ?? "");
-    if (!Number.isFinite(queueIdFromUrl) || queueIdFromUrl <= 0) {
-      throw new Error(`Could not parse queue_id from url ${page.url()}`);
-    }
 
     //Make a private request first
     await page.getByRole("link", { name: "New Request" }).click();
@@ -175,15 +115,9 @@ test.describe("Office Hours", () => {
     await page.getByRole("button", { name: "Submit Request" }).click();
 
     // newRequestForm.tsx awaits helpRequests.create() then router.push() to
-    // /office-hours/{queue_id}/{request_id}. The DB row is the ground truth:
-    // poll for it, then either let router.push land or navigate explicitly.
-    await waitForHelpRequestAndNavigate(page, {
-      courseId: course.id,
-      queueId: queueIdFromUrl,
-      studentProfileId: student!.private_profile_id,
-      request: PRIVATE_HELP_REQUEST_MESSAGE_1,
-      isPrivate: true
-    });
+    // /office-hours/{queue_id}/{request_id}. The router.push must land — if
+    // it doesn't, the user is stuck on the form (production bug).
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
     //Add a comment on it
     await page.getByRole("textbox", { name: "Type your message" }).click();
@@ -200,13 +134,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(HELP_REQUEST_MESSAGE_1);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
-    await waitForHelpRequestAndNavigate(page, {
-      courseId: course.id,
-      queueId: queueIdFromUrl,
-      studentProfileId: student!.private_profile_id,
-      request: HELP_REQUEST_MESSAGE_1,
-      isPrivate: false
-    });
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
 
     //Add a comment on it
