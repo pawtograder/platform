@@ -117,6 +117,24 @@ async function waitForVirtualizerIdle(page: Page) {
   );
 }
 
+// `gradebook-cell-pulse` is the className applied to the calculator icon a
+// gradebookCell.tsx renders while `studentGradebookColumn.is_recalculating`
+// is true (see app/course/[course_id]/manage/gradebook/gradebookCell.tsx).
+// Each is_recalculating flip toggles the cell's children, which combined with
+// realtime row updates causes the virtualizer to remount the cell — and
+// remounts in the middle of waitForStableLocator's two boundingBox samples
+// produce its "Timed out waiting for stable locator box" flake. Block until
+// no cell is currently recalculating before sampling cell geometry.
+async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000) {
+  await page
+    .locator(".gradebook-cell-pulse")
+    .first()
+    .waitFor({ state: "hidden", timeout: timeoutMs })
+    .catch(() => {
+      // No pulse element ever existed; that's fine — nothing was recalculating.
+    });
+}
+
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
   const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
   await region.evaluate((el) => {
@@ -756,11 +774,13 @@ test.describe("Gradebook Page - Comprehensive", () => {
   test("Issue #533: instructor can enter a decimal score in a manual gradebook cell", async ({ page }) => {
     const studentName = students[0].private_profile_name;
     await waitForVirtualizerIdle(page);
+    // Wait for the initial recalculation burst to drain. Each is_recalculating
+    // flip remounts the cell's children, defeating waitForStableLocator's
+    // two-boundingBox stability check.
+    await waitForGradebookRecalculationsIdle(page);
     const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
-    // Bump the stability window — under chromium load the virtualizer can
-    // remount the cell repeatedly for >3s while the gradebook hydrates,
-    // tripping the helper's default timeout. 60s upper bound matches the
-    // initial recalculation/realtime burst seen in CI.
+    // Even with recalculations idle, the virtualizer can briefly remount cells
+    // on realtime row updates — keep the wide stability window.
     const partCell = await waitForStableLocator(page, getPartCell, 60_000);
     await partCell.click();
     const scoreInput = page.locator('input[name="score"]');
