@@ -1253,6 +1253,27 @@ export default class TableController<
   }
 
   /**
+   * Public method to run an incremental since-watermark catch-up refetch.
+   *
+   * Useful for consumers that need to guarantee fresh data at a specific
+   * UI moment (e.g., a modal opening) without paying the cost of a full
+   * refetch. This is much cheaper than `refetchAll()` because it only
+   * fetches rows whose `updated_at > _maxUpdatedAtMs`. It is also safe to
+   * call frequently: there is no rate limit (unlike `refetchAll`), and
+   * concurrent calls are coalesced via the `_isRefetching` guard inside
+   * `_refetchSinceMaxUpdatedAt`.
+   *
+   * Falls back to no-op if the table has no `updated_at` watermark or if
+   * the controller is closed.
+   */
+  async catchUpSinceWatermark(): Promise<void> {
+    if (this._closed) return;
+    if (this._maxUpdatedAtMs == null) return;
+    if (!this._shouldEnableAutoRefetch()) return;
+    await this._refetchSinceMaxUpdatedAt();
+  }
+
+  /**
    * Public method to refetch specific rows by their IDs and update the controller state.
    * Uses batched IN queries to efficiently fetch multiple rows at once.
    * @param ids Array of row IDs to refetch
