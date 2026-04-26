@@ -82,8 +82,18 @@ test.describe("Lab Sections Page", () => {
     // to linger after the new page has rendered, intercepting clicks on the
     // "Manage lab sections" link below (see CI run #24943326970 retry #2,
     // where an "Enrollments" menuitem subtree intercepted pointer events for
-    // 60s). Wait for the menu positioner to detach before doing anything else.
-    await expect(page.locator('[data-part="positioner"][data-scope="menu"]')).toBeHidden();
+    // 60s).
+    //
+    // The chakra menu's *positioner* is a popper container that stays in the
+    // DOM regardless of menu open/closed (no `data-state` on it). The actual
+    // closed signal is on `Menu.Content`: when the menu closes, zag-js sets
+    // `hidden` and `data-state="closed"` on the content (see
+    // node_modules/@zag-js/menu/dist/index.js getContentProps). Asserting the
+    // positioner toBeHidden() is therefore a brittle proxy that depends on
+    // browser-specific bbox semantics — webkit has been observed to keep the
+    // empty positioner reported as "visible" for >20s. Wait on the
+    // authoritative content `data-state="closed"` instead.
+    await expect(page.locator('[data-part="content"][data-scope="menu"]')).toHaveAttribute("data-state", "closed");
 
     // Menu click navigates to lab-roster; only THEN does the "Manage lab sections"
     // link render. Don't trust `Loading lab roster... toBeHidden()` as a readiness
