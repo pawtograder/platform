@@ -1643,9 +1643,24 @@ test.describe("Gradebook column reorder (issue #531)", () => {
       .filter({ hasText: colName });
     await headerCellAfterMove.scrollIntoViewIfNeeded();
     await waitForVirtualizerIdle(page);
-    await headerCellAfterMove.getByRole("button", { name: "Column options" }).click();
-    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
-    await expect(page.getByText("Column moved right").first()).toBeVisible();
+    // The column header unmounts/remounts under realtime pressure: gradebook
+    // refetches caused by the prior Move Left can re-render the column
+    // virtualizer mid-click, detaching the "Column options" button or the
+    // chakra menu it controls. Retry the entire open+click sequence as a
+    // single unit so a transient detach doesn't fail the test. Each attempt
+    // re-resolves the locator (so the new mount is targeted), waits for
+    // virtualizer idle, opens the menu, and clicks Move Right. Any
+    // intermediate detach throws and we try again. The ultimate signal that
+    // the click succeeded is the "Column moved right" toast (matching how
+    // Move Left works above), and the DB sort_order assertion that follows.
+    await expect(async () => {
+      await waitForVirtualizerIdle(page);
+      const buttonNow = headerCellAfterMove.getByRole("button", { name: "Column options" });
+      await buttonNow.scrollIntoViewIfNeeded();
+      await buttonNow.click();
+      await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
+      await expect(page.getByText("Column moved right").first()).toBeVisible({ timeout: 5000 });
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
 
     // Verify sort_order restored to original
     await expect(async () => {
