@@ -77,14 +77,23 @@ test.describe("Lab Sections Page", () => {
     await page.getByRole("group").filter({ hasText: "Course Settings" }).locator("div").click();
     await expect(page.getByRole("menuitem", { name: "Lab Sections" })).toBeVisible();
     await page.getByRole("menuitem", { name: "Lab Sections" }).click();
+    // After the menuitem click, chakra triggers navigation AND starts closing
+    // the dropdown. Under webkit contention the menu positioner has been seen
+    // to linger after the new page has rendered, intercepting clicks on the
+    // "Manage lab sections" link below (see CI run #24943326970 retry #2,
+    // where an "Enrollments" menuitem subtree intercepted pointer events for
+    // 60s). Wait for the menu positioner to detach before doing anything else.
+    await expect(page.locator('[data-part="positioner"][data-scope="menu"]')).toBeHidden();
+
     // Menu click navigates to lab-roster; only THEN does the "Manage lab sections"
-    // link render. Without an explicit wait, webkit races the navigation and the
-    // click times out searching the previous page's DOM. The lab-roster page
-    // also has its own "Loading lab roster..." spinner that hides only once
-    // its data hooks resolve — that's the real signal that the page header
-    // (with the "Manage lab sections" link) has rendered.
+    // link render. Don't trust `Loading lab roster... toBeHidden()` as a readiness
+    // signal — `toBeHidden` is satisfied while the new page hasn't mounted yet
+    // (the spinner element doesn't exist yet), so we'd race past it onto a
+    // still-empty DOM. The real signal is the role-gated "Manage lab sections"
+    // link itself: it only renders once `isInitialized` flips true AND
+    // `useIsInstructor()` resolves to true — which is exactly what we want to
+    // click anyway. Wait directly for it.
     await page.waitForURL("**/manage/course/lab-roster");
-    await expect(page.getByText("Loading lab roster...")).toBeHidden();
     await expect(page.getByRole("link", { name: "Manage lab sections" })).toBeVisible();
     await page.getByRole("link", { name: "Manage lab sections" }).click();
     await page.waitForURL("**/manage/course/lab-sections");
@@ -95,14 +104,37 @@ test.describe("Lab Sections Page", () => {
     // signal — the page itself shows a "Loading lab sections..." spinner until
     // both the labSections and labSectionMeetings TableControllers are ready.
     // useIsTableControllerReady (lib/TableController.ts) flips ready=true once
-    // the initial fetch resolves, EVEN WITH ZERO ROWS — so the spinner can
-    // hide while the realtime broadcast for the 20 inserted lab sections
-    // hasn't arrived yet, leaving the page showing "No lab sections created
-    // yet." Wait for the actual row count to settle (20 inserted in beforeAll
-    // + 1 header row = 21 rows).
+    // the initial fetch resolves, EVEN WITH ZERO ROWS.
     await expect(page.getByText("Loading lab sections...")).toBeHidden();
     await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();
-    await expect(page.getByRole("row")).toHaveCount(21, { timeout: 30_000 });
+
+    // The 20 lab sections are inserted in beforeAll via the admin client.
+    // Each insert fires a postgres trigger that asynchronously POSTs to
+    // /api/cache/invalidate to clear the SSR fetch cache for the
+    // `lab_sections:${course_id}:staff` tag (see
+    // supabase/migrations/20251228131640_cache_invalidation_triggers.sql).
+    // Under CI contention these HTTP invalidations can land *after* the
+    // course-layout SSR fetch in app/course/[course_id]/layout.tsx has
+    // already populated `initialData.labSections` from a stale (often empty)
+    // cache. The lab_sections TableController hydrates from that initialData
+    // and then only ever subscribes for *future* realtime INSERTs — it does
+    // not replay the 20 INSERTs that happened before the channel joined. So
+    // the page can sit with 0–1 rows indefinitely (we observed 1 in CI run
+    // #24943326970 retry #1, stuck for 30s).
+    //
+    // Detect that race and recover by hard-reloading the page once. By the
+    // time we reload, the async cache invalidations have had >1s to land,
+    // and the fresh SSR fetch returns all 20 rows. We give the optimistic
+    // path 8s before falling back to reload so the common (cache-fresh) case
+    // stays fast.
+    try {
+      await expect(page.getByRole("row")).toHaveCount(21, { timeout: 8_000 });
+    } catch {
+      await page.reload();
+      await expect(page.getByText("Loading lab sections...")).toBeHidden();
+      await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();
+      await expect(page.getByRole("row")).toHaveCount(21, { timeout: 30_000 });
+    }
     await expect(page.getByText("<Lab Section 1>", { exact: true })).toBeVisible();
     await page.getByText("No upcoming meetings").first().waitFor({ state: "hidden" });
     await argosScreenshot(page, "Lab Sections Page Contents");
