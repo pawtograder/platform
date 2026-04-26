@@ -2,7 +2,7 @@ import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, loginAsUser, supabase, TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
@@ -176,6 +176,8 @@ test.describe("Discussion Thread Page", () => {
 
     // Check that the instructor can reply to the private thread
     await page.getByText("Is my answer for HW1 Q1 correct?").click();
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
+    const privateThreadRootId = Number(new URL(page.url()).pathname.match(/\/discussion\/(\d+)/)![1]);
     await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page.getByPlaceholder("Reply...").fill("Yes.");
@@ -186,10 +188,41 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Yes.")).toBeVisible();
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
-    // Replying triggers an auto-watch insert via DB trigger; allow up to 30s
-    // for the discussionThreadWatchers Realtime channel to surface the new
-    // row (chromium under load occasionally exceeds the default 20s).
-    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible({ timeout: 30_000 });
+    // Replying triggers an auto-watch insert via DB trigger. The
+    // discussion_thread_watchers row is the ground truth for the Unfollow
+    // button (see useDiscussionThreadFollowStatus → curWatch?.enabled). On
+    // chromium under CI load the realtime delivery of this row to the
+    // discussionThreadWatchers TableController has been seen to take >30s,
+    // so polling the UI alone is brittle. Gate on the DB row first, then
+    // reload-as-escape-hatch if the local controller hasn't picked it up:
+    // the page-level reload reseeds the controller from a fresh fetch which
+    // always includes the row.
+    await expect
+      .poll(
+        async () => {
+          const { data, error } = await supabase
+            .from("discussion_thread_watchers")
+            .select("id,enabled")
+            .eq("user_id", instructor!.user_id)
+            .eq("discussion_thread_root_id", privateThreadRootId);
+          if (error) throw error;
+          return (data ?? []).filter((r) => r.enabled).length;
+        },
+        {
+          message: "auto-follow discussion_thread_watchers row not found in DB",
+          timeout: 15_000,
+          intervals: [200, 500, 1000]
+        }
+      )
+      .toBeGreaterThan(0);
+    const unfollowButton = page.getByRole("button").filter({ hasText: "Unfollow" });
+    try {
+      await expect(unfollowButton).toBeVisible({ timeout: 10_000 });
+    } catch {
+      await page.reload();
+      await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
+      await expect(unfollowButton).toBeVisible({ timeout: 20_000 });
+    }
 
     // Need to go to browse topics to see the thread (because it's public)
     await page.getByRole("link", { name: "Browse Topics" }).click();
