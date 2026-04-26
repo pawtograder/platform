@@ -778,37 +778,11 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await partCell.click();
     const restoreInput = page.locator('input[name="score"]');
     await expect(restoreInput).toBeVisible();
-    // The form mounts with defaultValues: { score: studentGradebookColumn.score }
-    // populated from the controller's state (now 50.5). Filling before that
-    // initialization commits has produced "50.5845" or "50.5" carryover under
-    // load — wait for the input to reflect the just-saved 50.5 first so fill()
-    // has a stable starting state to clear and replace.
-    await expect(restoreInput).toHaveValue("50.5");
-    // Set the value via key sequence (focus → select-all → delete → type),
-    // which guarantees react-hook-form's registered onChange fires on every
-    // keystroke. On chromium under load, the more compact .fill() path has
-    // occasionally produced a successful toHaveValue but a submit that still
-    // sent the previous score, leaving the cell at 50.5 — the popover form
-    // could remount on a realtime tick between fill and Update click. Retry
-    // the entire fill→Update→assert sequence until the cell shows 84.5.
-    await expect(async () => {
-      // If the popover closed (e.g., remount, click-away), reopen it first.
-      if (!(await restoreInput.isVisible().catch(() => false))) {
-        await partCell.click();
-        await expect(restoreInput).toBeVisible();
-      }
-      // Wait for the form to mount with the most recent score before typing.
-      await expect(restoreInput).toHaveValue(/^(50\.5|84\.5)$/);
-      await restoreInput.click();
-      await restoreInput.press("ControlOrMeta+a");
-      await restoreInput.press("Delete");
-      await expect(restoreInput).toHaveValue("", { timeout: 1000 });
-      await restoreInput.pressSequentially("84.5");
-      await expect(restoreInput).toHaveValue("84.5", { timeout: 1000 });
-      await page.getByRole("button", { name: /^Update$/ }).click();
-      await expect(restoreInput).toBeHidden({ timeout: 5000 });
-      await expect(partCell).toHaveText(/84\.5/, { timeout: 5000 });
-    }).toPass({ timeout: 60_000, intervals: [500, 1000, 2000] });
+    await restoreInput.fill("84.5");
+    await expect(restoreInput).toHaveValue("84.5");
+    await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(restoreInput).toBeHidden();
+    await expect(partCell).toHaveText(/84\.5/);
   });
 
   test("Instructors can view comprehensive gradebook with real data", async ({ page }) => {
