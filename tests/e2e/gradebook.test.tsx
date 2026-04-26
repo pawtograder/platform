@@ -521,13 +521,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
     }
 
-    //Wait for gradebook to finish updating with the private final grade.
+    // Wait for gradebook to finish updating with the private final grade.
     // The final-grade column is calculated from average-assignments, which
     // depends on the code-walk column. The recalculation pipeline is async
-    // (DB → pg_net → edge function) and can stall under CI load with stuck
-    // is_recalculating flags. Apply the same kicker pattern as the code-walk
-    // poll above: clear stuck flags + invoke the worker between polls.
-    let finalKickCount = 0;
+    // (DB → pg_net → edge function); just poll the result.
     await expect(async () => {
       const { data: privateRecord, error: privateError } = await supabase
         .from("gradebook_column_students")
@@ -539,23 +536,6 @@ test.describe("Gradebook Page - Comprehensive", () => {
         .single();
       if (privateError) {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
-      }
-      if (privateRecord?.score !== 51.95 && finalKickCount < 8) {
-        finalKickCount++;
-        await supabase
-          .from("gradebook_row_recalc_state")
-          .update({ is_recalculating: false })
-          .eq("class_id", course.id)
-          .eq("is_recalculating", true);
-        const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
-        if (edgeSecret) {
-          await supabase.functions
-            .invoke("gradebook-column-recalculate", {
-              headers: { "x-edge-function-secret": edgeSecret }
-            })
-            .catch(() => {});
-        }
-        await supabase.rpc("invoke_gradebook_recalculation_background_task");
       }
       expect(privateRecord?.score).toBe(51.95);
     }).toPass({ timeout: 120_000 });
