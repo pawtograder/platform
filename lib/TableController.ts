@@ -2375,11 +2375,37 @@ export default class TableController<
 
   private _nonExistantKeys: Set<IDType> = new Set();
   private async _maybeRefetchKey(id: IDType) {
-    if (!this._ready || !this._autoFetchMissingRows) {
+    if (!this._autoFetchMissingRows) {
       return;
     }
     if (this._nonExistantKeys.has(id)) {
       return;
+    }
+
+    // If the controller hasn't completed its initial fetch yet, wait for it.
+    // The initial fetch may include this row, in which case we don't need to
+    // issue a per-row refetch. Without this wait, callers that arrive before
+    // _ready (e.g. a route navigation that mounts a detail page before the
+    // course-wide TableController has loaded) silently get `undefined`
+    // forever — _maybeRefetchKey used to early-return when !_ready, and the
+    // ready-transition only fires listeners for rows already present in
+    // _rows. The result was the discussion thread heading would
+    // intermittently never paint until reload.
+    if (!this._ready) {
+      try {
+        await this._readyPromise;
+      } catch {
+        return;
+      }
+      if (this._closed) return;
+      // After the initial fetch, the row may now be present; if so, no
+      // single-row refetch is needed. Listeners attached via getById() will
+      // have been notified by the ready-transition fan-out (see the
+      // _readyPromise resolver).
+      const existing = this._rows.find((row) => (row as ResultOne & { id: IDType }).id === id);
+      if (existing) {
+        return existing as unknown as ResultOne;
+      }
     }
 
     this._nonExistantKeys.add(id);

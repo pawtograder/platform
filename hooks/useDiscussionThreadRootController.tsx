@@ -188,66 +188,62 @@ export function DiscussionThreadsControllerProvider({
     threadRealTimeController: DiscussionThreadRealTimeController;
   } | null>(null);
 
-  // Create all controllers with async initialization
+  // Create all controllers with async initialization.
+  //
+  // Previously this awaited threadRealTimeController.start() before creating
+  // the TableController and resolving setController(...). On webkit (and
+  // anywhere websocket negotiation is slow) that gated the entire provider
+  // subtree behind realtime channel join — including the discussion thread
+  // heading, which only depends on the course-wide teasers controller.
+  // Symptom: navigating into a thread, the URL changed but the page sat on
+  // the loading skeleton until reload.
+  //
+  // Fix: construct the per-thread controllers synchronously and resolve
+  // setController immediately. The realtime controller starts in the
+  // background; the TableController buffers any pre-join broadcasts and
+  // catches up once the channel reaches "joined" via its existing
+  // since-watermark mechanism.
   useEffect(() => {
-    let cancelled = false;
+    if (!courseController?.client) {
+      return;
+    }
 
-    const initializeControllers = async () => {
-      if (!courseController?.client) {
-        return;
-      }
+    // Create DiscussionThreadRealTimeController for per-thread channel
+    const threadRealTimeController = new DiscussionThreadRealTimeController({
+      client: courseController.client,
+      threadRootId: root_id
+    });
 
-      // Create DiscussionThreadRealTimeController for per-thread channel
-      const threadRealTimeController = new DiscussionThreadRealTimeController({
-        client: courseController.client,
-        threadRootId: root_id
-      });
+    // Kick off realtime channel join in the background; do not block render.
+    void threadRealTimeController.start();
 
-      // Start the realtime controller
-      await threadRealTimeController.start();
+    // Create TableController with BOTH class and thread-specific realtime controllers
+    const tableController = new TableController({
+      client: courseController.client,
+      table: "discussion_threads",
+      query: courseController.client
+        .from("discussion_threads")
+        .select("*")
+        .eq("root", root_id)
+        .order("created_at", { ascending: true }),
+      classRealTimeController: courseController.classRealTimeController,
+      additionalRealTimeControllers: [threadRealTimeController],
+      realtimeFilter: { root: root_id },
+      loadEntireTable: true
+    });
 
-      if (cancelled) {
-        await threadRealTimeController.close();
-        return;
-      }
+    // Create DiscussionThreadsController
+    const discussionController = new DiscussionThreadsController(root_id, tableController, threadRealTimeController);
 
-      // Create TableController with BOTH class and thread-specific realtime controllers
-      const tableController = new TableController({
-        client: courseController.client,
-        table: "discussion_threads",
-        query: courseController.client
-          .from("discussion_threads")
-          .select("*")
-          .eq("root", root_id)
-          .order("created_at", { ascending: true }),
-        classRealTimeController: courseController.classRealTimeController,
-        additionalRealTimeControllers: [threadRealTimeController],
-        realtimeFilter: { root: root_id },
-        loadEntireTable: true
-      });
-
-      if (cancelled) {
-        await threadRealTimeController.close();
-        tableController.close();
-        return;
-      }
-
-      // Create DiscussionThreadsController
-      const discussionController = new DiscussionThreadsController(root_id, tableController, threadRealTimeController);
-
-      controllersRef.current = {
-        threadController: discussionController,
-        tableController,
-        threadRealTimeController
-      };
-
-      setController(discussionController);
+    controllersRef.current = {
+      threadController: discussionController,
+      tableController,
+      threadRealTimeController
     };
 
-    initializeControllers();
+    setController(discussionController);
 
     return () => {
-      cancelled = true;
       if (controllersRef.current) {
         controllersRef.current.threadController.close();
         controllersRef.current.tableController.close();
