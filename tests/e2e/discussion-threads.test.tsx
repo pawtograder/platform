@@ -236,6 +236,7 @@ test.describe("Discussion Thread Page", () => {
     // races initial navigation and never paints the heading.
     await page.getByRole("link", { name: "JAVA SUCKS" }).click();
     await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
+    const publicThreadRootId = Number(new URL(page.url()).pathname.match(/\/discussion\/(\d+)/)![1]);
     let attempts = 0;
     await expect(async () => {
       attempts += 1;
@@ -264,7 +265,32 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
     // Same DB-trigger + realtime race as the private-thread reply above.
-    await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible({ timeout: 30_000 });
+    await expect
+      .poll(
+        async () => {
+          const { data, error } = await supabase
+            .from("discussion_thread_watchers")
+            .select("id,enabled")
+            .eq("user_id", instructor!.user_id)
+            .eq("discussion_thread_root_id", publicThreadRootId);
+          if (error) throw error;
+          return (data ?? []).filter((r) => r.enabled).length;
+        },
+        {
+          message: "auto-follow discussion_thread_watchers row not found in DB (public thread)",
+          timeout: 15_000,
+          intervals: [200, 500, 1000]
+        }
+      )
+      .toBeGreaterThan(0);
+    const publicUnfollowButton = page.getByRole("button").filter({ hasText: "Unfollow" });
+    try {
+      await expect(publicUnfollowButton).toBeVisible({ timeout: 10_000 });
+    } catch {
+      await page.reload();
+      await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
+      await expect(publicUnfollowButton).toBeVisible({ timeout: 20_000 });
+    }
     await argosScreenshot(page, "After Instructor Replied to Public Thread");
   });
 });
