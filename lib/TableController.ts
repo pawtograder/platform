@@ -1222,7 +1222,16 @@ export default class TableController<
         `TableController for table '${this._table}' is closed. Cannot call refetchAll(). This indicates a stale reference is being used.`
       );
     }
+    // If a refetch is already in flight (e.g. triggered by a realtime
+    // reconnection or another caller), don't kick off a duplicate — but DO
+    // wait for it to complete. Returning immediately here defeats the whole
+    // point of `await refetchAll()` as a "data ready" signal: callers like
+    // FinalizeSubmissionEarly rely on the await to gate a success toast that
+    // means "the new rows are now in the cache." Without this wait, they
+    // race the toast against the still-in-flight refetch, and downstream
+    // tests/UI flicker between empty and populated states.
     if (this._isRefetching) {
+      await this.waitForRefetchToComplete();
       return;
     }
     if (Date.now() - this._lastRefetchAllTime < 3000) {
