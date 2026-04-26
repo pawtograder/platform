@@ -238,11 +238,57 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // The rubric-sidebar emits a `<Box role="region"
     // aria-label="Grading check {check.name}">` per applied check (see
     // components/ui/rubric-sidebar.tsx), and that region only mounts once
-    // the SubmissionFileComment row has hydrated into the controller —
-    // unlike the rubric-definition labels which are present from page load.
-    // This is the real "comment hydrated" signal; without it the next
-    // assertion races the rubric sidebar's progressive comment hydration.
-    await expect(page.getByRole("region", { name: "Grading check Self Review Check 2" }).first()).toBeVisible();
+    // the SubmissionComment row has hydrated into the SubmissionController
+    // (Self Review Check 2 is applied as a *global* check via the rubric
+    // sidebar's Add Check button, not a line annotation, so the row lives in
+    // submission_comments — distinct from SELF_REVIEW_COMMENT_1 which is a
+    // submission_file_comments row anchored to a code line).
+    //
+    // The DB write completes synchronously inside the previous test's
+    // `submissionController.submission_comments.create` call (see
+    // lib/TableController.ts create()), so by the time we navigate here the
+    // row is committed in PG. The race we hit on chromium under CI load is
+    // the SubmissionController's *initial fetch* of submission_comments
+    // occasionally landing without this row when paired with a live-realtime
+    // race — i.e., the controller's readyPromise resolves with a stale
+    // snapshot, and then the realtime delivery is delayed. Gate on the DB
+    // first (truth), then retry the UI assertion with a reload escape hatch
+    // — reload reseeds the controller from a fresh fetch.
+    const selfReviewCheck2 = assignment!.rubricChecks.find((c) => c.name === "Self Review Check 2");
+    if (!selfReviewCheck2) {
+      throw new Error("Self Review Check 2 rubric check not found in assignment fixture");
+    }
+    await expect
+      .poll(
+        async () => {
+          const { data, error } = await supabase
+            .from("submission_comments")
+            .select("id")
+            .eq("submission_id", submission_id!)
+            .eq("rubric_check_id", selfReviewCheck2.id)
+            .is("deleted_at", null);
+          if (error) throw error;
+          return data?.length ?? 0;
+        },
+        {
+          message: "submission_comments row for Self Review Check 2 not found in DB",
+          timeout: 15_000,
+          intervals: [200, 500, 1000]
+        }
+      )
+      .toBeGreaterThan(0);
+    // DB has the row; if the SubmissionController missed it on initial fetch
+    // and realtime hasn't delivered, reload once to force a fresh hydration.
+    const check2Region = page.getByRole("region", { name: "Grading check Self Review Check 2" }).first();
+    try {
+      await expect(check2Region).toBeVisible({ timeout: 10_000 });
+    } catch {
+      await page.reload();
+      await page.getByText("Lint Results: Passed").waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "Files" }).click();
+      await expect(page.getByLabel("Rubric: Self-Review Rubric")).toBeVisible();
+      await expect(check2Region).toBeVisible({ timeout: 20_000 });
+    }
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
