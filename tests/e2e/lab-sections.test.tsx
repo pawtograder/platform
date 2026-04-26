@@ -93,6 +93,13 @@ test.describe("Lab Sections Page", () => {
     // link itself: it only renders once `isInitialized` flips true AND
     // `useIsInstructor()` resolves to true — which is exactly what we want to
     // click anyway. Wait directly for it.
+    //
+    // The lab_sections TableController in lib/TableController.ts now runs a
+    // since-watermark catch-up refetch the first time its realtime channel
+    // joins after hydrating from initialData (see
+    // _needsCatchUpAfterInitialDataHydration). This catches rows inserted
+    // between the SSR fetch and the channel-join, eliminating the empty-page
+    // race that previously blocked isInitialized.
     await page.waitForURL("**/manage/course/lab-roster");
     await expect(page.getByRole("link", { name: "Manage lab sections" })).toBeVisible();
     await page.getByRole("link", { name: "Manage lab sections" }).click();

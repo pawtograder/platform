@@ -647,6 +647,16 @@ export default class TableController<
   private _channelsCompletedInitialConnection: Set<string> = new Set(); // Track which channels have completed their first connection
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
   private _lastFetchTimestamp: number = 0;
+  /**
+   * True when this controller hydrated from server-provided `initialData`
+   * (skipping the in-browser initial fetch). In that case, rows inserted
+   * between the SSR fetch and the realtime channel join are NOT delivered
+   * to us — broadcasts only fire for events after the channel is in the
+   * "joined" state. We catch up by issuing a since-watermark refetch the
+   * first time a relevant channel reaches "joined". Set to false once that
+   * catch-up has been kicked off so we don't repeat it.
+   */
+  private _needsCatchUpAfterInitialDataHydration: boolean = false;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
   /**
@@ -1336,6 +1346,10 @@ export default class TableController<
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
     // Track which relevant channels have reconnected
     const relevantReconnections: string[] = [];
+    // Track whether at least one relevant channel reached "joined" for the
+    // first time during this status update. We use this to drive the
+    // initial-data catch-up refetch (see _needsCatchUpAfterInitialDataHydration).
+    let relevantInitialJoinHappened = false;
 
     for (const channel of status.channels) {
       if (!this._isChannelRelevantForTable(channel)) {
@@ -1360,10 +1374,30 @@ export default class TableController<
       // Mark channel as having completed initial connection once it reaches "joined" state for the first time
       if (isChannelNowConnected && !hadCompletedInitialConnection) {
         this._channelsCompletedInitialConnection.add(channel.name);
+        relevantInitialJoinHappened = true;
       }
 
       // Update tracked state
       this._lastChannelStates.set(channel.name, channel.state);
+    }
+
+    // First-time channel join after hydrating from initialData: rows that
+    // were INSERTed between the SSR fetch and channel-join are not delivered
+    // by realtime broadcasts (those only cover events after we joined). Run
+    // a since-watermark refetch to catch them. This is cheap (only fetches
+    // rows with updated_at > our current max), but only meaningful when the
+    // table has updated_at.
+    if (
+      relevantInitialJoinHappened &&
+      this._needsCatchUpAfterInitialDataHydration &&
+      this._ready &&
+      !this._closed &&
+      this._shouldEnableAutoRefetch()
+    ) {
+      this._needsCatchUpAfterInitialDataHydration = false;
+      // Fire and forget — _refetchAllData internally guards against
+      // overlapping refetches.
+      void this._refetchAllData();
     }
 
     // Only refetch if a relevant channel has reconnected (not initial connection)
@@ -1537,6 +1571,12 @@ export default class TableController<
         if (initialData) {
           // Use pre-loaded data from server (skip initial fetch)
           dataToLoad = initialData;
+          // We did not hit the database from the browser yet, so we have no
+          // guarantee that initialData contains rows inserted just before
+          // page load (cache invalidation might still be in flight). Schedule
+          // a since-watermark catch-up refetch after the realtime channel
+          // joins — see _handleConnectionStatusChange.
+          this._needsCatchUpAfterInitialDataHydration = true;
         } else {
           // Fetch data from database
           dataToLoad = await this._fetchInitialData(loadEntireTable);
@@ -1626,6 +1666,30 @@ export default class TableController<
           }
           // Don't call listener(undefined) - let the hook keep its initial value if we don't have data yet
         });
+        // If we hydrated from initialData AND every relevant channel is
+        // already joined at construction time (subscribeToStatus only fires
+        // on *changes*, so the listener won't be invoked when the channel was
+        // pre-joined by another consumer), kick off the since-watermark
+        // catch-up immediately. This covers cases like multiple lab-section
+        // controllers in the same page sharing a single class:staff channel
+        // — the second/third controllers find the channel already joined.
+        if (
+          this._needsCatchUpAfterInitialDataHydration &&
+          this._lastChannelStates.size > 0 &&
+          this._areRelevantChannelsConnected() &&
+          this._shouldEnableAutoRefetch()
+        ) {
+          this._needsCatchUpAfterInitialDataHydration = false;
+          // Mark each already-joined relevant channel so subsequent state
+          // changes are correctly classified as reconnections rather than
+          // first-time joins.
+          for (const [name, state] of this._lastChannelStates) {
+            if (state === "joined") {
+              this._channelsCompletedInitialConnection.add(name);
+            }
+          }
+          void this._refetchAllData();
+        }
         resolve();
       } catch (error) {
         if (!this._closed) {
