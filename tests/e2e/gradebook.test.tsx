@@ -126,19 +126,20 @@ async function waitForVirtualizerIdle(page: Page) {
 // produce its "Timed out waiting for stable locator box" flake. Block until
 // no cell is currently recalculating before sampling cell geometry.
 async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000) {
-  // Three states are possible: (a) the pulse element never existed —
-  // nothing was recalculating; (b) it existed and transitioned to hidden;
-  // (c) it stayed visible past timeoutMs — recalculation is genuinely
-  // stuck and we want that to surface as a real failure, not a silent
-  // pass. Earlier we wrapped the whole waitFor in `.catch(() => {})`,
-  // which folded (c) into "success" and masked the diagnostic. Instead,
-  // detect (a) explicitly via isVisible() before waiting; only then call
-  // waitFor and let timeouts propagate.
-  const pulse = page.locator(".gradebook-cell-pulse").first();
-  if (!(await pulse.isVisible().catch(() => false))) {
-    return;
-  }
-  await pulse.waitFor({ state: "hidden", timeout: timeoutMs });
+  // Three states are possible: (a) no pulse elements at all — nothing
+  // was recalculating; (b) some existed and all transitioned to hidden;
+  // (c) at least one stayed visible past timeoutMs — recalculation is
+  // genuinely stuck and we want that to surface as a real failure, not
+  // a silent pass. Earlier we wrapped the whole waitFor in `.catch(() =>
+  // {})`, which folded (c) into "success" and masked the diagnostic.
+  // Then we narrowed to `.first()` only, which folds "first row idle but
+  // others still pulsing" into success. Now we wait until the *full
+  // set* drains, so partial-idle never reports as fully idle.
+  const pulses = page.locator(".gradebook-cell-pulse");
+  if ((await pulses.count()) === 0) return;
+  await page.waitForFunction(() => document.querySelectorAll(".gradebook-cell-pulse").length === 0, {
+    timeout: timeoutMs
+  });
 }
 
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {

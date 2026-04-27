@@ -157,9 +157,11 @@ test.describe("Lab Sections Page", () => {
     } catch (err) {
       // Only swallow the count-mismatch timeout from `toHaveCount`. Anything
       // else (page crash, navigation failure, locator engine error) should
-      // fail the test rather than silently re-trying.
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("toHaveCount")) throw err;
+      // fail the test rather than silently re-trying. Inspect Playwright's
+      // structured `matcherResult` rather than the rendered message string,
+      // since the message format is not part of Playwright's API contract.
+      const matcherResult = (err as { matcherResult?: { name?: string } } | null)?.matcherResult;
+      if (!matcherResult || matcherResult.name !== "toHaveCount") throw err;
       await page.reload();
       await expect(page.getByText("Loading lab sections...")).toBeHidden();
       await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();

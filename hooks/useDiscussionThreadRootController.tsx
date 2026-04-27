@@ -251,9 +251,11 @@ export function DiscussionThreadsControllerProvider({
 
     return () => {
       if (controllersRef.current) {
+        // threadController.close() already closes the realtime controller
+        // (DiscussionThreadsController.close at line ~168), so no explicit
+        // threadRealTimeController.close here.
         controllersRef.current.threadController.close();
         controllersRef.current.tableController.close();
-        controllersRef.current.threadRealTimeController.close();
         controllersRef.current = null;
       }
     };

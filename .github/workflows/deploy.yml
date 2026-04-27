@@ -41,6 +41,11 @@ jobs:
       LOCAL_SUPABASE_URL: http://127.0.0.1:54321
       LOCAL_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
       LOCAL_SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      # Per-run scratch dir for PID / log files. /tmp persists across jobs on
+      # self-hosted runners, so namespacing on run_id+attempt prevents the
+      # cleanup `kill $(cat ...pid)` from targeting a stale PID that the OS
+      # has since recycled to an unrelated process.
+      RUN_TMP: /tmp/e2e-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,21 +131,22 @@ jobs:
       - name: Start local Supabase (background, fresh)
         run: |
           set -euo pipefail
+          mkdir -p "$RUN_TMP"
           npx supabase stop --no-backup || true
           docker volume ls --filter label=com.supabase.cli.project=${SUPABASE_PROJECT} -q \
             | xargs -r docker volume rm || true
 
-          nohup npx supabase start > /tmp/supabase-start.log 2>&1 &
-          echo $! > /tmp/supabase-start.pid
+          nohup npx supabase start > "$RUN_TMP/supabase-start.log" 2>&1 &
+          echo $! > "$RUN_TMP/supabase-start.pid"
 
       # Background the browser install (~30-90s, mostly downloads + apt-get).
       - name: Install Playwright Browsers (background)
         run: |
           set -euo pipefail
-          rm -f /tmp/playwright-install.exitcode
+          rm -f $RUN_TMP/playwright-install.exitcode
           nohup bash -c 'npx playwright install --with-deps \
-            > /tmp/playwright-install.log 2>&1; \
-            echo $? > /tmp/playwright-install.exitcode' &
+            > $RUN_TMP/playwright-install.log 2>&1; \
+            echo $? > $RUN_TMP/playwright-install.exitcode' &
 
       - name: Build Next.js (prod, port 3001)
         env:
@@ -151,21 +157,21 @@ jobs:
         run: |
           set -euo pipefail
           for i in $(seq 1 600); do
-            [ -f /tmp/playwright-install.exitcode ] && break
+            [ -f $RUN_TMP/playwright-install.exitcode ] && break
             sleep 1
           done
-          rc="$(cat /tmp/playwright-install.exitcode 2>/dev/null || echo 'timeout')"
+          rc="$(cat $RUN_TMP/playwright-install.exitcode 2>/dev/null || echo 'timeout')"
           if [ "$rc" != "0" ]; then
             echo "playwright install failed (rc=$rc)"
             echo '--- playwright-install.log ---'
-            cat /tmp/playwright-install.log || true
+            cat $RUN_TMP/playwright-install.log || true
             exit 1
           fi
 
       - name: Wait for Supabase + finalize schema
         run: |
           set -euo pipefail
-          PID="$(cat /tmp/supabase-start.pid)"
+          PID="$(cat $RUN_TMP/supabase-start.pid)"
           # `wait` is useless here — the bg process was launched in a previous
           # step's shell and is reparented to PID 1. Poll the API until it
           # answers. `supabase start` can exit successfully while kong is
@@ -183,7 +189,7 @@ jobs:
               if [ "$grace_ticks" -gt 20 ]; then
                 echo 'supabase start exited and the API never came up within 20s'
                 echo '--- supabase-start.log ---'
-                cat /tmp/supabase-start.log || true
+                cat $RUN_TMP/supabase-start.log || true
                 exit 1
               fi
             fi
@@ -202,8 +208,8 @@ jobs:
         run: |
           set -euo pipefail
           nohup npx supabase functions serve --env-file .env.local \
-            > /tmp/edge-functions.log 2>&1 &
-          echo $! > /tmp/edge-functions.pid
+            > $RUN_TMP/edge-functions.log 2>&1 &
+          echo $! > $RUN_TMP/edge-functions.pid
           # Wait until the gateway answers. `curl -s -w %{http_code}` prints
           # `000` on connect-refused, so check the exit status (or filter
           # `000`) — otherwise the loop breaks on the first tick.
@@ -215,15 +221,15 @@ jobs:
           done
           if [ "$ready" != "1" ]; then
             echo "Edge Functions never became reachable"
-            tail -n 200 /tmp/edge-functions.log || true
+            tail -n 200 $RUN_TMP/edge-functions.log || true
             exit 1
           fi
 
       - name: Start Next.js prod server
         run: |
           set -euo pipefail
-          nohup env PORT=3001 npm run start > /tmp/next-server.log 2>&1 &
-          echo $! > /tmp/next-server.pid
+          nohup env PORT=3001 npm run start > $RUN_TMP/next-server.log 2>&1 &
+          echo $! > $RUN_TMP/next-server.pid
           ready=0
           for i in $(seq 1 60); do
             if curl -sf -o /dev/null http://localhost:3001/; then ready=1; break; fi
@@ -231,7 +237,7 @@ jobs:
           done
           if [ "$ready" != "1" ]; then
             echo "Next.js prod server never became reachable"
-            tail -n 200 /tmp/next-server.log || true
+            tail -n 200 $RUN_TMP/next-server.log || true
             exit 1
           fi
 
@@ -252,25 +258,27 @@ jobs:
       - name: Tail server logs on failure
         if: failure()
         run: |
-          echo '--- edge-functions.log ---'; tail -n 500 /tmp/edge-functions.log || true
-          echo '--- next-server.log ---';    tail -n 500 /tmp/next-server.log || true
+          echo '--- edge-functions.log ---'; tail -n 500 $RUN_TMP/edge-functions.log || true
+          echo '--- next-server.log ---';    tail -n 500 $RUN_TMP/next-server.log || true
 
       - name: Stop background services
         if: always()
         run: |
-          kill "$(cat /tmp/edge-functions.pid 2>/dev/null)" 2>/dev/null || true
-          kill "$(cat /tmp/next-server.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat $RUN_TMP/edge-functions.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat $RUN_TMP/next-server.pid 2>/dev/null)" 2>/dev/null || true
           # Capture full Supabase container logs while the stack is still up.
           mkdir -p server-logs
           for c in $(docker ps --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" --format '{{.Names}}'); do
             docker logs "$c" > "server-logs/${c}.log" 2>&1 || true
           done
-          cp -f /tmp/edge-functions.log server-logs/edge-functions.log 2>/dev/null || true
-          cp -f /tmp/next-server.log    server-logs/next-server.log    2>/dev/null || true
+          cp -f $RUN_TMP/edge-functions.log server-logs/edge-functions.log 2>/dev/null || true
+          cp -f $RUN_TMP/next-server.log    server-logs/next-server.log    2>/dev/null || true
           npx supabase stop --no-backup || true
 
       - name: Upload server logs
-        if: ${{ !cancelled() }}
+        # Use always() (not !cancelled()) so timeout-cancelled runs — exactly
+        # the case where these logs are most useful — still upload.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: server-logs
