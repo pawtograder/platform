@@ -657,6 +657,19 @@ export default class TableController<
    * catch-up has been kicked off so we don't repeat it.
    */
   private _needsCatchUpAfterInitialDataHydration: boolean = false;
+  /**
+   * True once the post-SSR catch-up refetch has been kicked off (from either
+   * the construction-time "already-joined" branch or the
+   * `_handleConnectionStatusChange` first-channel-join branch). Once set, the
+   * connection-status path becomes dormant for the rest of this controller's
+   * lifetime — it must NOT re-fire on later reconnects/channel rejoins. The
+   * catch-up is a one-shot SSR-recovery mechanism, distinct from the
+   * periodic-reconnect refetch (which has its own auto-refetch gate further
+   * down in `_handleConnectionStatusChange`). Without this gate, lab-sections
+   * pages with ~6 controllers would each re-fetch on every status change,
+   * cascading into wall-clock that page navigation can't budget for.
+   */
+  private _postSsrCatchUpDone: boolean = false;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
   /**
@@ -1418,13 +1431,21 @@ export default class TableController<
     // setup completed, and without catch-up the rubricChecksController stayed
     // empty forever, making `useRubricCriteriaInstances` filter out applied
     // global checks (Self Review Check 2 region never mounted in CI).
+    //
+    // Crucially this branch is gated by `!_postSsrCatchUpDone` so it fires
+    // EXACTLY ONCE per controller lifetime — never on later reconnects or
+    // channel rejoins. Pages that mount many SSR-hydrated controllers (e.g.
+    // lab-sections w/ ~6) would otherwise stack one full refetch per
+    // controller per status change, blowing the navigation wall-clock.
     if (
       relevantInitialJoinHappened &&
       this._needsCatchUpAfterInitialDataHydration &&
+      !this._postSsrCatchUpDone &&
       this._ready &&
       !this._closed
     ) {
       this._needsCatchUpAfterInitialDataHydration = false;
+      this._postSsrCatchUpDone = true;
       // Fire and forget — _refetchAllData internally guards against
       // overlapping refetches.
       void this._refetchAllData();
@@ -1705,13 +1726,17 @@ export default class TableController<
         // controllers find the channel already joined. Bypassing
         // `_shouldEnableAutoRefetch()` here matches the rationale in
         // _handleConnectionStatusChange: this is a one-shot post-SSR
-        // catch-up, not a periodic reconnect refetch.
+        // catch-up, not a periodic reconnect refetch. We also set
+        // `_postSsrCatchUpDone` so the connection-status path stays dormant
+        // even if a later channel transition would otherwise trigger it.
         if (
           this._needsCatchUpAfterInitialDataHydration &&
+          !this._postSsrCatchUpDone &&
           this._lastChannelStates.size > 0 &&
           this._areRelevantChannelsConnected()
         ) {
           this._needsCatchUpAfterInitialDataHydration = false;
+          this._postSsrCatchUpDone = true;
           // Mark each already-joined relevant channel so subsequent state
           // changes are correctly classified as reconnections rather than
           // first-time joins.
