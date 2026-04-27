@@ -12,6 +12,13 @@ on:
 # Secure baseline: no permissions. Jobs that need them override explicitly.
 permissions: {}
 
+# Cancel an in-flight run when a newer one comes in for the same ref. Saves
+# runner time on rapid-fire pushes; orthogonal to the per-run SUPABASE_PROJECT
+# isolation below, which protects across different refs.
+concurrency:
+  group: e2e-local-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
   # the Playwright suite against it. The Coolify branch-preview job that used to
@@ -23,7 +30,12 @@ jobs:
     permissions:
       contents: read
     env:
-      SUPABASE_PROJECT: pawtograder-platform
+      # Per-run project name so that two e2e-local jobs running on different
+      # refs (or different runners in the same pool) don't clobber each
+      # other's Supabase containers / Docker volumes. The Supabase CLI takes
+      # this from `supabase/config.toml` `project_id`, so we sed-edit the
+      # checkout copy below before any `supabase` invocation.
+      SUPABASE_PROJECT: pawtograder-platform-${{ github.run_id }}-${{ github.run_attempt }}
       # Supabase local-dev keys are deterministic (signed with the public
       # "supabase-demo" JWT secret). Hardcoding lets us write .env.local — and
       # therefore start `next build` — before `supabase start` finishes.
@@ -98,6 +110,16 @@ jobs:
             printf '%s' "${GITHUB_PRIVATE_KEY_STRING}"
             printf '"\n'
           } >> .env.local
+
+      # Make supabase/config.toml's project_id unique per run so the supabase
+      # CLI tags its containers and volumes with our SUPABASE_PROJECT, not the
+      # repo-default `pawtograder-platform`. Without this, two concurrent runs
+      # would mutually clobber each other's stack.
+      - name: Pin supabase project_id per run
+        run: |
+          set -euo pipefail
+          sed -i.bak -E "s|^project_id = .*$|project_id = \"${SUPABASE_PROJECT}\"|" supabase/config.toml
+          grep "^project_id" supabase/config.toml
 
       # Kick Supabase off in the background so its container pulls + migration
       # run overlap with `next build` and `playwright install`.
