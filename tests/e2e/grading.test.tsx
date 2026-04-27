@@ -169,6 +169,32 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // Chakra renders the toast title twice (visible toast + portal duplicate
     // both with the same id), so .first() is required to satisfy strict mode.
     await expect(page.getByText("Submission finalized").first()).toBeVisible();
+    // Even after the toast appears, the "Complete Self Review" button only
+    // renders once useMyReviewAssignments() observes the new row AND
+    // useRubric("self-review") returns the matching rubric (see
+    // components/ui/self-review-notice.tsx). Under webkit CI load both
+    // inputs can lag behind the toast: the realtime UPDATE delivering the
+    // new review_assignment row to other clients can race the server-direct
+    // refetch. Gate the click on the DB truth — poll review_assignments
+    // with the service-role supabase client until the new self-review row
+    // exists for this student + submission. (Same pattern as
+    // pseudonymous-grading.test.tsx.)
+    await expect(async () => {
+      const { data: selfReviewRubric } = await supabase
+        .from("rubrics")
+        .select("id")
+        .eq("assignment_id", assignment!.id)
+        .eq("review_round", "self-review")
+        .single();
+      expect(selfReviewRubric?.id).toBeTruthy();
+      const { data: ra } = await supabase
+        .from("review_assignments")
+        .select("id, rubric_id, assignee_profile_id, submission_id")
+        .eq("submission_id", submission_id!)
+        .eq("assignee_profile_id", student!.private_profile_id)
+        .eq("rubric_id", selfReviewRubric!.id);
+      expect(ra?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
