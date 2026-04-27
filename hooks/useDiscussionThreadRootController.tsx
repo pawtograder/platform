@@ -205,6 +205,9 @@ export function DiscussionThreadsControllerProvider({
   // since-watermark mechanism.
   useEffect(() => {
     if (!courseController?.client) {
+      // Clear any previously-set controller so consumers don't render with
+      // a stale, already-closed reference if the client briefly drops.
+      setController(null);
       return;
     }
 
@@ -216,11 +219,16 @@ export function DiscussionThreadsControllerProvider({
 
     // Kick off realtime channel join in the background; do not block render.
     // Without the .catch, a subscription failure silently leaves the thread
-    // with a half-initialized realtime controller and no diagnostics.
+    // with a half-initialized realtime controller and no diagnostics. close()
+    // is async (returns a Promise); chain its own .catch so a teardown failure
+    // doesn't surface as an unhandled rejection.
     void threadRealTimeController.start().catch((error) => {
       // eslint-disable-next-line no-console
       console.error("Failed to start DiscussionThreadRealTimeController:", error);
-      threadRealTimeController.close();
+      void threadRealTimeController.close().catch((closeError) => {
+        // eslint-disable-next-line no-console
+        console.error("Failed to close DiscussionThreadRealTimeController after start failure:", closeError);
+      });
     });
 
     // Create TableController with BOTH class and thread-specific realtime controllers

@@ -57,8 +57,10 @@ function SelectedPopoverContent({
           <OverrideScoreForm
             studentGradebookColumn={studentGradebookColumn}
             onSuccess={onSuccess}
-            isAutoCalculated={Boolean(column?.score_expression !== null || column?.external_data !== null)}
-            showWarning={Boolean(column?.score_expression !== null)}
+            // `!= null` (not `!== null`) so loading-state `undefined` does not
+            // mis-flag an in-flight column as auto-calculated.
+            isAutoCalculated={Boolean(column?.score_expression != null || column?.external_data != null)}
+            showWarning={Boolean(column?.score_expression != null)}
           />
         )}
       </Popover.Body>
