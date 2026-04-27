@@ -1405,15 +1405,24 @@ export default class TableController<
     // First-time channel join after hydrating from initialData: rows that
     // were INSERTed between the SSR fetch and channel-join are not delivered
     // by realtime broadcasts (those only cover events after we joined). Run
-    // a since-watermark refetch to catch them. This is cheap (only fetches
-    // rows with updated_at > our current max), but only meaningful when the
-    // table has updated_at.
+    // a refetch to catch them. For tables with `updated_at`, _refetchAllData
+    // does a cheap since-watermark refetch; for tables without (e.g.
+    // rubric_checks/rubrics/rubric_criteria), it falls back to a full
+    // refetch — which is exactly what's needed when the SSR cache was stale
+    // at hydration time. We deliberately bypass `_shouldEnableAutoRefetch()`
+    // here because that gate is meant to suppress *periodic reconnect*
+    // refetches on tables without watermarks, not the one-shot post-SSR
+    // catch-up. Skipping the catch-up for these tables produced a flake:
+    // the SSR cache for `rubric_checks:${assignment_id}:staff` could return
+    // an empty/stale snapshot if the cache was populated before assignment
+    // setup completed, and without catch-up the rubricChecksController stayed
+    // empty forever, making `useRubricCriteriaInstances` filter out applied
+    // global checks (Self Review Check 2 region never mounted in CI).
     if (
       relevantInitialJoinHappened &&
       this._needsCatchUpAfterInitialDataHydration &&
       this._ready &&
-      !this._closed &&
-      this._shouldEnableAutoRefetch()
+      !this._closed
     ) {
       this._needsCatchUpAfterInitialDataHydration = false;
       // Fire and forget — _refetchAllData internally guards against
@@ -1690,15 +1699,17 @@ export default class TableController<
         // If we hydrated from initialData AND every relevant channel is
         // already joined at construction time (subscribeToStatus only fires
         // on *changes*, so the listener won't be invoked when the channel was
-        // pre-joined by another consumer), kick off the since-watermark
-        // catch-up immediately. This covers cases like multiple lab-section
-        // controllers in the same page sharing a single class:staff channel
-        // — the second/third controllers find the channel already joined.
+        // pre-joined by another consumer), kick off the catch-up immediately.
+        // This covers cases like multiple lab-section controllers in the same
+        // page sharing a single class:staff channel — the second/third
+        // controllers find the channel already joined. Bypassing
+        // `_shouldEnableAutoRefetch()` here matches the rationale in
+        // _handleConnectionStatusChange: this is a one-shot post-SSR
+        // catch-up, not a periodic reconnect refetch.
         if (
           this._needsCatchUpAfterInitialDataHydration &&
           this._lastChannelStates.size > 0 &&
-          this._areRelevantChannelsConnected() &&
-          this._shouldEnableAutoRefetch()
+          this._areRelevantChannelsConnected()
         ) {
           this._needsCatchUpAfterInitialDataHydration = false;
           // Mark each already-joined relevant channel so subsequent state
