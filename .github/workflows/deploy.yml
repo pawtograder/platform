@@ -70,7 +70,9 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pin to a known-good version. `latest` makes runs non-reproducible —
+          # bump deliberately when we want a new CLI.
+          version: 2.92.1
 
       - name: Install dependencies
         run: npm ci
@@ -104,12 +106,11 @@ jobs:
           UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN}
           SENTRY_DSN=${SENTRY_DSN}
           EOF
-          # Multiline PEM — wrap in double quotes so dotenv preserves newlines.
-          {
-            printf 'GITHUB_PRIVATE_KEY_STRING="'
-            printf '%s' "${GITHUB_PRIVATE_KEY_STRING}"
-            printf '"\n'
-          } >> .env.local
+          # Single-line escaped PEM — supabase functions serve --env-file does
+          # not support multi-line quoted values; .env.local.staging uses the
+          # same shape. The Octokit / GitHub-App SDK unescapes \n at runtime.
+          KEY_ESCAPED=$(printf '%s' "${GITHUB_PRIVATE_KEY_STRING}" | awk 'BEGIN{ORS=""} {printf "%s\\n", $0}')
+          printf 'GITHUB_PRIVATE_KEY_STRING="%s"\n' "$KEY_ESCAPED" >> .env.local
 
       # Make supabase/config.toml's project_id unique per run so the supabase
       # CLI tags its containers and volumes with our SUPABASE_PROJECT, not the
@@ -200,23 +201,40 @@ jobs:
 
       - name: Serve Edge Functions
         run: |
+          set -euo pipefail
           nohup npx supabase functions serve --env-file .env.local \
             > /tmp/edge-functions.log 2>&1 &
           echo $! > /tmp/edge-functions.pid
-          # Wait until the gateway is listening.
+          # Wait until the gateway answers. `curl -s -w %{http_code}` prints
+          # `000` on connect-refused, so check the exit status (or filter
+          # `000`) — otherwise the loop breaks on the first tick.
+          ready=0
           for i in $(seq 1 60); do
-            if curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:54321/functions/v1/ | grep -qE '^[0-9]{3}$'; then break; fi
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:54321/functions/v1/ || true)
+            if [ -n "$code" ] && [ "$code" != "000" ]; then ready=1; break; fi
             sleep 1
           done
+          if [ "$ready" != "1" ]; then
+            echo "Edge Functions never became reachable"
+            tail -n 200 /tmp/edge-functions.log || true
+            exit 1
+          fi
 
       - name: Start Next.js prod server
         run: |
+          set -euo pipefail
           nohup env PORT=3001 npm run start > /tmp/next-server.log 2>&1 &
           echo $! > /tmp/next-server.pid
+          ready=0
           for i in $(seq 1 60); do
-            if curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/ | grep -qE '^[0-9]{3}$'; then break; fi
+            if curl -sf -o /dev/null http://localhost:3001/; then ready=1; break; fi
             sleep 1
           done
+          if [ "$ready" != "1" ]; then
+            echo "Next.js prod server never became reachable"
+            tail -n 200 /tmp/next-server.log || true
+            exit 1
+          fi
 
       - name: Run Playwright tests
         env:
@@ -224,8 +242,9 @@ jobs:
           SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
-          EDGE_FUNCTION_SECRET: some-secret-value
-          END_TO_END_SECRET: not-a-secret
+          # EDGE_FUNCTION_SECRET / END_TO_END_SECRET are sourced from .env.local
+          # (written above) via the test-runner's dotenv load — single source
+          # of truth so the two values can't drift.
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
