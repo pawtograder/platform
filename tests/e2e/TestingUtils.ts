@@ -373,13 +373,23 @@ async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supa
   const delaysMs = [500, 1500, 4000];
   let lastErrMsg = "";
   for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
-    const result = await supabase.auth.admin.generateLink({ email, type: "magiclink" });
-    if (!result.error) {
-      return result;
-    }
-    lastErrMsg = result.error.message || JSON.stringify(result.error) || "unknown";
-    if (attempt === delaysMs.length) {
-      return result;
+    try {
+      const result = await supabase.auth.admin.generateLink({ email, type: "magiclink" });
+      if (!result.error) {
+        return result;
+      }
+      lastErrMsg = result.error.message || JSON.stringify(result.error) || "unknown";
+      if (attempt === delaysMs.length) {
+        return result;
+      }
+    } catch (error) {
+      // generateLink can also reject (transient fetch / socket failure under
+      // CI parallelism). Treat rejections as retryable too — without this the
+      // first transient throw escapes before the retry loop engages.
+      lastErrMsg = error instanceof Error ? error.message : String(error);
+      if (attempt === delaysMs.length) {
+        throw error;
+      }
     }
     const jitter = Math.floor(Math.random() * 250);
     await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt] + jitter));
