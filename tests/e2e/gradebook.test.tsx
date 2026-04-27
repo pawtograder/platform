@@ -126,13 +126,19 @@ async function waitForVirtualizerIdle(page: Page) {
 // produce its "Timed out waiting for stable locator box" flake. Block until
 // no cell is currently recalculating before sampling cell geometry.
 async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000) {
-  await page
-    .locator(".gradebook-cell-pulse")
-    .first()
-    .waitFor({ state: "hidden", timeout: timeoutMs })
-    .catch(() => {
-      // No pulse element ever existed; that's fine — nothing was recalculating.
-    });
+  // Three states are possible: (a) the pulse element never existed —
+  // nothing was recalculating; (b) it existed and transitioned to hidden;
+  // (c) it stayed visible past timeoutMs — recalculation is genuinely
+  // stuck and we want that to surface as a real failure, not a silent
+  // pass. Earlier we wrapped the whole waitFor in `.catch(() => {})`,
+  // which folded (c) into "success" and masked the diagnostic. Instead,
+  // detect (a) explicitly via isVisible() before waiting; only then call
+  // waitFor and let timeouts propagate.
+  const pulse = page.locator(".gradebook-cell-pulse").first();
+  if (!(await pulse.isVisible().catch(() => false))) {
+    return;
+  }
+  await pulse.waitFor({ state: "hidden", timeout: timeoutMs });
 }
 
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
@@ -1608,6 +1614,22 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     // the click succeeded is the "Column moved right" toast (matching how
     // Move Left works above), and the DB sort_order assertion that follows.
     await expect(async () => {
+      // If a previous attempt's Move Right click already landed in the DB
+      // (sort_order back to original) but the toast assertion timed out
+      // — say a realtime-driven re-render detached the toast region —
+      // a second click would double-move the column and break the final
+      // sort_order assertion below. Short-circuit when the move already
+      // succeeded; let the retry only cover the toast assertion in that
+      // case (treating a missed toast on an otherwise-successful click
+      // as a no-op).
+      const { data: colNow } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", colBefore!.id)
+        .single();
+      if (colNow?.sort_order === sortOrderBefore) {
+        return;
+      }
       await waitForVirtualizerIdle(page);
       const buttonNow = headerCellAfterMove.getByRole("button", { name: "Column options" });
       await buttonNow.scrollIntoViewIfNeeded();
