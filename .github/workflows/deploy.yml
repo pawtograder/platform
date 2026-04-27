@@ -4,6 +4,8 @@ on:
     branches:
       - main
       - staging
+      # TODO(remove-before-merge): one final pre-merge validation lap.
+      - ci/parallel-e2e-local-supabase
   pull_request_target:
   workflow_dispatch:
 
