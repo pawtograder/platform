@@ -728,7 +728,19 @@ export default class TableController<
     await this.readyPromise;
     if (this._isRefetching) {
       return new Promise((resolve) => {
-        this._refetchListeners.push(() => resolve());
+        // Self-removing listener: a plain `.push(() => resolve())` would leak
+        // because `_refetchListeners` is otherwise only pruned by the
+        // unsubscribe closure returned from `subscribeToRefetchStatus`. Every
+        // concurrent caller of `refetchAll()`/`update()`/`catchUpSinceWatermark()`
+        // hits this path on an in-flight collision, so without removal the
+        // listener array grows unboundedly on long-lived controllers (e.g.
+        // chatty pages like reviews/lab-sections), permanently fanning out
+        // every future refetch-status notification.
+        const listener = () => {
+          this._refetchListeners = this._refetchListeners.filter((l) => l !== listener);
+          resolve();
+        };
+        this._refetchListeners.push(listener);
       });
     }
     return Promise.resolve();
@@ -1273,8 +1285,8 @@ export default class TableController<
    * refetch. This is much cheaper than `refetchAll()` because it only
    * fetches rows whose `updated_at > _maxUpdatedAtMs`. It is also safe to
    * call frequently: there is no rate limit (unlike `refetchAll`), and
-   * concurrent calls are coalesced via the `_isRefetching` guard inside
-   * `_refetchSinceMaxUpdatedAt`.
+   * concurrent calls are coalesced here by piggybacking on any in-flight
+   * refetch via `waitForRefetchToComplete()`.
    *
    * Falls back to no-op if the table has no `updated_at` watermark or if
    * the controller is closed.
@@ -1283,6 +1295,17 @@ export default class TableController<
     if (this._closed) return;
     if (this._maxUpdatedAtMs == null) return;
     if (!this._shouldEnableAutoRefetch()) return;
+    // If a refetch is already in flight (e.g. a reconnection-driven
+    // `_refetchSinceMaxUpdatedAt` or a `refetchAll`), don't issue a second
+    // `gt("updated_at", …)` query against the same watermark. Two concurrent
+    // refetches would both call `_addRow`/`_updateRow`/`_bumpMaxUpdatedAtFrom`
+    // and double-fire `_listDataListeners`, producing half-applied snapshots
+    // and a clobbered watermark. Mirror the guard in `_refetchAllData`:
+    // piggyback on the in-flight refetch and return.
+    if (this._isRefetching) {
+      await this.waitForRefetchToComplete();
+      return;
+    }
     await this._refetchSinceMaxUpdatedAt();
   }
 
