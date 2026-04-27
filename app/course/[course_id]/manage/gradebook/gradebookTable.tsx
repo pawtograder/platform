@@ -1307,9 +1307,7 @@ function GradebookColumnFilter({
           <FilterSelectAllNoneToolbar
             onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
             onSelectNone={() => columnModel.setFilterValue("")}
-            disableSelectAll={
-              selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)
-            }
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
             disableSelectNone={selectedOptions.length === 0}
           />
 
@@ -1424,9 +1422,7 @@ function SectionFilter({
           <FilterSelectAllNoneToolbar
             onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
             onSelectNone={() => columnModel.setFilterValue("")}
-            disableSelectAll={
-              selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)
-            }
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
             disableSelectNone={selectedOptions.length === 0}
           />
 
@@ -1520,9 +1516,7 @@ function GenericColumnFilter({
           <FilterSelectAllNoneToolbar
             onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
             onSelectNone={() => columnModel.setFilterValue("")}
-            disableSelectAll={
-              selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)
-            }
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
             disableSelectNone={selectedOptions.length === 0}
           />
           <Select

@@ -3,11 +3,7 @@
 import { Label } from "@/components/ui/label";
 import { useColorMode } from "@/components/ui/color-mode";
 import { useAllStudentRoles } from "@/hooks/useCourseController";
-import {
-  useGradebookColumns,
-  useGradebookController,
-  useGradebookExpressionPrefix
-} from "@/hooks/useGradebook";
+import { useGradebookColumns, useGradebookController, useGradebookExpressionPrefix } from "@/hooks/useGradebook";
 import {
   evaluateForStudent,
   evaluateRenderExpression,
@@ -192,7 +188,13 @@ export function ExpressionBuilder(props: Props) {
     if (trimmed) {
       const quick = validateExpressionString(math, gradebookController, trimmed, editingColumnId);
       if (quick.parseError) {
-        return { isValid: false, isEmpty: false, parseError: quick.parseError, dependencyError: null, evaluation: null };
+        return {
+          isValid: false,
+          isEmpty: false,
+          parseError: quick.parseError,
+          dependencyError: null,
+          evaluation: null
+        };
       }
       if (quick.dependencyError) {
         return {

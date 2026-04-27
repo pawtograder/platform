@@ -115,6 +115,7 @@ AS $$
 DECLARE
   assigned_ordinal integer;
   v_in_group boolean;
+  r RECORD;
 BEGIN
   CASE TG_OP
   WHEN 'INSERT' THEN
@@ -141,15 +142,30 @@ BEGIN
         WHERE assignment_id = NEW.assignment_id
           AND assignment_group_id = NEW.assignment_group_id;
 
-        UPDATE public.submissions s
-        SET is_active = false
-        FROM public.assignment_groups_members agm
-        WHERE agm.assignment_id = NEW.assignment_id
-          AND agm.assignment_group_id = NEW.assignment_group_id
-          AND s.assignment_id = NEW.assignment_id
-          AND s.profile_id = agm.profile_id
-          AND s.assignment_group_id IS NULL
-          AND s.is_active = true;
+        FOR r IN (
+          WITH demoted AS (
+            UPDATE public.submissions s
+            SET is_active = false
+            FROM public.assignment_groups_members agm
+            WHERE agm.assignment_id = NEW.assignment_id
+              AND agm.assignment_group_id = NEW.assignment_group_id
+              AND s.assignment_id = NEW.assignment_id
+              AND s.profile_id = agm.profile_id
+              AND s.assignment_group_id IS NULL
+              AND s.is_active = true
+            RETURNING s.profile_id
+          )
+          SELECT DISTINCT gcs.class_id, gcs.gradebook_id, gcs.student_id, gcs.is_private
+          FROM demoted d
+          JOIN public.gradebook_column_students gcs ON gcs.student_id = d.profile_id
+          JOIN public.gradebook_columns gc
+            ON gc.id = gcs.gradebook_column_id
+           AND gc.dependencies->'assignments' @> to_jsonb(ARRAY[NEW.assignment_id]::bigint[])
+        ) LOOP
+          PERFORM public.enqueue_gradebook_row_recalculation(
+            r.class_id, r.gradebook_id, r.student_id, r.is_private, 'group_submission_demote_individual', NULL
+          );
+        END LOOP;
       END IF;
     ELSE
       IF NEW.profile_id IS NOT NULL THEN
@@ -195,7 +211,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.submissions_insert_hook_optimized() IS
-  'Assigns ordinals, manages is_active, rejects individual INSERT when the student is in a group, demotes straggler individual rows on new group submission.';
+  'Assigns ordinals, manages is_active, rejects individual INSERT when the student is in a group, demotes straggler individual rows on new group submission and enqueues gradebook row recalc for demoted students.';
 
 -- 5) Guard: cannot re-activate an individual submission while the student is in a group
 CREATE OR REPLACE FUNCTION public.guard_individual_submission_active_when_in_group()
