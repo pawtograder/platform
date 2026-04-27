@@ -373,9 +373,13 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const hours = 24;
     await addExtensionModal.locator('input[name="hours"]').fill(hours.toString());
     await addExtensionModal.getByRole("button", { name: "Add Extension" }).click();
-    // Chakra sets data-state="closed" the moment the dialog dismisses; using
-    // toBeVisible races webkit's exit-animation budget.
-    await expect(addExtensionModal).toHaveAttribute("data-state", "closed");
+    // Chakra v3's Dialog.Root open={isOpen} with Portal can fully unmount
+    // on close — in that case the locator resolves to no element and
+    // toHaveAttribute would time out (no element to read attributes
+    // from). toHaveCount(0) matches the unmounted case AND covers the
+    // original "not visible" intent without racing webkit's
+    // exit-animation budget.
+    await expect(addExtensionModal).toHaveCount(0);
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
