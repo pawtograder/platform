@@ -602,7 +602,7 @@ export default function HelpRequestForm() {
 
             toaster.success({
               title: "Success",
-              description: "Help request successfully created. Redirecting to queue view..."
+              description: "Help request successfully created. Opening your request..."
             });
 
             // Navigate to queue view BEFORE any state-clearing work. The form is

@@ -215,7 +215,13 @@ export function DiscussionThreadsControllerProvider({
     });
 
     // Kick off realtime channel join in the background; do not block render.
-    void threadRealTimeController.start();
+    // Without the .catch, a subscription failure silently leaves the thread
+    // with a half-initialized realtime controller and no diagnostics.
+    void threadRealTimeController.start().catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error("Failed to start DiscussionThreadRealTimeController:", error);
+      threadRealTimeController.close();
+    });
 
     // Create TableController with BOTH class and thread-specific realtime controllers
     const tableController = new TableController({

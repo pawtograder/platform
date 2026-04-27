@@ -10,11 +10,12 @@ on:
 # Secure baseline: no permissions. Jobs that need them override explicitly.
 permissions: {}
 
-# Cancel an in-flight run when a newer one comes in for the same ref. Saves
-# runner time on rapid-fire pushes; orthogonal to the per-run SUPABASE_PROJECT
-# isolation below, which protects across different refs.
+# Cancel an in-flight run when a newer one comes in for the same PR (or push
+# ref). Under pull_request_target, github.ref resolves to the base branch, so
+# keying on it alone would make every PR against staging collide; prefer
+# pull_request.number when present so each PR has its own group.
 concurrency:
-  group: e2e-local-${{ github.ref }}
+  group: e2e-local-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

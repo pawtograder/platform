@@ -1140,7 +1140,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                     ? "Add a comment about this check and press enter to submit..."
                     : "Optionally add a comment, or just press enter to submit..."
               }
-              allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
+              allowEmptyMessage={selectedCheckOption.check ? !selectedCheckOption.check.is_comment_required : true}
               defaultSingleLine={true}
               sendMessage={async (message) => {
                 let points = selectedCheckOption.check?.points;

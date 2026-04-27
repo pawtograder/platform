@@ -158,7 +158,9 @@ export function GradebookPopoverProvider({ children }: { children: React.ReactNo
 
   const contextValue = useMemo<GradebookPopoverContextType>(() => ({ openAt, close }), [openAt, close]);
 
-  const handleFormSuccess = useCallback(() => setIsOpen(false), []);
+  // Reuse close() so submission-success teardown matches every other dismiss
+  // path — keeps `selected`, `anchorRect`, and `targetRef` from going stale.
+  const handleFormSuccess = useCallback(() => close(), [close]);
 
   return (
     <GradebookPopoverContext.Provider value={contextValue}>

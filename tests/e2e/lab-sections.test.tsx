@@ -93,7 +93,15 @@ test.describe("Lab Sections Page", () => {
     // browser-specific bbox semantics — webkit has been observed to keep the
     // empty positioner reported as "visible" for >20s. Wait on the
     // authoritative content `data-state="closed"` instead.
-    await expect(page.locator('[data-part="content"][data-scope="menu"]')).toHaveAttribute("data-state", "closed");
+    //
+    // Scope to the Course Settings menu specifically: the page also mounts a
+    // UserMenu via `dynamicCourseNav`, and a bare `[data-part="content"]
+    // [data-scope="menu"]` selector matches both, tripping Playwright's
+    // strict-mode check on `toHaveAttribute`. Filtering by a menuitem only
+    // present in this menu uniquely identifies it.
+    await expect(
+      page.locator('[data-part="content"][data-scope="menu"]').filter({ hasText: "Lab Sections" })
+    ).toHaveAttribute("data-state", "closed");
 
     // Menu click navigates to lab-roster; only THEN does the "Manage lab sections"
     // link render. Don't trust `Loading lab roster... toBeHidden()` as a readiness
@@ -146,7 +154,12 @@ test.describe("Lab Sections Page", () => {
     // stays fast.
     try {
       await expect(page.getByRole("row")).toHaveCount(21, { timeout: 8_000 });
-    } catch {
+    } catch (err) {
+      // Only swallow the count-mismatch timeout from `toHaveCount`. Anything
+      // else (page crash, navigation failure, locator engine error) should
+      // fail the test rather than silently re-trying.
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("toHaveCount")) throw err;
       await page.reload();
       await expect(page.getByText("Loading lab sections...")).toBeHidden();
       await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();
