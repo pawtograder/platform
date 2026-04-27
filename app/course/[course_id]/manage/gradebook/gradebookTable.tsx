@@ -2884,13 +2884,24 @@ export default function GradebookTable() {
     classSections?.data,
     labSections
     // intentionally NOT depending on `scoreMaps`: accessorFn/filterFn read
-    // it via scoreMapsRef. Sort state is invalidated explicitly on data
-    // tick via gradebookDataEpoch (table.setSorting in effect below).
+    // it via scoreMapsRef. Row-model invalidation on data ticks is driven by
+    // `studentProfiles` getting a fresh array reference per epoch (see memo
+    // below), which makes TanStack re-run accessor/filter/sort closures.
   ]);
 
+  // NOTE: depending on `gradebookDataEpoch` here is load-bearing. Our `columns`
+  // memo intentionally omits `scoreMaps` from its deps (see scoreMapsRef
+  // comment above) so ColumnDef objects stay stable across data ticks. But
+  // TanStack Table caches its sorted/filtered row models keyed by the
+  // `(data, columns)` references, so with both stable across ticks the
+  // accessor/filter closures never re-run and a sorted/filtered view stays
+  // stale after a realtime score update. Returning a fresh array reference
+  // per epoch tick invalidates the row-model memos without rebuilding any
+  // ColumnDef — accessors then run with the live scoreMapsRef values.
   const studentProfiles = useMemo(() => {
     return students.map((student) => student.profiles);
-  }, [students]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [students, gradebookDataEpoch]);
   // Table instance
   const table = useReactTable({
     data: studentProfiles,
