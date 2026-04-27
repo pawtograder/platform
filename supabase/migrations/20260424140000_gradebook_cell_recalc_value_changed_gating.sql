@@ -1,41 +1,52 @@
--- Bug 7: Gradebook dependent recalc lost on quick user edits while row is recalculating.
+-- Gradebook dependent recalc on user cell edits — race-free, in-flight-aware.
 --
--- Background: update_gradebook_column_student_with_recalc (defined in
--- 20251102112812_reduce-rt-spam.sql L1232-1294) writes the user's edit to
--- gradebook_column_students, then guards the dependent-recalc enqueue
--- with `IF NOT EXISTS (... is_recalculating=true)`. When a row is
--- mid-recalc from a previous burst, a brand-new user edit lands in the
--- DB but no new recalc fires; the in-flight worker, still computing
--- with the OLD value, finishes and clears is_recalculating=false /
--- dirty=false. Dependent calculated columns (Final Grade, totals) stay
--- stuck on the pre-edit derived values until something else perturbs
--- the row.
+-- Background: the prior wrappers (defined in 20251102112812_reduce-rt-spam.sql)
+-- guarded the dependent-recalc enqueue with `IF NOT EXISTS (... is_recalculating
+-- = true)`. When a row was mid-recalc from a previous burst, a brand-new user
+-- edit landed in the DB but no new recalc fired; the in-flight worker — still
+-- computing with the OLD value — finished and cleared is_recalculating=false /
+-- dirty=false, leaving dependent calculated columns (Final Grade, totals) stuck
+-- on pre-edit derived values until something else perturbed the row.
 --
 -- The worker (supabase/functions/gradebook-column-recalculate/index.ts
 -- ~L241-309) already implements VERSION_MISMATCH_RECOVERY: if
--- gradebook_row_recalc_state.version moves while a worker is running,
--- the worker re-runs with the latest inputs. So as long as we enqueue a
--- new batch (which bumps the row-state version), the worker will pick
--- up the new value. We just need the wrapper RPC to actually enqueue
--- when the user's edit *changes* a recalc-relevant input.
+-- gradebook_row_recalc_state.version moves while a worker is running, the
+-- worker re-runs with the latest inputs. So as long as we enqueue a new batch
+-- (which bumps the row-state version), the worker will pick up the new value.
 --
 -- A previous attempt (commit 7fec782c, migration
--- 20260424130000_update_gradebook_cell_recalc_when_in_flight.sql)
--- removed the in-flight gate entirely and was reverted: pass rate
--- dropped from 433/3 to 421/12. Per the audit, the cascade came from
--- redundant enqueues and version bumps under E2E load.
+-- 20260424130000_update_gradebook_cell_recalc_when_in_flight.sql) removed the
+-- in-flight gate entirely and was reverted because the cascade of redundant
+-- enqueues and version bumps under E2E load dropped pass rate from 433/3 to
+-- 421/12.
 --
--- Smarter gating: re-enqueue on top of an in-flight recalc only when
--- the user edit actually changes a recalc-relevant field versus the
--- pre-edit row. The five recalc-relevant fields are score,
--- score_override, is_missing, is_droppable, is_excused -- exactly the
--- inputs the worker reads when computing dependent-column values. If
--- the new write does not change any of them (e.g. UI re-saving the
--- same value, an idempotent batch retry), nothing downstream cares,
--- so we skip the enqueue and don't bump the row-state version.
+-- This migration replaces both wrappers with two corrections:
 --
--- This keeps every signal-bearing edit propagating to dependents while
--- preventing the noise that triggered the prior cascade.
+-- 1. Smarter gating ("value-changed"). Re-enqueue on top of an in-flight
+--    recalc only when the user edit actually changes a recalc-relevant field
+--    versus the pre-edit row. The five recalc-relevant fields are score,
+--    score_override, is_missing, is_droppable, is_excused — exactly the inputs
+--    the worker reads when computing dependent-column values. If the new write
+--    does not change any of them (e.g. UI re-saving the same value, an
+--    idempotent batch retry), nothing downstream cares, so we skip the enqueue
+--    and don't bump the row-state version. This keeps every signal-bearing
+--    edit propagating to dependents while preventing the noise that triggered
+--    the prior cascade.
+--
+-- 2. Row lock on the pre-update read (FOR UPDATE). Without this, two
+--    concurrent transactions could see the same pre-update snapshot and
+--    decide independently whether to enqueue. Concrete failure mode:
+--      * Transaction A: score 1 -> 2 (begins, not yet committed)
+--      * Transaction B: score 2 -> 1 (begins, reads old_row before A commits)
+--      * B's old_row.score reads as 1 under READ COMMITTED (pre-A snapshot).
+--      * The UPDATE in B blocks on A's row lock, then proceeds and writes 1.
+--      * B's updated_row.score == old_row.score, so recalc_input_changed=false
+--        and the enqueue is suppressed — even though the live row's score did
+--        change (1 -> 2 -> 1) and dependents need to recompute.
+--    `SELECT ... FOR UPDATE` blocks on any concurrent uncommitted writer, then
+--    reads the freshly-committed row. The lock is held until the subsequent
+--    UPDATE/RETURNING in the same transaction, so old_row and updated_row are
+--    a true before/after pair for the same serialized edit.
 
 CREATE OR REPLACE FUNCTION public.update_gradebook_column_student_with_recalc(
   p_id bigint,
@@ -50,14 +61,18 @@ DECLARE
   old_row public.gradebook_column_students%ROWTYPE;
   recalc_input_changed boolean;
 BEGIN
-  -- Get the old row values
-  SELECT * INTO old_row FROM public.gradebook_column_students WHERE id = p_id;
+  -- Lock the row while reading the pre-update snapshot so concurrent edits
+  -- serialize and old_row reflects the latest committed value (not a stale
+  -- pre-concurrent-writer snapshot). See migration header for the race.
+  SELECT * INTO old_row
+  FROM public.gradebook_column_students
+  WHERE id = p_id
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'gradebook_column_students row with id % not found', p_id;
   END IF;
 
-  -- Perform the UPDATE
   UPDATE public.gradebook_column_students
   SET
     score = CASE WHEN p_updates ? 'score' THEN (p_updates->>'score')::numeric ELSE score END,
@@ -71,8 +86,6 @@ BEGIN
   WHERE id = p_id
   RETURNING * INTO updated_row;
 
-  -- Did this write actually change one of the five fields the dependent
-  -- recalculator consumes? (Compare post-update row vs pre-update row.)
   recalc_input_changed := (
     updated_row.score IS DISTINCT FROM old_row.score OR
     updated_row.score_override IS DISTINCT FROM old_row.score_override OR
@@ -81,19 +94,6 @@ BEGIN
     updated_row.is_excused IS DISTINCT FROM old_row.is_excused
   );
 
-  -- Smarter gating, replacing the old `IF NOT EXISTS (... is_recalculating=true)`
-  -- short-circuit:
-  --
-  --   * No-op write (no recalc input changed): skip the enqueue. Avoids
-  --     redundant version bumps and the prior cascade.
-  --
-  --   * Recalc input did change: always enqueue, even if the row is
-  --     currently recalculating. enqueue_gradebook_row_recalculation_batch
-  --     bumps gradebook_row_recalc_state.version, and the worker's
-  --     VERSION_MISMATCH_RECOVERY path picks up the new value on its
-  --     stale-version retry. This is the bug fix: previously this branch
-  --     was unconditionally suppressed whenever is_recalculating=true,
-  --     which dropped user edits' propagation to dependent columns.
   IF recalc_input_changed THEN
     PERFORM public.enqueue_gradebook_row_recalculation_batch(ARRAY[
       jsonb_build_object(
@@ -108,16 +108,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.update_gradebook_column_student_with_recalc(bigint, jsonb)
-  IS 'Updates a single gradebook_column_students row and enqueues dependent recalculations when any of score/score_override/is_missing/is_droppable/is_excused actually changed. Re-enqueues even on top of an in-flight recalc so the worker''s VERSION_MISMATCH_RECOVERY picks up the new value; suppresses no-op writes to avoid version-bump cascades.';
+  IS 'Updates a single gradebook_column_students row and enqueues dependent recalculations when any of score/score_override/is_missing/is_droppable/is_excused actually changed. Locks the pre-update row (FOR UPDATE) so the before/after comparison is race-free under concurrent edits. Re-enqueues even on top of an in-flight recalc so the worker''s VERSION_MISMATCH_RECOVERY picks up the new value; suppresses no-op writes to avoid version-bump cascades.';
 
--- Same fix for the batch wrapper RPC. The original (in
--- 20251102112812_reduce-rt-spam.sql L1300-1407) has the same flaw: it
--- collects rows for enqueue but excludes any row whose recalc is already
--- in flight, even when the user-supplied write actually changed a recalc
--- input. Drop that inner gate and rely on the outer
--- "any-recalc-relevant-field-changed" check (which the function already
--- has) to suppress no-op writes. The batch enqueue's per-row advisory
--- lock + version bump makes in-flight re-enqueue safe.
 CREATE OR REPLACE FUNCTION public.update_gradebook_column_students_batch_with_recalc(
   p_updates jsonb[]
 ) RETURNS jsonb
@@ -131,9 +123,7 @@ DECLARE
   p_update_data jsonb;
   updated_count integer := 0;
   all_rows_to_enqueue jsonb[] := ARRAY[]::jsonb[];
-  changed_rows jsonb[];
 BEGIN
-  -- Process each update
   FOREACH update_obj IN ARRAY p_updates
   LOOP
     p_id := (update_obj->>'id')::bigint;
@@ -143,18 +133,21 @@ BEGIN
       CONTINUE;
     END IF;
 
-    -- Get old row values
     DECLARE
       old_row public.gradebook_column_students%ROWTYPE;
       updated_row public.gradebook_column_students%ROWTYPE;
     BEGIN
-      SELECT * INTO old_row FROM public.gradebook_column_students WHERE id = p_id;
+      -- Lock the pre-update row so the post-update vs pre-update comparison
+      -- below is race-free under concurrent edits. See migration header.
+      SELECT * INTO old_row
+      FROM public.gradebook_column_students
+      WHERE id = p_id
+      FOR UPDATE;
 
       IF NOT FOUND THEN
         CONTINUE;
       END IF;
 
-      -- Perform the UPDATE
       UPDATE public.gradebook_column_students
       SET
         score = CASE WHEN p_update_data ? 'score' THEN (p_update_data->>'score')::numeric ELSE score END,
@@ -168,7 +161,6 @@ BEGIN
       WHERE id = p_id
       RETURNING * INTO updated_row;
 
-      -- Did this update actually change a recalc-relevant field?
       IF (
         updated_row.score IS DISTINCT FROM old_row.score OR
         updated_row.score_override IS DISTINCT FROM old_row.score_override OR
@@ -177,14 +169,7 @@ BEGIN
         updated_row.is_excused IS DISTINCT FROM old_row.is_excused
       ) THEN
         updated_count := updated_count + 1;
-        changed_rows := array_append(changed_rows, to_jsonb(updated_row));
 
-        -- Always enqueue when a recalc input changed (no longer skipped
-        -- when is_recalculating=true; the batch enqueue's version bump
-        -- + the worker's VERSION_MISMATCH_RECOVERY make the in-flight
-        -- worker re-run with the new value). Still de-duplicate within
-        -- this single batch call so the same student row isn't
-        -- enqueued twice for the same privacy mode in one call.
         IF NOT EXISTS (
           SELECT 1 FROM unnest(all_rows_to_enqueue) AS existing
           WHERE (existing->>'class_id')::bigint = updated_row.class_id
@@ -205,7 +190,6 @@ BEGIN
     END;
   END LOOP;
 
-  -- Batch enqueue all dependent rows in a single call
   IF array_length(all_rows_to_enqueue, 1) > 0 THEN
     PERFORM public.enqueue_gradebook_row_recalculation_batch(all_rows_to_enqueue);
   END IF;
@@ -218,4 +202,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.update_gradebook_column_students_batch_with_recalc(jsonb[])
-  IS 'Batch updates multiple gradebook_column_students rows and enqueues dependent recalculations for any whose score/score_override/is_missing/is_droppable/is_excused actually changed. Re-enqueues across in-flight recalcs (batch enqueue handles version bumps so VERSION_MISMATCH_RECOVERY picks up the new values).';
+  IS 'Batch updates multiple gradebook_column_students rows and enqueues dependent recalculations for any whose score/score_override/is_missing/is_droppable/is_excused actually changed. Locks each pre-update row (FOR UPDATE) so the before/after comparison is race-free under concurrent edits. Re-enqueues across in-flight recalcs (batch enqueue handles version bumps so VERSION_MISMATCH_RECOVERY picks up the new values).';
