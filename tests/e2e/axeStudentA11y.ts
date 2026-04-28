@@ -26,7 +26,12 @@ const DEFAULT_EXCLUDES = [
   // 1.4.3 exempts disabled controls. The button has an explicit aria-label so
   // it contributes nothing else axe would catch; excluding the whole subtree
   // is cleaner than scoping color-contrast per-rule.
-  'button[aria-label="Finalize Submission Early"]'
+  'button[aria-label="Finalize Submission Early"]',
+  // Same pattern: any Chakra Button rendered with `loading={true}` gets
+  // `data-loading=""`, applying an opacity overlay that axe reads as low
+  // color-contrast (e.g. Send button mid-submit on webkit: fg #fdfdfd on bg
+  // #85b196, 2.36:1). WCAG exempts disabled/in-flight controls.
+  "button[data-loading]"
 ];
 
 /** Scope axe scanning to the rules we actually want to enforce. */

@@ -30,8 +30,11 @@ const config = defineConfig({
         // Chakra's default fg.success / fg.error pair with bg.success / bg.error at
         // ~3.1:1 (green.600 on green.50, red.600 on red.50) — below AA. Remap to
         // {green,red}.700 so status-tinted text cards (e.g. test-result headings)
-        // hit AA automatically.
+        // hit AA automatically. Also bump fg.muted (default gray.500 ≈ 4.43:1 on
+        // white — a hair below 4.5 AA) to gray.600 (~7.4:1) so muted timestamps,
+        // helper text, etc., pass without a per-call-site override.
         fg: {
+          muted: { value: { base: "{colors.gray.600}", _dark: "{colors.gray.400}" } },
           success: { value: { base: "{colors.green.700}", _dark: "{colors.green.300}" } },
           error: { value: { base: "{colors.red.700}", _dark: "{colors.red.300}" } }
         }
