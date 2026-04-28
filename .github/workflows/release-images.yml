@@ -32,6 +32,10 @@ permissions:
 env:
   REGISTRY: ghcr.io
   REPO_OWNER: ${{ github.repository_owner }}
+  # Silence the Node20 deprecation warnings on docker/* actions that don't
+  # yet ship a Node24-tagged major; opts in to the runner's Node24 binary
+  # for every JS-based action in this workflow.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
   group: release-images-${{ github.ref }}
@@ -46,7 +50,7 @@ jobs:
       tags: ${{ steps.v.outputs.tags }}
       chart_version: ${{ steps.v.outputs.chart_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: v
         name: Compute version + tag list
@@ -72,7 +76,7 @@ jobs:
     needs: meta
     runs-on: pawtograder-ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
@@ -134,7 +138,7 @@ jobs:
     needs: meta
     runs-on: pawtograder-ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
@@ -171,7 +175,7 @@ jobs:
     needs: meta
     runs-on: pawtograder-ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: docker/setup-buildx-action@v3
 
@@ -209,7 +213,7 @@ jobs:
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: azure/setup-helm@v4
         with:
