@@ -979,8 +979,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
             throw new UserVisibleError(`Internal error: ${teamMembershipError.message}`);
           }
           if (teamMembership) {
-            const groupName =
-              teamMembership.assignment_groups?.name ?? `group ${teamMembership.assignment_group_id}`;
+            const groupName = teamMembership.assignment_groups?.name ?? `group ${teamMembership.assignment_group_id}`;
             throw new UserVisibleError(
               `Your assignment is now being submitted as a group. Please push to your group repository instead of your personal repository. (assignment: ${assignment_id}, group: ${groupName}) If the group repository is not ready yet, wait for it to be provisioned or ask your instructor or TA.`
             );

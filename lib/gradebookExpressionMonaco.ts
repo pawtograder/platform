@@ -440,7 +440,6 @@ export function registerGradebookExpressionHoverProvider(
 ): import("monaco-editor").IDisposable {
   return monaco.languages.registerHoverProvider(GRADEBOOK_EXPRESSION_LANGUAGE_ID, {
     provideHover(model, position) {
-      const text = model.getValue();
       const offset = modelOffsetAt(model, position);
       const iv = findIntermediateForOffset(opts.getIntermediates(), offset);
       if (!iv) return null;
