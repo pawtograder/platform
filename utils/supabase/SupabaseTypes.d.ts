@@ -6007,6 +6007,13 @@ export type Database = {
             foreignKeyName: "repository_analytics_daily_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -6085,6 +6092,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
           },
           {
             foreignKeyName: "repository_analytics_fetch_status_repository_id_fkey";
@@ -6188,6 +6202,13 @@ export type Database = {
             foreignKeyName: "repository_analytics_items_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -6210,6 +6231,13 @@ export type Database = {
           repository_id?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "repository_analytics_repo_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
           {
             foreignKeyName: "repository_analytics_repo_status_repository_id_fkey";
             columns: ["repository_id"];
@@ -6278,6 +6306,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_check_run_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
           },
           {
             foreignKeyName: "repository_check_run_repository_id_fkey";
@@ -9002,6 +9037,13 @@ export type Database = {
             foreignKeyName: "submissions_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
+          {
+            foreignKeyName: "submissions_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -9849,6 +9891,13 @@ export type Database = {
             foreignKeyName: "workflow_events_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
+          {
+            foreignKeyName: "workflow_events_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -9915,6 +9964,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
           },
           {
             foreignKeyName: "workflow_run_error_repository_id_fkey";
@@ -10766,6 +10822,7 @@ export type Database = {
           activesubmissionid: number | null;
           assignedgradername: string | null;
           assignedmetagradername: string | null;
+          assignment_group_mentor_name: string | null;
           assignment_id: number | null;
           assignment_slug: string | null;
           autograder_score: number | null;
@@ -10957,6 +11014,10 @@ export type Database = {
       };
     };
     Functions: {
+      _cli_resolve_submission_file_id: {
+        Args: { p_file_name: string; p_submission_id: number };
+        Returns: number;
+      };
       _grade_targets_for_submission: {
         Args: { p_submission_id: number };
         Returns: string[];
@@ -11195,6 +11256,10 @@ export type Database = {
         Args: { submission_review_id: number };
         Returns: boolean;
       };
+      authorize_for_submission_review_comment_writable: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
       authorize_for_submission_review_writable: {
         Args: { submission_review_id: number };
         Returns: boolean;
@@ -11411,6 +11476,23 @@ export type Database = {
         };
         Returns: Json;
       };
+      cli_import_submission_comments_batch: {
+        Args: {
+          p_artifact_comments: Json;
+          p_assignment_id: number;
+          p_authors_by_submission: Json;
+          p_class_id: number;
+          p_default_author: string;
+          p_dry_run: boolean;
+          p_file_comments: Json;
+          p_mode: string;
+          p_run_sync_only?: boolean;
+          p_skip_sync?: boolean;
+          p_submission_comments: Json;
+          p_sync_submission_ids: number[];
+        };
+        Returns: Json;
+      };
       complete_eligible_grading_reviews: {
         Args: { p_assignment_id: number };
         Returns: number;
@@ -11440,6 +11522,10 @@ export type Database = {
             };
             Returns: undefined;
           };
+      create_all_repos_for_assignment_internal: {
+        Args: { assignment_id: number; course_id: number; p_force?: boolean };
+        Returns: undefined;
+      };
       create_help_request_message_notification: {
         Args: {
           p_author_name: string;
@@ -12242,6 +12328,14 @@ export type Database = {
         Args: { p_guild_id: string; p_user_id: string };
         Returns: undefined;
       };
+      merge_class_feature: {
+        Args: { p_class_id: number; p_enabled: boolean; p_name: string };
+        Returns: undefined;
+      };
+      merge_class_feature_as_service_role: {
+        Args: { p_class_id: number; p_enabled: boolean; p_name: string };
+        Returns: undefined;
+      };
       only_calendar_or_discord_ids_changed: {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
         Returns: boolean;
@@ -12358,6 +12452,10 @@ export type Database = {
       };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
+        Returns: number;
+      };
+      release_grading_reviews_for_submissions: {
+        Args: { p_assignment_id: number; p_submission_ids: number[] };
         Returns: number;
       };
       release_instructor_only_gradebook_column: {
@@ -12488,6 +12586,10 @@ export type Database = {
       };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
+        Returns: number;
+      };
+      unrelease_grading_reviews_for_submissions: {
+        Args: { p_assignment_id: number; p_submission_ids: number[] };
         Returns: number;
       };
       update_api_gateway_call: {

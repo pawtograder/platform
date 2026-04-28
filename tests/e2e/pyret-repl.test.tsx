@@ -10,6 +10,7 @@ import {
   TestingUser,
   getTestRunPrefix
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 let course: Course;
 let student: TestingUser;
@@ -353,6 +354,7 @@ test.describe("Pyret REPL Integration", () => {
     const hasErrorMessage = await page.getByText(/Failed to load REPL|Error loading/i).isVisible();
 
     expect(hasLoadedSuccessfully || hasErrorMessage).toBeTruthy();
+    await assertStudentPageAccessible(page, "pyret REPL load or error state");
 
     if (hasErrorMessage) {
       await replToggle.click();
@@ -394,5 +396,6 @@ test.describe("Pyret REPL Integration", () => {
       }
       return loadedCount >= expectedCount;
     }, expectedOpenReplCount);
+    await assertStudentPageAccessible(page, "pyret multiple REPLs open");
   });
 });

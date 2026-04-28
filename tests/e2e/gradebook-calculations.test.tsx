@@ -17,13 +17,14 @@
  */
 
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Database, Json } from "@/utils/supabase/SupabaseTypes";
 import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser, supabase } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
@@ -211,7 +212,7 @@ async function kickRecalculation(class_id: number) {
       return true;
     });
     await supabase.rpc("enqueue_gradebook_row_recalculation_batch", {
-      p_rows: deduped as unknown as Record<string, unknown>[]
+      p_rows: deduped as Json[]
     });
   }
 
@@ -728,6 +729,7 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     const finalCard = page.getByRole("article", { name: "Grade for Final Grade" });
     await expect(finalCard).toBeVisible({ timeout: 10_000 });
     await expect(finalCard).toContainText(/84(\.0+)?/);
+    await assertStudentPageAccessible(page, "gradebook calculations student released grades");
   });
 });
 
@@ -2002,5 +2004,6 @@ test.describe("Fixture 5: Score Override Precedence", () => {
     const bonusCard = page.getByRole("article", { name: "Grade for Final with Bonus" });
     await expect(bonusCard).toBeVisible({ timeout: 30_000 });
     await expect(bonusCard).toContainText(/82(\.0+)?/);
+    await assertStudentPageAccessible(page, "gradebook calculations student overrides UI");
   });
 });

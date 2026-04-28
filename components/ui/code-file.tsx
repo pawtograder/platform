@@ -9,7 +9,7 @@ import {
   useRubricParts,
   useRubricWithParts
 } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useAssignmentGroupWithMembers } from "@/hooks/useCourseController";
 import {
   computeRubricAnnotationTargetMeta,
@@ -25,6 +25,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId, useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import {
   Json,
   RubricCheck,
@@ -286,6 +287,7 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
                   content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                 >
                   <Button
+                    aria-label={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                     variant={expanded.length > 0 ? "solid" : "outline"}
                     size="xs"
                     p={0}
@@ -751,6 +753,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
   const [selectOpen, setSelectOpen] = useState(true);
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+  const isTaOnly = useIsGrader();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -1137,7 +1141,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                     ? "Add a comment about this check and press enter to submit..."
                     : "Optionally add a comment, or just press enter to submit..."
               }
-              allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
+              allowEmptyMessage={selectedCheckOption.check ? !selectedCheckOption.check.is_comment_required : true}
               defaultSingleLine={true}
               sendMessage={async (message) => {
                 let points = selectedCheckOption.check?.points;
@@ -1182,13 +1186,25 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                   regrade_request_id: null,
                   target_student_profile_id: targetEff.targetId
                 };
+                // Close the popover synchronously as soon as the user submits.
+                // submission_file_comments.create() optimistically inserts a
+                // tentative row (TableController._addRow), so the new annotation
+                // is visible to the user immediately even before the network
+                // round-trip resolves. Awaiting create() before close() means
+                // the popover stays open for the full INSERT latency, and any
+                // PostgREST/realtime hiccup under CI load (chromium has been
+                // observed to take >60s for this insert) leaves the popover
+                // hanging — see the "Annotate line 15 with a check:" CI flake.
+                close();
                 try {
                   await submissionController.submission_file_comments.create(values);
-                  close();
                 } catch (e) {
                   toaster.error({
                     title: "Error saving annotation",
-                    description: e instanceof Error ? e.message : "Unknown error"
+                    description: getStudentFacingErrorMessage(e, {
+                      releasedReviewGraderBlocked:
+                        isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(review?.released)
+                    })
                   });
                 }
               }}

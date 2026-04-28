@@ -617,6 +617,7 @@ export const ChatMessageItem = ({
             {/* Reply Button - Only show for messages with database IDs */}
             {onReply && messageId && (
               <Button
+                aria-label="Reply to message"
                 className="reply-button"
                 size="xs"
                 variant="ghost"

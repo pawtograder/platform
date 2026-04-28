@@ -14,7 +14,7 @@ export default function EmptyPollsState({ courseId }: EmptyPollsStateProps) {
         <Heading size="2xl" color="fg.default">
           Manage Polls
         </Heading>
-        <Button size="sm" asChild variant="solid" bg="green.500" color="white" _hover={{ bg: "green.600" }}>
+        <Button size="sm" asChild variant="solid" colorPalette="green">
           <NextLink href={`/course/${courseId}/manage/polls/new`}>+ Create Poll</NextLink>
         </Button>
       </HStack>
@@ -40,7 +40,7 @@ export default function EmptyPollsState({ courseId }: EmptyPollsStateProps) {
             Create your first poll to gather quick feedback from students.
           </Text>
           <VStack p={2}>
-            <Button size="xs" asChild variant="solid" bg="green.500" color="white" _hover={{ bg: "green.600" }}>
+            <Button size="xs" asChild variant="solid" colorPalette="green">
               <NextLink href={`/course/${courseId}/manage/polls/new`}>+ Create a New Poll</NextLink>
             </Button>
           </VStack>

@@ -16,9 +16,10 @@ import {
   supabase,
   createAuthenticatedClient
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 // removed unused import
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let students: TestingUser[] = [];
@@ -115,6 +116,31 @@ async function waitForVirtualizerIdle(page: Page) {
     },
     { polling: "raf", timeout: 2000 }
   );
+}
+
+// `gradebook-cell-pulse` is the className applied to the calculator icon a
+// gradebookCell.tsx renders while `studentGradebookColumn.is_recalculating`
+// is true (see app/course/[course_id]/manage/gradebook/gradebookCell.tsx).
+// Each is_recalculating flip toggles the cell's children, which combined with
+// realtime row updates causes the virtualizer to remount the cell — and
+// remounts in the middle of waitForStableLocator's two boundingBox samples
+// produce its "Timed out waiting for stable locator box" flake. Block until
+// no cell is currently recalculating before sampling cell geometry.
+async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000) {
+  // Three states are possible: (a) no pulse elements at all — nothing
+  // was recalculating; (b) some existed and all transitioned to hidden;
+  // (c) at least one stayed visible past timeoutMs — recalculation is
+  // genuinely stuck and we want that to surface as a real failure, not
+  // a silent pass. Earlier we wrapped the whole waitFor in `.catch(() =>
+  // {})`, which folded (c) into "success" and masked the diagnostic.
+  // Then we narrowed to `.first()` only, which folds "first row idle but
+  // others still pulsing" into success. Now we wait until the *full
+  // set* drains, so partial-idle never reports as fully idle.
+  const pulses = page.locator(".gradebook-cell-pulse");
+  if ((await pulses.count()) === 0) return;
+  await page.waitForFunction(() => document.querySelectorAll(".gradebook-cell-pulse").length === 0, {
+    timeout: timeoutMs
+  });
 }
 
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
@@ -503,7 +529,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
     }
 
-    //Wait for gradebook to finish updating with the private final grade
+    // Wait for gradebook to finish updating with the private final grade.
+    // The final-grade column is calculated from average-assignments, which
+    // depends on the code-walk column. The recalculation pipeline is async
+    // (DB → pg_net → edge function); just poll the result.
     await expect(async () => {
       const { data: privateRecord, error: privateError } = await supabase
         .from("gradebook_column_students")
@@ -517,7 +546,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
       }
       expect(privateRecord?.score).toBe(51.95);
-    }).toPass({ timeout: 60_000 });
+    }).toPass({ timeout: 120_000 });
 
     // Public record may lag behind private due to async recalculation — poll separately
     await expect(async () => {
@@ -733,20 +762,34 @@ test.describe("Gradebook Page - Comprehensive", () => {
   test("Issue #533: instructor can enter a decimal score in a manual gradebook cell", async ({ page }) => {
     const studentName = students[0].private_profile_name;
     await waitForVirtualizerIdle(page);
+    // Wait for the initial recalculation burst to drain. Each is_recalculating
+    // flip remounts the cell's children, defeating waitForStableLocator's
+    // two-boundingBox stability check.
+    await waitForGradebookRecalculationsIdle(page);
     const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
-    const partCell = await waitForStableLocator(page, getPartCell);
+    // Even with recalculations idle, the virtualizer can briefly remount cells
+    // on realtime row updates — keep the wide stability window.
+    const partCell = await waitForStableLocator(page, getPartCell, 60_000);
     await partCell.click();
     const scoreInput = page.locator('input[name="score"]');
     await scoreInput.fill("50.5");
     await expect(scoreInput).toHaveValue("50.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
+    // Wait for the editor popover to fully close before reopening; otherwise
+    // the next click lands on the open popover instead of the cell, the
+    // restore Update fires against the stale 50.5 form, and the cell never
+    // moves to 84.5.
+    await expect(scoreInput).toBeHidden();
     await expect(partCell).toHaveText(/50\.5/);
 
     // Restore original value so subsequent serial tests see the expected score
     await partCell.click();
     const restoreInput = page.locator('input[name="score"]');
+    await expect(restoreInput).toBeVisible();
     await restoreInput.fill("84.5");
+    await expect(restoreInput).toHaveValue("84.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(restoreInput).toBeHidden();
     await expect(partCell).toHaveText(/84\.5/);
   });
 
@@ -776,7 +819,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
 
     // Check action buttons
     await expect(page.getByRole("button", { name: "Download Gradebook" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Import Column" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Import Columns" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Column" })).toBeVisible();
 
     // Check that Student 1's assignments are showing grades, final grade is calculated
@@ -881,9 +924,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass({ timeout: 60_000 });
   });
 
-  test("Import Column workflow creates a new column and populates scores", async ({ page }) => {
+  test("Import Columns workflow creates a new column and populates scores", async ({ page }) => {
     // Open import dialog
-    await page.getByRole("button", { name: "Import Column" }).click();
+    await page.getByRole("button", { name: "Import Columns" }).click();
 
     // Step 1: upload file
     const fileInput = page.locator('input[type="file"]');
@@ -938,6 +981,148 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(ecCell).toHaveText(/7/);
 
     // This column is not included in final grade so don't check that it updates
+  });
+
+  test("Expression Builder: live validation, full-screen mode, and per-student evaluation", async ({ page }) => {
+    // Uses the Add Column dialog (creates a new column so it's safe even in
+    // the serial suite). Covers:
+    //   1. Live parse validation (invalid syntax).
+    //   2. Dependency validation (unknown slug) blocks save.
+    //   3. A valid expression enables save.
+    //   4. Full-screen Expression Builder opens, shows a student picker, and
+    //      evaluates the expression against a specific student with live
+    //      intermediate values.
+    await page.getByRole("button", { name: "Add Column" }).click();
+
+    const addDialog = page.getByRole("dialog").filter({ hasText: "Add Column" });
+    await expect(addDialog).toBeVisible();
+
+    await addDialog.getByLabel("Name").fill("Validated Column");
+    await addDialog.getByLabel("Max Score").fill("100");
+    await addDialog.getByLabel("Slug").fill("validated-column");
+
+    const scoreTextarea = addDialog.getByLabel("Score Expression");
+    await expect(scoreTextarea).toBeVisible();
+    const saveButton = addDialog.getByRole("button", { name: /^Save$/ });
+
+    // --- (1) Parse error ---
+    await scoreTextarea.fill("((1 +");
+    await expect(page.getByTestId("expression-parse-error")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-parse-error")).toContainText(/Parse error/i);
+    // Save must be disabled while the expression is unparseable — asserting
+    // the disabled state explicitly (rather than clicking and swallowing the
+    // failure) fails loud if the guard ever regresses.
+    await expect(saveButton).toBeDisabled();
+
+    // --- (2) Dependency error ---
+    await scoreTextarea.fill('mean(gradebook_columns("does-not-exist-xyz"))');
+    await expect(page.getByTestId("expression-dependency-error")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-dependency-error")).toContainText(/Invalid dependency/i);
+    await expect(saveButton).toBeDisabled();
+
+    // --- (3) Valid arithmetic expression ---
+    await scoreTextarea.fill("1 + 2 * 3");
+    await expect(page.getByTestId("expression-ok-syntax")).toBeVisible({ timeout: 10_000 });
+    await expect(saveButton).toBeEnabled();
+
+    // --- (4) Full-screen expression builder ---
+    await addDialog.getByRole("button", { name: /Expression Builder/i }).click();
+    // The overlay region is rendered only in expanded mode.
+    await expect(page.getByTestId("expression-builder-overlay")).toBeVisible({ timeout: 10_000 });
+
+    // The student picker auto-selects the first student; scope the button
+    // lookup to the dialog so we don't match any instructor/grader UI still
+    // rendered underneath. Student names in this fixture are globally unique
+    // inside the dialog.
+    const studentButton = addDialog.getByRole("button", { name: students[0].private_profile_name });
+    await expect(studentButton).toBeVisible({ timeout: 10_000 });
+    await studentButton.click();
+
+    // With a valid expression and a selected student, we should see a green
+    // evaluation status and a "Score: …" badge at the top of the editor.
+    await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    // Wait for the result-badges container to render before asserting its
+    // text — it mounts as soon as the Expression Builder expands, which is a
+    // separate re-render from the one that flips `expression-ok` visible.
+    await expect(page.getByTestId("expression-builder-result-badges")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-builder-result-badges")).toContainText(/Score\s*7/);
+    // No render expression yet — only the Score badge is shown.
+    await expect(page.getByTestId("expression-builder-rendered-badge")).toHaveCount(0);
+
+    // Setting a render expression should light up the second badge with the
+    // rendered form alongside the raw score. With score=7 and max_score=100
+    // the default `letter(score)` renders as "F".
+    await addDialog.getByLabel("Render Expression").fill("letter(score)");
+    await expect(page.getByTestId("expression-builder-rendered-badge")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-builder-rendered-badge")).toContainText(/Rendered\s*F/);
+
+    // Switch to an expression that uses a real gradebook_columns slug and
+    // assert that the intermediate-values panel renders the inner call. Scope
+    // to the full-screen id so we don't hit the compact-mode textarea if both
+    // are ever mounted simultaneously.
+    const fullScreenTextarea = addDialog.locator("#scoreExpressionFull");
+    await expect(fullScreenTextarea).toBeVisible();
+    await fullScreenTextarea.fill('gradebook_columns("participation")');
+    await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    // The intermediate overlay panel should mention the dependency slug it
+    // just resolved (participation=…/…) rather than "undefined".
+    await expect(page.getByTestId("expression-builder-overlay")).toContainText(/participation/);
+    await expect(page.getByTestId("expression-builder-overlay")).not.toContainText(/undefined/);
+
+    // Nested context-aware calls (regression guard): the `context` arg
+    // injected by the AST transform must be stripped globally from every
+    // level of the stringified source, not just the outermost call, AND the
+    // transform has to recurse into children so the inner `gradebook_columns`
+    // also receives the `context` symbol (mathjs's own `transform()` stops
+    // recursing the moment the callback returns a new node). We use a glob
+    // so `gradebook_columns(...)` returns an array that `mean` accepts.
+    await fullScreenTextarea.fill('mean(gradebook_columns("*"))');
+    await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("expression-builder-overlay")).not.toContainText(/context,/);
+    // The inner call must resolve (not "invalid pattern"), proving both
+    // levels of the AST received the injected context symbol.
+    await expect(page.getByTestId("expression-builder-overlay")).not.toContainText(/invalid pattern/);
+
+    // Multi-line expressions get one inline annotation per statement.
+    // Typing three assignments followed by their sum should produce four
+    // `= value` annotations inside the editor.
+    await fullScreenTextarea.fill("A = 10\nB = 20\nC = A + B\nC * 2");
+    await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
+    const lineValues = page.getByTestId("expression-line-value");
+    await expect(lineValues).toHaveCount(4);
+    // The overlay should carry the final value for each statement.
+    const overlayText = await page.getByTestId("expression-builder-overlay").innerText();
+    expect(overlayText).toContain("= 10");
+    expect(overlayText).toContain("= 20");
+    expect(overlayText).toContain("= 30");
+    expect(overlayText).toContain("= 60");
+
+    // Introducing a parse error in the full-screen mode should still surface
+    // the inline error and keep Save disabled.
+    await fullScreenTextarea.fill("((1 +");
+    await expect(page.getByTestId("expression-parse-error")).toBeVisible({ timeout: 10_000 });
+
+    // Collapse back. Note: the expression state is shared between the compact
+    // and full-screen textareas, so the invalid `((1 +` from above is
+    // intentionally left in place — the subsequent Cancel closes the dialog
+    // and discards it. Any future edit that closes via Save/Escape should
+    // reset the textarea first or this will leak into whatever reopens it.
+    await page.getByRole("button", { name: /Collapse/i }).click();
+    await expect(page.getByTestId("expression-builder-overlay")).toBeHidden();
+
+    await addDialog.getByRole("button", { name: /^Cancel$/ }).click();
+    // The Chakra dialog flips data-state="closed" the instant the close
+    // dispatches, but `toBeHidden` waits for the bounding box to collapse,
+    // which on webkit can lag the exit animation enough to time out.
+    await expect(addDialog).toHaveAttribute("data-state", "closed");
+
+    // Sanity: no column named "Validated Column" leaked into the DB.
+    const { data: leaked } = await supabase
+      .from("gradebook_columns")
+      .select("id")
+      .eq("class_id", course.id)
+      .eq("slug", "validated-column");
+    expect(leaked ?? []).toHaveLength(0);
   });
 
   // test("Student What If page allows simulating grades and shows released grades", async ({ page }) => {
@@ -1064,6 +1249,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByRole("article", { name: "Grade for Participation" })).toBeVisible();
     // Validate that the final grade shown is correctly calcualted
     await expect(page.getByText(`Final Grade90.8`)).toBeVisible({ timeout: 70_000 });
+    await assertStudentPageAccessible(page, "student gradebook released participation");
 
     // Now unrelease the column and verify it's hidden from student
     await loginAsUser(page, instructor!, course);
@@ -1115,6 +1301,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const unreleasedCard = page.getByRole("article", { name: "Grade for Participation" });
     await expect(unreleasedCard).toBeVisible();
     await expect(unreleasedCard).toContainText(/In Progress/i);
+    await assertStudentPageAccessible(page, "student gradebook unreleased participation");
   });
 });
 
@@ -1409,9 +1596,51 @@ test.describe("Gradebook column reorder (issue #531)", () => {
 
     await waitForVirtualizerIdle(page);
 
-    await headerCell.getByRole("button", { name: "Column options" }).click();
-    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
-    await expect(page.getByText("Column moved right").first()).toBeVisible();
+    // After the Move Left, the column moved to a new index in the column
+    // virtualizer and its previous DOM node may be unmounted. Re-query the
+    // headerCell from the live thead, then scroll it into view (webkit and
+    // chromium both occasionally render the column off-screen).
+    const headerCellAfterMove = region
+      .locator("thead tr")
+      .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+      .locator("[data-col-id]")
+      .filter({ hasText: colName });
+    await headerCellAfterMove.scrollIntoViewIfNeeded();
+    await waitForVirtualizerIdle(page);
+    // The column header unmounts/remounts under realtime pressure: gradebook
+    // refetches caused by the prior Move Left can re-render the column
+    // virtualizer mid-click, detaching the "Column options" button or the
+    // chakra menu it controls. Retry the entire open+click sequence as a
+    // single unit so a transient detach doesn't fail the test. Each attempt
+    // re-resolves the locator (so the new mount is targeted), waits for
+    // virtualizer idle, opens the menu, and clicks Move Right. Any
+    // intermediate detach throws and we try again. The ultimate signal that
+    // the click succeeded is the "Column moved right" toast (matching how
+    // Move Left works above), and the DB sort_order assertion that follows.
+    await expect(async () => {
+      // If a previous attempt's Move Right click already landed in the DB
+      // (sort_order back to original) but the toast assertion timed out
+      // — say a realtime-driven re-render detached the toast region —
+      // a second click would double-move the column and break the final
+      // sort_order assertion below. Short-circuit when the move already
+      // succeeded; let the retry only cover the toast assertion in that
+      // case (treating a missed toast on an otherwise-successful click
+      // as a no-op).
+      const { data: colNow } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", colBefore!.id)
+        .single();
+      if (colNow?.sort_order === sortOrderBefore) {
+        return;
+      }
+      await waitForVirtualizerIdle(page);
+      const buttonNow = headerCellAfterMove.getByRole("button", { name: "Column options" });
+      await buttonNow.scrollIntoViewIfNeeded();
+      await buttonNow.click();
+      await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
+      await expect(page.getByText("Column moved right").first()).toBeVisible({ timeout: 5000 });
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
 
     // Verify sort_order restored to original
     await expect(async () => {

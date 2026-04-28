@@ -60,7 +60,7 @@ function CurrentTimeIndicator() {
         position="absolute"
         left={`${LEFT_OFFSET + 4}px`}
         top="-10px"
-        bg="red.500"
+        bg="red.solid"
         color="white"
         fontSize="xs"
         px={2}
@@ -98,7 +98,7 @@ function CompactCurrentTimeIndicator({ leftOffset = 0 }: { leftOffset?: number }
         position="absolute"
         left="4px"
         top="-10px"
-        bg="red.500"
+        bg="red.solid"
         color="white"
         fontSize="2xs"
         px={1.5}

@@ -15,8 +15,9 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
@@ -35,6 +36,7 @@ import {
   FiMenu,
   FiMessageSquare,
   FiSettings,
+  FiSliders,
   FiStar,
   FiUsers
 } from "react-icons/fi";
@@ -51,69 +53,74 @@ const LinkItems = (courseID: number) => [
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/assignments`
   },
-  { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion`, feature_flag: "discussion" },
+  {
+    name: "Discussion",
+    icon: FiStar,
+    target: `/course/${courseID}/discussion`,
+    feature_flag: COURSE_FEATURES.DISCUSSION
+  },
   {
     name: "Flashcards",
     icon: TbCards,
     student_only: true,
     target: `/course/${courseID}/flashcards`,
-    feature_flag: "flashcards"
+    feature_flag: COURSE_FEATURES.FLASHCARDS
   },
   {
     name: "Office Hours",
     student_only: true,
     icon: FiMessageSquare,
     target: `/course/${courseID}/office-hours`,
-    feature_flag: "office-hours"
+    feature_flag: COURSE_FEATURES.OFFICE_HOURS
   },
   {
     name: "Office Hours",
     instructors_or_graders_only: true,
     icon: FiClipboard,
     target: `/course/${courseID}/manage/office-hours`,
-    feature_flag: "office-hours"
+    feature_flag: COURSE_FEATURES.OFFICE_HOURS
   },
   {
     name: "Gradebook",
     icon: FiBookOpen,
     student_only: true,
     target: `/course/${courseID}/gradebook`,
-    feature_flag: "gradebook"
+    feature_flag: COURSE_FEATURES.GRADEBOOK
   },
   {
     name: "Gradebook",
     icon: FiBookOpen,
     instructor_only: true,
     target: `/course/${courseID}/manage/gradebook`,
-    feature_flag: "gradebook"
+    feature_flag: COURSE_FEATURES.GRADEBOOK
   },
   {
     name: "Surveys",
     icon: FiFileText,
     student_only: true,
     target: `/course/${courseID}/surveys`,
-    feature_flag: "surveys"
+    feature_flag: COURSE_FEATURES.SURVEYS
   },
   {
     name: "Surveys",
     icon: FiFileText,
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/surveys`,
-    feature_flag: "surveys"
+    feature_flag: COURSE_FEATURES.SURVEYS
   },
   {
     name: "Polls",
     icon: FiCheckSquare,
     student_only: true,
     target: `/course/${courseID}/polls`,
-    feature_flag: "polls"
+    feature_flag: COURSE_FEATURES.POLLS
   },
   {
     name: "Polls",
     icon: FiCheckSquare,
     instructors_or_graders_only: true,
     target: `/course/${courseID}/manage/polls`,
-    feature_flag: "polls"
+    feature_flag: COURSE_FEATURES.POLLS
   },
   {
     name: "Course Settings",
@@ -134,6 +141,12 @@ const LinkItems = (courseID: number) => [
         target: `/course/${courseID}/manage/course/enrollments`
       },
       {
+        name: "Feature flags",
+        icon: FiSliders,
+        instructors_only: true,
+        target: `/course/${courseID}/manage/course/feature-flags`
+      },
+      {
         name: "Lab Sections",
         instructors_or_graders_only: true,
         icon: MdOutlineScience,
@@ -145,14 +158,14 @@ const LinkItems = (courseID: number) => [
         icon: FiHash,
         instructors_only: true,
         target: `/course/${courseID}/manage/discussion-topics`,
-        feature_flag: "discussion"
+        feature_flag: COURSE_FEATURES.DISCUSSION
       },
       {
         name: "Discussion Engagement",
         icon: FiBarChart,
         instructors_or_graders_only: true,
         target: `/course/${courseID}/manage/discussion-engagement`,
-        feature_flag: "discussion"
+        feature_flag: COURSE_FEATURES.DISCUSSION
       },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
@@ -238,6 +251,8 @@ export default function DynamicCourseNav() {
 
   const isInstructor = enrollment.role === "instructor";
   const isInstructorOrGrader = enrollment.role === "instructor" || enrollment.role === "grader";
+  /** Matches `display={{ base, md }}` splits below — only one layout gets landmark ids / exposes nav to SRs. */
+  const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
 
   useEffect(() => {
     if (courseNavRef.current) {
@@ -266,6 +281,7 @@ export default function DynamicCourseNav() {
 
   return (
     <Box
+      as="header"
       px={{ base: 2, md: 4 }}
       py={{ base: 2, md: 2 }}
       ref={courseNavRef}
@@ -277,7 +293,7 @@ export default function DynamicCourseNav() {
     >
       <NavigationProgressBar />
       {/* Mobile Layout */}
-      <Box display={{ base: "block", md: "none" }}>
+      <Box display={{ base: "block", md: "none" }} aria-hidden={isMdUp ? true : undefined}>
         <VStack gap={2} align="stretch">
           {/* Top row: Course picker, logo, course name, user menu */}
           <HStack justifyContent="space-between" alignItems="center">
@@ -294,11 +310,20 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <UserMenu />
+            <Box id={!isMdUp ? "user-menu" : undefined}>
+              <UserMenu />
+            </Box>
           </HStack>
 
           {/* Navigation links - horizontal scroll on mobile */}
-          <Box overflowX="auto" overflowY="hidden" pb={1}>
+          <Box
+            as="nav"
+            id={!isMdUp ? "primary-nav" : undefined}
+            aria-label="Course navigation"
+            overflowX="auto"
+            overflowY="hidden"
+            pb={1}
+          >
             <HStack gap={1} minWidth="max-content">
               {filteredLinks.map((link) => {
                 if (link.submenu) {
@@ -312,6 +337,7 @@ export default function DynamicCourseNav() {
                       <Menu.Root>
                         <Menu.Trigger asChild>
                           <Button
+                            aria-label={`${link.name} menu`}
                             colorPalette="gray"
                             size="xs"
                             fontSize="xs"
@@ -372,7 +398,10 @@ export default function DynamicCourseNav() {
                         whiteSpace="nowrap"
                         asChild
                       >
-                        <NextLink href={link.target || "#"}>
+                        <NextLink
+                          href={link.target || "#"}
+                          aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+                        >
                           <HStack gap={1}>
                             {React.createElement(link.icon, { size: 14 })}
                             <Text>{link.name}</Text>
@@ -391,7 +420,7 @@ export default function DynamicCourseNav() {
       </Box>
 
       {/* Desktop Layout - unchanged */}
-      <Box display={{ base: "none", md: "block" }}>
+      <Box display={{ base: "none", md: "block" }} aria-hidden={!isMdUp ? true : undefined}>
         <Flex width="100%" pt="2" alignItems="center" justifyContent="space-between">
           <VStack gap="0" align="start">
             <HStack>
@@ -407,7 +436,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <HStack width="100%" mt={2}>
+            <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
               {filteredLinks.map((link) => {
                 if (link.submenu) {
                   return (
@@ -418,7 +447,15 @@ export default function DynamicCourseNav() {
                     >
                       <Menu.Root>
                         <Menu.Trigger asChild>
-                          <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
+                          <Button
+                            aria-label={`${link.name} menu`}
+                            colorPalette="gray"
+                            size="xs"
+                            fontSize="sm"
+                            pt="0"
+                            variant="ghost"
+                            asChild
+                          >
                             <Flex align="center" role="group">
                               <HStack>
                                 {React.createElement(link.icon)}
@@ -463,7 +500,10 @@ export default function DynamicCourseNav() {
                       borderColor="orange.600"
                     >
                       <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
-                        <NextLink href={link.target || "#"}>
+                        <NextLink
+                          href={link.target || "#"}
+                          aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+                        >
                           <Flex align="center" role="group">
                             <HStack>
                               {React.createElement(link.icon)}
@@ -478,7 +518,9 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <UserMenu />
+          <Box id={isMdUp ? "user-menu" : undefined}>
+            <UserMenu />
+          </Box>
         </Flex>
       </Box>
     </Box>

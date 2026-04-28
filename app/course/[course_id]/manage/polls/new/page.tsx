@@ -375,14 +375,7 @@ export default function NewPollPage() {
               </Box>
 
               <HStack gap={4} justify="flex-start" pt={4}>
-                <UIButton
-                  type="submit"
-                  loading={isSaving}
-                  size="md"
-                  bg="green.500"
-                  color="white"
-                  _hover={{ bg: "green.600" }}
-                >
+                <UIButton type="submit" loading={isSaving} size="md" colorPalette="green" variant="solid">
                   Publish Poll
                 </UIButton>
                 <Button

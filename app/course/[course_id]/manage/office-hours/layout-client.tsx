@@ -2,7 +2,6 @@
 
 import { OfficeHoursHeader, type OfficeHoursViewMode } from "@/components/help-queue/office-hours-header";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
-import { useCourseController } from "@/hooks/useCourseController";
 import { getNotificationManager } from "@/lib/notifications";
 import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -11,7 +10,6 @@ import { useHelpQueue, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 
 export default function HelpManageLayoutClient({ children }: Readonly<{ children: React.ReactNode }>) {
   const { course_id, request_id, queue_id } = useParams();
-  const courseController = useCourseController();
   const pathname = usePathname();
 
   // Sidebar state - persists across request navigation
@@ -65,12 +63,6 @@ export default function HelpManageLayoutClient({ children }: Readonly<{ children
 
   // Show sidebar only when viewing a specific request
   const showSidebar = !!requestId;
-
-  useEffect(() => {
-    if (courseController?.course?.name) {
-      document.title = `${courseController.course.name} - Office Hours`;
-    }
-  }, [courseController?.course?.name]);
 
   // Initialize notification manager and handle visibility changes
   useEffect(() => {
