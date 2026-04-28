@@ -40,9 +40,17 @@ export default function WorkflowRunsLayoutClient({ children }: { children: React
   const courseIdNum = Number.parseInt(course_id as string, 10);
   const linkItems = useMemo(() => LinkItems(courseIdNum), [courseIdNum]);
   const selectOptions = useMemo(() => linkItems.map((item) => ({ label: item.label, value: item.href })), [linkItems]);
+
+  /** Single active tab: longest `href` that is an exact path or proper prefix (`href/`…). */
+  const bestMatch = useMemo(() => {
+    const candidates = linkItems.filter((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
+    if (candidates.length === 0) return null;
+    return candidates.reduce((longest, item) => (item.href.length > longest.href.length ? item : longest));
+  }, [linkItems, pathname]);
+
   const selectedOption = useMemo(
-    () => selectOptions.find((o) => o.value === pathname || pathname.startsWith(o.value + "/")) ?? null,
-    [selectOptions, pathname]
+    () => (bestMatch ? { label: bestMatch.label, value: bestMatch.href } : null),
+    [bestMatch]
   );
 
   return (
@@ -51,7 +59,7 @@ export default function WorkflowRunsLayoutClient({ children }: { children: React
         <Box as="nav" aria-label="Workflow runs" w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
             {linkItems.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+              const isActive = bestMatch === item;
               return (
                 <Button
                   key={item.label}

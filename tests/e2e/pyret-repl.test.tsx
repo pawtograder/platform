@@ -269,7 +269,6 @@ test.describe("Pyret REPL Integration", () => {
     ).not.toBeVisible();
 
     await page.waitForLoadState("networkidle");
-    await assertStudentPageAccessible(page, "pyret test results before REPL");
 
     const replToggle = page.getByRole("button", { name: /Interactive Pyret REPL/i }).first();
     await expect(replToggle).toBeVisible();

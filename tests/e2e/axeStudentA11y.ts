@@ -312,12 +312,14 @@ export async function assertSkipLinksWork(page: Page, contextLabel?: string): Pr
 
   const mainLink = skipNav.getByRole("link", { name: /skip to main content/i });
   await expect(mainLink, `${prefix}"Skip to main content" link exists`).toHaveCount(1);
-  await expect(mainLink, `${prefix}skip link targets #main-content`).toHaveAttribute("href", "#main-content");
 
-  // Reset focus to document root so the first Tab lands on the first tabbable
-  // element — SkipNav should be mounted earliest in the tree.
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  // Reset focus to <body> so Tab order is predictable (not another control that
+  // happened to be focused from a prior interaction).
+  await page.evaluate(() => {
+    document.body.focus();
+  });
   await page.keyboard.press("Tab");
+  await expect(mainLink, `${prefix}skip link targets #main-content`).toHaveAttribute("href", "#main-content");
   await expect(mainLink, `${prefix}"Skip to main content" is the first tabbable element`).toBeFocused();
 
   await mainLink.click();

@@ -17,7 +17,7 @@ import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
@@ -251,6 +251,8 @@ export default function DynamicCourseNav() {
 
   const isInstructor = enrollment.role === "instructor";
   const isInstructorOrGrader = enrollment.role === "instructor" || enrollment.role === "grader";
+  /** Matches `display={{ base, md }}` splits below — only one layout gets landmark ids / exposes nav to SRs. */
+  const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
 
   useEffect(() => {
     if (courseNavRef.current) {
@@ -291,7 +293,7 @@ export default function DynamicCourseNav() {
     >
       <NavigationProgressBar />
       {/* Mobile Layout */}
-      <Box display={{ base: "block", md: "none" }}>
+      <Box display={{ base: "block", md: "none" }} aria-hidden={isMdUp ? true : undefined}>
         <VStack gap={2} align="stretch">
           {/* Top row: Course picker, logo, course name, user menu */}
           <HStack justifyContent="space-between" alignItems="center">
@@ -308,7 +310,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <Box data-landmark="user-menu">
+            <Box id={!isMdUp ? "user-menu" : undefined}>
               <UserMenu />
             </Box>
           </HStack>
@@ -316,7 +318,7 @@ export default function DynamicCourseNav() {
           {/* Navigation links - horizontal scroll on mobile */}
           <Box
             as="nav"
-            data-landmark="primary-nav"
+            id={!isMdUp ? "primary-nav" : undefined}
             aria-label="Course navigation"
             overflowX="auto"
             overflowY="hidden"
@@ -418,7 +420,7 @@ export default function DynamicCourseNav() {
       </Box>
 
       {/* Desktop Layout - unchanged */}
-      <Box display={{ base: "none", md: "block" }}>
+      <Box display={{ base: "none", md: "block" }} aria-hidden={!isMdUp ? true : undefined}>
         <Flex width="100%" pt="2" alignItems="center" justifyContent="space-between">
           <VStack gap="0" align="start">
             <HStack>
@@ -434,7 +436,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <HStack as="nav" data-landmark="primary-nav" aria-label="Course navigation" width="100%" mt={2}>
+            <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
               {filteredLinks.map((link) => {
                 if (link.submenu) {
                   return (
@@ -516,7 +518,7 @@ export default function DynamicCourseNav() {
               })}
             </HStack>
           </VStack>
-          <Box data-landmark="user-menu">
+          <Box id={isMdUp ? "user-menu" : undefined}>
             <UserMenu />
           </Box>
         </Flex>
