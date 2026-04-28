@@ -12,7 +12,7 @@ import {
   TestingUser
 } from "./TestingUtils";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student: TestingUser;

@@ -20,7 +20,7 @@ export default defineConfig({
   /* Retry on CI only */
   retries: process.env.CI ? 2 : 0,
   /* Opt out of parallel tests on CI. */
-  workers: 4,
+  workers: process.env.CI ? 6 : 4,
 
   timeout: 60_000,
 
@@ -56,7 +56,9 @@ export default defineConfig({
     screenshot: "only-on-failure",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
-    trace: "on" //"on-first-retry"
+    /* "on" was filling tmpfs and OOM-killing the CI runner — every test wrote
+       a multi-MB trace. "on-first-retry" only captures for the retry flow. */
+    trace: "on-first-retry"
   },
   expect: {
     timeout: 20_000

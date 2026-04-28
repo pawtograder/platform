@@ -1,4 +1,4 @@
-name: Deploy Branch Preview
+name: E2E Tests
 on:
   push:
     branches:
@@ -10,17 +10,47 @@ on:
 # Secure baseline: no permissions. Jobs that need them override explicitly.
 permissions: {}
 
+# Cancel an in-flight run when a newer one comes in for the same PR (or push
+# ref). Under pull_request_target, github.ref resolves to the base branch, so
+# keying on it alone would make every PR against staging collide; prefer
+# pull_request.number when present so each PR has its own group.
+concurrency:
+  group: e2e-local-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  deploy:
-    runs-on: pawtograder-ci
-    environment: staging
+  # Local-Supabase E2E. Spins up a clean dev environment on the runner and runs
+  # the Playwright suite against it. The Coolify branch-preview job that used to
+  # run alongside this one is gone — it'll come back once the deployment target
+  # moves into the same k8s cluster as this runner.
+  e2e-local:
+    runs-on: pawtograder-e2e
+    timeout-minutes: 75
     permissions:
       contents: read
-      packages: write
+    env:
+      # Per-run project name so that two e2e-local jobs running on different
+      # refs (or different runners in the same pool) don't clobber each
+      # other's Supabase containers / Docker volumes. The Supabase CLI takes
+      # this from `supabase/config.toml` `project_id`, so we sed-edit the
+      # checkout copy below before any `supabase` invocation.
+      SUPABASE_PROJECT: pawtograder-platform-${{ github.run_id }}-${{ github.run_attempt }}
+      # Supabase local-dev keys are deterministic (signed with the public
+      # "supabase-demo" JWT secret). Hardcoding lets us write .env.local — and
+      # therefore start `next build` — before `supabase start` finishes.
+      LOCAL_SUPABASE_URL: http://127.0.0.1:54321
+      LOCAL_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      LOCAL_SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      # Per-run scratch dir for PID / log files. /tmp persists across jobs on
+      # self-hosted runners, so namespacing on run_id+attempt prevents the
+      # cleanup `kill $(cat ...pid)` from targeting a stale PID that the OS
+      # has since recycled to an unrelated process.
+      RUN_TMP: /tmp/e2e-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
       - name: Cache npm dependencies
         uses: actions/cache@v4
         with:
@@ -28,57 +58,233 @@ jobs:
           key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-node-22-
+
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx', '!**/node_modules/**') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
-      - name: Deploy a branch preview environment
-        id: deploy
-        uses: pawtograder/coolify-supabase-deployment-action@main
-        with:
-          ephemeral: false
-          coolify_api_url: https://coolify.in.ripley.cloud/api/v1
-          coolify_server_uuid: ${{ secrets.COOLIFY_SERVER_UUID }}
-          coolify_api_token: ${{ secrets.COOLIFY_API_TOKEN }}
-          coolify_project_uuid: ${{ secrets.COOLIFY_PROJECT_UUID }}
-          coolify_environment_name: ${{ vars.COOLIFY_ENVIRONMENT_NAME }}
-          coolify_environment_uuid: ${{ secrets.COOLIFY_ENVIRONMENT_UUID }}
-          coolify_supabase_api_url: ${{ secrets.COOLIFY_SUPABASE_API_URL }}
-          deployment_app_uuid: ${{ secrets.COOLIFY_DEPLOYMENT_APP_UUID }}
-          bugsink_dsn: ${{ secrets.BUGSINK_DSN }}
-          discord_webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          frontend_image_repo: ghcr.io/${{ github.repository_owner }}/platform-frontend
-          dockerfile_path: ./Dockerfile
-          docker_registry_username: ${{ github.actor }}
-          docker_registry_password: ${{ secrets.GITHUB_TOKEN }}
+          # Pin to a known-good version. `latest` makes runs non-reproducible —
+          # bump deliberately when we want a new CLI.
+          version: 2.92.1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Write .env.local
         env:
           GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
+          GITHUB_PRIVATE_KEY_STRING: ${{ secrets.PAWTOGRADER_GITHUB_PRIVATE_KEY_STRING }}
           GITHUB_OAUTH_CLIENT_ID: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
           GITHUB_OAUTH_CLIENT_SECRET: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_SECRET }}
-          GITHUB_PRIVATE_KEY_STRING: ${{ secrets.PAWTOGRADER_GITHUB_PRIVATE_KEY_STRING }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
           UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install dependencies
-        run: npm ci
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
+        run: |
+          set -euo pipefail
+          cat > .env.local <<EOF
+          NEXT_PUBLIC_SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          SUPABASE_URL=${LOCAL_SUPABASE_URL}
+          SUPABASE_ANON_KEY=${LOCAL_SUPABASE_ANON_KEY}
+          SUPABASE_SERVICE_ROLE_KEY=${LOCAL_SUPABASE_SERVICE_ROLE_KEY}
+          ENABLE_SIGNUPS=true
+          NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001
+          E2E_ENABLE=true
+          END_TO_END_SECRET=not-a-secret
+          EDGE_FUNCTION_SECRET=some-secret-value
+          GITHUB_APP_ID=${GITHUB_APP_ID}
+          GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
+          GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
+          UPSTASH_REDIS_REST_URL=${UPSTASH_REDIS_REST_URL}
+          UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN}
+          SENTRY_DSN=${SENTRY_DSN}
+          EOF
+          # Single-line escaped PEM — supabase functions serve --env-file does
+          # not support multi-line quoted values; .env.local.staging uses the
+          # same shape. The Octokit / GitHub-App SDK unescapes \n at runtime.
+          KEY_ESCAPED=$(printf '%s' "${GITHUB_PRIVATE_KEY_STRING}" | awk 'BEGIN{ORS=""} {printf "%s\\n", $0}')
+          printf 'GITHUB_PRIVATE_KEY_STRING="%s"\n' "$KEY_ESCAPED" >> .env.local
+
+      # Make supabase/config.toml's project_id unique per run so the supabase
+      # CLI tags its containers and volumes with our SUPABASE_PROJECT, not the
+      # repo-default `pawtograder-platform`. Without this, two concurrent runs
+      # would mutually clobber each other's stack.
+      - name: Pin supabase project_id per run
+        run: |
+          set -euo pipefail
+          sed -i.bak -E "s|^project_id = .*$|project_id = \"${SUPABASE_PROJECT}\"|" supabase/config.toml
+          grep "^project_id" supabase/config.toml
+
+      # Kick Supabase off in the background so its container pulls + migration
+      # run overlap with `next build` and `playwright install`.
+      - name: Start local Supabase (background, fresh)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUN_TMP"
+          npx supabase stop --no-backup || true
+          docker volume ls --filter label=com.supabase.cli.project=${SUPABASE_PROJECT} -q \
+            | xargs -r docker volume rm || true
+
+          nohup npx supabase start > "$RUN_TMP/supabase-start.log" 2>&1 &
+          echo $! > "$RUN_TMP/supabase-start.pid"
+
+      # Background the browser install (~30-90s, mostly downloads + apt-get).
+      - name: Install Playwright Browsers (background)
+        run: |
+          set -euo pipefail
+          rm -f $RUN_TMP/playwright-install.exitcode
+          nohup bash -c 'npx playwright install --with-deps \
+            > $RUN_TMP/playwright-install.log 2>&1; \
+            echo $? > $RUN_TMP/playwright-install.exitcode' &
+
+      - name: Build Next.js (prod, port 3001)
+        env:
+          NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
+        run: npm run build
+
+      - name: Wait for Playwright install
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 600); do
+            [ -f $RUN_TMP/playwright-install.exitcode ] && break
+            sleep 1
+          done
+          rc="$(cat $RUN_TMP/playwright-install.exitcode 2>/dev/null || echo 'timeout')"
+          if [ "$rc" != "0" ]; then
+            echo "playwright install failed (rc=$rc)"
+            echo '--- playwright-install.log ---'
+            cat $RUN_TMP/playwright-install.log || true
+            exit 1
+          fi
+
+      - name: Wait for Supabase + finalize schema
+        run: |
+          set -euo pipefail
+          PID="$(cat $RUN_TMP/supabase-start.pid)"
+          # `wait` is useless here — the bg process was launched in a previous
+          # step's shell and is reparented to PID 1. Poll the API until it
+          # answers. `supabase start` can exit successfully while kong is
+          # still warming up, so don't bail on the first PID-gone tick —
+          # give the API a grace period to come up before declaring failure.
+          grace_ticks=0
+          for i in $(seq 1 600); do
+            if curl -sf -o /dev/null \
+                 -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+                 "${LOCAL_SUPABASE_URL}/rest/v1/"; then
+              break
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              grace_ticks=$((grace_ticks + 1))
+              if [ "$grace_ticks" -gt 20 ]; then
+                echo 'supabase start exited and the API never came up within 20s'
+                echo '--- supabase-start.log ---'
+                cat $RUN_TMP/supabase-start.log || true
+                exit 1
+              fi
+            fi
+            sleep 1
+          done
+          # Final readiness check — fail loudly if we fell out of the loop.
+          curl -sf -o /dev/null \
+            -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+            "${LOCAL_SUPABASE_URL}/rest/v1/"
+
+          # Audit table is partitioned; seed today's partition (and the next 7 days).
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
+            "SELECT public.audit_maintain_partitions();"
+
+      - name: Serve Edge Functions
+        run: |
+          set -euo pipefail
+          nohup npx supabase functions serve --env-file .env.local \
+            > $RUN_TMP/edge-functions.log 2>&1 &
+          echo $! > $RUN_TMP/edge-functions.pid
+          # Wait until the gateway answers. `curl -s -w %{http_code}` prints
+          # `000` on connect-refused, so check the exit status (or filter
+          # `000`) — otherwise the loop breaks on the first tick.
+          ready=0
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:54321/functions/v1/ || true)
+            if [ -n "$code" ] && [ "$code" != "000" ]; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            echo "Edge Functions never became reachable"
+            tail -n 200 $RUN_TMP/edge-functions.log || true
+            exit 1
+          fi
+
+      - name: Start Next.js prod server
+        run: |
+          set -euo pipefail
+          nohup env PORT=3001 npm run start > $RUN_TMP/next-server.log 2>&1 &
+          echo $! > $RUN_TMP/next-server.pid
+          ready=0
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://localhost:3001/; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            echo "Next.js prod server never became reachable"
+            tail -n 200 $RUN_TMP/next-server.log || true
+            exit 1
+          fi
+
       - name: Run Playwright tests
         env:
+          BASE_URL: http://localhost:3001
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+          # EDGE_FUNCTION_SECRET / END_TO_END_SECRET are sourced from .env.local
+          # (written above) via the test-runner's dotenv load — single source
+          # of truth so the two values can't drift.
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
-          SUPABASE_URL: ${{ steps.deploy.outputs.supabase_url }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ steps.deploy.outputs.supabase_service_role_key }}
-          SUPABASE_ANON_KEY: ${{ steps.deploy.outputs.supabase_anon_key }}
-          BASE_URL: ${{ steps.deploy.outputs.app_url }}
-          EDGE_FUNCTION_SECRET: ${{ steps.deploy.outputs.edge_function_secret }}
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx playwright test
+
+      - name: Tail server logs on failure
+        if: failure()
+        run: |
+          echo '--- edge-functions.log ---'; tail -n 500 $RUN_TMP/edge-functions.log || true
+          echo '--- next-server.log ---';    tail -n 500 $RUN_TMP/next-server.log || true
+
+      - name: Stop background services
+        if: always()
+        run: |
+          kill "$(cat $RUN_TMP/edge-functions.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat $RUN_TMP/next-server.pid 2>/dev/null)" 2>/dev/null || true
+          # Capture full Supabase container logs while the stack is still up.
+          mkdir -p server-logs
+          for c in $(docker ps --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" --format '{{.Names}}'); do
+            docker logs "$c" > "server-logs/${c}.log" 2>&1 || true
+          done
+          cp -f $RUN_TMP/edge-functions.log server-logs/edge-functions.log 2>/dev/null || true
+          cp -f $RUN_TMP/next-server.log    server-logs/next-server.log    2>/dev/null || true
+          npx supabase stop --no-backup || true
+
+      - name: Upload server logs
+        # Use always() (not !cancelled()) so timeout-cancelled runs — exactly
+        # the case where these logs are most useful — still upload.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-logs
+          path: server-logs/
+          retention-days: 14
+
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

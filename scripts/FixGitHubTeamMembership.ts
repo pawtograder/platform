@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/utils/supabase/client";
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 function printUsage() {
   console.log("Usage:");
