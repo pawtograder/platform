@@ -60,13 +60,13 @@ jobs:
   meta:
     runs-on: ubuntu-latest
     outputs:
-      preview_id:   ${{ steps.v.outputs.preview_id }}
-      hostname:     ${{ steps.v.outputs.hostname }}
+      preview_id: ${{ steps.v.outputs.preview_id }}
+      hostname: ${{ steps.v.outputs.hostname }}
       api_hostname: ${{ steps.v.outputs.api_hostname }}
-      tag:          ${{ steps.v.outputs.tag }}
-      release:      ${{ steps.v.outputs.release }}
-      namespace:    ${{ steps.v.outputs.namespace }}
-      mode:         ${{ steps.v.outputs.mode }}
+      tag: ${{ steps.v.outputs.tag }}
+      release: ${{ steps.v.outputs.release }}
+      namespace: ${{ steps.v.outputs.namespace }}
+      mode: ${{ steps.v.outputs.mode }}
     steps:
       - id: v
         run: |
