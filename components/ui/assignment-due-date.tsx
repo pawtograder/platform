@@ -19,7 +19,6 @@ import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster, Toaster } from "./toaster";
-import AssignmentsTable from "@/app/course/[course_id]/manage/assignments/[assignment_id]/assignmentsTable";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();
