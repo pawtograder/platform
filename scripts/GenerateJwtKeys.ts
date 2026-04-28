@@ -74,6 +74,18 @@ const realtimeEncKey = randomBytes(16).toString("base64").slice(0, 16);
 // --- AES-256 key for pg-meta to encrypt saved DB connection strings ---
 // Used by Studio's Database/SQL-editor pages; without it those pages 500.
 const pgMetaCryptoKey = randomBytes(32).toString("base64");
+
+// --- 32-byte hex key for pgsodium; postgres mounts it as a file ---
+const pgsodiumRootKey = randomBytes(32).toString("hex");
+
+// --- Postgres + application-role passwords, URL-safe ---
+const safePass = (n: number) => randomBytes(n).toString("base64").replace(/[/+=]/g, "").slice(0, 32);
+const postgresPassword = safePass(24);
+const pawtograderPassword = safePass(24);
+
+// --- E2E load-test secrets (used only when edgeFunctions.e2e.enabled) ---
+const endToEndSecret = randomBytes(32).toString("hex");
+const edgeFunctionSecret = randomBytes(32).toString("hex");
 const octPublic = {
   kty: "oct",
   k: b64url(hsSecret),
@@ -127,11 +139,16 @@ if (mode === "env") {
   console.log(`JWT_SECRET=${hsSecret}`);
   console.log(`JWT_PRIVATE_JWKS=${privateJwks}`);
   console.log(`JWT_PUBLIC_JWKS=${publicJwks}`);
+  console.log(`JWT_REALTIME_JWKS=${realtimeJwks}`);
   console.log(`ANON_KEY=${anonKey}`);
   console.log(`SERVICE_ROLE_KEY=${serviceRoleKey}`);
   console.log(`REALTIME_ENC_KEY=${realtimeEncKey}`);
   console.log(`PG_META_CRYPTO_KEY=${pgMetaCryptoKey}`);
-  console.log(`JWT_REALTIME_JWKS=${realtimeJwks}`);
+  console.log(`PGSODIUM_ROOT_KEY=${pgsodiumRootKey}`);
+  console.log(`POSTGRES_PASSWORD=${postgresPassword}`);
+  console.log(`PAWTOGRADER_PASSWORD=${pawtograderPassword}`);
+  console.log(`END_TO_END_SECRET=${endToEndSecret}`);
+  console.log(`EDGE_FUNCTION_SECRET=${edgeFunctionSecret}`);
 } else if (mode === "helm") {
   // YAML snippet that can be passed via `helm install -f` together with the
   // chart's other values. Single-quoted scalars preserve the JSON exactly.

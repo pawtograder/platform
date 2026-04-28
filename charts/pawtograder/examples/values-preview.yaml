@@ -111,6 +111,11 @@ edgeFunctions:
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits:   { cpu: "1",    memory: "1Gi" }
+  # END_TO_END_SECRET / EDGE_FUNCTION_SECRET come from the chart-rendered
+  # pawtograder-e2e secret (templates/secrets.yaml when secrets.create=true
+  # AND edgeFunctions.e2e.enabled=true).
+  envFromSecrets:
+    - pawtograder-e2e
   e2e:
     enabled: true
     mockGitHub: true

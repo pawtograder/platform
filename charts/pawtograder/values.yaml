@@ -97,6 +97,14 @@ secrets:
       serviceRoleKey: "" # HS256 JWT, role=service_role
       privateJwks: "" # JSON array of private JWKs (GoTrue JWT_KEYS)
       publicJwks: "" # JSON object {"keys":[…]} for verifiers
+      realtimeJwks: "" # EC-only JWK Set (Joken can't take oct JWK maps)
+      realtimeEncKey: "" # AES-128 (16 bytes exactly) for tenant secrets
+      pgMetaCryptoKey: "" # AES-256 base64; pg-meta + Studio share this
+      pgsodiumRootKey: "" # 32-byte hex; postgres mounts as file
+    e2e:
+      # Used only when edgeFunctions.e2e.enabled=true
+      endToEndSecret: ""
+      edgeFunctionSecret: ""
     smtp:
       host: ""
       port: "587"
