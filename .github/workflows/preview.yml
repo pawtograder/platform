@@ -107,10 +107,16 @@ jobs:
           } | tee -a "$GITHUB_OUTPUT"
 
   # --------------------------------------------------------------------------
-  # keys — generate per-preview JWT/postgres/e2e secrets *before* build so
-  # the web image can inline NEXT_PUBLIC_SUPABASE_ANON_KEY. The same values
-  # are passed to helm at deploy time so build/runtime keys match. Outputs
-  # are masked but live in workflow scope; previews are ephemeral.
+  # keys — for each preview namespace, REUSE existing secrets when the
+  # release is already installed (so PR sync pushes don't rotate the DB
+  # password / anon key out from under the running pods). Generate fresh
+  # only on first install.
+  #
+  # The same values feed:
+  #   - build-web (NEXT_PUBLIC_SUPABASE_ANON_KEY inlined into client bundle)
+  #   - deploy (--set-string secrets.values.* — chart re-applies the same
+  #     values, idempotent)
+  # so build/runtime keys always match.
   # --------------------------------------------------------------------------
   keys:
     needs: meta
@@ -137,22 +143,69 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - id: gen
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - name: Write kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
         run: |
           set -euo pipefail
-          # Run the same key generator scripts/export-staging-env.sh would
-          # emit. Each KEY=VALUE line is masked then forwarded as a job
-          # output (lowercased name).
-          while IFS='=' read -r k v; do
-            [ -n "$k" ] || continue
-            echo "::add-mask::$v"
-            name=$(echo "$k" | tr '[:upper:]' '[:lower:]')
+          if [ -z "${KUBECONFIG_B64:-}" ]; then
+            echo "::error::KUBECONFIG_BASE64 is required (used to read existing preview secrets)"
+            exit 1
+          fi
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+      - id: gen
+        env:
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+
+          emit() {
+            local name="$1" val="$2"
+            echo "::add-mask::$val"
+            local lower
+            lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
             {
-              printf '%s<<__EOF__\n' "$name"
-              printf '%s\n' "$v"
+              printf '%s<<__EOF__\n' "$lower"
+              printf '%s\n' "$val"
               printf '__EOF__\n'
             } >> "$GITHUB_OUTPUT"
-          done < <(npx -y tsx scripts/GenerateJwtKeys.ts --env)
+          }
+
+          read_secret_field() {
+            local secret="$1" key="$2"
+            kubectl -n "$NS" get secret "$secret" -o jsonpath="{.data.$key}" 2>/dev/null | base64 -d
+          }
+
+          if kubectl -n "$NS" get secret pawtograder-jwt >/dev/null 2>&1; then
+            echo "Reusing existing secrets in namespace $NS"
+            for k in JWT_SECRET ANON_KEY SERVICE_ROLE_KEY JWT_PRIVATE_JWKS JWT_PUBLIC_JWKS JWT_REALTIME_JWKS REALTIME_ENC_KEY PG_META_CRYPTO_KEY PGSODIUM_ROOT_KEY; do
+              emit "$k" "$(read_secret_field pawtograder-jwt "$k")"
+            done
+            for k in POSTGRES_PASSWORD PAWTOGRADER_PASSWORD; do
+              emit "$k" "$(read_secret_field pawtograder-postgres "$k")"
+            done
+            # pawtograder-e2e is created only when edgeFunctions.e2e.enabled.
+            # If absent (older preview / e2e off), generate fresh values for
+            # the emit so the chart-rendered Secret has something to write.
+            if kubectl -n "$NS" get secret pawtograder-e2e >/dev/null 2>&1; then
+              emit END_TO_END_SECRET    "$(read_secret_field pawtograder-e2e END_TO_END_SECRET)"
+              emit EDGE_FUNCTION_SECRET "$(read_secret_field pawtograder-e2e EDGE_FUNCTION_SECRET)"
+            else
+              emit END_TO_END_SECRET    "$(openssl rand -hex 32)"
+              emit EDGE_FUNCTION_SECRET "$(openssl rand -hex 32)"
+            fi
+          else
+            echo "First install for namespace $NS — generating fresh keys"
+            while IFS='=' read -r k v; do
+              [ -n "$k" ] || continue
+              emit "$k" "$v"
+            done < <(npx -y tsx scripts/GenerateJwtKeys.ts --env)
+          fi
 
   # --------------------------------------------------------------------------
   # build-* — per-PR images. web is the only one whose build args change
