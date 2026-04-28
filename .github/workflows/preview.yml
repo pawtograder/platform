@@ -20,6 +20,12 @@ name: Deploy preview
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
+  # Direct push to the helm branch fires a "preview-helm" deploy. Useful
+  # while iterating on the chart before merging to main, since
+  # workflow_dispatch needs the workflow to exist on the default branch
+  # first. Remove this trigger once helm is merged.
+  push:
+    branches: [helm]
   workflow_dispatch:
     inputs:
       preview_id:
@@ -44,7 +50,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
-  group: preview-${{ github.event.pull_request.number || inputs.preview_id }}
+  group: preview-${{ github.event.pull_request.number || inputs.preview_id || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -73,6 +79,12 @@ jobs:
             else
               mode="deploy"
             fi
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            # Push trigger: use branch name as the preview id. URL becomes
+            # pr-<branch>.preview.pawtograder.net. No PR comment is posted.
+            preview_id="${{ github.ref_name }}"
+            sha="${GITHUB_SHA}"
+            mode="deploy"
           else
             preview_id="${{ inputs.preview_id }}"
             sha="${GITHUB_SHA}"
