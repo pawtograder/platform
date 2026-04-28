@@ -12,7 +12,7 @@ name: Release images
 #   - workflow_dispatch    → manual, with optional hostname/version overrides
 on:
   push:
-    branches: [main]
+    branches: [main, helm]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
