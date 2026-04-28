@@ -414,7 +414,118 @@ export function createTestAssignment(
 }
 
 /**
- * Create a test student (auth user + profiles + enrollment)
+ * Create an enrolled user (auth user + public profile + private profile + user_role + magic link).
+ * Use this for students, graders, and instructors. The returned shape matches StudentData
+ * (kept for backward compatibility with existing tests).
+ */
+export function createTestUserWithRole(opts: {
+  role: "student" | "grader" | "instructor";
+  number: number;
+  classId: number;
+  testRunPrefix: string;
+  workerIndex: string;
+  config: SupabaseConfig;
+}): StudentData {
+  const { role, number: n, classId, testRunPrefix, workerIndex, config } = opts;
+  const labels: Record<typeof role, { privateName: string; publicName: string }> = {
+    student: { privateName: `Student #${n} Test`, publicName: `Pseudonym #${n}` },
+    grader: { privateName: `Grader #${n} Test`, publicName: `Grader #${n}` },
+    instructor: { privateName: `Instructor #${n} Test`, publicName: `Professor #${n}` }
+  };
+  const { privateName, publicName } = labels[role];
+  const email = `${role}-${testRunPrefix}-${workerIndex}-${n}@pawtograder.net`;
+  const password = __ENV.TEST_PASSWORD || "change-it";
+
+  console.log(`👤 Creating ${role}: ${email}`);
+
+  const authHeaders = createAuthHeaders(config.serviceRoleKey);
+  const userResponse = http.post(
+    `${config.url}/auth/v1/admin/users`,
+    JSON.stringify({ email, password, email_confirm: true }),
+    { headers: { ...authHeaders, "Content-Type": "application/json" } }
+  );
+
+  if (userResponse.status !== 200 && userResponse.status !== 201) {
+    throw new Error(`Failed to create user ${email}: ${userResponse.status} - ${userResponse.body}`);
+  }
+  const userData = safeJsonParse(userResponse.body as string) as { id: string } | null;
+  if (!userData || !userData.id) {
+    throw new Error(`User creation returned invalid data for ${email}`);
+  }
+  const userId = userData.id;
+
+  const publicProfileResponse = makeSupabaseRequest(
+    "POST",
+    "profiles",
+    {
+      name: publicName,
+      avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${role}-public-${n}`,
+      class_id: classId,
+      is_private_profile: false
+    },
+    config
+  );
+  if (publicProfileResponse.status !== 201) {
+    throw new Error(`Failed to create public profile for ${email}: ${publicProfileResponse.status}`);
+  }
+  const publicProfileData = publicProfileResponse.data as Array<{ id: string }> | null;
+  if (!publicProfileData || publicProfileData.length === 0) {
+    throw new Error(`Public profile creation returned invalid data for ${email}`);
+  }
+  const publicProfileId = publicProfileData[0].id;
+
+  const privateProfileResponse = makeSupabaseRequest(
+    "POST",
+    "profiles",
+    {
+      name: privateName,
+      avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${role}-private-${n}`,
+      class_id: classId,
+      is_private_profile: true
+    },
+    config
+  );
+  if (privateProfileResponse.status !== 201) {
+    throw new Error(`Failed to create private profile for ${email}: ${privateProfileResponse.status}`);
+  }
+  const privateProfileData = privateProfileResponse.data as Array<{ id: string }> | null;
+  if (!privateProfileData || privateProfileData.length === 0) {
+    throw new Error(`Private profile creation returned invalid data for ${email}`);
+  }
+  const privateProfileId = privateProfileData[0].id;
+
+  const userRoleResponse = makeSupabaseRequest(
+    "POST",
+    "user_roles",
+    {
+      user_id: userId,
+      class_id: classId,
+      private_profile_id: privateProfileId,
+      public_profile_id: publicProfileId,
+      role
+    },
+    config
+  );
+  if (userRoleResponse.status !== 201) {
+    throw new Error(`Failed to create user role for ${email}: ${userRoleResponse.status}`);
+  }
+
+  const magicLinkData = generateMagicLink(email, config);
+
+  return {
+    id: `${role}-${testRunPrefix}-${n}`,
+    profile_id: privateProfileId,
+    email,
+    user_id: userId,
+    public_profile_id: publicProfileId,
+    private_profile_id: privateProfileId,
+    magic_link: magicLinkData
+  };
+}
+
+/**
+ * Create a test student (auth user + profiles + enrollment). Thin wrapper around
+ * createTestUserWithRole, preserved for backward compatibility.
  */
 export function createTestStudent(
   studentNumber: number,
@@ -423,113 +534,14 @@ export function createTestStudent(
   workerIndex: string,
   config: SupabaseConfig
 ): StudentData {
-  const email = `student-${testRunPrefix}-${workerIndex}-${studentNumber}@pawtograder.net`;
-  const privateName = `Student #${studentNumber} Test`;
-  const publicName = `Pseudonym #${studentNumber}`;
-  const password = __ENV.TEST_PASSWORD || "change-it";
-
-  console.log(`👤 Creating student: ${email}`);
-
-  // Step 1: Create auth user
-  const userPayload = {
-    email,
-    password,
-    email_confirm: true
-  };
-
-  const authHeaders = createAuthHeaders(config.serviceRoleKey);
-  const userResponse = http.post(`${config.url}/auth/v1/admin/users`, JSON.stringify(userPayload), {
-    headers: {
-      ...authHeaders,
-      "Content-Type": "application/json"
-    }
+  return createTestUserWithRole({
+    role: "student",
+    number: studentNumber,
+    classId,
+    testRunPrefix,
+    workerIndex,
+    config
   });
-
-  if (userResponse.status !== 200 && userResponse.status !== 201) {
-    throw new Error(`Failed to create user ${email}: ${userResponse.status} - ${userResponse.body}`);
-  }
-
-  const userData = safeJsonParse(userResponse.body as string) as { id: string } | null;
-  if (!userData || !userData.id) {
-    throw new Error(`User creation returned invalid data for ${email}`);
-  }
-
-  const userId = userData.id;
-  console.log(`✅ Created user ID: ${userId}`);
-
-  // Step 2: Create public profile
-  const publicProfilePayload = {
-    name: publicName,
-    avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=test-user-${studentNumber}`,
-    class_id: classId,
-    is_private_profile: false
-  };
-
-  const publicProfileResponse = makeSupabaseRequest("POST", "profiles", publicProfilePayload, config);
-
-  if (publicProfileResponse.status !== 201) {
-    throw new Error(`Failed to create public profile for ${email}: ${publicProfileResponse.status}`);
-  }
-
-  const publicProfileData = publicProfileResponse.data;
-  if (!publicProfileData || !Array.isArray(publicProfileData) || publicProfileData.length === 0) {
-    throw new Error(`Public profile creation returned invalid data for ${email}`);
-  }
-
-  const publicProfileId = (publicProfileData[0] as { id: string }).id;
-  console.log(`✅ Created public profile ID: ${publicProfileId}`);
-
-  // Step 3: Create private profile
-  const privateProfilePayload = {
-    name: privateName,
-    avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=test-private-user-${studentNumber}`,
-    class_id: classId,
-    is_private_profile: true
-  };
-
-  const privateProfileResponse = makeSupabaseRequest("POST", "profiles", privateProfilePayload, config);
-
-  if (privateProfileResponse.status !== 201) {
-    throw new Error(`Failed to create private profile for ${email}: ${privateProfileResponse.status}`);
-  }
-
-  const privateProfileData = privateProfileResponse.data;
-  if (!privateProfileData || !Array.isArray(privateProfileData) || privateProfileData.length === 0) {
-    throw new Error(`Private profile creation returned invalid data for ${email}`);
-  }
-
-  const privateProfileId = (privateProfileData[0] as { id: string }).id;
-  console.log(`✅ Created private profile ID: ${privateProfileId}`);
-
-  // Step 4: Create user role (enroll student in class)
-  const userRolePayload = {
-    user_id: userId,
-    class_id: classId,
-    private_profile_id: privateProfileId,
-    public_profile_id: publicProfileId,
-    role: "student"
-  };
-
-  const userRoleResponse = makeSupabaseRequest("POST", "user_roles", userRolePayload, config);
-
-  if (userRoleResponse.status !== 201) {
-    throw new Error(`Failed to create user role for ${email}: ${userRoleResponse.status}`);
-  }
-
-  console.log(`✅ Enrolled student ${email} in class`);
-
-  // Step 5: Generate magic link for the student
-  const magicLinkData = generateMagicLink(email, config);
-
-  return {
-    id: `student-${testRunPrefix}-${studentNumber}`,
-    profile_id: privateProfileId,
-    email,
-    user_id: userId,
-    public_profile_id: publicProfileId,
-    private_profile_id: privateProfileId,
-    magic_link: magicLinkData
-  };
 }
 
 /**
@@ -720,4 +732,158 @@ export function generateTestRunPrefix(testType: string = "k6"): string {
 export function logCleanupInfo(classId: number, testType: string): void {
   console.log(`🧹 ${testType} test completed. Class ID: ${classId}`);
   console.log("Note: Test data cleanup should be handled separately if needed.");
+}
+
+// ============================================================================
+// Helpers used by tests/performance/submissions-write-storm.ts
+// ============================================================================
+
+/**
+ * Build the unsigned JWT shape that autograder-create-submission and
+ * autograder-submit-feedback both accept in E2E mode. Both endpoints derive the
+ * submission identity from (repository, sha, run_id, run_attempt) — passing the same
+ * tuple to both calls lets them correlate to one submission row.
+ */
+export function buildE2EAutograderJwt(args: {
+  repository: string;
+  sha: string;
+  runId: number;
+  runAttempt: number;
+  endToEndSecret: string;
+  actor?: string;
+}): string {
+  const header = { alg: "RS256", typ: "JWT", kid: args.endToEndSecret };
+  const payload = {
+    repository: args.repository,
+    sha: args.sha,
+    workflow_ref: ".github/workflows/grade.yml-e2e-test",
+    run_id: String(args.runId),
+    run_attempt: String(args.runAttempt),
+    actor: args.actor ?? "pawtograder-load-test"
+  };
+  return encoding.b64encode(JSON.stringify(header)) + "." + encoding.b64encode(JSON.stringify(payload)) + ".";
+}
+
+/**
+ * Call autograder-create-submission with explicit run identifiers so the caller can
+ * later correlate with autograder-submit-feedback for the same submission.
+ */
+export function callCreateSubmission(args: {
+  repository: string;
+  sha: string;
+  runId: number;
+  runAttempt: number;
+  config: SupabaseConfig;
+  endToEndSecret: string;
+}): SupabaseApiResponse {
+  const token = buildE2EAutograderJwt(args);
+  const response = http.post(`${args.config.url}/functions/v1/autograder-create-submission`, null, {
+    headers: { Authorization: token, "Content-Type": "application/json" }
+  });
+  return {
+    status: response.status,
+    body: response.body as string | null,
+    data: safeJsonParse(response.body as string | null)
+  };
+}
+
+/**
+ * Call autograder-submit-feedback with the same JWT identifiers used to create the
+ * submission. Body is the GradingScriptResult shape from FunctionTypes.d.ts.
+ */
+export function callSubmitFeedback(args: {
+  repository: string;
+  sha: string;
+  runId: number;
+  runAttempt: number;
+  body: Record<string, unknown>;
+  config: SupabaseConfig;
+  endToEndSecret: string;
+}): SupabaseApiResponse {
+  const token = buildE2EAutograderJwt(args);
+  const response = http.post(
+    `${args.config.url}/functions/v1/autograder-submit-feedback`,
+    JSON.stringify(args.body),
+    { headers: { Authorization: token, "Content-Type": "application/json" } }
+  );
+  return {
+    status: response.status,
+    body: response.body as string | null,
+    data: safeJsonParse(response.body as string | null)
+  };
+}
+
+function randInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randString(len: number): string {
+  if (len <= 0) return "";
+  const chars = "abcdefghijklmnopqrstuvwxyz ";
+  let out = "";
+  for (let i = 0; i < len; i++) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
+/**
+ * Synthetic GradingScriptResult body shaped to mirror prod write storms:
+ *   - 20-60 test results, each with 0-500 chars of output
+ *   - 0-10 comments, each 0-100 chars (mix of plain submission comments and line comments
+ *     when fileName is provided)
+ *   - No artifacts (intentionally out of scope for this load test)
+ */
+export function buildSyntheticFeedback(args: {
+  graderName: string;
+  fileName?: string;
+  graderSha?: string;
+}): Record<string, unknown> {
+  const numTests = randInt(20, 60);
+  const tests: Record<string, unknown>[] = [];
+  for (let i = 0; i < numTests; i++) {
+    tests.push({
+      name: `synthetic_test_${i}`,
+      name_format: "text",
+      output: randString(randInt(0, 500)),
+      output_format: "text",
+      score: Math.random() < 0.85 ? 1 : 0,
+      max_score: 1,
+      part: i < numTests / 2 ? "part1" : "part2",
+      hide_until_released: false
+    });
+  }
+
+  const numComments = randInt(0, 10);
+  const annotations: Record<string, unknown>[] = [];
+  const author = { name: args.graderName, avatar_url: "" };
+  for (let j = 0; j < numComments; j++) {
+    const message = randString(randInt(0, 100));
+    if (args.fileName && Math.random() < 0.5) {
+      annotations.push({
+        author,
+        message,
+        released: true,
+        line: randInt(1, 5),
+        file_name: args.fileName
+      });
+    } else {
+      annotations.push({ author, message, released: true });
+    }
+  }
+
+  return {
+    ret_code: 0,
+    output: "",
+    execution_time: randInt(50, 5000),
+    grader_sha: args.graderSha ?? "e2e-mock-grader-sha",
+    action_ref: "main",
+    action_repository: "pawtograder/load-test-action",
+    feedback: {
+      output: { visible: { output: "ok", output_format: "text" } },
+      lint: { status: "pass", output: "", output_format: "text" },
+      tests,
+      annotations
+    }
+  };
 }
