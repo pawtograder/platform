@@ -337,6 +337,8 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
               size="sm"
               bg="bg"
               pr={inputValue ? "8" : undefined}
+              data-shortcut="search"
+              aria-label="Search help requests"
             />
           </InputGroup>
           {inputValue && (

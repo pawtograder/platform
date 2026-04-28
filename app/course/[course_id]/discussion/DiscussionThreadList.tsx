@@ -308,7 +308,7 @@ export default function DiscussionThreadList() {
           Discussion Feed
         </Heading>
         <HStack mb="4" gap="2">
-          <Button asChild size="sm" variant="surface" colorPalette="green" flex="1">
+          <Button asChild size="sm" variant="solid" colorPalette="green" flex="1">
             <NextLink href={`/course/${course_id}/discussion/new`}>
               <Icon as={FaPlus} mr="1" />
               New Thread

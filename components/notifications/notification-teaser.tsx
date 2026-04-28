@@ -267,7 +267,7 @@ function HelpRequestMessageNotificationTeaser({ notification }: { notification: 
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={author.avatar_url} />
+        <Avatar.Image src={author.avatar_url} alt="" />
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
@@ -354,7 +354,7 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={author.avatar_url} />
+        <Avatar.Image src={author.avatar_url} alt="" />
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
@@ -478,7 +478,7 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={actor.avatar_url} />
+        <Avatar.Image src={actor.avatar_url} alt="" />
         <Avatar.Fallback fontSize="xs">{actor.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">

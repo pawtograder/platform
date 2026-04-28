@@ -241,15 +241,26 @@ export default function AssignmentPage() {
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
-                    <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {submission.submission_reviews?.completed_at
+                    {(() => {
+                      const gradeLabel = submission.submission_reviews?.completed_at
                         ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.total_points}`
                         : submission.is_active
                           ? "Pending"
                           : submission.is_not_graded
                             ? "Not for grading"
-                            : ""}
-                    </Link>
+                            : "—";
+                      return (
+                        <Link
+                          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}
+                          // Only fall back to a synthetic accessible name when the visible
+                          // label is the dash placeholder — otherwise the visible text is
+                          // already the link's name (and tests / screen readers expect it).
+                          aria-label={gradeLabel === "—" ? `Submission #${submission.ordinal} grade` : undefined}
+                        >
+                          {gradeLabel}
+                        </Link>
+                      );
+                    })()}
                   </Table.Cell>
                 </Table.Row>
               ))}

@@ -11,7 +11,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 /** Result shape for one `.range(from, to)` page from Supabase PostgREST. */
 export type SupabasePageResult<T> = PromiseLike<{ data: T[] | null; error: unknown | null }>;

@@ -41,7 +41,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
         <HStack align="start" gap="2" alignSelf="flex-start">
           {userProfile ? (
             <Avatar.Root size="xs">
-              <Avatar.Image src={userProfile?.avatar_url} />
+              <Avatar.Image src={userProfile?.avatar_url} alt="" />
               <Avatar.Fallback>{userProfile?.name?.charAt(0) || "?"}</Avatar.Fallback>
             </Avatar.Root>
           ) : (
@@ -218,6 +218,19 @@ function DiscussionPost({ root_id }: { root_id: number }) {
   const discussion_topics = useDiscussionTopics();
   const { discussionThreadTeasers } = useCourseController();
   const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
+  // Force a single-row fetch on mount / root_id change so the heading paints
+  // reliably on first navigation. The course-wide teasers controller is
+  // populated by an initial-load query plus realtime broadcasts; if neither
+  // has delivered this row yet (race when the user navigates before the
+  // teasers controller's initial fetch resolves, or when realtime delivery
+  // for a freshly-created thread lags the navigation), getById() returns
+  // undefined and the page sits on the Skeleton until reload. refetchByIds
+  // always queries the DB and adds the row, which fires the listener wired
+  // up by useTableControllerValueById.
+  useEffect(() => {
+    discussionThreadTeasers.refetchByIds([root_id]);
+  }, [discussionThreadTeasers, root_id]);
+
   const [editing, setEditing] = useState(false);
   const [visibility, setVisibility] = useState(rootThread?.instructors_only ? "instructors_only" : "all");
   const isGraderOrInstructor = useIsGraderOrInstructor();

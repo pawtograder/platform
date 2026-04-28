@@ -122,7 +122,16 @@ export default function NewDiscussionThread() {
     <Box p={{ base: "4", md: "0" }}>
       <Heading as="h1">New Discussion Thread</Heading>
       <Box maxW="4xl" w="100%">
-        <form onSubmit={onSubmit} aria-busy={formBusy}>
+        <form
+          onSubmit={onSubmit}
+          aria-busy={formBusy}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !formBusy) {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+        >
           <Fieldset.Root bg="surface" disabled={formBusy}>
             <Fieldset.Content w="100%">
               <Field

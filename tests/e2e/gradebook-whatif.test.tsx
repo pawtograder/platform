@@ -11,8 +11,9 @@ import {
   setCourseFeature,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student: TestingUser;
@@ -42,6 +43,7 @@ async function gotoStudentGradebook(page: Page) {
     throw lastError;
   }
   await expect(page.getByRole("region", { name: "Student Gradebook" })).toBeVisible();
+  await assertStudentPageAccessible(page, "student gradebook what-if");
 }
 
 test.setTimeout(180_000);

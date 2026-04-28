@@ -13,6 +13,7 @@ import {
   submitFeedbackViaAPI,
   createSampleGradingResult
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 import { argosScreenshot } from "@argos-ci/playwright";
 
 let course: Course;
@@ -137,6 +138,7 @@ test.describe("Create submission", () => {
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - future deadline files");
   });
   test("If the deadline has passed, the student cannot create a submission", async () => {
     const submission = insertSubmissionViaAPI({
@@ -159,6 +161,7 @@ test.describe("Create submission", () => {
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - extended due date files");
   });
 
   test("Student can create NOT-GRADED submission after deadline when assignment allows it", async ({ page }) => {
@@ -176,6 +179,7 @@ test.describe("Create submission", () => {
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - not graded files");
   });
 
   test("NOT-GRADED submission does not become active", async ({ page }) => {
@@ -210,6 +214,7 @@ test.describe("Create submission", () => {
     await argosScreenshot(page, "Showing active and not-graded submissions");
     await page.getByRole("link", { name: "Not for grading" }).click();
     await expect(page.getByText("Viewing a not-for-grading submission")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - not graded detail");
   });
 
   test("Empty submission is accepted when permitted, and flagged", async () => {

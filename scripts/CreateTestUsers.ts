@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/utils/supabase/client";
 import dotenv from "dotenv";
 import fs from "fs";
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 const adminSupabase = createAdminClient();
 const createTestUsers = async () => {
   for (let i = 2; i < 50; i++) {

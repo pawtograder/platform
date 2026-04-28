@@ -226,6 +226,8 @@ export function DiscussionSearch({ onChangeAction }: DiscussionSearchProps) {
             size="sm"
             bg="bg"
             pr={inputValue ? "8" : undefined}
+            data-shortcut="search"
+            aria-label="Search posts"
           />
           {inputValue && (
             <Box

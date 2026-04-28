@@ -124,6 +124,7 @@ export default function NotificationsBox() {
           <Box display="inline-block">
             <PopoverTrigger asChild>
               <IconButton
+                aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}
                 variant="outline"
                 colorPalette="gray"
                 size="sm"

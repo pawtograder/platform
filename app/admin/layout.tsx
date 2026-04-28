@@ -7,6 +7,13 @@ import { ReactNode } from "react";
 /** Default when no course context; matches course layout fallback. */
 const ADMIN_DISPLAY_TIME_ZONE = "America/New_York";
 
+export const metadata = {
+  title: {
+    default: "Admin · Pawtograder",
+    template: "%s · Admin · Pawtograder"
+  }
+};
+
 interface AdminLayoutProps {
   children: ReactNode;
 }
@@ -53,7 +60,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
                   Manage courses and system settings
                 </Text>
               </VStack>
-              <HStack gap={4}>
+              <HStack as="nav" id="primary-nav" aria-label="Admin navigation" gap={4}>
                 <Link
                   href="/admin"
                   color="blue.fg"
@@ -142,7 +149,16 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
             </Flex>
           </Box>
         </Box>
-        <Box as="main" maxW="7xl" mx="auto" py={6} px={{ base: 4, sm: 6, lg: 8 }}>
+        <Box
+          as="main"
+          id="main-content"
+          tabIndex={-1}
+          outline="none"
+          maxW="7xl"
+          mx="auto"
+          py={6}
+          px={{ base: 4, sm: 6, lg: 8 }}
+        >
           {children}
         </Box>
       </Box>

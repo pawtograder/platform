@@ -58,3 +58,4 @@ playwright/.auth
 
 .direnv
 data
+axe-debug/

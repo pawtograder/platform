@@ -13,7 +13,7 @@ import { addDays, format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import dotenv from "dotenv";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "../generator/GenerationUtils";
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
@@ -369,6 +369,42 @@ export async function updateClassSettings({
   );
 }
 
+/**
+ * Calls supabase.auth.admin.generateLink with exponential backoff. GoTrue
+ * occasionally returns a generic empty-body error ({}) when the admin endpoint
+ * is rate-limited or briefly unavailable under CI parallelism. Treat any
+ * generateLink error as transient and retry with jitter; only surface the
+ * error after all retries are exhausted.
+ */
+async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supabase.auth.admin.generateLink> {
+  const delaysMs = [500, 1500, 4000];
+  let lastErrMsg = "";
+  for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+    try {
+      const result = await supabase.auth.admin.generateLink({ email, type: "magiclink" });
+      if (!result.error) {
+        return result;
+      }
+      lastErrMsg = result.error.message || JSON.stringify(result.error) || "unknown";
+      if (attempt === delaysMs.length) {
+        return result;
+      }
+    } catch (error) {
+      // generateLink can also reject (transient fetch / socket failure under
+      // CI parallelism). Treat rejections as retryable too — without this the
+      // first transient throw escapes before the retry loop engages.
+      lastErrMsg = error instanceof Error ? error.message : String(error);
+      if (attempt === delaysMs.length) {
+        throw error;
+      }
+    }
+    const jitter = Math.floor(Math.random() * 250);
+    await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt] + jitter));
+  }
+  // Unreachable; satisfy types.
+  throw new Error(`generateMagicLinkWithRetry: exhausted retries (${lastErrMsg})`);
+}
+
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
@@ -378,10 +414,7 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
   );
 
   // Generate magic link using admin client (same as TestingUtils.ts does)
-  const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
-    email: testingUser.email,
-    type: "magiclink"
-  });
+  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
 
   if (magicLinkError || !magicLinkData.properties?.hashed_token) {
     throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
@@ -411,10 +444,7 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
   );
 
   // Generate magic link using admin client
-  const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
-    email: testingUser.email,
-    type: "magiclink"
-  });
+  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
 
   if (magicLinkError || !magicLinkData.properties?.hashed_token) {
     throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
@@ -504,10 +534,7 @@ export async function gotoCourseUrlWhenHeadingVisible(
 async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
   try {
     // Generate magic link on-demand for authentication
-    const { data: magicLinkData, error: magicLinkError } = await supabase.auth.admin.generateLink({
-      email: testingUser.email,
-      type: "magiclink"
-    });
+    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
     if (magicLinkError) {
       throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
     }
@@ -550,10 +577,7 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
   }
 }
 export async function generateMagicLink(user: TestingUser): Promise<string> {
-  const { data, error } = await supabase.auth.admin.generateLink({
-    email: user.email,
-    type: "magiclink"
-  });
+  const { data, error } = await generateMagicLinkWithRetry(user.email);
   if (error) throw new Error(`Failed to generate magic link for ${user.email}: ${error.message}`);
   const tokenHash = data.properties?.hashed_token;
   if (!tokenHash) throw new Error(`Failed to generate magic link for ${user.email}: missing token hash`);

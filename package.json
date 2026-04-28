@@ -152,6 +152,7 @@
   },
   "devDependencies": {
     "@argos-ci/playwright": "^6.0.4",
+    "@axe-core/playwright": "^4.11.2",
     "@eslint/eslintrc": "^3.3.1",
     "@eslint/js": "^9.26.0",
     "@faker-js/faker": "^9.9.0",
