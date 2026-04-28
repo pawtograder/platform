@@ -546,6 +546,12 @@ function InlineLineAnnotatedEditor({
 
   const handleBeforeMount = useCallback((monaco: Monaco) => {
     monacoRef.current = monaco;
+    // Expose the Monaco namespace globally so E2E tests (and devtools) can
+    // reach the editor models without us having to plumb a custom helper
+    // through the React tree. This is a no-op for normal users — `monaco` is
+    // already a global symbol when the editor loads via AMD; we only re-add
+    // it because our webpack-bundled build keeps it module-local.
+    (window as unknown as { monaco?: Monaco }).monaco = monaco;
     window.MonacoEnvironment = {
       getWorker(_moduleId, label) {
         if (label === "editorWorkerService") {
@@ -566,6 +572,10 @@ function InlineLineAnnotatedEditor({
     editorRef.current = editor;
     monacoRef.current = monaco;
     editor.updateOptions({ padding: { top: 8, bottom: 8 } });
+    // Force LF line endings: mathjs only treats `\n` as a top-level statement
+    // separator, so a CRLF-EOL model would make multi-line expressions fail
+    // validation with a parse error on the `\r` left at the end of every line.
+    editor.getModel()?.setEOL(monaco.editor.EndOfLineSequence.LF);
   }, []);
 
   useEffect(() => {
@@ -619,7 +629,7 @@ function InlineLineAnnotatedEditor({
         path="gradebook-score-expression"
         language={GRADEBOOK_EXPRESSION_LANGUAGE_ID}
         value={expression}
-        onChange={(v) => onExpressionChange(v ?? "")}
+        onChange={(v) => onExpressionChange((v ?? "").replace(/\r\n?/g, "\n"))}
         beforeMount={handleBeforeMount}
         onMount={handleMount}
         wrapperProps={{
@@ -649,12 +659,25 @@ function InlineLineAnnotatedEditor({
         }}
       />
 
-      {/* Preserve e2e + accessibility hooks for per-statement values (Monaco decorations are not in the React tree). */}
-      <Box position="absolute" width={0} height={0} overflow="hidden" aria-hidden="true">
+      {/* Preserve e2e + accessibility hooks for per-statement values (Monaco
+          decorations are not in the React tree). Use a visually-hidden
+          (clipped) box rather than `width:0;height:0;overflow:hidden` so the
+          spans are still considered "rendered" — WebKit excludes zero-sized
+          collapsed elements from `innerText`, which broke the e2e assertions
+          that look for `= value` annotations on the overlay. */}
+      <Box
+        position="absolute"
+        w="1px"
+        h="1px"
+        overflow="hidden"
+        clipPath="inset(50%)"
+        whiteSpace="nowrap"
+        aria-hidden="true"
+      >
         {(evaluation?.lineResults ?? []).map((lr) =>
           lr.kind === "value" ? (
             <span key={`lv-${lr.lineIndex}`} data-testid="expression-line-value">
-              {lr.display}
+              {` = ${lr.display} `}
             </span>
           ) : null
         )}

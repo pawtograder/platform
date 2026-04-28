@@ -1087,7 +1087,22 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Multi-line expressions get one inline annotation per statement.
     // Typing three assignments followed by their sum should produce four
     // `= value` annotations inside the editor.
-    await fullScreenTextarea.fill("A = 10\nB = 20\nC = A + B\nC * 2");
+    //
+    // Playwright's `fill` on Monaco's hidden textarea inserts at the cursor
+    // without first deleting the existing content on WebKit, so previous
+    // expressions bleed into the result. Reach into the Monaco model
+    // directly (its `data-uri` attribute is exposed on the editor's view
+    // root) so we can `setValue` deterministically across browsers.
+    await page.evaluate((text) => {
+      const monaco = (window as { monaco?: typeof import("monaco-editor") }).monaco;
+      if (!monaco) throw new Error("monaco is not exposed on window");
+      const node = document.querySelector<HTMLElement>("#scoreExpressionFull [data-uri]");
+      const uri = node?.getAttribute("data-uri");
+      if (!uri) throw new Error("could not find expression editor model URI");
+      const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+      if (!model) throw new Error(`no model for URI ${uri}`);
+      model.setValue(text);
+    }, "A = 10\nB = 20\nC = A + B\nC * 2");
     await expect(page.getByTestId("expression-ok")).toBeVisible({ timeout: 10_000 });
     const lineValues = page.getByTestId("expression-line-value");
     await expect(lineValues).toHaveCount(4);
