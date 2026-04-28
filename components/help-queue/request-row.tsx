@@ -99,10 +99,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
     if (effectiveStudents.length === 1) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image
-            src={(student1Profile?.avatar_url || undefined) as string | undefined}
-            alt={student1Profile?.name ? `${student1Profile.name}'s avatar` : ""}
-          />
+          <Avatar.Image src={(student1Profile?.avatar_url || undefined) as string | undefined} alt="" />
           <Avatar.Fallback>{(student1Profile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
@@ -131,7 +128,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
       <AvatarGroup size="sm">
         {avatars.map((p) => (
           <Avatar.Root key={p.id} size="sm">
-            <Avatar.Image src={p.avatar_url} alt={p.name ? `${p.name}'s avatar` : ""} />
+            <Avatar.Image src={p.avatar_url} alt="" />
             <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}

@@ -35,7 +35,7 @@ function PersonName({
   return (
     <HStack w="100%">
       <Avatar.Root size={size}>
-        <Avatar.Image src={userProfile?.avatar_url} alt={userProfile?.name ? `${userProfile.name}'s avatar` : ""} />
+        <Avatar.Image src={userProfile?.avatar_url} alt="" />
         <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack>

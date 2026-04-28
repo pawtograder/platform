@@ -8,7 +8,7 @@ export default function PersonName({ uid, size = "sm" }: { uid: string; size?: "
     <Tooltip content={userProfile?.name} portalled={false}>
       <Box display="inline-block">
         <Avatar.Root size={size}>
-          <Avatar.Image src={userProfile?.avatar_url} alt={userProfile?.name ? `${userProfile.name}'s avatar` : ""} />
+          <Avatar.Image src={userProfile?.avatar_url} alt="" />
           <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       </Box>

@@ -286,10 +286,7 @@ const DiscussionThreadContent = memo(
               {authorProfile ? (
                 <Avatar.Root size="sm" variant="outline" shape="square">
                   <Avatar.Fallback name={authorProfile.name} />
-                  <Avatar.Image
-                    src={authorProfile.avatar_url}
-                    alt={authorProfile.name ? `${authorProfile.name}'s avatar` : ""}
-                  />
+                  <Avatar.Image src={authorProfile.avatar_url} alt="" />
                 </Avatar.Root>
               ) : (
                 <SkeletonCircle width="40px" height="40px" />

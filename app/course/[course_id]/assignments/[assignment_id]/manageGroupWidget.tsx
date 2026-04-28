@@ -604,7 +604,7 @@ function GroupMember({ profile_id }: { profile_id: string }) {
   return (
     <HStack>
       <Avatar.Root size="xs">
-        <Avatar.Image src={profile?.avatar_url} alt={profile?.name ? `${profile.name}'s avatar` : ""} />
+        <Avatar.Image src={profile?.avatar_url} alt="" />
         <Avatar.Fallback>{profile?.name?.slice(0, 2)}</Avatar.Fallback>
       </Avatar.Root>
       <Text fontSize="sm" color="fg.muted">

@@ -714,10 +714,7 @@ function UserSettingsMenu() {
         <IconButton aria-label="Open user menu" variant="ghost" size="sm" borderRadius="full" p={0}>
           <Avatar.Root size="sm" colorPalette="gray">
             <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-            <Avatar.Image
-              src={privateProfile?.data.avatar_url ?? undefined}
-              alt={privateProfile?.data.name ? `${privateProfile.data.name}'s avatar` : "User avatar"}
-            />
+            <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
           </Avatar.Root>
         </IconButton>
       </Drawer.Trigger>
@@ -731,10 +728,7 @@ function UserSettingsMenu() {
                   <HStack flex={1} minWidth={0}>
                     <Avatar.Root size="sm" colorPalette="gray">
                       <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                      <Avatar.Image
-                        src={privateProfile?.data.avatar_url ?? undefined}
-                        alt={privateProfile?.data.name ? `${privateProfile.data.name}'s avatar` : "User avatar"}
-                      />
+                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
                     </Avatar.Root>
                     <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
                       <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
