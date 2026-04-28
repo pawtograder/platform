@@ -58,7 +58,9 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     await page.keyboard.press("?");
     const dialog = page.getByRole("dialog", { name: /keyboard shortcuts/i });
     await expect(dialog).toBeVisible();
-    await page.keyboard.press("Escape");
+    // Send Esc *into* the dialog itself — on WebKit a top-level page.keyboard.press
+    // races Chakra's exit animation; sending it on the focused dialog reliably closes it.
+    await dialog.press("Escape");
     await expect(dialog).toBeHidden();
   });
 
