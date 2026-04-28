@@ -38,7 +38,7 @@ export default function GradingConflictsPage() {
             </Text>
           )}
         </VStack>
-        <Button onClick={() => openAddConflictModal()} colorPalette="green" variant="surface">
+        <Button onClick={() => openAddConflictModal()} colorPalette="green" variant="solid">
           Add Conflict
         </Button>
       </HStack>

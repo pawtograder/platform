@@ -12,6 +12,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -214,6 +215,7 @@ test.describe("Assignment due dates", () => {
     await expect(
       groupRow.getByText(formatDateForTest(new TZDate(testGroupAssignment!.due_date, "America/New_York")))
     ).toBeVisible();
+    await assertStudentPageAccessible(page, "due dates assignments table");
   });
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
     //Test with the lab section assignment
@@ -265,6 +267,7 @@ test.describe("Assignment due dates", () => {
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
+    await assertStudentPageAccessible(page, "due dates after token extensions");
   });
 });
 

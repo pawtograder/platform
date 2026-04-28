@@ -496,7 +496,7 @@ function AddColumnDialog() {
       unmountOnExit
     >
       <Dialog.Trigger asChild>
-        <Button variant="surface" size="sm" colorPalette="green" onClick={() => setIsOpen(true)}>
+        <Button variant="solid" size="sm" colorPalette="green" onClick={() => setIsOpen(true)}>
           <Icon as={FiPlus} mr={2} /> Add Column
         </Button>
       </Dialog.Trigger>

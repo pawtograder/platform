@@ -386,7 +386,7 @@ export function CommentActions({
         }}
       >
         <Menu.Trigger asChild>
-          <Button p={0} m={2} colorPalette="blue" variant="ghost" size="2xs">
+          <Button aria-label="Comment options" p={0} m={2} colorPalette="blue" variant="ghost" size="2xs">
             <Icon as={BsThreeDots} />
           </Button>
         </Menu.Trigger>

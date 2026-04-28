@@ -516,9 +516,8 @@ export function SurveyTemplateLibraryModal({
                         </Button>
                         <Button
                           size="sm"
-                          bg="green.500"
-                          color="white"
-                          _hover={{ bg: "green.600" }}
+                          colorPalette="green"
+                          variant="solid"
                           onClick={() => handleClone(template)}
                           flex={1}
                         >
@@ -674,7 +673,7 @@ export function SurveyTemplateLibraryModal({
               >
                 Cancel
               </Button>
-              <Button bg="green.500" color="white" _hover={{ bg: "green.600" }} onClick={handleSaveEdit}>
+              <Button colorPalette="green" variant="solid" onClick={handleSaveEdit}>
                 Save Changes
               </Button>
             </HStack>
@@ -709,7 +708,7 @@ export function SurveyTemplateLibraryModal({
               >
                 Cancel
               </Button>
-              <Button bg="red.500" color="white" _hover={{ bg: "red.600" }} onClick={handleConfirmDelete}>
+              <Button colorPalette="red" variant="solid" onClick={handleConfirmDelete}>
                 Delete
               </Button>
             </HStack>

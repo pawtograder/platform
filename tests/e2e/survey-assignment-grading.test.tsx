@@ -9,6 +9,7 @@ import {
   loginAsUser,
   supabase
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { addDays } from "date-fns";
 import { TEAM_COLLABORATION_SURVEY } from "../fixtures/teamCollaborationSurvey";
@@ -108,6 +109,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     // Navigate to the survey list
     await page.goto(`/course/${course.id}/surveys`);
     await expect(page.getByText("Week 5 Team Collaboration Survey")).toBeVisible();
+    await assertStudentPageAccessible(page, "survey assignment grading - survey list");
     await argosScreenshot(page, "Student Survey List - Team Collaboration Survey Available");
 
     // Click to start the survey
@@ -161,6 +163,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       page.getByText("How do you feel about your team's collaboration process in this project?").first()
     ).toBeVisible();
     await argosScreenshot(page, "Student Survey - Page 4 Impediments and Reflection");
+    await assertStudentPageAccessible(page, "team collaboration survey page 4 (shell)");
   });
 
   test("student sees survey status banner on submission page", async ({ page }) => {
@@ -196,6 +199,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(page.getByText("Survey: Week 5 Team Collaboration Survey")).toBeVisible({ timeout: 10000 });
     await expect(page.getByText("Pending")).toBeVisible();
     await expect(page.getByText("Take Survey")).toBeVisible();
+    await assertStudentPageAccessible(page, "submission page survey pending banner");
 
     await argosScreenshot(page, "Student Submission Page - Survey Pending Banner");
 
@@ -228,6 +232,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(page.getByText("Survey: Week 5 Team Collaboration Survey")).toBeVisible({ timeout: 10000 });
     await expect(page.getByText("Completed")).toBeVisible();
     await expect(page.getByText("View Response")).toBeVisible();
+    await assertStudentPageAccessible(page, "submission page survey completed banner");
 
     await argosScreenshot(page, "Student Submission Page - Survey Completed Banner");
   });
@@ -478,6 +483,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
 
     // Should show read-only indicator
     await expect(page.getByText("This survey has been submitted and cannot be edited.")).toBeVisible();
+    await assertStudentPageAccessible(page, "submitted survey read-only (shell)");
     await argosScreenshot(page, "Student Survey - Submitted Read Only View");
   });
 });

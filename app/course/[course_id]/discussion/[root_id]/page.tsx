@@ -41,7 +41,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
         <HStack align="start" gap="2" alignSelf="flex-start">
           {userProfile ? (
             <Avatar.Root size="xs">
-              <Avatar.Image src={userProfile?.avatar_url} />
+              <Avatar.Image src={userProfile?.avatar_url} alt="" />
               <Avatar.Fallback>{userProfile?.name?.charAt(0) || "?"}</Avatar.Fallback>
             </Avatar.Root>
           ) : (

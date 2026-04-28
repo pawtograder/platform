@@ -3,6 +3,7 @@ import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
@@ -54,6 +55,7 @@ test.describe("Discussion Thread Page", () => {
       page.getByText("Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here.")
     ).toBeVisible();
     await argosScreenshot(page, "Discussion Thread Page");
+    await assertStudentPageAccessible(page, "discussion feed empty");
   });
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
     await loginAsUser(page, student1!, course);
@@ -119,6 +121,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Viewable by poster and staff only")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).toBeVisible();
+    await assertStudentPageAccessible(page, "discussion private thread created");
   });
 
   test("Another student cannot view a private thread", async ({ page }) => {
@@ -130,6 +133,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Viewable by poster and staff only")).not.toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).not.toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).not.toBeVisible();
+    await assertStudentPageAccessible(page, "discussion private thread hidden");
   });
 
   test("Another student creates a public thread", async ({ page }) => {
@@ -158,6 +162,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student2?.public_profile_name })).toBeVisible();
+    await assertStudentPageAccessible(page, "discussion public thread");
   });
 
   test("An instructor can view all threads and reply to them", async ({ page }) => {

@@ -13,6 +13,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -184,6 +185,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Complete Review" }).click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
+    await assertStudentPageAccessible(page, "pseudonymous self-review completed");
   });
 
   test("Instructors can grade the submission with pseudonymous mode enabled", async ({ page }) => {
@@ -310,6 +312,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     });
     await page.waitForTimeout(100);
     await argosScreenshot(page, "Pseudonymous grading - Student sees only pseudonym");
+    await assertStudentPageAccessible(page, "pseudonymous student grading view");
   });
 
   test("Student can request a regrade and sees grader's pseudonym in responses", async ({ page }) => {
@@ -332,6 +335,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(region.getByText(REGRADE_REQUEST_COMMENT).first()).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await argosScreenshot(page, "Pseudonymous grading - Student opens regrade request");
+    await assertStudentPageAccessible(page, "pseudonymous regrade request opened");
   });
 
   test("Instructor resolves regrade with pseudonymous profile and adds comment", async ({ page }) => {
@@ -447,5 +451,6 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
 
     await argosScreenshot(page, "Pseudonymous grading - Student sees instructor real name for final decision");
+    await assertStudentPageAccessible(page, "pseudonymous regrade closed student view");
   });
 });

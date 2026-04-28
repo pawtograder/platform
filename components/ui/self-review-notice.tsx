@@ -40,7 +40,7 @@ function CompleteReviewButton({
         <Link
           href={`/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`}
         >
-          <Button colorPalette="green" variant="surface">
+          <Button colorPalette="green" variant="solid">
             Complete Self Review
           </Button>
         </Link>
