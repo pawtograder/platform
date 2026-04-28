@@ -37,6 +37,14 @@ const DEFAULT_EXCLUDES = [
 /** Scope axe scanning to the rules we actually want to enforce. */
 const DEFAULT_WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
 
+/**
+ * Best-practice rules we want enforced *in addition to* the WCAG tag set.
+ * `heading-order` is in `best-practice` (not `wcag*`), but skipping heading
+ * levels (e.g. h1 → h3) materially hurts screen-reader navigation, so we
+ * enable it explicitly.
+ */
+const ADDITIONAL_RULES = ["heading-order"];
+
 export type AxeAssertOptions = {
   /** Extra CSS selectors to exclude from the scan. Merged with DEFAULT_EXCLUDES. */
   exclude?: string[];
@@ -204,19 +212,47 @@ export async function assertStudentPageAccessible(
       /* fall through — let axe report the real issue if it really is empty */
     });
 
-  // @axe-core/playwright types against playwright-core's Page; cast for compatibility with test fixtures.
-  let builder = new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(
-    options.tags ?? DEFAULT_WCAG_TAGS
-  );
+  // axe samples rendered pixel colors; in-flight CSS animations / transitions
+  // (e.g. chat slideInFromBottom, Chakra dialog enter/exit) cause it to read
+  // intermediate opacity-blended values and flag color-contrast on text that
+  // is fine once the animation settles. Snap everything to its final state
+  // so the scan is deterministic.
+  await page.addStyleTag({
+    content: `
+      *, *::before, *::after {
+        animation-duration: 0s !important;
+        animation-delay: 0s !important;
+        transition-duration: 0s !important;
+        transition-delay: 0s !important;
+      }
+    `
+  });
+
   const excludes = [...DEFAULT_EXCLUDES, ...(options.exclude ?? [])];
-  for (const sel of excludes) {
-    builder = builder.exclude(sel);
-  }
-  if (options.disableRules && options.disableRules.length > 0) {
-    builder = builder.disableRules(options.disableRules);
-  }
-  const results = await builder.analyze();
-  const violations = results.violations ?? [];
+  const applyCommonConfig = (b: AxeBuilder) => {
+    let builder = b;
+    for (const sel of excludes) builder = builder.exclude(sel);
+    if (options.disableRules && options.disableRules.length > 0) {
+      builder = builder.disableRules(options.disableRules);
+    }
+    return builder;
+  };
+
+  // @axe-core/playwright types against playwright-core's Page; cast for compatibility with test fixtures.
+  const tagBuilder = applyCommonConfig(
+    new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(options.tags ?? DEFAULT_WCAG_TAGS)
+  );
+  const tagResults = await tagBuilder.analyze();
+
+  // Second pass: best-practice rules we want enforced (heading-order). axe's
+  // `withTags` filters out rules outside those tags, and `withRules` would
+  // *replace* the tag filter, so run a second scoped scan and merge.
+  const ruleBuilder = applyCommonConfig(
+    new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withRules(ADDITIONAL_RULES)
+  );
+  const ruleResults = await ruleBuilder.analyze();
+
+  const violations = [...(tagResults.violations ?? []), ...(ruleResults.violations ?? [])];
   if (violations.length === 0) return;
 
   const summary = formatViolations(violations);
