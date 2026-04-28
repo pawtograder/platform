@@ -191,8 +191,11 @@ jobs:
             NEXT_PUBLIC_ENABLE_SIGNUPS=true
             SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
             SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,scope=web,mode=max
+          # Cache image lives in the in-cluster registry (auth seeded into
+          # the runner's ~/.docker/config.json by the gha-runner-scale-set
+          # init container — see k8s/apps/arc/values-pawtograder-ci.yaml).
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/web-buildcache:latest,mode=max
 
   build-edge-functions:
     needs: meta
@@ -214,8 +217,8 @@ jobs:
           file: charts/pawtograder/images/edge-functions/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.tag }}
-          cache-from: type=gha,scope=edge-functions
-          cache-to: type=gha,scope=edge-functions,mode=max
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/edge-functions-buildcache:latest,mode=max
 
   build-migrations:
     needs: meta
@@ -237,8 +240,8 @@ jobs:
           file: charts/pawtograder/images/migrations/Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${{ needs.meta.outputs.tag }}
-          cache-from: type=gha,scope=migrations
-          cache-to: type=gha,scope=migrations,mode=max
+          cache-from: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest
+          cache-to: type=registry,ref=registry.work.ripley.cloud/pawtograder/migrations-buildcache:latest,mode=max
 
   # --------------------------------------------------------------------------
   # deploy — helm install/upgrade against ripley
