@@ -279,19 +279,22 @@ export async function assertPageHasLandmarks(page: Page, contextLabel?: string):
   const lang = await page.locator("html").getAttribute("lang");
   expect(lang, `${prefix}html element has a lang attribute`).toBeTruthy();
 
-  // Wait for the page to leave any <Suspense>/loading.tsx state before counting landmarks.
-  const mains = page.locator('main, [role="main"]');
-  await expect(mains.first(), `${prefix}main landmark renders`).toBeVisible({ timeout: 15000 });
-  const mainCount = await mains.count();
+  // Use getByRole so we count what's *exposed to the accessibility tree* —
+  // i.e. screen readers see — not raw DOM nodes. This skips siblings hidden
+  // via aria-hidden (e.g. the responsive twin of the active subtree in
+  // dynamicCourseNav, where mobile/desktop are both mounted but only the
+  // visible one is in the a11y tree).
+  await expect(page.getByRole("main").first(), `${prefix}main landmark renders`).toBeVisible({ timeout: 15000 });
+  const mainCount = await page.getByRole("main").count();
   expect(mainCount, `${prefix}page has exactly one main landmark`).toBe(1);
 
-  const navs = page.locator('nav, [role="navigation"]');
+  const navs = page.getByRole("navigation");
   const navCount = await navs.count();
   expect(navCount, `${prefix}page has at least one nav landmark`).toBeGreaterThan(0);
 
-  // Every nav landmark must expose a non-empty computed accessible name (covers
-  // aria-label, aria-labelledby resolution, and other naming sources; broken
-  // labelledby refs fail here).
+  // Every visible nav landmark must expose a non-empty computed accessible
+  // name (covers aria-label, aria-labelledby resolution, and other naming
+  // sources; broken labelledby refs fail here).
   for (let i = 0; i < navCount; i++) {
     const nav = navs.nth(i);
     await expect(nav, `${prefix}nav landmark #${i} has an accessible name`).toHaveAccessibleName(/\S/);
