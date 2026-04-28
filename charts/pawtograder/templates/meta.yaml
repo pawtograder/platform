@@ -57,6 +57,15 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            # Studio sends an `x-connection-encrypted` header with the DSN
+            # encrypted under PG_META_CRYPTO_KEY. pg-meta needs the same key
+            # to decrypt; mismatch → 5xx → Studio's Database/SQL editor
+            # pages 500 with a Zod validation error.
+            - name: CRYPTO_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: PG_META_CRYPTO_KEY
           readinessProbe:
             tcpSocket:
               port: http

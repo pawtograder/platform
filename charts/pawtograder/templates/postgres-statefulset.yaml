@@ -54,8 +54,13 @@ spec:
           env:
             - name: POSTGRES_DB
               value: {{ .Values.postgres.database | quote }}
+            # Bootstrap superuser MUST be supabase_admin: the supabase migration
+            # `10000000000000_demote-postgres.sql` removes SUPERUSER from
+            # `postgres`, which fails on Postgres ("bootstrap superuser must
+            # have SUPERUSER attribute") if `postgres` is the initdb user.
+            # The migrate.sh script later creates the `postgres` role itself.
             - name: POSTGRES_USER
-              value: postgres
+              value: supabase_admin
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
             - name: POSTGRES_PASSWORD
@@ -83,8 +88,20 @@ spec:
               mountPath: /etc/postgresql/pg_hba.conf
               subPath: pg_hba.conf
             - name: config
-              mountPath: /docker-entrypoint-initdb.d/99-app-role.sh
+              mountPath: /etc/postgresql/pgsodium_getkey.sh
+              subPath: pgsodium_getkey.sh
+            - name: config
+              mountPath: /docker-entrypoint-initdb.d/00-supabase-admin.sh
+              subPath: 00-supabase-admin.sh
+            - name: config
+              mountPath: /docker-entrypoint-initdb.d/zy-app-role.sh
               subPath: init-app-role.sh
+            - name: config
+              mountPath: /docker-entrypoint-initdb.d/zz-supabase-passwords.sh
+              subPath: zz-supabase-passwords.sh
+            - name: pgsodium
+              mountPath: /var/run/secrets/pgsodium
+              readOnly: true
           readinessProbe:
             exec:
               command:
@@ -122,6 +139,23 @@ spec:
               - key: init-app-role.sh
                 path: init-app-role.sh
                 mode: 0755
+              - key: 00-supabase-admin.sh
+                path: 00-supabase-admin.sh
+                mode: 0755
+              - key: zz-supabase-passwords.sh
+                path: zz-supabase-passwords.sh
+                mode: 0755
+              - key: pgsodium_getkey.sh
+                path: pgsodium_getkey.sh
+                mode: 0755
+        - name: pgsodium
+          secret:
+            secretName: {{ .Values.secrets.names.jwt }}
+            defaultMode: 0444
+            items:
+              - key: PGSODIUM_ROOT_KEY
+                path: PGSODIUM_ROOT_KEY
+                mode: 0444
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}
       nodeSelector:
         {{- . | nindent 8 }}

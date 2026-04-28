@@ -45,6 +45,8 @@ spec:
             - name: http
               containerPort: {{ .Values.edgeFunctions.service.port }}
           command: ["edge-runtime"]
+          # NOTE: --no-verify-jwt isn't supported by edge-runtime v1.69.5;
+          # JWT verification (or lack thereof) is handled inside main.ts.
           args:
             - start
             - --main-service
@@ -53,9 +55,6 @@ spec:
             - "{{ .Values.edgeFunctions.service.port }}"
             - --policy
             - {{ .Values.edgeFunctions.policy | quote }}
-            {{- if not .Values.edgeFunctions.verifyJwt }}
-            - --no-verify-jwt
-            {{- end }}
           env:
             - name: SUPABASE_URL
               value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
@@ -83,10 +82,23 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: JWT_SECRET
+            {{- if .Values.edgeFunctions.e2e.enabled }}
+            - name: E2E_ENABLE
+              value: "true"
+            {{- end }}
+            {{- if .Values.edgeFunctions.e2e.mockGitHub }}
+            - name: E2E_MOCK_GITHUB
+              value: "true"
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secrets.names.edgeFunctions }}
                 optional: true
+            {{- range .Values.edgeFunctions.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+                optional: true
+            {{- end }}
           readinessProbe:
             tcpSocket:
               port: http

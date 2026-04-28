@@ -42,19 +42,19 @@ spec:
             - name: http
               containerPort: {{ .Values.studio.service.port }}
           env:
+            # Next.js standalone server only listens on loopback by default;
+            # set HOSTNAME=0.0.0.0 so the container accepts external traffic.
+            - name: HOSTNAME
+              value: "0.0.0.0"
             - name: STUDIO_PG_META_URL
               value: "http://{{ include "pawtograder.meta.host" . }}:{{ .Values.meta.service.port }}"
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secrets.names.postgres }}
-                  key: POSTGRES_PASSWORD
-            - name: DEFAULT_ORGANIZATION_NAME
-              value: Pawtograder
-            - name: DEFAULT_PROJECT_NAME
-              value: pawtograder
+            # SUPABASE_URL is the SERVER-SIDE URL Studio's Next.js API routes
+            # use to reach Kong/PostgREST/Auth. It must resolve in-cluster —
+            # using the public hostname here causes every server route to
+            # 500 (the static UI shell still loads, hence "looks broken").
+            # SUPABASE_PUBLIC_URL is the only var the browser ever sees.
             - name: SUPABASE_URL
-              value: {{ include "pawtograder.api.url" . }}
+              value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
             - name: SUPABASE_PUBLIC_URL
               value: {{ include "pawtograder.api.url" . }}
             - name: SUPABASE_ANON_KEY
@@ -72,18 +72,66 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: JWT_SECRET
-            - name: LOGFLARE_API_KEY
-              value: ""
-            - name: LOGFLARE_URL
-              value: ""
+            # Direct postgres access for the Database/SQL editor pages.
+            - name: POSTGRES_HOST
+              value: {{ include "pawtograder.postgres.host" . }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            # pg-meta uses this to encrypt saved DB connection strings.
+            # Without it the SQL editor / Database pages 500.
+            - name: PG_META_CRYPTO_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: PG_META_CRYPTO_KEY
+            # PostgREST schema/path/row settings — must match what
+            # postgrest itself exposes (see rest.* values).
+            - name: PGRST_DB_SCHEMAS
+              value: {{ .Values.rest.schemas | quote }}
+            - name: PGRST_DB_EXTRA_SEARCH_PATH
+              value: {{ .Values.rest.extraSearchPath | quote }}
+            - name: PGRST_DB_MAX_ROWS
+              value: {{ .Values.rest.maxRows | quote }}
+            - name: DEFAULT_ORGANIZATION_NAME
+              value: Pawtograder
+            - name: DEFAULT_PROJECT_NAME
+              value: pawtograder
+            - name: NEXT_ANALYTICS_BACKEND_PROVIDER
+              value: postgres
             - name: NEXT_PUBLIC_ENABLE_LOGS
               value: "false"
+            - name: OPENAI_API_KEY
+              value: ""
+            # Filesystem paths Studio writes user-saved SQL snippets and
+            # edge function source to. Required (Studio asserts on boot
+            # if missing). Backed by an emptyDir below — non-persistent;
+            # snippets are lost on pod restart, which is fine for admin
+            # use. Mount a PVC here if persistence matters.
+            - name: SNIPPETS_MANAGEMENT_FOLDER
+              value: /var/lib/studio/snippets
+            - name: EDGE_FUNCTIONS_MANAGEMENT_FOLDER
+              value: /var/lib/studio/functions
+          volumeMounts:
+            - name: studio-data
+              mountPath: /var/lib/studio
+          # /api/profile returns 401/redirect when unauthenticated which fails
+          # default probe matching. /api/platform/profile is the supabase-self-
+          # hosted unauthenticated health endpoint. TCP probe is the safest
+          # cross-version option.
           readinessProbe:
-            httpGet:
-              path: /api/profile
-              port: http
+            tcpSocket: { port: http }
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:
             {{- toYaml .Values.studio.resources | nindent 12 }}
+      volumes:
+        - name: studio-data
+          emptyDir: {}
 {{- end }}

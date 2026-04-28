@@ -1,4 +1,10 @@
 {{- if and .Values.postgres.enabled .Values.migrations.enabled }}
+# Migrations run as a regular install resource (not a Helm hook): the chart's
+# postgres StatefulSet is also a regular resource, and pre-install hooks fire
+# *before* any non-hook resource exists, so a hook-based migrations Job has
+# nothing to connect to. Instead, the Job's wait-for-postgres init container
+# polls until postgres is ready, then applies the migration set. Components
+# that depend on the schema retry connecting until migrations completes.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -6,10 +12,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "migrations") | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": {{ .Values.migrations.hookWeight | quote }}
-    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 86400
@@ -18,7 +20,9 @@ spec:
       labels:
         {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "migrations") | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      # Use the namespace's default ServiceAccount: helm pre-install hooks run
+      # before non-hook resources, so the chart's own ServiceAccount template
+      # hasn't applied yet. The migrations job needs no cluster permissions.
       {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
       restartPolicy: OnFailure
       initContainers:
@@ -39,6 +43,55 @@ spec:
               done
               echo "postgres not ready after 120s" >&2
               exit 1
+        # Pawtograder migrations reference auth/storage/realtime/vault tables
+        # and grant on them. Those services run their OWN schema migrations on
+        # startup; we have to wait for them to finish before pawtograder
+        # migrations can run, otherwise we get "relation does not exist" /
+        # "column does not exist" errors. We probe by checking for tables that
+        # only exist after each service's migrations have completed.
+        - name: wait-for-supabase-services
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.postgres.image) }}
+          env:
+            - name: PGHOST
+              value: {{ include "pawtograder.postgres.host" . }}
+            - name: PGPORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: PGUSER
+              value: supabase_admin
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              check() {
+                # $1 = label, $2 = SQL that returns 1 row when ready
+                psql -tAc "$2" 2>/dev/null | grep -q 1
+              }
+              # Realtime's tables aren't required by pawtograder migrations
+              # (they touch the `supabase_realtime` publication, created by
+              # the postgres image's own init-scripts, not realtime itself).
+              for i in $(seq 1 90); do
+                ok=true
+                check 'auth.identities'           "SELECT 1 FROM information_schema.tables WHERE table_schema='auth' AND table_name='identities'"               || ok=false
+                check 'storage.buckets.public'    "SELECT 1 FROM information_schema.columns WHERE table_schema='storage' AND table_name='buckets' AND column_name='public'" || ok=false
+                check 'pub.supabase_realtime'     "SELECT 1 FROM pg_publication WHERE pubname='supabase_realtime'"                                              || ok=false
+                if $ok; then
+                  echo "supabase services migrated"
+                  exit 0
+                fi
+                echo "waiting for supabase services ($i/90)"
+                sleep 4
+              done
+              echo "supabase services not ready after 6min" >&2
+              psql -c "SELECT table_schema, count(*) FROM information_schema.tables WHERE table_schema IN ('auth','storage','realtime') GROUP BY 1" >&2
+              exit 1
       containers:
         - name: migrate
           image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.migrations.image) }}
@@ -50,8 +103,11 @@ spec:
               value: {{ .Values.postgres.service.port | quote }}
             - name: PGDATABASE
               value: {{ .Values.postgres.database | quote }}
+            # supabase_admin (superuser) is needed because pawtograder
+            # migrations install pgsodium via CREATE EXTENSION, which the
+            # demoted `postgres` role can no longer do.
             - name: PGUSER
-              value: postgres
+              value: supabase_admin
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:

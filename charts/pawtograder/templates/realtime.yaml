@@ -93,13 +93,19 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            # The supabase/postgres image's init-scripts create the
+            # `realtime` schema (no underscore). Realtime puts its
+            # ecto-managed tables there. The community-docker convention is
+            # `_realtime` but THIS image uses unprefixed `realtime`.
             - name: DB_AFTER_CONNECT_QUERY
-              value: "SET search_path TO _realtime"
+              value: "SET search_path TO realtime"
+            # AES-128 — exactly 16 bytes. Stored as REALTIME_ENC_KEY in the
+            # JWT secret bundle; emitted by scripts/GenerateJwtKeys.ts.
             - name: DB_ENC_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
-                  key: JWT_SECRET
+                  key: REALTIME_ENC_KEY
             - name: SECRET_KEY_BASE
               valueFrom:
                 secretKeyRef:
@@ -113,11 +119,18 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: JWT_SECRET
+            # API_JWT_JWKS = EC-only (no oct key). Two paths in realtime's
+            # jwt_verification.ex:
+            #   ES256 + kid → finds EC by kid → verifies user session JWTs.
+            #   HS256 + kid → no oct match → falls back to API_JWT_SECRET
+            #                 (Joken accepts a binary string for HS but
+            #                 raises on a JWK map; that's why we exclude
+            #                 the oct key from this JWKS).
             - name: API_JWT_JWKS
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
-                  key: JWT_PUBLIC_JWKS
+                  key: JWT_REALTIME_JWKS
             - name: APP_NAME
               value: realtime
             - name: FLY_ALLOC_ID
@@ -139,17 +152,23 @@ spec:
               value: {{ .Values.realtime.maxHeaderLength | quote }}
             - name: SEED_SELF_HOST
               value: "true"
+            # Realtime parses the Host header to find the tenant by
+            # external_id. Kong forwards with Host = the upstream service
+            # name (no dots → realtime treats the whole string as the
+            # external_id). Set the seeded tenant name to match.
+            - name: SELF_HOST_TENANT_NAME
+              value: {{ include "pawtograder.realtime.host" . }}
+          # Realtime v2.34 has no public unauthenticated health endpoint
+          # (/healthz returns 404; /api/tenants/<id>/health needs a JWT).
+          # TCP probe just confirms the listener is up — good enough for
+          # liveness/readiness in a single-tenant self-hosted setup.
           readinessProbe:
-            httpGet:
-              path: /api/tenants/realtime-dev/health
-              port: http
+            tcpSocket: { port: http }
             initialDelaySeconds: 15
             periodSeconds: 10
             failureThreshold: 6
           livenessProbe:
-            httpGet:
-              path: /api/tenants/realtime-dev/health
-              port: http
+            tcpSocket: { port: http }
             initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 5

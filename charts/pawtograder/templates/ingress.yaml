@@ -21,9 +21,6 @@ spec:
         {{- if .Values.global.apiOnSeparateHost }}
         - "api.{{ .Values.global.hostname }}"
         {{- end }}
-        {{- if .Values.studio.ingressEnabled }}
-        - "studio.{{ .Values.global.hostname }}"
-        {{- end }}
         {{- range .Values.ingress.extraHosts }}
         - {{ . | quote }}
         {{- end }}
@@ -88,17 +85,5 @@ spec:
                 name: {{ include "pawtograder.kong.host" . }}
                 port:
                   number: {{ .Values.kong.service.port }}
-    {{- end }}
-    {{- if .Values.studio.ingressEnabled }}
-    - host: "studio.{{ .Values.global.hostname }}"
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pawtograder.studio.host" . }}
-                port:
-                  number: {{ .Values.studio.service.port }}
     {{- end }}
 {{- end }}

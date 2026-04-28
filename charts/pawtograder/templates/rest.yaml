@@ -42,13 +42,22 @@ spec:
             - name: http
               containerPort: {{ .Values.rest.service.port }}
           env:
-            - name: PGRST_DB_URI
-              value: "postgres://authenticator:$(POSTGRES_PASSWORD)@{{ include "pawtograder.supavisor.host" . }}:{{ .Values.supavisor.service.port }}/{{ .Values.postgres.database }}"
+            # POSTGRES_PASSWORD MUST come before PGRST_DB_URI so the
+            # `$(POSTGRES_PASSWORD)` reference below substitutes — k8s only
+            # interpolates env vars defined earlier in the same container.
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            # Direct postgres, NOT supavisor: supavisor requires explicit
+            # tenant registration via its management API; without that you
+            # get "FATAL: Tenant or user not found". For load testing we
+            # rely on postgres' native connection limits and PostgREST's
+            # internal pooling. Switch back to supavisor once we've wired
+            # tenant registration into the chart.
+            - name: PGRST_DB_URI
+              value: "postgres://authenticator:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
             - name: PGRST_DB_SCHEMAS
               value: {{ .Values.rest.schemas | quote }}
             - name: PGRST_DB_EXTRA_SEARCH_PATH

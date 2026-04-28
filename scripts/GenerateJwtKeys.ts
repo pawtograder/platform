@@ -67,6 +67,13 @@ const ecPublic = {
 
 // --- HS256 oct key (for the long-lived API keys) ---
 const hsSecret = randomBytes(48).toString("base64");
+
+// --- AES-128 key for Realtime's tenant secret encryption (must be 16 bytes) ---
+const realtimeEncKey = randomBytes(16).toString("base64").slice(0, 16);
+
+// --- AES-256 key for pg-meta to encrypt saved DB connection strings ---
+// Used by Studio's Database/SQL-editor pages; without it those pages 500.
+const pgMetaCryptoKey = randomBytes(32).toString("base64");
 const octPublic = {
   kty: "oct",
   k: b64url(hsSecret),
@@ -77,11 +84,18 @@ const octPublic = {
 };
 
 // --- The two artefacts components consume ---
-// GoTrue takes a JSON ARRAY of private JWKs in GOTRUE_JWT_KEYS. Only one key
-// has key_ops including "sign"; that one is the active signing key.
-const privateJwks = JSON.stringify([ecPrivate]);
+// GoTrue takes a JSON ARRAY of private JWKs in GOTRUE_JWT_KEYS. Only one
+// key has key_ops including "sign" — the EC key signs new session JWTs.
+// The oct key is included verify-only so GoTrue can validate the
+// HS256-signed long-lived ANON/SERVICE_ROLE keys clients send.
+const privateJwks = JSON.stringify([ecPrivate, octPublic]);
 // Verifiers take a JWK Set object {"keys":[…]} with public material only.
 const publicJwks = JSON.stringify({ keys: [ecPublic, octPublic] });
+// Realtime gets EC-only: its Joken pin (v2.5.0) doesn't accept JWK maps for
+// HS-family algorithms and raises "Couldn't recognize the signer algorithm".
+// With EC-only in the tenant's jwt_jwks, ES256 sessions verify against the
+// EC key, and HS256 API keys fall back to jwt_secret (which works fine).
+const realtimeJwks = JSON.stringify({ keys: [ecPublic] });
 
 // --- Long-lived API keys, signed HS256 with the apikeys oct key ---
 const now = Math.floor(Date.now() / 1000);
@@ -115,6 +129,9 @@ if (mode === "env") {
   console.log(`JWT_PUBLIC_JWKS=${publicJwks}`);
   console.log(`ANON_KEY=${anonKey}`);
   console.log(`SERVICE_ROLE_KEY=${serviceRoleKey}`);
+  console.log(`REALTIME_ENC_KEY=${realtimeEncKey}`);
+  console.log(`PG_META_CRYPTO_KEY=${pgMetaCryptoKey}`);
+  console.log(`JWT_REALTIME_JWKS=${realtimeJwks}`);
 } else if (mode === "helm") {
   // YAML snippet that can be passed via `helm install -f` together with the
   // chart's other values. Single-quoted scalars preserve the JSON exactly.

@@ -340,7 +340,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       const { data } = await supabase
         .from("submission_reviews")
         .select("released")
-        .eq("submission_id", submission_id)
+        .eq("submission_id", submission_id!)
         .eq("released", true);
       expect(data?.length ?? 0).toBeGreaterThan(0);
     }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });

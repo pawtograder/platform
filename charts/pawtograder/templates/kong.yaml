@@ -46,6 +46,11 @@ spec:
           env:
             - name: KONG_DATABASE
               value: "off"
+            # Default is "auto" which reads host CPU count — on a 64-core
+            # node that's 64 nginx workers, each ~150MiB. Pin to a small
+            # fixed count.
+            - name: KONG_NGINX_WORKER_PROCESSES
+              value: "2"
             - name: KONG_DECLARATIVE_CONFIG
               value: /var/lib/kong/kong.yml
             - name: KONG_DNS_ORDER
@@ -71,19 +76,8 @@ spec:
                   name: {{ .Values.secrets.names.jwt }}
                   key: SERVICE_ROLE_KEY
           volumeMounts:
-            - name: config
-              mountPath: /var/lib/kong/kong.yml.template
-              subPath: kong.yml
-          # Kong's declarative config doesn't support env interpolation natively;
-          # use a tiny init step to envsubst the template into the runtime path.
-          command:
-            - sh
-            - -c
-            - |
-              set -e
-              envsubst < /var/lib/kong/kong.yml.template > /tmp/kong.yml
-              export KONG_DECLARATIVE_CONFIG=/tmp/kong.yml
-              exec /docker-entrypoint.sh kong docker-start
+            - name: rendered
+              mountPath: /var/lib/kong
           readinessProbe:
             tcpSocket:
               port: http
@@ -91,10 +85,43 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.kong.resources | nindent 12 }}
+      # Kong (oss/ee) doesn't ship envsubst, and KONG_DECLARATIVE_CONFIG
+      # interprets $VARS literally. Init container substitutes anon/service
+      # keys into kong.yml at start; rendered file lives in an emptyDir.
+      initContainers:
+        - name: render-config
+          image: alpine:3.20
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              apk add --no-cache gettext >/dev/null
+              envsubst < /template/kong.yml > /rendered/kong.yml
+              echo "[render] /rendered/kong.yml ready ($(wc -l </rendered/kong.yml) lines)"
+          env:
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: ANON_KEY
+            - name: SUPABASE_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: SERVICE_ROLE_KEY
+          volumeMounts:
+            - name: template
+              mountPath: /template
+              readOnly: true
+            - name: rendered
+              mountPath: /rendered
       volumes:
-        - name: config
+        - name: template
           configMap:
             name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "kong-config") }}
+        - name: rendered
+          emptyDir: {}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.kong)) }}
       nodeSelector:
         {{- . | nindent 8 }}

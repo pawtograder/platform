@@ -1,0 +1,311 @@
+name: Deploy preview
+
+# Per-PR ephemeral previews of the full pawtograder stack on ripley.
+#
+# Trigger model:
+#   pull_request: opened/sync/reopened    → build + deploy preview, comment URL
+#   pull_request: closed                  → tear down preview
+#   workflow_dispatch (action=deploy)     → same as opened, with manual preview_id
+#   workflow_dispatch (action=destroy)    → manual teardown
+#
+# Cluster access: provided via KUBECONFIG_BASE64 repo secret (base64 of a
+# kubeconfig that can helm install + create namespaces in
+# pawtograder-preview-*). The deploy step uses helm directly against the
+# chart in this checkout — no OCI publish step required for previews.
+#
+# Image storage: ghcr.io/pawtograder/{web,edge-functions,migrations}:pr-${id}-${sha}.
+# Ephemeral; cleanup of old tags is out of scope here (use a periodic
+# package-cleanup workflow if image bloat becomes a problem).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      preview_id:
+        description: "Preview id (URL suffix: pr-<id>.preview.pawtograder.net). Use the PR number, or any safe slug."
+        required: true
+      action:
+        description: deploy or destroy
+        required: true
+        type: choice
+        options: [deploy, destroy]
+        default: deploy
+
+permissions:
+  contents: read
+  pull-requests: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  REPO_OWNER: ${{ github.repository_owner }}
+  PREVIEW_DOMAIN: preview.pawtograder.net
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || inputs.preview_id }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # meta — derive preview id, hostnames, image tag, namespace, etc.
+  # --------------------------------------------------------------------------
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      preview_id:   ${{ steps.v.outputs.preview_id }}
+      hostname:     ${{ steps.v.outputs.hostname }}
+      api_hostname: ${{ steps.v.outputs.api_hostname }}
+      tag:          ${{ steps.v.outputs.tag }}
+      release:      ${{ steps.v.outputs.release }}
+      namespace:    ${{ steps.v.outputs.namespace }}
+      mode:         ${{ steps.v.outputs.mode }}
+    steps:
+      - id: v
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            preview_id="${{ github.event.pull_request.number }}"
+            sha="${{ github.event.pull_request.head.sha }}"
+            if [[ "${{ github.event.action }}" == "closed" ]]; then
+              mode="destroy"
+            else
+              mode="deploy"
+            fi
+          else
+            preview_id="${{ inputs.preview_id }}"
+            sha="${GITHUB_SHA}"
+            mode="${{ inputs.action }}"
+          fi
+          short_sha="${sha:0:7}"
+          hostname="pr-${preview_id}.${PREVIEW_DOMAIN}"
+          api_hostname="api.pr-${preview_id}.${PREVIEW_DOMAIN}"
+          tag="pr-${preview_id}-${short_sha}"
+          release="pawtograder"
+          namespace="pawtograder-preview-pr-${preview_id}"
+          {
+            echo "preview_id=${preview_id}"
+            echo "hostname=${hostname}"
+            echo "api_hostname=${api_hostname}"
+            echo "tag=${tag}"
+            echo "release=${release}"
+            echo "namespace=${namespace}"
+            echo "mode=${mode}"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------------------------
+  # build-* — per-PR images. web is the only one whose build args change
+  # across previews (NEXT_PUBLIC_* is inlined). edge-functions & migrations
+  # are PR-content-dependent only, no per-preview args.
+  # --------------------------------------------------------------------------
+  build-web:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/web:${{ needs.meta.outputs.tag }}
+          # The anon key is generated *in-cluster* by the secrets-bootstrap
+          # hook on first install. We don't know its value at build time —
+          # so this image is tied to that release's anon key. CI ships them
+          # together; if the chart re-runs autogenerate (it won't, hook is
+          # idempotent), keys would drift and the bundle would break.
+          # We pass an empty NEXT_PUBLIC_SUPABASE_ANON_KEY here; the web pod
+          # reads SUPABASE_ANON_KEY from env at runtime AND the client-side
+          # Supabase factory in `utils/supabase/client.ts` falls back to
+          # window-injected globals — so login/anon RPCs still work.
+          build-args: |
+            NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://${{ needs.meta.outputs.hostname }}
+            NEXT_PUBLIC_SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=
+            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
+            NEXT_PUBLIC_ENABLE_SIGNUPS=true
+            SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
+            SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+  build-edge-functions:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/edge-functions/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.tag }}
+          cache-from: type=gha,scope=edge-functions
+          cache-to: type=gha,scope=edge-functions,mode=max
+
+  build-migrations:
+    needs: meta
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/migrations/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${{ needs.meta.outputs.tag }}
+          cache-from: type=gha,scope=migrations
+          cache-to: type=gha,scope=migrations,mode=max
+
+  # --------------------------------------------------------------------------
+  # deploy — helm install/upgrade against ripley
+  # --------------------------------------------------------------------------
+  deploy:
+    needs: [meta, build-web, build-edge-functions, build-migrations]
+    if: needs.meta.outputs.mode == 'deploy'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+
+      - name: Write kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KUBECONFIG_B64:-}" ]; then
+            echo "::error::KUBECONFIG_BASE64 secret is missing — set it under repo settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl version --client=true --output=yaml | head -20
+
+      - name: helm upgrade --install
+        run: |
+          set -euo pipefail
+          helm upgrade --install "${{ needs.meta.outputs.release }}" \
+            ./charts/pawtograder \
+            --namespace "${{ needs.meta.outputs.namespace }}" \
+            --create-namespace \
+            -f charts/pawtograder/examples/values-preview.yaml \
+            --set global.hostname="${{ needs.meta.outputs.hostname }}" \
+            --set web.image.tag="${{ needs.meta.outputs.tag }}" \
+            --set edgeFunctions.image.tag="${{ needs.meta.outputs.tag }}" \
+            --set migrations.image.tag="${{ needs.meta.outputs.tag }}" \
+            --wait --timeout 10m
+
+      - name: Wait for migrations to complete
+        run: |
+          set -euo pipefail
+          # The chart's migrations Job runs as a regular install resource
+          # with init containers waiting on supabase services. helm --wait
+          # only waits for Deployments/StatefulSets, so we explicitly poll.
+          kubectl -n "${{ needs.meta.outputs.namespace }}" wait \
+            --for=condition=Complete --timeout=10m \
+            job -l app.kubernetes.io/component=migrations || {
+              echo "::warning::migrations job didn't complete; preview may be partially functional"
+              kubectl -n "${{ needs.meta.outputs.namespace }}" get pods,jobs
+            }
+
+      - name: Status snapshot
+        if: always()
+        run: |
+          kubectl -n "${{ needs.meta.outputs.namespace }}" get pods,svc,ingress 2>&1 | head -50
+
+      - name: Comment URL on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview
+          message: |
+            🚀 **Preview deployed** for `${{ needs.meta.outputs.tag }}`
+
+            - App:    https://${{ needs.meta.outputs.hostname }}
+            - API:    https://${{ needs.meta.outputs.api_hostname }}
+            - Studio: `kubectl -n ${{ needs.meta.outputs.namespace }} port-forward svc/pawtograder-studio 3010:3000`
+            - Logs:   `kubectl -n ${{ needs.meta.outputs.namespace }} logs -l app.kubernetes.io/instance=${{ needs.meta.outputs.release }}`
+
+            Cert may take ~1 min to issue. The preview tears down automatically when this PR closes.
+
+  # --------------------------------------------------------------------------
+  # destroy — helm uninstall + namespace delete on PR close (or manual)
+  # --------------------------------------------------------------------------
+  destroy:
+    needs: meta
+    if: needs.meta.outputs.mode == 'destroy'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+
+      - name: Write kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: helm uninstall + delete namespace
+        run: |
+          set -euo pipefail
+          NS="${{ needs.meta.outputs.namespace }}"
+          if kubectl get ns "$NS" >/dev/null 2>&1; then
+            helm uninstall "${{ needs.meta.outputs.release }}" --namespace "$NS" --ignore-not-found || true
+            # PVCs are not deleted by helm uninstall — clean them up so
+            # the namespace can actually go away.
+            kubectl -n "$NS" delete pvc --all --wait=false || true
+            kubectl delete namespace "$NS" --wait=false
+            echo "preview ${NS} torn down"
+          else
+            echo "preview ${NS} already absent — nothing to do"
+          fi
+
+      - name: Update PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: preview
+          message: |
+            🧹 **Preview torn down** — namespace `${{ needs.meta.outputs.namespace }}` deleted.

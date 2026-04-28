@@ -82,13 +82,16 @@ spec:
                   key: JWT_PRIVATE_JWKS
             - name: GOTRUE_DB_DRIVER
               value: postgres
-            - name: GOTRUE_DB_DATABASE_URL
-              value: "postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}?search_path=auth"
+            # POSTGRES_PASSWORD MUST come before GOTRUE_DB_DATABASE_URL so the
+            # `$(POSTGRES_PASSWORD)` reference below substitutes — k8s only
+            # interpolates env vars defined earlier in the same container.
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            - name: GOTRUE_DB_DATABASE_URL
+              value: "postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}?search_path=auth"
             - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
               value: {{ .Values.auth.enableEmailSignup | quote }}
             - name: GOTRUE_MAILER_AUTOCONFIRM

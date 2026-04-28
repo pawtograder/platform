@@ -74,6 +74,7 @@ spec:
             {{- range .Values.web.envFromSecrets }}
             - secretRef:
                 name: {{ . }}
+                optional: true
             {{- end }}
           readinessProbe:
             httpGet:
