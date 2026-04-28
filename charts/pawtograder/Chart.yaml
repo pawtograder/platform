@@ -1,0 +1,25 @@
+apiVersion: v2
+name: pawtograder
+description: |
+  Pawtograder — self-hosted CS course operations platform.
+  Bundles the Next.js web app together with the Supabase services it depends on
+  (Postgres, GoTrue, PostgREST, Realtime, Storage API, Edge Functions, Kong,
+  Studio, postgres-meta, supavisor) so the whole stack can be deployed to a
+  Kubernetes cluster from a single Helm release.
+type: application
+version: 0.1.0
+appVersion: "0.0.1"
+kubeVersion: ">=1.27.0-0"
+home: https://pawtograder.net
+sources:
+  - https://github.com/pawtograder/platform
+maintainers:
+  - name: Jonathan Bell
+    email: jon@jonbell.net
+keywords:
+  - pawtograder
+  - supabase
+  - education
+  - autograder
+annotations:
+  category: Application

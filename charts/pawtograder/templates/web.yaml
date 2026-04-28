@@ -1,0 +1,106 @@
+{{- if .Values.web.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.web.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.web.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: web
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.web.image) }}
+          imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.service.port }}
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: {{ .Values.web.service.port | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            # Server-only Supabase wiring. NEXT_PUBLIC_* are baked into the
+            # client bundle at build time and cannot be overridden here — the
+            # image must have been built with build-args matching this chart's
+            # hostname/keys.
+            - name: SUPABASE_URL
+              value: {{ default (include "pawtograder.api.url" .) .Values.web.apiUrl | quote }}
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: ANON_KEY
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: SERVICE_ROLE_KEY
+            {{- with .Values.web.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.names.web }}
+                optional: true
+            {{- range .Values.web.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.web)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.web)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.affinity" (dict "ctx" . "component" .Values.web)) }}
+      affinity:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

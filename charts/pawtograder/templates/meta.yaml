@@ -1,0 +1,67 @@
+{{- if .Values.meta.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.meta.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "meta") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.meta.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "meta") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.meta.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "meta") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "meta") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "meta") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: meta
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.meta.image) }}
+          imagePullPolicy: {{ .Values.meta.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.meta.service.port }}
+          env:
+            - name: PG_META_PORT
+              value: {{ .Values.meta.service.port | quote }}
+            - name: PG_META_DB_HOST
+              value: {{ include "pawtograder.postgres.host" . }}
+            - name: PG_META_DB_PORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: PG_META_DB_NAME
+              value: {{ .Values.postgres.database | quote }}
+            - name: PG_META_DB_USER
+              value: postgres
+            - name: PG_META_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.meta.resources | nindent 12 }}
+{{- end }}

@@ -1,0 +1,89 @@
+{{- if .Values.studio.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.studio.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "studio") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.studio.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "studio") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.studio.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "studio") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "studio") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "studio") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: studio
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.studio.image) }}
+          imagePullPolicy: {{ .Values.studio.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.studio.service.port }}
+          env:
+            - name: STUDIO_PG_META_URL
+              value: "http://{{ include "pawtograder.meta.host" . }}:{{ .Values.meta.service.port }}"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            - name: DEFAULT_ORGANIZATION_NAME
+              value: Pawtograder
+            - name: DEFAULT_PROJECT_NAME
+              value: pawtograder
+            - name: SUPABASE_URL
+              value: {{ include "pawtograder.api.url" . }}
+            - name: SUPABASE_PUBLIC_URL
+              value: {{ include "pawtograder.api.url" . }}
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: ANON_KEY
+            - name: SUPABASE_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: SERVICE_ROLE_KEY
+            - name: AUTH_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: LOGFLARE_API_KEY
+              value: ""
+            - name: LOGFLARE_URL
+              value: ""
+            - name: NEXT_PUBLIC_ENABLE_LOGS
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /api/profile
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.studio.resources | nindent 12 }}
+{{- end }}

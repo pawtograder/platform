@@ -1,0 +1,110 @@
+{{- if .Values.supavisor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.supavisor.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "supavisor") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: pool
+      port: {{ .Values.supavisor.service.port }}
+      targetPort: pool
+    - name: metrics
+      port: 4000
+      targetPort: metrics
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "supavisor") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.supavisor.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "supavisor") | nindent 4 }}
+spec:
+  replicas: {{ .Values.supavisor.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "supavisor") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "supavisor") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: supavisor
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.supavisor.image) }}
+          imagePullPolicy: {{ .Values.supavisor.image.pullPolicy }}
+          ports:
+            - name: pool
+              containerPort: {{ .Values.supavisor.service.port }}
+            - name: metrics
+              containerPort: 4000
+          env:
+            - name: PORT
+              value: "4000"
+            - name: PROXY_PORT_TRANSACTION
+              value: {{ .Values.supavisor.service.port | quote }}
+            - name: POOL_SIZE
+              value: {{ .Values.supavisor.poolSize | quote }}
+            - name: MAX_CLIENTS
+              value: {{ .Values.supavisor.maxClientConn | quote }}
+            - name: DB_HOST
+              value: {{ include "pawtograder.postgres.host" . }}
+            - name: DB_PORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: DB_NAME
+              value: {{ .Values.postgres.database | quote }}
+            - name: DB_USER
+              value: postgres
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            - name: SECRET_KEY_BASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: VAULT_ENC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: API_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: METRICS_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: REGION
+              value: local
+            - name: ERL_AFLAGS
+              value: "-proto_dist inet_tcp"
+          readinessProbe:
+            tcpSocket:
+              port: pool
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.supavisor.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.supavisor)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.supavisor)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

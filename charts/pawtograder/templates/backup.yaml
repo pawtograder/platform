@@ -1,0 +1,70 @@
+{{- if and .Values.postgres.enabled .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "backup") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "backup") | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+          {{- include "pawtograder.imagePullSecrets" . | nindent 10 }}
+          containers:
+            - name: backup
+              image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.backup.image) }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -euo pipefail
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  FILE="/tmp/pawtograder-${TS}.sql.gz"
+                  pg_dump --no-owner --no-acl --clean --if-exists | gzip > "$FILE"
+                  apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+                  curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+                  chmod +x /usr/local/bin/mc
+                  mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
+                  mc cp "$FILE" "s3/${S3_BUCKET}/$(basename $FILE)"
+                  mc ilm rule add --expiry-days {{ .Values.backup.retentionDays }} "s3/${S3_BUCKET}" || true
+              env:
+                - name: PGHOST
+                  value: {{ include "pawtograder.postgres.host" . }}
+                - name: PGPORT
+                  value: {{ .Values.postgres.service.port | quote }}
+                - name: PGDATABASE
+                  value: {{ .Values.postgres.database | quote }}
+                - name: PGUSER
+                  value: postgres
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.postgres }}
+                      key: POSTGRES_PASSWORD
+                - name: S3_ENDPOINT
+                  value: {{ .Values.backup.s3.endpoint | quote }}
+                - name: S3_BUCKET
+                  value: {{ .Values.backup.s3.bucket | quote }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.s3 }}
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.names.s3 }}
+                      key: AWS_SECRET_ACCESS_KEY
+{{- end }}

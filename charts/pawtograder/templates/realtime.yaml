@@ -1,0 +1,185 @@
+{{- if .Values.realtime.enabled }}
+# Headless Service for BEAM clustering — pods discover peers via DNS A records.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.realtime.headless" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "realtime") | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: epmd
+      port: 4369
+      targetPort: epmd
+    - name: erlang
+      port: 9000
+      targetPort: erlang
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "realtime") | nindent 4 }}
+---
+# Client-facing Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.realtime.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "realtime") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.realtime.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "realtime") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pawtograder.realtime.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "realtime") | nindent 4 }}
+spec:
+  serviceName: {{ include "pawtograder.realtime.headless" . }}
+  replicas: {{ .Values.realtime.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "realtime") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "realtime") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: realtime
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.realtime.image) }}
+          imagePullPolicy: {{ .Values.realtime.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.realtime.service.port }}
+            - name: epmd
+              containerPort: 4369
+            - name: erlang
+              containerPort: 9000
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: PORT
+              value: {{ .Values.realtime.service.port | quote }}
+            - name: DB_HOST
+              value: {{ include "pawtograder.postgres.host" . }}
+            - name: DB_PORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: DB_NAME
+              value: {{ .Values.postgres.database | quote }}
+            - name: DB_USER
+              value: supabase_admin
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            - name: DB_AFTER_CONNECT_QUERY
+              value: "SET search_path TO _realtime"
+            - name: DB_ENC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: SECRET_KEY_BASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            # API_JWT_SECRET secures Realtime's admin API and seeds the
+            # default tenant's HS256 fallback. User session JWTs (ES256) are
+            # verified against API_JWT_JWKS below.
+            - name: API_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: API_JWT_JWKS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_PUBLIC_JWKS
+            - name: APP_NAME
+              value: realtime
+            - name: FLY_ALLOC_ID
+              value: $(POD_NAME)
+            - name: FLY_APP_NAME
+              value: realtime
+            - name: ERL_AFLAGS
+              value: "-proto_dist inet_tcp"
+            # Clustering — discover peers via the headless Service's DNS.
+            - name: CLUSTER_POSTGRES
+              value: "true"
+            - name: DNS_NODES
+              value: "{{ include "pawtograder.realtime.headless" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+            - name: RLIMIT_NOFILE
+              value: "10000"
+            - name: REALTIME_IP_VERSION
+              value: IPv4
+            - name: MAX_HEADER_LENGTH
+              value: {{ .Values.realtime.maxHeaderLength | quote }}
+            - name: SEED_SELF_HOST
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /api/tenants/realtime-dev/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/tenants/realtime-dev/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.realtime.resources | nindent 12 }}
+      {{- if .Values.realtime.spreadAcrossNodes }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "realtime") | nindent 20 }}
+        {{- with (include "pawtograder.affinity" (dict "ctx" . "component" .Values.realtime)) }}
+        {{- /* note: per-component affinity overrides the spread block above */ -}}
+        {{- end }}
+      {{- else }}
+      {{- with (include "pawtograder.affinity" (dict "ctx" . "component" .Values.realtime)) }}
+      affinity:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.realtime)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.realtime)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

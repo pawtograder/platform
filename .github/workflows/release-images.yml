@@ -1,0 +1,231 @@
+name: Release images
+
+# Builds and pushes the three OCI images that the Helm chart consumes:
+#   - web              (Next.js)
+#   - edge-functions   (Deno runtime + supabase/functions/)
+#   - migrations       (postgres-client + supabase/migrations/)
+# and publishes the chart itself as an OCI artifact.
+#
+# Triggers:
+#   - push to main         → tag `main-<sha>` + `main-latest` (no chart push)
+#   - tag v*               → tag <version> + `latest`, plus chart push
+#   - workflow_dispatch    → manual, with optional hostname/version overrides
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      web_hostname:
+        description: "NEXT_PUBLIC_PAWTOGRADER_WEB_URL build arg (full https URL)"
+        required: false
+        default: "https://staging.pawtograder.net"
+      api_hostname:
+        description: "NEXT_PUBLIC_SUPABASE_URL build arg (full https URL)"
+        required: false
+        default: "https://api.staging.pawtograder.net"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  REPO_OWNER: ${{ github.repository_owner }}
+
+concurrency:
+  group: release-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_tag: ${{ steps.v.outputs.is_tag }}
+      tags: ${{ steps.v.outputs.tags }}
+      chart_version: ${{ steps.v.outputs.chart_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        name: Compute version + tag list
+        run: |
+          set -euo pipefail
+          chart_version=$(awk '/^version:/ {print $2; exit}' charts/pawtograder/Chart.yaml)
+          short_sha=${GITHUB_SHA:0:7}
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            is_tag=true
+            tags="${version},latest,sha-${short_sha}"
+          else
+            version="main-${short_sha}"
+            is_tag=false
+            tags="main-${short_sha},main-latest"
+          fi
+          echo "version=${version}"            | tee -a "$GITHUB_OUTPUT"
+          echo "is_tag=${is_tag}"              | tee -a "$GITHUB_OUTPUT"
+          echo "tags=${tags}"                  | tee -a "$GITHUB_OUTPUT"
+          echo "chart_version=${chart_version}" | tee -a "$GITHUB_OUTPUT"
+
+  build-web:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve hostnames
+        id: hosts
+        run: |
+          web="${{ inputs.web_hostname }}"
+          api="${{ inputs.api_hostname }}"
+          if [ -z "$web" ]; then web="https://staging.pawtograder.net"; fi
+          if [ -z "$api" ]; then api="https://api.staging.pawtograder.net"; fi
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/web:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            NEXT_PUBLIC_PAWTOGRADER_WEB_URL=${{ steps.hosts.outputs.web }}
+            NEXT_PUBLIC_SUPABASE_URL=${{ steps.hosts.outputs.api }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+            NEXT_PUBLIC_GITHUB_OAUTH_CLIENT_ID=${{ secrets.STAGING_GITHUB_OAUTH_CLIENT_ID }}
+            NEXT_PUBLIC_BUGSINK_DSN=${{ secrets.STAGING_BUGSINK_DSN }}
+            NEXT_PUBLIC_BUGSINK_HOST=${{ secrets.STAGING_BUGSINK_HOST }}
+            NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.STAGING_POSTHOG_KEY }}
+            NEXT_PUBLIC_POSTHOG_HOST=${{ secrets.STAGING_POSTHOG_HOST }}
+            NEXT_PUBLIC_POSTHOG_UI_HOST=${{ secrets.STAGING_POSTHOG_UI_HOST }}
+            NEXT_PUBLIC_ENABLE_SIGNUPS=false
+            NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
+            SENTRY_RELEASE=${{ needs.meta.outputs.version }}
+            SUPABASE_URL=${{ steps.hosts.outputs.api }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+      - name: Tag additional refs
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/web:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/web:${{ needs.meta.outputs.version }}
+          done
+
+  build-edge-functions:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push edge-functions image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/edge-functions/Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/edge-functions:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=edge-functions
+          cache-to: type=gha,scope=edge-functions,mode=max
+
+      - name: Tag additional refs
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/edge-functions:${{ needs.meta.outputs.version }}
+          done
+
+  build-migrations:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push migrations image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: charts/pawtograder/images/migrations/Dockerfile
+          push: true
+          tags: ${{ format('{0}/{1}/migrations:{2}', env.REGISTRY, env.REPO_OWNER, needs.meta.outputs.version) }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=migrations
+          cache-to: type=gha,scope=migrations,mode=max
+
+      - name: Tag additional refs
+        run: |
+          set -euo pipefail
+          for t in $(echo '${{ needs.meta.outputs.tags }}' | tr ',' ' '); do
+            [ "$t" = "${{ needs.meta.outputs.version }}" ] && continue
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${t} \
+              ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/migrations:${{ needs.meta.outputs.version }}
+          done
+
+  publish-chart:
+    needs: [meta, build-web, build-edge-functions, build-migrations]
+    if: needs.meta.outputs.is_tag == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Lint chart
+        run: helm lint charts/pawtograder
+
+      - name: Package chart
+        run: helm package charts/pawtograder --version ${{ needs.meta.outputs.chart_version }} --app-version ${{ needs.meta.outputs.version }}
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
+
+      - name: Push chart to OCI
+        run: |
+          set -euo pipefail
+          helm push pawtograder-${{ needs.meta.outputs.chart_version }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/charts
