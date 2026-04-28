@@ -70,7 +70,7 @@ jobs:
 
   build-web:
     needs: meta
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
 
@@ -132,7 +132,7 @@ jobs:
 
   build-edge-functions:
     needs: meta
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
 
@@ -169,7 +169,7 @@ jobs:
 
   build-migrations:
     needs: meta
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
 
