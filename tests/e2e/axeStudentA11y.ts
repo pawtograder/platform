@@ -217,7 +217,7 @@ export async function assertStudentPageAccessible(
   // intermediate opacity-blended values and flag color-contrast on text that
   // is fine once the animation settles. Snap everything to its final state
   // so the scan is deterministic.
-  await page.addStyleTag({
+  const animationFreezeStyle = await page.addStyleTag({
     content: `
       *, *::before, *::after {
         animation-duration: 0s !important;
@@ -238,19 +238,26 @@ export async function assertStudentPageAccessible(
     return builder;
   };
 
-  // @axe-core/playwright types against playwright-core's Page; cast for compatibility with test fixtures.
-  const tagBuilder = applyCommonConfig(
-    new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(options.tags ?? DEFAULT_WCAG_TAGS)
-  );
-  const tagResults = await tagBuilder.analyze();
+  let tagResults;
+  let ruleResults;
+  try {
+    // @axe-core/playwright types against playwright-core's Page; cast for compatibility with test fixtures.
+    const tagBuilder = applyCommonConfig(
+      new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withTags(options.tags ?? DEFAULT_WCAG_TAGS)
+    );
+    tagResults = await tagBuilder.analyze();
 
-  // Second pass: best-practice rules we want enforced (heading-order). axe's
-  // `withTags` filters out rules outside those tags, and `withRules` would
-  // *replace* the tag filter, so run a second scoped scan and merge.
-  const ruleBuilder = applyCommonConfig(
-    new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withRules(ADDITIONAL_RULES)
-  );
-  const ruleResults = await ruleBuilder.analyze();
+    // Second pass: best-practice rules we want enforced (heading-order). axe's
+    // `withTags` filters out rules outside those tags, and `withRules` would
+    // *replace* the tag filter, so run a second scoped scan and merge.
+    const ruleBuilder = applyCommonConfig(
+      new AxeBuilder({ page: page as unknown as PlaywrightCorePage }).withRules(ADDITIONAL_RULES)
+    );
+    ruleResults = await ruleBuilder.analyze();
+  } finally {
+    await animationFreezeStyle.evaluate((el) => (el as Element).remove()).catch(() => {});
+    await animationFreezeStyle.dispose().catch(() => {});
+  }
 
   const violations = [...(tagResults.violations ?? []), ...(ruleResults.violations ?? [])];
   if (violations.length === 0) return;
