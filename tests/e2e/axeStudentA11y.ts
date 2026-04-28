@@ -289,15 +289,12 @@ export async function assertPageHasLandmarks(page: Page, contextLabel?: string):
   const navCount = await navs.count();
   expect(navCount, `${prefix}page has at least one nav landmark`).toBeGreaterThan(0);
 
-  // Every nav landmark must have an accessible name (aria-label or aria-labelledby).
+  // Every nav landmark must expose a non-empty computed accessible name (covers
+  // aria-label, aria-labelledby resolution, and other naming sources; broken
+  // labelledby refs fail here).
   for (let i = 0; i < navCount; i++) {
     const nav = navs.nth(i);
-    const label = await nav.getAttribute("aria-label");
-    const labelledBy = await nav.getAttribute("aria-labelledby");
-    expect(
-      Boolean((label && label.trim()) || (labelledBy && labelledBy.trim())),
-      `${prefix}nav landmark #${i} has an accessible name (aria-label or aria-labelledby)`
-    ).toBe(true);
+    await expect(nav, `${prefix}nav landmark #${i} has an accessible name`).toHaveAccessibleName(/\S/);
   }
 }
 

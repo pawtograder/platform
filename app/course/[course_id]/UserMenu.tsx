@@ -262,7 +262,13 @@ const DropBoxAvatar = ({
           <Menu.Root positioning={{ placement: "bottom" }}>
             <Text fontWeight={"700"}>{avatarType} Avatar</Text>
             <Menu.Trigger asChild>
-              <Button background="transparent" height="100%" width="100%" borderRadius={"full"}>
+              <Button
+                aria-label="Edit avatar"
+                background="transparent"
+                height="100%"
+                width="100%"
+                borderRadius={"full"}
+              >
                 <Avatar.Root
                   colorPalette="gray"
                   width="100px"
@@ -276,7 +282,7 @@ const DropBoxAvatar = ({
                   onMouseEnter={() => setIsHovered(true)}
                   onMouseLeave={() => setIsHovered(false)}
                 >
-                  <Avatar.Image src={avatarLink || undefined} alt={`${avatarType} avatar preview`} />
+                  <Avatar.Image src={avatarLink || undefined} alt="" />
                   <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
                 </Avatar.Root>
                 {isHovered && (
