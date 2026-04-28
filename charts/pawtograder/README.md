@@ -3,20 +3,20 @@
 Self-hosted [pawtograder](https://pawtograder.net) — bundles the Next.js web
 app together with the Supabase services it depends on:
 
-| Component       | Image                          | Default replicas |
-|-----------------|--------------------------------|------------------|
-| postgres        | `supabase/postgres:17`         | 1 (StatefulSet)  |
-| supavisor       | `supabase/supavisor`           | 2                |
-| gotrue (auth)   | `supabase/gotrue`              | 2                |
-| postgrest       | `postgrest/postgrest`          | 2                |
-| realtime        | `supabase/realtime` (clustered)| 3 (StatefulSet)  |
-| storage-api     | `supabase/storage-api`         | 2                |
-| imgproxy        | `darthsim/imgproxy`            | 1                |
-| postgres-meta   | `supabase/postgres-meta`       | 1                |
-| studio          | `supabase/studio`              | 1                |
-| edge-runtime    | `ghcr.io/pawtograder/edge-functions` (built per release) | 2 |
-| kong            | `kong:3`                       | 2                |
-| web (Next.js)   | `ghcr.io/pawtograder/web` (built per release) | 2 |
+| Component     | Image                                                    | Default replicas |
+| ------------- | -------------------------------------------------------- | ---------------- |
+| postgres      | `supabase/postgres:17`                                   | 1 (StatefulSet)  |
+| supavisor     | `supabase/supavisor`                                     | 2                |
+| gotrue (auth) | `supabase/gotrue`                                        | 2                |
+| postgrest     | `postgrest/postgrest`                                    | 2                |
+| realtime      | `supabase/realtime` (clustered)                          | 3 (StatefulSet)  |
+| storage-api   | `supabase/storage-api`                                   | 2                |
+| imgproxy      | `darthsim/imgproxy`                                      | 1                |
+| postgres-meta | `supabase/postgres-meta`                                 | 1                |
+| studio        | `supabase/studio`                                        | 1                |
+| edge-runtime  | `ghcr.io/pawtograder/edge-functions` (built per release) | 2                |
+| kong          | `kong:3`                                                 | 2                |
+| web (Next.js) | `ghcr.io/pawtograder/web` (built per release)            | 2                |
 
 The chart is environment-agnostic. Cluster-specific concerns (ingress class,
 storage class, node selectors, secret backend) come from a values overlay you
@@ -51,15 +51,15 @@ SOPS-encrypted manifests) and set `secrets.create=false`.
 
 ## Required Secrets when `secrets.create=false`
 
-| Secret name (default)         | Required keys                                                |
-|-------------------------------|--------------------------------------------------------------|
-| `pawtograder-postgres`        | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                  |
-| `pawtograder-jwt`             | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`                 |
-| `pawtograder-smtp`            | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (if SMTP) |
-| `pawtograder-s3`              | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage) |
-| `pawtograder-web`             | Optional. Mounted via envFrom into the web pod. Use this for |
-|                               | GitHub App, Discord, Canvas, LLM credentials, etc.           |
-| `pawtograder-edge-functions`  | Optional. Same idea, mounted into the edge-runtime pod.      |
+| Secret name (default)        | Required keys                                                |
+| ---------------------------- | ------------------------------------------------------------ |
+| `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                  |
+| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`                 |
+| `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (if SMTP) |
+| `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage) |
+| `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for |
+|                              | GitHub App, Discord, Canvas, LLM credentials, etc.           |
+| `pawtograder-edge-functions` | Optional. Same idea, mounted into the edge-runtime pod.      |
 
 `ANON_KEY` and `SERVICE_ROLE_KEY` are JWTs signed with `JWT_SECRET`. Generate
 them using the helper script in `scripts/generate-jwt.ts` (or any JWT library)
@@ -131,8 +131,8 @@ component. Common knobs:
 ```yaml
 global:
   hostname: pawtograder.example.com
-  apiOnSeparateHost: true               # api.<hostname> vs path-based
-  nodeSelector: {}                      # default placement for every pod
+  apiOnSeparateHost: true # api.<hostname> vs path-based
+  nodeSelector: {} # default placement for every pod
   tolerations: []
   imagePullSecrets: []
 
@@ -151,7 +151,7 @@ postgres:
 
 realtime:
   replicas: 3
-  spreadAcrossNodes: true               # podAntiAffinity hint
+  spreadAcrossNodes: true # podAntiAffinity hint
 ```
 
 ## Compatibility

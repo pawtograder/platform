@@ -30,18 +30,10 @@ const APIKEYS_KID = "pawtograder-apikeys-v1";
 
 function b64url(input: Buffer | string): string {
   const buf = typeof input === "string" ? Buffer.from(input, "utf-8") : input;
-  return buf
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
+  return buf.toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
-function signHS256(
-  secret: string,
-  payload: Record<string, unknown>,
-  kid: string,
-): string {
+function signHS256(secret: string, payload: Record<string, unknown>, kid: string): string {
   const header = { alg: "HS256", typ: "JWT", kid };
   const headerEncoded = b64url(JSON.stringify(header));
   const payloadEncoded = b64url(JSON.stringify(payload));
@@ -52,7 +44,7 @@ function signHS256(
 
 // --- ES256 (P-256) keypair, exported as JWKs ---
 const { privateKey, publicKey } = generateKeyPairSync("ec", {
-  namedCurve: "P-256",
+  namedCurve: "P-256"
 });
 const privateJwk = privateKey.export({ format: "jwk" }) as Record<string, string>;
 const publicJwk = publicKey.export({ format: "jwk" }) as Record<string, string>;
@@ -63,14 +55,14 @@ const ecPrivate = {
   kid: SESSION_KID,
   alg: "ES256",
   use: "sig",
-  key_ops: ["sign", "verify"],
+  key_ops: ["sign", "verify"]
 };
 const ecPublic = {
   ...publicJwk,
   kid: SESSION_KID,
   alg: "ES256",
   use: "sig",
-  key_ops: ["verify"],
+  key_ops: ["verify"]
 };
 
 // --- HS256 oct key (for the long-lived API keys) ---
@@ -81,7 +73,7 @@ const octPublic = {
   kid: APIKEYS_KID,
   alg: "HS256",
   use: "sig",
-  key_ops: ["verify"],
+  key_ops: ["verify"]
 };
 
 // --- The two artefacts components consume ---
@@ -95,15 +87,11 @@ const publicJwks = JSON.stringify({ keys: [ecPublic, octPublic] });
 const now = Math.floor(Date.now() / 1000);
 const exp = now + TEN_YEARS_SECONDS;
 
-const anonKey = signHS256(
-  hsSecret,
-  { iss: "supabase", ref: "pawtograder", role: "anon", iat: now, exp },
-  APIKEYS_KID,
-);
+const anonKey = signHS256(hsSecret, { iss: "supabase", ref: "pawtograder", role: "anon", iat: now, exp }, APIKEYS_KID);
 const serviceRoleKey = signHS256(
   hsSecret,
   { iss: "supabase", ref: "pawtograder", role: "service_role", iat: now, exp },
-  APIKEYS_KID,
+  APIKEYS_KID
 );
 
 // --- Output ---
@@ -111,15 +99,13 @@ const args = process.argv.slice(2);
 const mode: "plain" | "env" | "kv" | "helm" = args.includes("--env")
   ? "env"
   : args.includes("--helm-values")
-  ? "helm"
-  : args.includes("--kv")
-  ? "kv"
-  : "plain";
+    ? "helm"
+    : args.includes("--kv")
+      ? "kv"
+      : "plain";
 const kvPath = mode === "kv" ? args[args.indexOf("--kv") + 1] : null;
 if (mode === "kv" && !kvPath) {
-  console.error(
-    "--kv requires a path argument (e.g. kv/apps/pawtograder-staging/jwt)",
-  );
+  console.error("--kv requires a path argument (e.g. kv/apps/pawtograder-staging/jwt)");
   process.exit(2);
 }
 
@@ -147,9 +133,7 @@ if (mode === "env") {
   // bao kv put accepts @file or KEY=value pairs; large JSON values escape
   // poorly on a single shell line, so use stdin-based input.
   console.log(`# Pipe this script's --env output to bao via:`);
-  console.log(
-    `#   npx tsx scripts/GenerateJwtKeys.ts --env | bao kv put ${kvPath} -`,
-  );
+  console.log(`#   npx tsx scripts/GenerateJwtKeys.ts --env | bao kv put ${kvPath} -`);
   console.log(`# Or run individual puts:`);
   console.log(`bao kv put ${kvPath} \\`);
   console.log(`  JWT_SECRET='${hsSecret}' \\`);

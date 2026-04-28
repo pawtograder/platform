@@ -16,19 +16,17 @@ Deno.serve(async (req: Request) => {
   const serviceName = pathParts[0];
 
   if (!serviceName) {
-    return new Response(
-      JSON.stringify({ msg: "missing function name in request path" }),
-      { status: 400, headers: { "content-type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ msg: "missing function name in request path" }), {
+      status: 400,
+      headers: { "content-type": "application/json" }
+    });
   }
 
   const servicePath = `/home/deno/functions/${serviceName}`;
 
   try {
     const envVarsObj = Deno.env.toObject();
-    const envVars = Object.keys(envVarsObj).map(
-      (k) => [k, envVarsObj[k]] as [string, string],
-    );
+    const envVars = Object.keys(envVarsObj).map((k) => [k, envVarsObj[k]] as [string, string]);
 
     // @ts-ignore EdgeRuntime is provided by supabase/edge-runtime
     const worker = await EdgeRuntime.userWorkers.create({
@@ -37,15 +35,15 @@ Deno.serve(async (req: Request) => {
       workerTimeoutMs: 5 * 60 * 1000,
       noModuleCache: false,
       importMapPath: null,
-      envVars,
+      envVars
     });
 
     return await worker.fetch(req);
   } catch (e) {
     console.error(`error invoking ${serviceName}:`, e);
-    return new Response(
-      JSON.stringify({ msg: (e as Error).toString() }),
-      { status: 500, headers: { "content-type": "application/json" } },
-    );
+    return new Response(JSON.stringify({ msg: (e as Error).toString() }), {
+      status: 500,
+      headers: { "content-type": "application/json" }
+    });
   }
 });
