@@ -2404,6 +2404,17 @@ export default function GradebookTable() {
     return { sortVal, filterVal };
   }, [gradebookColumns, gradebookDataEpoch, gradebookController]);
 
+  // Mirror scoreMaps into a ref so the accessor/filter closures baked into
+  // our `columns` memo can always read the latest values without forcing a
+  // ColumnDef rebuild on every gradebook data tick. Rebuilding `columns`
+  // makes useReactTable regenerate every header object, which under some
+  // conditions causes DraggableGradebookHeaderBox (keyed by `header.id`) to
+  // unmount and remount its DOM subtree — and any in-flight playwright click
+  // on the "Column options" button gets "element detached" mid-action. See
+  // tests/e2e/gradebook.test.tsx Move Left/Move Right flake.
+  const scoreMapsRef = useRef(scoreMaps);
+  scoreMapsRef.current = scoreMaps;
+
   const isInstructor = useIsInstructor();
   const isRefetching = useGradebookRefetchStatus();
   const isGradebookDataReady = useIsGradebookDataReady();
@@ -2817,7 +2828,9 @@ export default function GradebookTable() {
         cols.push({
           id: `grade_${col.id}`,
           header: col.name,
-          accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? null,
+          // Read scoreMaps via ref so this ColumnDef stays referentially
+          // stable across gradebookDataEpoch ticks — see scoreMapsRef.
+          accessorFn: (row) => scoreMapsRef.current.sortVal.get(row.id)?.get(col.id) ?? null,
           sortingFn: (rowA, rowB, columnId) =>
             compareGradeColumnSortValues(rowA.getValue(columnId), rowB.getValue(columnId)),
           cell: ({ row }) => {
@@ -2825,7 +2838,7 @@ export default function GradebookTable() {
           },
           enableColumnFilter: true,
           filterFn: (row, columnId, filterValue) => {
-            const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? null;
+            const fv = scoreMapsRef.current.filterVal.get(row.original.id)?.get(col.id) ?? null;
             return gradebookScoreFilterMatches(filterValue, gradebookScoreToFilterRawString(fv));
           },
           enableSorting: true
@@ -2839,7 +2852,7 @@ export default function GradebookTable() {
           cols.push({
             id: `grade_${col.id}`,
             header: col.name,
-            accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? null,
+            accessorFn: (row) => scoreMapsRef.current.sortVal.get(row.id)?.get(col.id) ?? null,
             sortingFn: (rowA, rowB, columnId) =>
               compareGradeColumnSortValues(rowA.getValue(columnId), rowB.getValue(columnId)),
             cell: ({ row }) => {
@@ -2847,7 +2860,7 @@ export default function GradebookTable() {
             },
             enableColumnFilter: true,
             filterFn: (row, columnId, filterValue) => {
-              const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? null;
+              const fv = scoreMapsRef.current.filterVal.get(row.original.id)?.get(col.id) ?? null;
               return gradebookScoreFilterMatches(filterValue, gradebookScoreToFilterRawString(fv));
             },
             enableSorting: true,
@@ -2869,13 +2882,26 @@ export default function GradebookTable() {
     collapsedGroups,
     findBestColumnToShow,
     classSections?.data,
-    labSections,
-    scoreMaps
+    labSections
+    // intentionally NOT depending on `scoreMaps`: accessorFn/filterFn read
+    // it via scoreMapsRef. Row-model invalidation on data ticks is driven by
+    // `studentProfiles` getting a fresh array reference per epoch (see memo
+    // below), which makes TanStack re-run accessor/filter/sort closures.
   ]);
 
+  // NOTE: depending on `gradebookDataEpoch` here is load-bearing. Our `columns`
+  // memo intentionally omits `scoreMaps` from its deps (see scoreMapsRef
+  // comment above) so ColumnDef objects stay stable across data ticks. But
+  // TanStack Table caches its sorted/filtered row models keyed by the
+  // `(data, columns)` references, so with both stable across ticks the
+  // accessor/filter closures never re-run and a sorted/filtered view stays
+  // stale after a realtime score update. Returning a fresh array reference
+  // per epoch tick invalidates the row-model memos without rebuilding any
+  // ColumnDef — accessors then run with the live scoreMapsRef values.
   const studentProfiles = useMemo(() => {
     return students.map((student) => student.profiles);
-  }, [students]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [students, gradebookDataEpoch]);
   // Table instance
   const table = useReactTable({
     data: studentProfiles,

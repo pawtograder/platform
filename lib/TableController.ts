@@ -647,6 +647,29 @@ export default class TableController<
   private _channelsCompletedInitialConnection: Set<string> = new Set(); // Track which channels have completed their first connection
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
   private _lastFetchTimestamp: number = 0;
+  /**
+   * True when this controller hydrated from server-provided `initialData`
+   * (skipping the in-browser initial fetch). In that case, rows inserted
+   * between the SSR fetch and the realtime channel join are NOT delivered
+   * to us — broadcasts only fire for events after the channel is in the
+   * "joined" state. We catch up by issuing a since-watermark refetch the
+   * first time a relevant channel reaches "joined". Set to false once that
+   * catch-up has been kicked off so we don't repeat it.
+   */
+  private _needsCatchUpAfterInitialDataHydration: boolean = false;
+  /**
+   * True once the post-SSR catch-up refetch has been kicked off (from either
+   * the construction-time "already-joined" branch or the
+   * `_handleConnectionStatusChange` first-channel-join branch). Once set, the
+   * connection-status path becomes dormant for the rest of this controller's
+   * lifetime — it must NOT re-fire on later reconnects/channel rejoins. The
+   * catch-up is a one-shot SSR-recovery mechanism, distinct from the
+   * periodic-reconnect refetch (which has its own auto-refetch gate further
+   * down in `_handleConnectionStatusChange`). Without this gate, lab-sections
+   * pages with ~6 controllers would each re-fetch on every status change,
+   * cascading into wall-clock that page navigation can't budget for.
+   */
+  private _postSsrCatchUpDone: boolean = false;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
   /**
@@ -705,7 +728,19 @@ export default class TableController<
     await this.readyPromise;
     if (this._isRefetching) {
       return new Promise((resolve) => {
-        this._refetchListeners.push(() => resolve());
+        // Self-removing listener: a plain `.push(() => resolve())` would leak
+        // because `_refetchListeners` is otherwise only pruned by the
+        // unsubscribe closure returned from `subscribeToRefetchStatus`. Every
+        // concurrent caller of `refetchAll()`/`update()`/`catchUpSinceWatermark()`
+        // hits this path on an in-flight collision, so without removal the
+        // listener array grows unboundedly on long-lived controllers (e.g.
+        // chatty pages like reviews/lab-sections), permanently fanning out
+        // every future refetch-status notification.
+        const listener = () => {
+          this._refetchListeners = this._refetchListeners.filter((l) => l !== listener);
+          resolve();
+        };
+        this._refetchListeners.push(listener);
       });
     }
     return Promise.resolve();
@@ -1222,7 +1257,16 @@ export default class TableController<
         `TableController for table '${this._table}' is closed. Cannot call refetchAll(). This indicates a stale reference is being used.`
       );
     }
+    // If a refetch is already in flight (e.g. triggered by a realtime
+    // reconnection or another caller), don't kick off a duplicate — but DO
+    // wait for it to complete. Returning immediately here defeats the whole
+    // point of `await refetchAll()` as a "data ready" signal: callers like
+    // FinalizeSubmissionEarly rely on the await to gate a success toast that
+    // means "the new rows are now in the cache." Without this wait, they
+    // race the toast against the still-in-flight refetch, and downstream
+    // tests/UI flicker between empty and populated states.
     if (this._isRefetching) {
+      await this.waitForRefetchToComplete();
       return;
     }
     if (Date.now() - this._lastRefetchAllTime < 3000) {
@@ -1231,6 +1275,38 @@ export default class TableController<
     this._lastRefetchAllTime = Date.now();
 
     await this._refetchAllData();
+  }
+
+  /**
+   * Public method to run an incremental since-watermark catch-up refetch.
+   *
+   * Useful for consumers that need to guarantee fresh data at a specific
+   * UI moment (e.g., a modal opening) without paying the cost of a full
+   * refetch. This is much cheaper than `refetchAll()` because it only
+   * fetches rows whose `updated_at > _maxUpdatedAtMs`. It is also safe to
+   * call frequently: there is no rate limit (unlike `refetchAll`), and
+   * concurrent calls are coalesced here by piggybacking on any in-flight
+   * refetch via `waitForRefetchToComplete()`.
+   *
+   * Falls back to no-op if the table has no `updated_at` watermark or if
+   * the controller is closed.
+   */
+  async catchUpSinceWatermark(): Promise<void> {
+    if (this._closed) return;
+    if (this._maxUpdatedAtMs == null) return;
+    if (!this._shouldEnableAutoRefetch()) return;
+    // If a refetch is already in flight (e.g. a reconnection-driven
+    // `_refetchSinceMaxUpdatedAt` or a `refetchAll`), don't issue a second
+    // `gt("updated_at", …)` query against the same watermark. Two concurrent
+    // refetches would both call `_addRow`/`_updateRow`/`_bumpMaxUpdatedAtFrom`
+    // and double-fire `_listDataListeners`, producing half-applied snapshots
+    // and a clobbered watermark. Mirror the guard in `_refetchAllData`:
+    // piggyback on the in-flight refetch and return.
+    if (this._isRefetching) {
+      await this.waitForRefetchToComplete();
+      return;
+    }
+    await this._refetchSinceMaxUpdatedAt();
   }
 
   /**
@@ -1327,6 +1403,10 @@ export default class TableController<
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
     // Track which relevant channels have reconnected
     const relevantReconnections: string[] = [];
+    // Track whether at least one relevant channel reached "joined" for the
+    // first time during this status update. We use this to drive the
+    // initial-data catch-up refetch (see _needsCatchUpAfterInitialDataHydration).
+    let relevantInitialJoinHappened = false;
 
     for (const channel of status.channels) {
       if (!this._isChannelRelevantForTable(channel)) {
@@ -1351,10 +1431,47 @@ export default class TableController<
       // Mark channel as having completed initial connection once it reaches "joined" state for the first time
       if (isChannelNowConnected && !hadCompletedInitialConnection) {
         this._channelsCompletedInitialConnection.add(channel.name);
+        relevantInitialJoinHappened = true;
       }
 
       // Update tracked state
       this._lastChannelStates.set(channel.name, channel.state);
+    }
+
+    // First-time channel join after hydrating from initialData: rows that
+    // were INSERTed between the SSR fetch and channel-join are not delivered
+    // by realtime broadcasts (those only cover events after we joined). Run
+    // a refetch to catch them. For tables with `updated_at`, _refetchAllData
+    // does a cheap since-watermark refetch; for tables without (e.g.
+    // rubric_checks/rubrics/rubric_criteria), it falls back to a full
+    // refetch — which is exactly what's needed when the SSR cache was stale
+    // at hydration time. We deliberately bypass `_shouldEnableAutoRefetch()`
+    // here because that gate is meant to suppress *periodic reconnect*
+    // refetches on tables without watermarks, not the one-shot post-SSR
+    // catch-up. Skipping the catch-up for these tables produced a flake:
+    // the SSR cache for `rubric_checks:${assignment_id}:staff` could return
+    // an empty/stale snapshot if the cache was populated before assignment
+    // setup completed, and without catch-up the rubricChecksController stayed
+    // empty forever, making `useRubricCriteriaInstances` filter out applied
+    // global checks (Self Review Check 2 region never mounted in CI).
+    //
+    // Crucially this branch is gated by `!_postSsrCatchUpDone` so it fires
+    // EXACTLY ONCE per controller lifetime — never on later reconnects or
+    // channel rejoins. Pages that mount many SSR-hydrated controllers (e.g.
+    // lab-sections w/ ~6) would otherwise stack one full refetch per
+    // controller per status change, blowing the navigation wall-clock.
+    if (
+      relevantInitialJoinHappened &&
+      this._needsCatchUpAfterInitialDataHydration &&
+      !this._postSsrCatchUpDone &&
+      this._ready &&
+      !this._closed
+    ) {
+      this._needsCatchUpAfterInitialDataHydration = false;
+      this._postSsrCatchUpDone = true;
+      // Fire and forget — _refetchAllData internally guards against
+      // overlapping refetches.
+      void this._refetchAllData();
     }
 
     // Only refetch if a relevant channel has reconnected (not initial connection)
@@ -1528,6 +1645,12 @@ export default class TableController<
         if (initialData) {
           // Use pre-loaded data from server (skip initial fetch)
           dataToLoad = initialData;
+          // We did not hit the database from the browser yet, so we have no
+          // guarantee that initialData contains rows inserted just before
+          // page load (cache invalidation might still be in flight). Schedule
+          // a since-watermark catch-up refetch after the realtime channel
+          // joins — see _handleConnectionStatusChange.
+          this._needsCatchUpAfterInitialDataHydration = true;
         } else {
           // Fetch data from database
           dataToLoad = await this._fetchInitialData(loadEntireTable);
@@ -1617,6 +1740,36 @@ export default class TableController<
           }
           // Don't call listener(undefined) - let the hook keep its initial value if we don't have data yet
         });
+        // If we hydrated from initialData AND every relevant channel is
+        // already joined at construction time (subscribeToStatus only fires
+        // on *changes*, so the listener won't be invoked when the channel was
+        // pre-joined by another consumer), kick off the catch-up immediately.
+        // This covers cases like multiple lab-section controllers in the same
+        // page sharing a single class:staff channel — the second/third
+        // controllers find the channel already joined. Bypassing
+        // `_shouldEnableAutoRefetch()` here matches the rationale in
+        // _handleConnectionStatusChange: this is a one-shot post-SSR
+        // catch-up, not a periodic reconnect refetch. We also set
+        // `_postSsrCatchUpDone` so the connection-status path stays dormant
+        // even if a later channel transition would otherwise trigger it.
+        if (
+          this._needsCatchUpAfterInitialDataHydration &&
+          !this._postSsrCatchUpDone &&
+          this._lastChannelStates.size > 0 &&
+          this._areRelevantChannelsConnected()
+        ) {
+          this._needsCatchUpAfterInitialDataHydration = false;
+          this._postSsrCatchUpDone = true;
+          // Mark each already-joined relevant channel so subsequent state
+          // changes are correctly classified as reconnections rather than
+          // first-time joins.
+          for (const [name, state] of this._lastChannelStates) {
+            if (state === "joined") {
+              this._channelsCompletedInitialConnection.add(name);
+            }
+          }
+          void this._refetchAllData();
+        }
         resolve();
       } catch (error) {
         if (!this._closed) {
@@ -2281,11 +2434,37 @@ export default class TableController<
 
   private _nonExistantKeys: Set<IDType> = new Set();
   private async _maybeRefetchKey(id: IDType) {
-    if (!this._ready || !this._autoFetchMissingRows) {
+    if (!this._autoFetchMissingRows) {
       return;
     }
     if (this._nonExistantKeys.has(id)) {
       return;
+    }
+
+    // If the controller hasn't completed its initial fetch yet, wait for it.
+    // The initial fetch may include this row, in which case we don't need to
+    // issue a per-row refetch. Without this wait, callers that arrive before
+    // _ready (e.g. a route navigation that mounts a detail page before the
+    // course-wide TableController has loaded) silently get `undefined`
+    // forever — _maybeRefetchKey used to early-return when !_ready, and the
+    // ready-transition only fires listeners for rows already present in
+    // _rows. The result was the discussion thread heading would
+    // intermittently never paint until reload.
+    if (!this._ready) {
+      try {
+        await this._readyPromise;
+      } catch {
+        return;
+      }
+      if (this._closed) return;
+      // After the initial fetch, the row may now be present; if so, no
+      // single-row refetch is needed. Listeners attached via getById() will
+      // have been notified by the ready-transition fan-out (see the
+      // _readyPromise resolver).
+      const existing = this._rows.find((row) => (row as ResultOne & { id: IDType }).id === id);
+      if (existing) {
+        return existing as unknown as ResultOne;
+      }
     }
 
     this._nonExistantKeys.add(id);

@@ -89,11 +89,29 @@ export default function FinalizeSubmissionEarly({
         });
         return;
       }
-      reviewAssignments.refetchAll();
+      // The submission *is* finalized at this point — the RPC committed the
+      // state change. Anything that fails after this is post-success cache
+      // refresh; it must not surface as a "Could not finalize submission"
+      // error or the user will think the action failed and retry.
       toaster.success({
         title: "Submission finalized",
         description: "Your submission time is set. You can continue with self-review if your course uses it."
       });
+
+      // Refresh the review_assignments controller so the self-review row
+      // created by finalize_submission_early is in cache before the UI
+      // renders the "Complete Self Review" button. Failures here are
+      // non-fatal (the row will arrive via realtime or the next page load).
+      try {
+        await reviewAssignments.refetchAll();
+      } catch (refetchErr) {
+        console.warn("Submission finalized, but reviewAssignments refetch failed:", refetchErr);
+        toaster.create({
+          type: "warning",
+          title: "Self-review may take a moment to appear",
+          description: "Your submission was finalized. If the self-review button doesn't show up, refresh the page."
+        });
+      }
     } catch (err) {
       console.error("Unexpected error finalizing submission:", err);
       toaster.error({

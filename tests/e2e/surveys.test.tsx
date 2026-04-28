@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import { createClass, createUsersInClass, getAuthTokenForUser, loginAsUser, supabase } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];

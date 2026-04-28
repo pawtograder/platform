@@ -142,6 +142,16 @@ export function useAllStudentRoles() {
       });
     });
     setRoles(data.filter((r) => r.role === "student" && !r.disabled));
+    // Consumers of this hook (e.g., the bulk/create-group modals) need an
+    // up-to-the-second roster: students enrolled by the same instructor
+    // moments earlier (via admin/SIS sync) must be selectable without a
+    // page reload. The TableController's first-channel-join catch-up
+    // (lib/TableController.ts) covers initial-data hydration, but it
+    // doesn't help if (a) the catch-up was raced by an in-flight full
+    // refetch and dropped, or (b) Next.js cache invalidation arrived after
+    // the SSR fetch. A cheap since-watermark catch-up at hook mount
+    // closes that gap with one `gt(updated_at, watermark)` query.
+    void controller.catchUpSinceWatermark();
     return unsubscribe;
   }, [controller]);
   return roles;

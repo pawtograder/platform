@@ -14,7 +14,7 @@ import {
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let instructor: TestingUser | undefined;

@@ -24,7 +24,7 @@ import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser, supabase } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers

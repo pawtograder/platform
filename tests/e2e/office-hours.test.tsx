@@ -13,7 +13,7 @@ import {
   TestingUser
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -115,6 +115,10 @@ test.describe("Office Hours", () => {
     await argosScreenshot(page, "Office Hours - Submit a Private Request");
     await page.getByRole("button", { name: "Submit Request" }).click();
 
+    // newRequestForm.tsx awaits helpRequests.create() then router.push() to
+    // /office-hours/{queue_id}/{request_id}. The router.push must land — if
+    // it doesn't, the user is stuck on the form (production bug).
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
     //Add a comment on it
     await page.getByRole("textbox", { name: "Type your message" }).click();
@@ -131,6 +135,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(HELP_REQUEST_MESSAGE_1);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
 
     //Add a comment on it

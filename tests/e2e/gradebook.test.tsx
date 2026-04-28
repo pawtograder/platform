@@ -19,7 +19,7 @@ import {
 import { assertStudentPageAccessible } from "./axeStudentA11y";
 // removed unused import
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let students: TestingUser[] = [];
@@ -116,6 +116,31 @@ async function waitForVirtualizerIdle(page: Page) {
     },
     { polling: "raf", timeout: 2000 }
   );
+}
+
+// `gradebook-cell-pulse` is the className applied to the calculator icon a
+// gradebookCell.tsx renders while `studentGradebookColumn.is_recalculating`
+// is true (see app/course/[course_id]/manage/gradebook/gradebookCell.tsx).
+// Each is_recalculating flip toggles the cell's children, which combined with
+// realtime row updates causes the virtualizer to remount the cell — and
+// remounts in the middle of waitForStableLocator's two boundingBox samples
+// produce its "Timed out waiting for stable locator box" flake. Block until
+// no cell is currently recalculating before sampling cell geometry.
+async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000) {
+  // Three states are possible: (a) no pulse elements at all — nothing
+  // was recalculating; (b) some existed and all transitioned to hidden;
+  // (c) at least one stayed visible past timeoutMs — recalculation is
+  // genuinely stuck and we want that to surface as a real failure, not
+  // a silent pass. Earlier we wrapped the whole waitFor in `.catch(() =>
+  // {})`, which folded (c) into "success" and masked the diagnostic.
+  // Then we narrowed to `.first()` only, which folds "first row idle but
+  // others still pulsing" into success. Now we wait until the *full
+  // set* drains, so partial-idle never reports as fully idle.
+  const pulses = page.locator(".gradebook-cell-pulse");
+  if ((await pulses.count()) === 0) return;
+  await page.waitForFunction(() => document.querySelectorAll(".gradebook-cell-pulse").length === 0, {
+    timeout: timeoutMs
+  });
 }
 
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
@@ -504,7 +529,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
       throw new Error(`Failed to get final gradebook column: ${finalGradebookColumnError.message}`);
     }
 
-    //Wait for gradebook to finish updating with the private final grade
+    // Wait for gradebook to finish updating with the private final grade.
+    // The final-grade column is calculated from average-assignments, which
+    // depends on the code-walk column. The recalculation pipeline is async
+    // (DB → pg_net → edge function); just poll the result.
     await expect(async () => {
       const { data: privateRecord, error: privateError } = await supabase
         .from("gradebook_column_students")
@@ -518,7 +546,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
       }
       expect(privateRecord?.score).toBe(51.95);
-    }).toPass({ timeout: 60_000 });
+    }).toPass({ timeout: 120_000 });
 
     // Public record may lag behind private due to async recalculation — poll separately
     await expect(async () => {
@@ -734,20 +762,34 @@ test.describe("Gradebook Page - Comprehensive", () => {
   test("Issue #533: instructor can enter a decimal score in a manual gradebook cell", async ({ page }) => {
     const studentName = students[0].private_profile_name;
     await waitForVirtualizerIdle(page);
+    // Wait for the initial recalculation burst to drain. Each is_recalculating
+    // flip remounts the cell's children, defeating waitForStableLocator's
+    // two-boundingBox stability check.
+    await waitForGradebookRecalculationsIdle(page);
     const getPartCell = () => getGridcellInRow(page, studentName, "Participation");
-    const partCell = await waitForStableLocator(page, getPartCell);
+    // Even with recalculations idle, the virtualizer can briefly remount cells
+    // on realtime row updates — keep the wide stability window.
+    const partCell = await waitForStableLocator(page, getPartCell, 60_000);
     await partCell.click();
     const scoreInput = page.locator('input[name="score"]');
     await scoreInput.fill("50.5");
     await expect(scoreInput).toHaveValue("50.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
+    // Wait for the editor popover to fully close before reopening; otherwise
+    // the next click lands on the open popover instead of the cell, the
+    // restore Update fires against the stale 50.5 form, and the cell never
+    // moves to 84.5.
+    await expect(scoreInput).toBeHidden();
     await expect(partCell).toHaveText(/50\.5/);
 
     // Restore original value so subsequent serial tests see the expected score
     await partCell.click();
     const restoreInput = page.locator('input[name="score"]');
+    await expect(restoreInput).toBeVisible();
     await restoreInput.fill("84.5");
+    await expect(restoreInput).toHaveValue("84.5");
     await page.getByRole("button", { name: /^Update$/ }).click();
+    await expect(restoreInput).toBeHidden();
     await expect(partCell).toHaveText(/84\.5/);
   });
 
@@ -1069,7 +1111,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByTestId("expression-builder-overlay")).toBeHidden();
 
     await addDialog.getByRole("button", { name: /^Cancel$/ }).click();
-    await expect(addDialog).toBeHidden();
+    // The Chakra dialog flips data-state="closed" the instant the close
+    // dispatches, but `toBeHidden` waits for the bounding box to collapse,
+    // which on webkit can lag the exit animation enough to time out.
+    await expect(addDialog).toHaveAttribute("data-state", "closed");
 
     // Sanity: no column named "Validated Column" leaked into the DB.
     const { data: leaked } = await supabase
@@ -1551,9 +1596,51 @@ test.describe("Gradebook column reorder (issue #531)", () => {
 
     await waitForVirtualizerIdle(page);
 
-    await headerCell.getByRole("button", { name: "Column options" }).click();
-    await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
-    await expect(page.getByText("Column moved right").first()).toBeVisible();
+    // After the Move Left, the column moved to a new index in the column
+    // virtualizer and its previous DOM node may be unmounted. Re-query the
+    // headerCell from the live thead, then scroll it into view (webkit and
+    // chromium both occasionally render the column off-screen).
+    const headerCellAfterMove = region
+      .locator("thead tr")
+      .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+      .locator("[data-col-id]")
+      .filter({ hasText: colName });
+    await headerCellAfterMove.scrollIntoViewIfNeeded();
+    await waitForVirtualizerIdle(page);
+    // The column header unmounts/remounts under realtime pressure: gradebook
+    // refetches caused by the prior Move Left can re-render the column
+    // virtualizer mid-click, detaching the "Column options" button or the
+    // chakra menu it controls. Retry the entire open+click sequence as a
+    // single unit so a transient detach doesn't fail the test. Each attempt
+    // re-resolves the locator (so the new mount is targeted), waits for
+    // virtualizer idle, opens the menu, and clicks Move Right. Any
+    // intermediate detach throws and we try again. The ultimate signal that
+    // the click succeeded is the "Column moved right" toast (matching how
+    // Move Left works above), and the DB sort_order assertion that follows.
+    await expect(async () => {
+      // If a previous attempt's Move Right click already landed in the DB
+      // (sort_order back to original) but the toast assertion timed out
+      // — say a realtime-driven re-render detached the toast region —
+      // a second click would double-move the column and break the final
+      // sort_order assertion below. Short-circuit when the move already
+      // succeeded; let the retry only cover the toast assertion in that
+      // case (treating a missed toast on an otherwise-successful click
+      // as a no-op).
+      const { data: colNow } = await supabase
+        .from("gradebook_columns")
+        .select("sort_order")
+        .eq("id", colBefore!.id)
+        .single();
+      if (colNow?.sort_order === sortOrderBefore) {
+        return;
+      }
+      await waitForVirtualizerIdle(page);
+      const buttonNow = headerCellAfterMove.getByRole("button", { name: "Column options" });
+      await buttonNow.scrollIntoViewIfNeeded();
+      await buttonNow.click();
+      await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
+      await expect(page.getByText("Column moved right").first()).toBeVisible({ timeout: 5000 });
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
 
     // Verify sort_order restored to original
     await expect(async () => {

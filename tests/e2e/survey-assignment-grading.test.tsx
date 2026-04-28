@@ -14,7 +14,7 @@ import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
 import { addDays } from "date-fns";
 import { TEAM_COLLABORATION_SURVEY } from "../fixtures/teamCollaborationSurvey";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
