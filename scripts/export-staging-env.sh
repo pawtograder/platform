@@ -36,7 +36,15 @@ emit() {
   if [ "$mode" = shell ]; then
     printf 'export %s=%q\n' "$1" "${2:-}"
   else
-    printf '%s=%s\n' "$1" "${2:-}"
+    # .env-style output: dotenv parsers (Next.js, dotenv) accept double-quoted
+    # values with \n, \", \\ escapes — required for multiline secrets like
+    # GITHUB_PRIVATE_KEY_STRING. Bare KEY=value would split mid-key on newlines.
+    local value="${2:-}"
+    value="${value//\\/\\\\}"   # backslash first, before introducing more
+    value="${value//\"/\\\"}"   # double-quote
+    value="${value//$'\n'/\\n}" # newline -> literal \n
+    value="${value//$'\r'/\\r}" # CR -> literal \r
+    printf '%s="%s"\n' "$1" "$value"
   fi
 }
 
