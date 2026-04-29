@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import PersonName from "@/components/ui/person-name";
 import { Toaster, toaster } from "@/components/ui/toaster";
+import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import {
@@ -46,10 +47,6 @@ import {
   Input,
   Link,
   List,
-  PopoverBody,
-  PopoverContent,
-  PopoverRoot,
-  PopoverTrigger,
   Portal,
   Spinner,
   Table,
@@ -503,11 +500,23 @@ function AddColumnDialog() {
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content maxW={isExpressionBuilderExpanded ? "100vw" : undefined}>
+          <Dialog.Content
+            maxW={isExpressionBuilderExpanded ? "100vw" : undefined}
+            maxH={isExpressionBuilderExpanded ? "100dvh" : undefined}
+            display={isExpressionBuilderExpanded ? "flex" : undefined}
+            flexDirection={isExpressionBuilderExpanded ? "column" : undefined}
+            overflow={isExpressionBuilderExpanded ? "hidden" : undefined}
+          >
             <Dialog.Header>
               <Dialog.Title>Add Column</Dialog.Title>
             </Dialog.Header>
-            <Dialog.Body as="form" onSubmit={handleSubmit(onSubmit)}>
+            <Dialog.Body
+              as="form"
+              onSubmit={handleSubmit(onSubmit)}
+              flex={isExpressionBuilderExpanded ? "1" : undefined}
+              minH={isExpressionBuilderExpanded ? "0" : undefined}
+              overflowY={isExpressionBuilderExpanded ? "auto" : undefined}
+            >
               <VStack gap={3} align="stretch">
                 <Box>
                   <Label htmlFor="name">
@@ -783,11 +792,23 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content maxW={isExpressionBuilderExpanded ? "100vw" : undefined}>
+          <Dialog.Content
+            maxW={isExpressionBuilderExpanded ? "100vw" : undefined}
+            maxH={isExpressionBuilderExpanded ? "100dvh" : undefined}
+            display={isExpressionBuilderExpanded ? "flex" : undefined}
+            flexDirection={isExpressionBuilderExpanded ? "column" : undefined}
+            overflow={isExpressionBuilderExpanded ? "hidden" : undefined}
+          >
             <Dialog.Header>
               <Dialog.Title>Edit Column{isExpressionBuilderExpanded ? " — Expression Builder" : ""}</Dialog.Title>
             </Dialog.Header>
-            <Dialog.Body as="form" onSubmit={handleSubmit(onSubmit)}>
+            <Dialog.Body
+              as="form"
+              onSubmit={handleSubmit(onSubmit)}
+              flex={isExpressionBuilderExpanded ? "1" : undefined}
+              minH={isExpressionBuilderExpanded ? "0" : undefined}
+              overflowY={isExpressionBuilderExpanded ? "auto" : undefined}
+            >
               <VStack gap={3} align="stretch">
                 <Box>
                   <Label htmlFor="name">
@@ -1126,6 +1147,35 @@ function ExternalDataAdvice({ externalData }: { externalData: GradebookColumnExt
   );
 }
 
+function filterOptionsAllSelected<T extends { value: string }>(options: T[], selected: T[]): boolean {
+  if (options.length === 0) return false;
+  const selectedSet = new Set(selected.map((s) => s.value));
+  return options.every((o) => selectedSet.has(o.value));
+}
+
+function FilterSelectAllNoneToolbar({
+  onSelectAll,
+  onSelectNone,
+  disableSelectAll,
+  disableSelectNone
+}: {
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+  disableSelectAll: boolean;
+  disableSelectNone: boolean;
+}) {
+  return (
+    <HStack justifyContent="flex-end" gap={1} mb={2} flexWrap="wrap">
+      <Button type="button" size="xs" variant="ghost" onClick={onSelectAll} disabled={disableSelectAll}>
+        Select all
+      </Button>
+      <Button type="button" size="xs" variant="ghost" onClick={onSelectNone} disabled={disableSelectNone}>
+        Select none
+      </Button>
+    </HStack>
+  );
+}
+
 // New component for filtering a gradebook column
 function GradebookColumnFilter({
   columnName,
@@ -1254,6 +1304,13 @@ function GradebookColumnFilter({
             </IconButton>
           </HStack>
 
+          <FilterSelectAllNoneToolbar
+            onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
+            onSelectNone={() => columnModel.setFilterValue("")}
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
+            disableSelectNone={selectedOptions.length === 0}
+          />
+
           {/* Filter input */}
           <Select
             size="sm"
@@ -1362,6 +1419,13 @@ function SectionFilter({
             </IconButton>
           </HStack>
 
+          <FilterSelectAllNoneToolbar
+            onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
+            onSelectNone={() => columnModel.setFilterValue("")}
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
+            disableSelectNone={selectedOptions.length === 0}
+          />
+
           <Select
             size="sm"
             placeholder={`Filter ${columnName}...`}
@@ -1449,6 +1513,12 @@ function GenericColumnFilter({
         zIndex={1000}
       >
         <PopoverBody p={3}>
+          <FilterSelectAllNoneToolbar
+            onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
+            onSelectNone={() => columnModel.setFilterValue("")}
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
+            disableSelectNone={selectedOptions.length === 0}
+          />
           <Select
             size="sm"
             placeholder={`Filter ${columnName}...`}

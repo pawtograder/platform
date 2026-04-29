@@ -11558,6 +11558,7 @@ export type Database = {
           metric_value: number;
         }[];
       };
+      dual_active_invariants_version: { Args: never; Returns: number };
       deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
