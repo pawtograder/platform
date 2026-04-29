@@ -38,6 +38,9 @@ function signHS256(secret: string, payload: Record<string, unknown>, kid: string
   const headerEncoded = b64url(JSON.stringify(header));
   const payloadEncoded = b64url(JSON.stringify(payload));
   const data = `${headerEncoded}.${payloadEncoded}`;
+  // HMAC-SHA256 is the correct primitive for JWT HS256 signing per RFC 7518; this
+  // is not password hashing, so the password-hash-strength rule does not apply.
+  // codeql[js/insufficient-password-hash]
   const sig = b64url(createHmac("sha256", secret).update(data).digest());
   return `${data}.${sig}`;
 }
@@ -145,8 +148,11 @@ if (mode === "env") {
   console.log(`REALTIME_ENC_KEY=${realtimeEncKey}`);
   console.log(`PG_META_CRYPTO_KEY=${pgMetaCryptoKey}`);
   console.log(`PGSODIUM_ROOT_KEY=${pgsodiumRootKey}`);
-  console.log(`POSTGRES_PASSWORD=${postgresPassword}`);
-  console.log(`PAWTOGRADER_PASSWORD=${pawtograderPassword}`);
+  // The whole point of --env mode is to print fresh secrets to stdout so the
+  // operator can pipe them into bao or .env.local. Suppress CodeQL's
+  // clear-text-logging rule here — emitting these is the script's contract.
+  console.log(`POSTGRES_PASSWORD=${postgresPassword}`); // codeql[js/clear-text-logging]
+  console.log(`PAWTOGRADER_PASSWORD=${pawtograderPassword}`); // codeql[js/clear-text-logging]
   console.log(`END_TO_END_SECRET=${endToEndSecret}`);
   console.log(`EDGE_FUNCTION_SECRET=${edgeFunctionSecret}`);
 } else if (mode === "helm") {
