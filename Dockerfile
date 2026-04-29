@@ -9,7 +9,13 @@ COPY package.json package-lock.json ./
 RUN npm config set fetch-retries 5 \
  && npm config set fetch-retry-mintimeout 10000 \
  && npm config set fetch-retry-maxtimeout 60000 \
- && for i in 1 2 3; do npm ci && break || { echo "npm ci attempt $i failed; sleeping 10s"; sleep 10; }; done
+ && success=0 \
+ && for i in 1 2 3; do \
+      if npm ci; then success=1; break; fi; \
+      echo "npm ci attempt $i failed; sleeping 10s"; \
+      sleep 10; \
+    done \
+ && test "$success" -eq 1
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
