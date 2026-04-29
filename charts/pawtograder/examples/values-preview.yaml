@@ -147,3 +147,9 @@ backup:
 
 auditPartitions:
   enabled: false
+
+# Seed the demo class so previews come up with content to play with.
+# Idempotent — `seed.sh` skips if classes.id=1 already exists, so PR-sync
+# re-runs are no-ops.
+seed:
+  enabled: true

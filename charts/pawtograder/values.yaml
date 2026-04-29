@@ -212,6 +212,22 @@ migrations:
   hookWeight: "5"
 
 # -----------------------------------------------------------------------------
+# Seed: load supabase/seed.sql into the database. Creates a "Demo Class"
+# (id=1) along with canned auth.users, assignments, rubrics, and a help
+# queue. Runs as a post-install,post-upgrade Helm hook using the same
+# image as `migrations`. The seed script skips itself if classes.id=1
+# already exists, so re-runs are no-ops.
+#
+# Off by default. Enable for ephemeral previews / load-test environments;
+# never enable on production.
+# -----------------------------------------------------------------------------
+seed:
+  enabled: false
+  resources:
+    requests: { cpu: "50m", memory: "128Mi" }
+    limits: { cpu: "500m", memory: "256Mi" }
+
+# -----------------------------------------------------------------------------
 # Supavisor (Postgres connection pooler — replaces pgbouncer)
 # -----------------------------------------------------------------------------
 supavisor:

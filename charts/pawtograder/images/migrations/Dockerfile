@@ -11,8 +11,10 @@ FROM postgres:17-alpine
 RUN apk add --no-cache bash
 
 COPY supabase/migrations /migrations
+COPY supabase/seed.sql /seed.sql
 COPY charts/pawtograder/images/migrations/migrate.sh /usr/local/bin/migrate
-RUN chmod +x /usr/local/bin/migrate
+COPY charts/pawtograder/images/migrations/seed.sh /usr/local/bin/seed
+RUN chmod +x /usr/local/bin/migrate /usr/local/bin/seed
 
 ARG GIT_SHA=""
 ARG VERSION=""
