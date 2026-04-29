@@ -1,6 +1,6 @@
-import { useFindTableControllerValue, useTableControllerValueById } from "@/lib/TableController";
-import { UserProfile, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
-import { useCallback, useMemo } from "react";
+import { useIndexedTableControllerValue, useTableControllerValueById } from "@/lib/TableController";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { useMemo } from "react";
 import { useCourseController } from "./useCourseController";
 
 export function getUserProfile(
@@ -33,13 +33,17 @@ export function useUserProfile(id: string | null | undefined):
     }
   | undefined {
   const controller = useCourseController();
-  const findFunction = useCallback(
-    (row: UserRoleWithPrivateProfileAndUser) => {
-      return row.private_profile_id === id || row.public_profile_id === id;
-    },
-    [id]
+  // The original predicate was `row.private_profile_id === id || row.public_profile_id === id`.
+  // Two indexed subscriptions (one per field) replace the O(listeners × rows)
+  // predicate scan; pick whichever bucket has a hit. `id` only ever matches
+  // exactly one of the two columns, so there is no ambiguity.
+  const userRoleByPrivate = useIndexedTableControllerValue(
+    controller.userRolesWithProfiles,
+    "private_profile_id",
+    id
   );
-  const userRole = useFindTableControllerValue(controller.userRolesWithProfiles, findFunction);
+  const userRoleByPublic = useIndexedTableControllerValue(controller.userRolesWithProfiles, "public_profile_id", id);
+  const userRole = userRoleByPrivate ?? userRoleByPublic;
   const profile = useTableControllerValueById(controller.profiles, id);
 
   const ret = useMemo(() => {

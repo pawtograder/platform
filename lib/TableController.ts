@@ -722,6 +722,14 @@ export default class TableController<
   }
 
   private _rows: PossiblyTentativeResult<ResultOne>[] = [];
+  /**
+   * Mirror of `_rows` keyed by `id`. Maintained in lockstep with every
+   * `_rows` mutation. Used to make `_resolveIndexedRows` (and any other
+   * id-keyed lookup on the hot notification path) O(matches) instead of
+   * O(N), which matters because `_notifyIndexedListeners` may invoke the
+   * resolver many times per single row mutation.
+   */
+  private _rowsById: Map<IDType, PossiblyTentativeResult<ResultOne>> = new Map();
   private _client: SupabaseClient;
   private _query: PostgrestFilterBuilder<
     Database["public"],
@@ -1296,6 +1304,7 @@ export default class TableController<
             // Only notify if deeply different
             if (!this._deepEqualObjects(current, updated)) {
               this._rows[i] = updated as PossiblyTentativeResult<ResultOne>;
+              this._rowsById.set(current.id, updated as PossiblyTentativeResult<ResultOne>);
               const listeners = this._itemDataListeners.get(current.id);
               if (listeners) {
                 listeners.forEach((listener) => listener(this._rows[i]));
@@ -1307,11 +1316,13 @@ export default class TableController<
         if (anyChanges) {
           // Optimization opportunity: we should fix it so that no subscriber depends on this behavior
           this._rows = newRows;
+          this._rebuildRowsById();
           this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
         }
       } else {
         // Membership changed: replace rows and notify list + item listeners accordingly
         this._rows = newRows;
+        this._rebuildRowsById();
 
         // Notify list listeners
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
@@ -1789,6 +1800,7 @@ export default class TableController<
           ...row,
           __db_pending: false
         }));
+        this._rebuildRowsById();
 
         // Initialize watermark
         for (const r of this._rows) {
@@ -2773,15 +2785,36 @@ export default class TableController<
   }
 
   /**
+   * Rebuild the `_rowsById` mirror from the current `_rows`. Called after
+   * any wholesale `_rows` reassignment (initial load, refetch catch-up).
+   * Per-row mutations keep the map in sync inline and don't need this.
+   */
+  private _rebuildRowsById() {
+    this._rowsById.clear();
+    for (const row of this._rows) {
+      if ("id" in (row as object)) {
+        this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
+      }
+    }
+  }
+
+  /**
    * Optimistic create / realtime-dedup swaps a tentative row's id from the
    * negative temp value to the real DB id by mutating the same row object
-   * in place. The forward index entries (`rowIdsByValue`) still point at
-   * the temp id, so subsequent `_resolveIndexedRows` calls can't find the
-   * row in `_rows` (which now has the real id). Walk every index entry and
-   * rewrite any temp id we hold to the new id.
+   * in place. Without rewriting our id-keyed bookkeeping the forward index
+   * entries (`rowIdsByValue`) and the `_rowsById` mirror would keep
+   * pointing at the temp id, so subsequent lookups couldn't find the row.
+   * Walk every index entry plus the row mirror, rewriting any temp id we
+   * hold to the new id.
    */
   private _swapIdInIndexes(oldId: IDType, newId: IDType) {
-    if (this._indexes.size === 0 || oldId === newId) return;
+    if (oldId === newId) return;
+    const row = this._rowsById.get(oldId);
+    if (row !== undefined) {
+      this._rowsById.delete(oldId);
+      this._rowsById.set(newId, row);
+    }
+    if (this._indexes.size === 0) return;
     for (const entry of this._indexes.values()) {
       for (const ids of entry.rowIdsByValue.values()) {
         if (ids.delete(oldId)) ids.add(newId);
@@ -2793,12 +2826,12 @@ export default class TableController<
   private _resolveIndexedRows(rowIds: Set<IDType> | undefined): PossiblyTentativeResult<ResultOne>[] {
     if (!rowIds || rowIds.size === 0) return [];
     const out: PossiblyTentativeResult<ResultOne>[] = [];
-    // Walk `_rows` once rather than `_rows.find` per id — same wall-clock for
-    // small matching sets, but predictable for large ones too.
-    const rowsArr = this._rows;
-    for (let i = 0; i < rowsArr.length; i++) {
-      const r = rowsArr[i];
-      if (rowIds.has((r as ResultOne & { id: IDType }).id)) out.push(r);
+    // O(matches) via the id-keyed mirror of `_rows`. The previous walk over
+    // `_rows` was O(N) per call and is on the hot notification fan-out path.
+    const byId = this._rowsById;
+    for (const id of rowIds) {
+      const row = byId.get(id);
+      if (row !== undefined) out.push(row);
     }
     return out;
   }
@@ -3009,8 +3042,7 @@ export default class TableController<
     // Enforce uniqueness by ID. If a row with the same ID already exists, treat this as an update.
     if ("id" in row) {
       const id = (row as { id: IDType }).id;
-      const existingIndex = this._rows.findIndex((r) => (r as ResultOne & { id: IDType }).id === id);
-      if (existingIndex !== -1) {
+      if (this._rowsById.has(id)) {
         this._updateRow(
           id,
           row as unknown as ResultOne & { id: IDType },
@@ -3021,6 +3053,9 @@ export default class TableController<
     }
 
     this._rows = [...this._rows, row];
+    if ("id" in row) {
+      this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
+    }
     // Notify indexed listeners FIRST so they see the row in `_rows` when
     // they re-resolve via `_resolveIndexedRows`. Then the broad
     // `_listDataListeners` fan-out runs (the legacy O(N) path).
@@ -3038,16 +3073,21 @@ export default class TableController<
   }
 
   private _updateRow(id: IDType, newRow: ResultOne & { id: IDType }, is_pending: boolean = false) {
-    const index = this._rows.findIndex((r) => (r as ResultOne & { id: IDType }).id === id);
+    const oldRow = this._rowsById.get(id);
+    if (oldRow === undefined) {
+      throw new Error("Row not found");
+    }
+    const index = this._rows.indexOf(oldRow);
     if (index === -1) {
       throw new Error("Row not found");
     }
-    const oldRow = this._rows[index];
-    this._rows[index] = {
+    const merged = {
       ...this._rows[index],
       ...newRow,
       __db_pending: is_pending
-    };
+    } as PossiblyTentativeResult<ResultOne>;
+    this._rows[index] = merged;
+    this._rowsById.set(id, merged);
 
     const itemListeners = this._itemDataListeners.get(id as IDType);
 
@@ -3073,10 +3113,11 @@ export default class TableController<
   }
 
   private _removeRow(id: IDType) {
-    const rowToRemove = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+    const rowToRemove = this._rowsById.get(id);
     if (!rowToRemove) {
       return;
     }
+    this._rowsById.delete(id);
     this._rows = this._rows.filter((r) => (r as ResultOne & { id: IDType }).id !== id);
     // Indexed listeners need to see the row gone from the index BEFORE the
     // legacy fan-out runs. The helper handles the index-pruning side.
@@ -3114,7 +3155,7 @@ export default class TableController<
     }
 
     // Check if the real-time broadcast has already updated this row
-    const currentRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+    const currentRow = this._rowsById.get(data.id as IDType);
     if (currentRow && !(currentRow as PossiblyTentativeResult<ResultOne>).__db_pending) {
       // Row was already updated by real-time broadcast, just return the data
       return data;
