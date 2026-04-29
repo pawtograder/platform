@@ -47,15 +47,19 @@ for f in "${sorted[@]}"; do
   base="$(basename "$f" .sql)"
   version="${base%%_*}"
   name="${base#*_}"
-  exists="$(psql -tAc "SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='${version}'")"
+  # Use psql --set with the :'var' literal-quoting form so values are quoted
+  # by psql, never by the shell. This is the equivalent of bound parameters
+  # and is safe even if filenames contain quotes or other unusual characters.
+  exists="$(psql -tAc --set=ver="${version}" \
+    "SELECT 1 FROM supabase_migrations.schema_migrations WHERE version=:'ver'")"
   if [ "${exists}" = "1" ]; then
     skipped=$((skipped+1))
     continue
   fi
   echo "[migrate] applying ${base}"
   psql -v ON_ERROR_STOP=1 --single-transaction -f "$f"
-  psql -v ON_ERROR_STOP=1 -c \
-    "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('${version}', '${name//\'/\'\'}') ON CONFLICT (version) DO NOTHING;"
+  psql -v ON_ERROR_STOP=1 --set=ver="${version}" --set=mname="${name}" -c \
+    "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES (:'ver', :'mname') ON CONFLICT (version) DO NOTHING;"
   applied=$((applied+1))
 done
 
