@@ -1238,6 +1238,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               file.type === "File" && // Do not submit directories
               expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
           );
+          if (submittedFiles.length === 0) {
+            if (submission_id !== undefined) {
+              try {
+                await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+                submission_id = undefined;
+              } catch (cleanupErr) {
+                Sentry.captureException(cleanupErr, scope);
+              }
+            }
+            throw new UserVisibleError(
+              `No files in the repository matched the assignment's submissionFiles patterns (${expectedFiles.join(", ")}). ` +
+                `Instructor: check pawtograder.yml in grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha} — the patterns appear not to match any file in the student repository.`,
+              400
+            );
+          }
           // Make sure that all files that are NOT glob patterns are present
           const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
           const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
