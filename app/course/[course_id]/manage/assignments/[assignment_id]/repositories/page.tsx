@@ -25,7 +25,16 @@ import {
 } from "@chakra-ui/react";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
-import { CheckIcon, RefreshCw, GitPullRequest, ShieldCheck } from "lucide-react";
+import {
+  DialogRoot,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogBody,
+  DialogFooter,
+  DialogCloseTrigger
+} from "@/components/ui/dialog";
+import { CheckIcon, RefreshCw, GitPullRequest, ShieldCheck, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -326,6 +335,162 @@ function FixRepoPermissionsButton({
         </Box>
       )}
     </VStack>
+  );
+}
+
+const CLEANUP_CONFIRM_PHRASE = "CLEANUP";
+
+function CleanupIndividualReposButton({
+  courseId,
+  assignmentId,
+  tableController,
+  individualRepoCount
+}: {
+  courseId: number;
+  assignmentId: number;
+  tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
+  individualRepoCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<1 | 2>(1);
+  const [confirmText, setConfirmText] = useState("");
+  const [isRunning, setIsRunning] = useState(false);
+
+  const resetAndClose = () => {
+    setOpen(false);
+    setStep(1);
+    setConfirmText("");
+  };
+
+  const handleOpenChange = (details: { open: boolean }) => {
+    if (!details.open) {
+      setOpen(false);
+      setStep(1);
+      setConfirmText("");
+    }
+  };
+
+  const handleCleanup = async () => {
+    if (confirmText.trim() !== CLEANUP_CONFIRM_PHRASE) {
+      return;
+    }
+    const supabase = createClient();
+    setIsRunning(true);
+    try {
+      const { data, error } = await supabase.rpc("cleanup_individual_repositories_for_assignment", {
+        p_class_id: courseId,
+        p_assignment_id: assignmentId
+      });
+      if (error) throw error;
+      const result = data as { message?: string; summary?: Record<string, number> };
+      toaster.success({
+        title: "Cleanup started",
+        description: result.message ?? "Individual repositories were queued for archival."
+      });
+      resetAndClose();
+      await tableController?.refetchAll();
+    } catch (error) {
+      console.error(error);
+      toaster.error({
+        title: "Cleanup failed",
+        description: error instanceof Error ? error.message : "Could not clean up individual repositories."
+      });
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  const disabledNoIndividuals = individualRepoCount === 0;
+
+  return (
+    <>
+      <Button
+        size="sm"
+        colorPalette="red"
+        variant="outline"
+        disabled={disabledNoIndividuals}
+        title={disabledNoIndividuals ? "There are no individual repositories for this assignment." : undefined}
+        onClick={() => {
+          setStep(1);
+          setConfirmText("");
+          setOpen(true);
+        }}
+      >
+        <Icon as={Trash2} boxSize={3.5} />
+        Cleanup individual repositories
+      </Button>
+
+      <DialogRoot open={open} onOpenChange={handleOpenChange}>
+        <DialogContent maxW="lg">
+          <DialogHeader>
+            <DialogTitle>Cleanup individual repositories</DialogTitle>
+            <DialogCloseTrigger />
+          </DialogHeader>
+          <DialogBody>
+            {step === 1 ? (
+              <VStack alignItems="flex-start" gap={3}>
+                <Text fontSize="sm">
+                  Use this when students were given both an individual repository and a group repository by mistake (for
+                  example, groups were configured after the assignment was released).
+                </Text>
+                <Text fontSize="sm" fontWeight="semibold">
+                  This will:
+                </Text>
+                <Box as="ul" pl={5} fontSize="sm" style={{ listStyleType: "disc" }}>
+                  <li>
+                    Archive {individualRepoCount} individual student repositor
+                    {individualRepoCount === 1 ? "y" : "ies"} on GitHub (async queue)
+                  </li>
+                  <li>Delete related submissions, grades, and workflow data from Pawtograder</li>
+                  <li>Remove the individual repository records (group repos are unchanged)</li>
+                </Box>
+                <Text fontSize="sm" color="red.600" _dark={{ color: "red.300" }}>
+                  This cannot be undone. Continue only if you are sure.
+                </Text>
+              </VStack>
+            ) : (
+              <VStack alignItems="stretch" gap={3}>
+                <Text fontSize="sm">
+                  Type <Code>{CLEANUP_CONFIRM_PHRASE}</Code> below to confirm. This runs the cleanup immediately.
+                </Text>
+                <Input
+                  placeholder={CLEANUP_CONFIRM_PHRASE}
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  autoComplete="off"
+                />
+              </VStack>
+            )}
+          </DialogBody>
+          <DialogFooter gap={2}>
+            {step === 1 ? (
+              <>
+                <Button variant="outline" onClick={resetAndClose}>
+                  Cancel
+                </Button>
+                <Button colorPalette="red" onClick={() => setStep(2)}>
+                  Continue
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setStep(1)} disabled={isRunning}>
+                  Back
+                </Button>
+                <Button
+                  colorPalette="red"
+                  loading={isRunning}
+                  disabled={confirmText.trim() !== CLEANUP_CONFIRM_PHRASE || isRunning}
+                  onClick={handleCleanup}
+                >
+                  Confirm cleanup
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </DialogRoot>
+    </>
   );
 }
 
@@ -707,6 +872,11 @@ export default function RepositoriesPage() {
 
   const selectedCount = getSelectedRowModel().rows.length;
 
+  const individualRepoCount = useMemo(() => {
+    const rows = (data as unknown as RepositoryRow[]) ?? [];
+    return rows.filter((r) => r.assignment_group_id == null && r.profile_id != null).length;
+  }, [data]);
+
   return (
     <VStack w="100%">
       <VStack paddingBottom="55px" w="100%">
@@ -744,13 +914,21 @@ export default function RepositoriesPage() {
           </HStack>
         )}
         <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
-          <HStack justifyContent="space-between" alignItems="flex-start" w="100%" mb={2}>
+          <HStack justifyContent="space-between" alignItems="flex-start" w="100%" mb={2} flexWrap="wrap" gap={2}>
             <Heading size="sm">Repository Status</Heading>
-            <FixRepoPermissionsButton
-              courseId={Number(course_id)}
-              assignmentId={Number(assignment_id)}
-              tableController={repositories}
-            />
+            <HStack flexWrap="wrap" gap={2} justifyContent="flex-end">
+              <CleanupIndividualReposButton
+                courseId={Number(course_id)}
+                assignmentId={Number(assignment_id)}
+                tableController={repositories}
+                individualRepoCount={individualRepoCount}
+              />
+              <FixRepoPermissionsButton
+                courseId={Number(course_id)}
+                assignmentId={Number(assignment_id)}
+                tableController={repositories}
+              />
+            </HStack>
           </HStack>
           <Table.Root minW="0" w="100%">
             <Table.Header>
