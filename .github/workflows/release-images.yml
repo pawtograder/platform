@@ -8,6 +8,7 @@ name: Release images
 #
 # Triggers:
 #   - push to main         → tag `main-<sha>` + `main-latest` (no chart push)
+#   - push to other branch → tag `<branch>-<sha>` + `<branch>-latest` (no chart push)
 #   - tag v*               → tag <version> + `latest`, plus chart push
 #   - workflow_dispatch    → manual, with optional hostname/version overrides
 on:
@@ -62,10 +63,18 @@ jobs:
             version="${GITHUB_REF#refs/tags/v}"
             is_tag=true
             tags="${version},latest,sha-${short_sha}"
-          else
+          elif [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             version="main-${short_sha}"
             is_tag=false
             tags="main-${short_sha},main-latest"
+          else
+            # Any other branch (helm today, others tomorrow). Sanitize `/`
+            # to `-` so feature branches don't break docker tag syntax.
+            branch="${GITHUB_REF#refs/heads/}"
+            safe_branch="${branch//\//-}"
+            version="${safe_branch}-${short_sha}"
+            is_tag=false
+            tags="${safe_branch}-${short_sha},${safe_branch}-latest"
           fi
           echo "version=${version}"            | tee -a "$GITHUB_OUTPUT"
           echo "is_tag=${is_tag}"              | tee -a "$GITHUB_OUTPUT"
@@ -75,6 +84,18 @@ jobs:
   build-web:
     needs: meta
     runs-on: pawtograder-ci
+    # NEXT_PUBLIC_* values are baked into the client bundle by Next.js, so
+    # one image cannot serve arbitrary deployments. We only build web on
+    # events where the bake target is unambiguous:
+    #   - workflow_dispatch       (caller supplies inputs.web_hostname /
+    #                             inputs.api_hostname; defaults to staging)
+    #   - push to refs/heads/main (staging — main-latest is contractually
+    #                             a staging-baked image)
+    # For tag releases (v*) and other branches (helm, …), the caller must
+    # invoke workflow_dispatch with explicit URLs; otherwise we'd silently
+    # bake staging URLs into a release. edge-functions / migrations / chart
+    # don't have this problem and continue to build/publish.
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v5
 
@@ -88,11 +109,20 @@ jobs:
 
       - name: Resolve hostnames
         id: hosts
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_WEB: ${{ inputs.web_hostname }}
+          INPUT_API: ${{ inputs.api_hostname }}
         run: |
-          web="${{ inputs.web_hostname }}"
-          api="${{ inputs.api_hostname }}"
-          if [ -z "$web" ]; then web="https://staging.pawtograder.net"; fi
-          if [ -z "$api" ]; then api="https://api.staging.pawtograder.net"; fi
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            web="${INPUT_WEB:-https://staging.pawtograder.net}"
+            api="${INPUT_API:-https://api.staging.pawtograder.net}"
+          else
+            # push to main → staging (see job-level if condition above).
+            web="https://staging.pawtograder.net"
+            api="https://api.staging.pawtograder.net"
+          fi
           echo "web=$web" >> "$GITHUB_OUTPUT"
           echo "api=$api" >> "$GITHUB_OUTPUT"
 
@@ -209,7 +239,13 @@ jobs:
           done
 
   publish-chart:
-    needs: [meta, build-web, build-edge-functions, build-migrations]
+    # Note: build-web is intentionally not a dep — on v* tag pushes the web
+    # image is not built here (URLs would have to be baked at tag time and
+    # we don't know the consumer's hostname). The chart references images
+    # by tag only, so it's fine to publish the chart without a same-tag
+    # web image; consumers of the chart override web.image.tag to a
+    # workflow_dispatch-built image keyed to their environment.
+    needs: [meta, build-edge-functions, build-migrations]
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     steps:
