@@ -174,7 +174,17 @@ spec:
             failureThreshold: 5
           resources:
             {{- toYaml .Values.realtime.resources | nindent 12 }}
-      {{- if .Values.realtime.spreadAcrossNodes }}
+      {{- /*
+      Per-component / global affinity (if set) wins over the
+      spreadAcrossNodes default — the user opted into custom placement
+      explicitly. Otherwise emit the default soft podAntiAffinity for
+      `spreadAcrossNodes`.
+      */ -}}
+      {{- $userAffinity := include "pawtograder.affinity" (dict "ctx" . "component" .Values.realtime) -}}
+      {{- if $userAffinity }}
+      affinity:
+        {{- $userAffinity | nindent 8 }}
+      {{- else if .Values.realtime.spreadAcrossNodes }}
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -184,14 +194,6 @@ spec:
                 labelSelector:
                   matchLabels:
                     {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "realtime") | nindent 20 }}
-        {{- with (include "pawtograder.affinity" (dict "ctx" . "component" .Values.realtime)) }}
-        {{- /* note: per-component affinity overrides the spread block above */ -}}
-        {{- end }}
-      {{- else }}
-      {{- with (include "pawtograder.affinity" (dict "ctx" . "component" .Values.realtime)) }}
-      affinity:
-        {{- . | nindent 8 }}
-      {{- end }}
       {{- end }}
       {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.realtime)) }}
       nodeSelector:

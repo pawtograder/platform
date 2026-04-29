@@ -91,11 +91,21 @@ realtime:
     requests: { cpu: "100m", memory: "256Mi" }
     limits:   { cpu: "1",    memory: "1Gi" }
 
+# ----- Storage backend: in-cluster MinIO, separate bucket per preview --------
+# Override storage.s3.bucket in CI to e.g. pawtograder-preview-pr${PR}
+# OR share a single bucket across previews (cheaper) — they're sandboxed
+# anyway since each release uses a different JWT key.
 storage:
   replicas: 1
   resources:
     requests: { cpu: "50m",  memory: "128Mi" }
     limits:   { cpu: "500m", memory: "512Mi" }
+  backend: s3
+  s3:
+    endpoint: https://s3.talos.ripley.cloud
+    region: us-east-1
+    bucket: pawtograder-previews-shared
+    forcePathStyle: true
 
 kong:
   replicas: 1
@@ -125,18 +135,6 @@ web:
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits:   { cpu: "1",    memory: "1Gi" }
-
-# ----- Storage backend: in-cluster MinIO, separate bucket per preview --------
-# Override storage.s3.bucket in CI to e.g. pawtograder-preview-pr${PR}
-# OR share a single bucket across previews (cheaper) — they're sandboxed
-# anyway since each release uses a different JWT key.
-storage:
-  backend: s3
-  s3:
-    endpoint: https://s3.talos.ripley.cloud
-    region: us-east-1
-    bucket: pawtograder-previews-shared
-    forcePathStyle: true
 
 # ----- Disable admin-side stuff that adds setup complexity -------------------
 studio:

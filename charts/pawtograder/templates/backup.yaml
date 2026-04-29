@@ -33,8 +33,16 @@ spec:
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   FILE="/tmp/pawtograder-${TS}.sql.gz"
                   pg_dump --no-owner --no-acl --clean --if-exists | gzip > "$FILE"
+                  # Install mc into the supabase/postgres image at runtime.
+                  # Ideally mc would be baked into the image (no network
+                  # dependency, no MITM surface), but the chart can't
+                  # rebuild the postgres image; pin the binary by SHA256
+                  # so a tampered download is rejected. Bump the URL +
+                  # checksum together by setting backup.mc.url and
+                  # backup.mc.sha256 in your values.
                   apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-                  curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+                  curl -fsSL "{{ .Values.backup.mc.url }}" -o /usr/local/bin/mc
+                  echo "{{ .Values.backup.mc.sha256 }}  /usr/local/bin/mc" | sha256sum -c -
                   chmod +x /usr/local/bin/mc
                   mc alias set s3 "${S3_ENDPOINT}" "${AWS_ACCESS_KEY_ID}" "${AWS_SECRET_ACCESS_KEY}"
                   mc cp "$FILE" "s3/${S3_BUCKET}/$(basename $FILE)"
