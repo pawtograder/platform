@@ -591,9 +591,7 @@ export function useIndexedTableControllerValue<
     // No listener — `subscribeIndexedSingle` short-circuits and returns just
     // the current data with a no-op unsubscribe. Passing `() => {}` here
     // would register a permanent listener whose unsubscribe is discarded.
-    return controller.subscribeIndexedSingle(field, value).data as
-      | PossiblyTentativeResult<ResultType>
-      | undefined;
+    return controller.subscribeIndexedSingle(field, value).data as PossiblyTentativeResult<ResultType> | undefined;
   });
   useEffect(() => {
     if (!controller || value === undefined || value === null) {

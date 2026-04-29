@@ -37,11 +37,7 @@ export function useUserProfile(id: string | null | undefined):
   // Two indexed subscriptions (one per field) replace the O(listeners × rows)
   // predicate scan; pick whichever bucket has a hit. `id` only ever matches
   // exactly one of the two columns, so there is no ambiguity.
-  const userRoleByPrivate = useIndexedTableControllerValue(
-    controller.userRolesWithProfiles,
-    "private_profile_id",
-    id
-  );
+  const userRoleByPrivate = useIndexedTableControllerValue(controller.userRolesWithProfiles, "private_profile_id", id);
   const userRoleByPublic = useIndexedTableControllerValue(controller.userRolesWithProfiles, "public_profile_id", id);
   const userRole = userRoleByPrivate ?? userRoleByPublic;
   const profile = useTableControllerValueById(controller.profiles, id);
