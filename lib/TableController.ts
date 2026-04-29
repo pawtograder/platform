@@ -588,7 +588,10 @@ export function useIndexedTableControllerValue<
 ): PossiblyTentativeResult<ResultType> | undefined {
   const [val, setVal] = useState<PossiblyTentativeResult<ResultType> | undefined>(() => {
     if (!controller || value === undefined || value === null) return undefined;
-    return controller.subscribeIndexedSingle(field, value, () => {}).data as
+    // No listener — `subscribeIndexedSingle` short-circuits and returns just
+    // the current data with a no-op unsubscribe. Passing `() => {}` here
+    // would register a permanent listener whose unsubscribe is discarded.
+    return controller.subscribeIndexedSingle(field, value).data as
       | PossiblyTentativeResult<ResultType>
       | undefined;
   });
@@ -635,7 +638,9 @@ export function useIndexedTableControllerValues<
 ): PossiblyTentativeResult<ResultType>[] {
   const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>(() => {
     if (!controller || value === undefined || value === null) return [];
-    return controller.subscribeIndexedList(field, value, () => {}).data as PossiblyTentativeResult<ResultType>[];
+    // See `useIndexedTableControllerValue`: omit the listener so the
+    // initializer doesn't register a leaked subscription.
+    return controller.subscribeIndexedList(field, value).data as PossiblyTentativeResult<ResultType>[];
   });
   useEffect(() => {
     if (!controller || value === undefined || value === null) {
@@ -2123,6 +2128,9 @@ export default class TableController<
       if (pendingRow) {
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
+        // Rewrite any indexed-id references from the temp id to the real id
+        // BEFORE mutating, so indexed listeners can still resolve this row.
+        this._swapIdInIndexes(pendingRowWithId.id, data.id as IDType);
         pendingRowWithId.id = data.id as IDType;
         // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
@@ -2764,6 +2772,23 @@ export default class TableController<
     return entry;
   }
 
+  /**
+   * Optimistic create / realtime-dedup swaps a tentative row's id from the
+   * negative temp value to the real DB id by mutating the same row object
+   * in place. The forward index entries (`rowIdsByValue`) still point at
+   * the temp id, so subsequent `_resolveIndexedRows` calls can't find the
+   * row in `_rows` (which now has the real id). Walk every index entry and
+   * rewrite any temp id we hold to the new id.
+   */
+  private _swapIdInIndexes(oldId: IDType, newId: IDType) {
+    if (this._indexes.size === 0 || oldId === newId) return;
+    for (const entry of this._indexes.values()) {
+      for (const ids of entry.rowIdsByValue.values()) {
+        if (ids.delete(oldId)) ids.add(newId);
+      }
+    }
+  }
+
   /** Resolve the row ids matching `(field, value)` to actual row objects. */
   private _resolveIndexedRows(rowIds: Set<IDType> | undefined): PossiblyTentativeResult<ResultOne>[] {
     if (!rowIds || rowIds.size === 0) return [];
@@ -3099,6 +3124,9 @@ export default class TableController<
     // This handles cases where real-time might be slow or disabled
     const tentativeRowStillExists = this._rows.find((r) => r === tentativeRow);
     if (tentativeRowStillExists) {
+      // Same temp→real id swap as the realtime-dedup path: keep the index
+      // forward map in sync before mutating the row's id in place.
+      this._swapIdInIndexes(tentativeRow.id as IDType, data.id as IDType);
       tentativeRow.id = data.id;
       this._updateRow(data.id, data, false);
     }

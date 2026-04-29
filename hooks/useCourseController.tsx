@@ -235,9 +235,12 @@ export function useDiscussionThreadReadStatus(threadId: number) {
 
   const setUnread = useCallback(
     async (root_threadId: number, threadId: number, isUnread: boolean) => {
-      if (readStatus === undefined) {
-        return;
-      }
+      // `useIndexedTableControllerValue` returns `undefined` both while the
+      // controller is still loading and when no row exists for this thread.
+      // Wait for the initial load to settle, then fall through to the
+      // `getOneByFilters` lookup if `readStatus` is still missing — the
+      // Postgres trigger guarantees a row exists, so a miss here means it
+      // simply hasn't been fetched yet.
       await controller.discussionThreadReadStatus.readyPromise;
       if (readStatus) {
         if (isUnread && readStatus.read_at) {

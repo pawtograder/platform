@@ -5,7 +5,7 @@ import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams, useRouter } from "next/navigation";
 import { LucideMail, X } from "lucide-react";
-import { CSSProperties, useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { toaster } from "../ui/toaster";
 import Markdown from "../ui/markdown";
 

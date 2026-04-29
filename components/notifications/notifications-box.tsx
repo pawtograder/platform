@@ -5,7 +5,7 @@ import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/comp
 import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser, { SystemNotification } from "./notification-teaser";
-import { CSSProperties, useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, type CSSProperties } from "react";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import Markdown from "@/components/ui/markdown";
