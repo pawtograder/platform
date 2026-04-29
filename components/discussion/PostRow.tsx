@@ -19,7 +19,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { Badge, Box, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   FaCheck,
   FaCheckCircle,
@@ -32,7 +32,7 @@ import {
   FaThumbtack
 } from "react-icons/fa";
 
-export function PostRow({
+function PostRowComponent({
   threadId,
   href,
   selected,
@@ -338,3 +338,9 @@ export function PostRow({
     </Box>
   );
 }
+
+// All props are primitives, so the default shallow compare is enough. Without
+// this, every list-listener fan-out from the teasers TableController re-runs
+// the whole hook stack inside each row (likes/watch/profile/read-status/etc).
+export const PostRow = memo(PostRowComponent);
+PostRow.displayName = "PostRow";

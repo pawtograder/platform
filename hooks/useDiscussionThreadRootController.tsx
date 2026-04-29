@@ -1,10 +1,10 @@
 import TableController, {
-  useListTableControllerValues,
+  useIndexedTableControllerValues,
   useTableControllerTableValues,
   useTableControllerValueById
 } from "@/lib/TableController";
 import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { DiscussionThreadRealTimeController } from "@/lib/DiscussionThreadRealTimeController";
 
@@ -23,8 +23,11 @@ export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus 
 export function useDiscussionThreadRoot() {
   const controller = useDiscussionThreadsController();
   const rootThread = useTableControllerValueById(controller.tableController, controller.root_id);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === rootThread?.id, [rootThread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  // Indexed on `parent`: every PostRow that mounted in this thread tree used
+  // to register its own predicate-scan list-listener, so each row mutation
+  // re-scanned every row × every listener (O(N²) per write). The indexed
+  // path fans out only to the listener whose `value` actually matches.
+  const children = useIndexedTableControllerValues(controller.tableController, "parent", rootThread?.id);
   const ret = useMemo(() => {
     if (!rootThread) return undefined;
     return {
@@ -42,8 +45,9 @@ export function useDiscussionThreadRoot() {
 export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
   const controller = useDiscussionThreadsController();
   const thread = useTableControllerValueById(controller.tableController, threadId);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === thread?.id, [thread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  // See `useDiscussionThreadRoot` above — indexed by `parent` to avoid
+  // O(listeners × rows) predicate scans on every reply mutation.
+  const children = useIndexedTableControllerValues(controller.tableController, "parent", thread?.id);
 
   // Stable sort order: capture initial order on first render, maintain it during session
   // Reset when threadId changes (component remounts)

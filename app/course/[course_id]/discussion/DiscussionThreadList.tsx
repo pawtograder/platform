@@ -35,7 +35,7 @@ import {
 import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
-import { Fragment, useMemo, useState, type ComponentProps } from "react";
+import { Fragment, memo, useMemo, useState, type ComponentProps } from "react";
 import { FaFilter, FaHeart, FaPlus, FaThumbtack } from "react-icons/fa";
 
 // Module-stable plugin and component overrides for the teaser preview.
@@ -70,7 +70,11 @@ interface Props {
   width?: string;
 }
 
-export const DiscussionThreadTeaser = (props: Props) => {
+// Memoized: when the teaser TableController fires its full-list listener
+// (e.g. one reply's `children_count` updates), every rendered teaser would
+// otherwise re-run its hooks (read-status, descendants count, topics).
+// Props are primitive, so default shallow compare is sufficient.
+export const DiscussionThreadTeaser = memo((props: Props) => {
   const thread = useDiscussionThreadTeaser(props.thread_id);
   const topics = useDiscussionTopics();
   const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
@@ -158,7 +162,8 @@ export const DiscussionThreadTeaser = (props: Props) => {
       </NextLink>
     </Box>
   );
-};
+});
+DiscussionThreadTeaser.displayName = "DiscussionThreadTeaser";
 
 export default function DiscussionThreadList() {
   const { course_id } = useParams();
