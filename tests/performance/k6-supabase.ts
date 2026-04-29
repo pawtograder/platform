@@ -753,12 +753,16 @@ export function buildE2EAutograderJwt(args: {
   actor?: string;
 }): string {
   const header = { alg: "RS256", typ: "JWT", kid: args.endToEndSecret };
+  // Match createSubmissionJwtToken's payload shape — numeric run_id /
+  // run_attempt. The server-side handlers (autograder-create-submission /
+  // -submit-feedback) Number.parseInt these regardless, but staying consistent
+  // here means both helpers in this file produce identical-shaped tokens.
   const payload = {
     repository: args.repository,
     sha: args.sha,
     workflow_ref: ".github/workflows/grade.yml-e2e-test",
-    run_id: String(args.runId),
-    run_attempt: String(args.runAttempt),
+    run_id: args.runId,
+    run_attempt: args.runAttempt,
     actor: args.actor ?? "pawtograder-load-test"
   };
   return encoding.b64encode(JSON.stringify(header)) + "." + encoding.b64encode(JSON.stringify(payload)) + ".";

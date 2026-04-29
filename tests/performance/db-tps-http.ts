@@ -14,7 +14,7 @@ import {
   type SupabaseConfig,
   type ClassData,
   type StudentData
-} from "./k6-supabase";
+} from "@/tests/performance/k6-supabase";
 import http from "k6/http";
 
 // k6 globals
