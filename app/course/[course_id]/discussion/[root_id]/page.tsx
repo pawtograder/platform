@@ -446,6 +446,7 @@ function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   useEffect(() => {
     document.title = `${courseController.course.name} - Discussion - ${thread?.subject}`;
   }, [courseController.course.name, thread?.subject]);
+
   return (
     <>
       <DiscussionPost root_id={root_id} />

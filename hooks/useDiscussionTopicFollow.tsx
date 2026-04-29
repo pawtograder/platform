@@ -1,7 +1,7 @@
 "use client";
 
 import { toaster } from "@/components/ui/toaster";
-import { useFindTableControllerValue, useTableControllerTableValues } from "@/lib/TableController";
+import { useIndexedTableControllerValue, useTableControllerTableValues } from "@/lib/TableController";
 import type { DiscussionTopicFollower } from "@/utils/supabase/DatabaseTypes";
 import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";
@@ -14,12 +14,13 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
 
   const topic = useMemo(() => topics?.find((t) => t.id === topicId), [topics, topicId]);
 
-  const predicate = useMemo(
-    () => (row: DiscussionTopicFollower) => row.topic_id === topicId && row.user_id === user?.id,
-    [topicId, user?.id]
-  );
-
-  const cur = useFindTableControllerValue(controller.discussionTopicFollowers, predicate);
+  // The controller's underlying query already filters by `user_id` and
+  // `class_id` (see CourseController.discussionTopicFollowers), so indexing
+  // by `topic_id` alone is sufficient and uniquely identifies the override
+  // row. `user` is still consulted below in `setTopicFollowStatus` for the
+  // create() payload.
+  void user;
+  const cur = useIndexedTableControllerValue(controller.discussionTopicFollowers, "topic_id", topicId);
 
   const status = useMemo(() => {
     if (cur) return !!cur.following;

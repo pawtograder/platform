@@ -88,7 +88,7 @@ import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
 import path from "path";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaChartLine, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
@@ -97,6 +97,10 @@ import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
 import { Tooltip } from "./tooltip";
+
+// Module-stable style — see `components/ui/markdown.tsx` for why
+// `<Markdown style={{...}}>` literals defeat its `memo` wrapper.
+const RUBRIC_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
 const KPI_LABELS: Record<string, string> = {
   commits: "commits",
@@ -745,7 +749,7 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
               </Text>
             </HStack>
             <Box fontSize="sm">
-              <Markdown style={{ fontSize: "0.8rem" }}>{instance.comment}</Markdown>
+              <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{instance.comment}</Markdown>
             </Box>
           </Box>
         ))}
@@ -891,13 +895,7 @@ export function RubricCheckAnnotation({
         </HStack>
         <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
       </HStack>
-      <Markdown
-        style={{
-          fontSize: "0.8rem"
-        }}
-      >
-        {check.description}
-      </Markdown>
+      <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
       {linkedArtifactId && submission && check.artifact && (
         <Box mt={1}>
           <Link
@@ -1086,13 +1084,7 @@ export function RubricCheckGlobal({
                   </Field.Label>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
-                <Markdown
-                  style={{
-                    fontSize: "0.8rem"
-                  }}
-                >
-                  {check.description}
-                </Markdown>
+                <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
                 {linkedFileId && submission && (
                   <Link
                     prefetch={true}
@@ -1176,13 +1168,7 @@ export function RubricCheckGlobal({
                         {points} {check.name}
                       </Text>
                     </Field.Label>
-                    <Markdown
-                      style={{
-                        fontSize: "0.8rem"
-                      }}
-                    >
-                      {check.description}
-                    </Markdown>
+                    <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
                   </Checkbox>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
@@ -1226,13 +1212,7 @@ export function RubricCheckGlobal({
                         {points} {check.name}
                       </Text>
                     </Field.Label>
-                    <Markdown
-                      style={{
-                        fontSize: "0.8rem"
-                      }}
-                    >
-                      {check.description}
-                    </Markdown>
+                    <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
                   </Radio>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
@@ -1544,13 +1524,7 @@ export function RubricCriteria({
         </Heading>
 
         <Fieldset.HelperText>
-          <Markdown
-            style={{
-              fontSize: "0.8rem"
-            }}
-          >
-            {criteria.description}
-          </Markdown>
+          <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{criteria.description}</Markdown>
         </Fieldset.HelperText>
         {isTaOnly && !isInstructor && reviewForThisRubric?.released && (
           <Alert status="warning" variant="subtle" borderRadius="md" mb={2} title="Grading is locked">

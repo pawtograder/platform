@@ -5,9 +5,48 @@ import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams, useRouter } from "next/navigation";
 import { LucideMail, X } from "lucide-react";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { toaster } from "../ui/toaster";
 import Markdown from "../ui/markdown";
+
+// Module-stable style references. The notification dropdown renders
+// every notification on every parent re-render, and the surrounding
+// `<Markdown>` wrapper is now `memo()`-ed (see `components/ui/markdown.tsx`).
+// Hoisting these literals out of the JSX keeps the `style` prop's
+// identity stable so `memo` can short-circuit. Inline `style={{...}}`
+// literals would tear that down on every render.
+const NOTIFICATION_BODY_STYLE: CSSProperties = {
+  fontSize: "0.875rem",
+  color: "var(--chakra-colors-fg-default)",
+  lineHeight: "1.4"
+};
+const NOTIFICATION_BODY_BOLD_STYLE: CSSProperties = {
+  ...NOTIFICATION_BODY_STYLE,
+  fontWeight: "600"
+};
+const NOTIFICATION_BODY_SMALLER_STYLE: CSSProperties = {
+  fontSize: "0.8rem",
+  color: "var(--chakra-colors-fg-default)",
+  lineHeight: "1.4"
+};
+const NOTIFICATION_MUTED_PREVIEW_STYLE: CSSProperties = {
+  fontSize: "0.75rem",
+  color: "var(--chakra-colors-fg-muted)",
+  lineHeight: "1.3",
+  overflow: "hidden",
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical"
+};
+const NOTIFICATION_MUTED_TEXT_STYLE: CSSProperties = {
+  fontSize: "0.75rem",
+  color: "var(--chakra-colors-fg-muted)",
+  lineHeight: "1.3"
+};
+const NOTIFICATION_MUTED_INLINE_STYLE: CSSProperties = {
+  fontSize: "0.75rem",
+  color: "var(--chakra-colors-fg-muted)"
+};
 
 export type NotificationEnvelope = { type: string };
 export type DiscussionThreadNotification = NotificationEnvelope & {
@@ -216,19 +255,19 @@ function HelpRequestNotificationTeaser({ notification }: { notification: Notific
 
   if (body.action === "created") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.creator_name}** created a new help request in **${body.help_queue_name}**${body.is_private ? " *(private)*" : ""}`}
       </Markdown>
     );
   } else if (body.action === "assigned") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.assignee_name}** is now working on **${body.creator_name}**'s help request in **${body.help_queue_name}**`}
       </Markdown>
     );
   } else if (body.action === "status_changed") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`Help request by **${body.creator_name}** in **${body.help_queue_name}** was marked as **${body.status}**`}
       </Markdown>
     );
@@ -238,19 +277,7 @@ function HelpRequestNotificationTeaser({ notification }: { notification: Notific
     <VStack align="flex-start" gap="2">
       {message}
       {body.request_preview && (
-        <Markdown
-          style={{
-            fontSize: "0.75rem",
-            color: "var(--chakra-colors-fg-muted)",
-            lineHeight: "1.3",
-            overflow: "hidden",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical"
-          }}
-        >
-          {`> ${body.request_preview}`}
-        </Markdown>
+        <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.request_preview}`}</Markdown>
       )}
     </VStack>
   );
@@ -271,23 +298,11 @@ function HelpRequestMessageNotificationTeaser({ notification }: { notification: 
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        <Markdown style={NOTIFICATION_BODY_STYLE}>
           {`**${author.name}** replied to **${body.help_request_creator_name}**'s help request in **${body.help_queue_name}**${body.is_private ? " *(private)*" : ""}`}
         </Markdown>
         {body.message_preview && (
-          <Markdown
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--chakra-colors-fg-muted)",
-              lineHeight: "1.3",
-              overflow: "hidden",
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical"
-            }}
-          >
-            {`> ${body.message_preview}`}
-          </Markdown>
+          <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.message_preview}`}</Markdown>
         )}
       </VStack>
     </HStack>
@@ -297,7 +312,7 @@ function HelpRequestMessageNotificationTeaser({ notification }: { notification: 
 function AssignmentGroupMemberNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupMemberNotification;
   return (
-    <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+    <Markdown style={NOTIFICATION_BODY_STYLE}>
       {`**${body.name}** ${body.action === "join" ? "joined" : "left"} your group **${body.assignment_group_name}** for **${body.assignment_name}**${body.action === "join" ? ` *(added by ${body.added_by_name})*` : ""}`}
     </Markdown>
   );
@@ -305,7 +320,7 @@ function AssignmentGroupMemberNotificationTeaser({ notification }: { notificatio
 function AssignmentGroupInvitationNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupInvitationNotification;
   return (
-    <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+    <Markdown style={NOTIFICATION_BODY_STYLE}>
       {`**${body.inviter_name}** invited you to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
     </Markdown>
   );
@@ -316,25 +331,25 @@ function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notifi
   let message;
   if (body.status === "pending") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.requestor_name}** requested to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
   } else if (body.status === "approved") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.decision_maker_name}** approved **${body.requestor_name}**'s request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
   } else if (body.status === "rejected") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.decision_maker_name}** rejected **${body.requestor_name}**'s request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
   } else if (body.status === "withdrawn") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.requestor_name}** withdrew their request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
@@ -358,24 +373,10 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        <Markdown style={NOTIFICATION_BODY_STYLE}>
           {`**${author.name}** replied to thread **#${rootThread.ordinal}** **${rootThread.subject}**`}
         </Markdown>
-        {body.teaser && (
-          <Markdown
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--chakra-colors-fg-muted)",
-              lineHeight: "1.3",
-              overflow: "hidden",
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical"
-            }}
-          >
-            {`> ${body.teaser}`}
-          </Markdown>
-        )}
+        {body.teaser && <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.teaser}`}</Markdown>}
       </VStack>
     </HStack>
   );
@@ -389,12 +390,8 @@ function EmailNotificationTeaser({ notification }: { notification: Notification 
         <LucideMail size={16} />
       </Box>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-          {`**${body.subject}**`}
-        </Markdown>
-        <Markdown style={{ fontSize: "0.75rem", color: "var(--chakra-colors-fg-muted)" }}>
-          {`*Check your email for details*`}
-        </Markdown>
+        <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${body.subject}**`}</Markdown>
+        <Markdown style={NOTIFICATION_MUTED_INLINE_STYLE}>{`*Check your email for details*`}</Markdown>
       </VStack>
     </HStack>
   );
@@ -410,16 +407,8 @@ function CourseEnrollmentNotificationTeaser({ notification }: { notification: No
         </svg>
       </Box>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-          {`Welcome to **${body.course_name}**!`}
-        </Markdown>
-        <Markdown
-          style={{
-            fontSize: "0.75rem",
-            color: "var(--chakra-colors-fg-muted)",
-            lineHeight: "1.3"
-          }}
-        >
+        <Markdown style={NOTIFICATION_BODY_STYLE}>{`Welcome to **${body.course_name}**!`}</Markdown>
+        <Markdown style={NOTIFICATION_MUTED_TEXT_STYLE}>
           {`You were added by **${body.inviter_name}** (${body.inviter_email})`}
         </Markdown>
       </VStack>
@@ -438,7 +427,7 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
     actorProfileId = body.opened_by;
     actorName = body.opened_by_name;
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${actorName}** opened a regrade request on your grading comment`}
       </Markdown>
     );
@@ -446,27 +435,19 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
     actorProfileId = body.updated_by;
     actorName = body.updated_by_name;
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${actorName}** updated a regrade request to **${body.new_status}**`}
       </Markdown>
     );
   } else if (body.action === "escalated") {
     actorProfileId = body.escalated_by;
     actorName = body.escalated_by_name;
-    message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-        {`**${actorName}** escalated a regrade request`}
-      </Markdown>
-    );
+    message = <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${actorName}** escalated a regrade request`}</Markdown>;
   } else {
     // action === "new_comment"
     actorProfileId = body.comment_author;
     actorName = body.comment_author_name;
-    message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-        {`**${actorName}** commented on a regrade request`}
-      </Markdown>
-    );
+    message = <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${actorName}** commented on a regrade request`}</Markdown>;
   }
 
   const actor = useUserProfile(actorProfileId);
@@ -536,25 +517,8 @@ function SystemNotificationTeaser({ notification }: { notification: Notification
         )}
       </Box>
       <VStack align="flex-start" gap="2" flex="1">
-        <Markdown
-          style={{
-            fontSize: "0.875rem",
-            color: "var(--chakra-colors-fg-default)",
-            lineHeight: "1.4",
-            fontWeight: "600"
-          }}
-        >
-          {body.title}
-        </Markdown>
-        <Markdown
-          style={{
-            fontSize: "0.8rem",
-            color: "var(--chakra-colors-fg-default)",
-            lineHeight: "1.4"
-          }}
-        >
-          {body.message}
-        </Markdown>
+        <Markdown style={NOTIFICATION_BODY_BOLD_STYLE}>{body.title}</Markdown>
+        <Markdown style={NOTIFICATION_BODY_SMALLER_STYLE}>{body.message}</Markdown>
       </VStack>
     </HStack>
   );

@@ -31,7 +31,32 @@ const nextConfig: NextConfig = {
   output: process.env.NEXT_OUTPUT_STANDALONE === "true" ? "standalone" : undefined,
   experimental: {
     optimizePackageImports,
-    ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {})
+    ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {}),
+    // Re-enable client-side Router Cache for dynamic layouts.
+    //
+    // Next 15 dropped `staleTimes.dynamic` from the Next-14 default of 30s
+    // to 0, which means *every* client-side navigation re-fetches dynamic
+    // RSC segments. Our `app/course/[course_id]/layout.tsx` is dynamic
+    // because it reads `headers()` (to pull the middleware-injected
+    // `X-User-ID` for the per-course role check + course-controller
+    // initial-data fetch). With `dynamic: 0`, the discussion-perf trace
+    // showed a stable ~4 s click-to-content gap on every thread nav,
+    // dominated by re-shipping the entire `CourseControllerInitialData`
+    // (profiles, user_roles, all discussion_threads, tags, lab sections,
+    // …) as part of the layout RSC payload on each request.
+    //
+    // 30s is the old Next-14 default — restoring it lets a session of
+    // intra-course navigations reuse the cached layout while still
+    // picking up role / enrollment changes within a minute on idle. The
+    // server-side fetch cache (see `createClientWithCaching` in
+    // `lib/ssrUtils.ts`) plus its trigger-based tag revalidation still
+    // governs how quickly data writes propagate; staleTimes only
+    // controls how often the client re-asks the server for the same
+    // logical segment.
+    staleTimes: {
+      dynamic: 30,
+      static: 300
+    }
   },
   ...(useLegacyWebpackTweaks
     ? {
