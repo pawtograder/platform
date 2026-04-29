@@ -120,7 +120,9 @@ jobs:
   secrets:
     needs: meta
     if: needs.meta.outputs.mode == 'deploy'
-    runs-on: ubuntu-latest
+    # Cluster apiserver isn't reachable from gh-hosted runners (private LB);
+    # use the in-cluster runner pool. Same goes for the deploy job below.
+    runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
         with:
@@ -298,7 +300,7 @@ jobs:
   deploy:
     needs: [meta, secrets, build-web, build-edge-functions, build-migrations]
     if: needs.meta.outputs.mode == 'deploy'
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
       - uses: azure/setup-helm@v4
@@ -380,7 +382,7 @@ jobs:
   destroy:
     needs: meta
     if: needs.meta.outputs.mode == 'destroy'
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     steps:
       - uses: azure/setup-helm@v4
         with:
