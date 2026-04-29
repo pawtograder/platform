@@ -558,6 +558,99 @@ export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };
 
+/**
+ * Indexed-by-field counterpart to `useFindTableControllerValue`. Subscribes
+ * to the *first* row in `controller` whose `field === value`, using the
+ * controller's `subscribeIndexedSingle` path so a row mutation only
+ * notifies subscribers whose `value` actually matches — eliminating the
+ * `O(listeners × rows)` predicate-scan that the find-by-predicate path
+ * pays.
+ *
+ * `field` must be a column on the row. Pass a stable string literal
+ * (or a value from a typed enum) — anything that changes between renders
+ * will tear down and re-register the subscription.
+ */
+export function useIndexedTableControllerValue<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType> | undefined,
+  field: keyof Database["public"]["Tables"][T]["Row"] & string,
+  value: unknown
+): PossiblyTentativeResult<ResultType> | undefined {
+  const [val, setVal] = useState<PossiblyTentativeResult<ResultType> | undefined>(() => {
+    if (!controller || value === undefined || value === null) return undefined;
+    return controller.subscribeIndexedSingle(field, value, () => {}).data as
+      | PossiblyTentativeResult<ResultType>
+      | undefined;
+  });
+  useEffect(() => {
+    if (!controller || value === undefined || value === null) {
+      setVal(undefined);
+      return;
+    }
+    const { data, unsubscribe } = controller.subscribeIndexedSingle(field, value, (row) => {
+      setVal(row as PossiblyTentativeResult<ResultType> | undefined);
+    });
+    setVal(data as PossiblyTentativeResult<ResultType> | undefined);
+    return unsubscribe;
+  }, [controller, field, value]);
+  return val;
+}
+
+/**
+ * Indexed-by-field counterpart to `useListTableControllerValues` (with a
+ * single field=value predicate). Subscribes to *all* rows where
+ * `field === value`. Same scaling properties as
+ * `useIndexedTableControllerValue` — only this listener fires when rows
+ * matching `value` change.
+ *
+ * The returned array's identity changes only when the matching set
+ * changes (or when one of the rows in the set changes). It does NOT
+ * change when an unrelated row in another value-bucket is updated.
+ */
+export function useIndexedTableControllerValues<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType> | undefined,
+  field: keyof Database["public"]["Tables"][T]["Row"] & string,
+  value: unknown
+): PossiblyTentativeResult<ResultType>[] {
+  const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>(() => {
+    if (!controller || value === undefined || value === null) return [];
+    return controller.subscribeIndexedList(field, value, () => {}).data as PossiblyTentativeResult<ResultType>[];
+  });
+  useEffect(() => {
+    if (!controller || value === undefined || value === null) {
+      setValues([]);
+      return;
+    }
+    const { data, unsubscribe } = controller.subscribeIndexedList(field, value, (rows) => {
+      setValues(rows as PossiblyTentativeResult<ResultType>[]);
+    });
+    setValues(data as PossiblyTentativeResult<ResultType>[]);
+    return unsubscribe;
+  }, [controller, field, value]);
+  return values;
+}
+
 //TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
 export type GradebookRowRecalcStateBroadcastMessage = {
   type: "gradebook_row_recalc_state";
@@ -692,6 +785,32 @@ export default class TableController<
   ) => void)[] = [];
   private _itemDataListeners: Map<IDType, ((data: PossiblyTentativeResult<ResultOne> | undefined) => void)[]> =
     new Map();
+  /**
+   * Indexed-listener registry for `subscribeIndexedSingle` / `subscribeIndexedList`.
+   *
+   * Outer key is the field name being indexed (e.g. `"discussion_thread_id"`).
+   * For each indexed field we maintain:
+   *   - `rowIdsByValue`: forward index from a field value to the set of row
+   *     ids currently holding that value.
+   *   - `singleListenersByValue` / `listListenersByValue`: subscribers that
+   *     only care about rows matching a specific field value, partitioned
+   *     by single-row vs list semantics.
+   *
+   * Lazy: an entry is only created the first time `_ensureIndex(field)` is
+   * called. Once created, mutations in `_addRow`/`_updateRow`/`_removeRow`
+   * keep it consistent and notify only the listeners whose value matches —
+   * eliminating the `O(listeners × rows)` predicate-scan fan-out that the
+   * `useFindTableControllerValue` / `useListTableControllerValues` paths
+   * pay on every publish.
+   */
+  private _indexes: Map<
+    string,
+    {
+      rowIdsByValue: Map<unknown, Set<IDType>>;
+      singleListenersByValue: Map<unknown, Set<(row: PossiblyTentativeResult<ResultOne> | undefined) => void>>;
+      listListenersByValue: Map<unknown, Set<(rows: PossiblyTentativeResult<ResultOne>[]) => void>>;
+    }
+  > = new Map();
   // Batching state for debounced operations - single queue to maintain order
   private _pendingOperations: BroadcastMessage[] = [];
   private _debounceTimeout: NodeJS.Timeout | null = null;
@@ -2616,6 +2735,225 @@ export default class TableController<
     };
   }
 
+  /**
+   * Lazily build (and return) the index entry for `field`. The first call
+   * for a given field walks every row once to populate the forward index;
+   * subsequent calls are O(1). Mutations in `_addRow`/`_updateRow`/
+   * `_removeRow` keep already-built indexes in sync.
+   */
+  private _ensureIndex(field: string) {
+    let entry = this._indexes.get(field);
+    if (entry) return entry;
+    entry = {
+      rowIdsByValue: new Map(),
+      singleListenersByValue: new Map(),
+      listListenersByValue: new Map()
+    };
+    for (const row of this._rows) {
+      const value = (row as unknown as Record<string, unknown>)[field];
+      if (value === undefined || value === null) continue;
+      const id = (row as ResultOne & { id: IDType }).id;
+      let rowIds = entry.rowIdsByValue.get(value);
+      if (!rowIds) {
+        rowIds = new Set();
+        entry.rowIdsByValue.set(value, rowIds);
+      }
+      rowIds.add(id);
+    }
+    this._indexes.set(field, entry);
+    return entry;
+  }
+
+  /** Resolve the row ids matching `(field, value)` to actual row objects. */
+  private _resolveIndexedRows(rowIds: Set<IDType> | undefined): PossiblyTentativeResult<ResultOne>[] {
+    if (!rowIds || rowIds.size === 0) return [];
+    const out: PossiblyTentativeResult<ResultOne>[] = [];
+    // Walk `_rows` once rather than `_rows.find` per id — same wall-clock for
+    // small matching sets, but predictable for large ones too.
+    const rowsArr = this._rows;
+    for (let i = 0; i < rowsArr.length; i++) {
+      const r = rowsArr[i];
+      if (rowIds.has((r as ResultOne & { id: IDType }).id)) out.push(r);
+    }
+    return out;
+  }
+
+  /**
+   * Subscribe to the *first* row whose `field === value`. Returns the
+   * current matching row (or `undefined`) plus an unsubscribe.
+   *
+   * Designed for "lookup by foreign key" patterns where the existing
+   * `useFindTableControllerValue` would re-scan all rows on every list
+   * publish. With `subscribeIndexedSingle`, mutations only notify
+   * subscribers whose `value` actually matches, so a single row update
+   * costs O(1) rather than O(listeners × rows).
+   */
+  subscribeIndexedSingle(
+    field: string,
+    value: unknown,
+    listener?: (row: PossiblyTentativeResult<ResultOne> | undefined) => void
+  ): { data: PossiblyTentativeResult<ResultOne> | undefined; unsubscribe: () => void } {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call subscribeIndexedSingle(${field}, ${String(value)}).`
+      );
+    }
+    const entry = this._ensureIndex(field);
+
+    const matchedRows = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+    const data = matchedRows.length > 0 ? matchedRows[0] : undefined;
+
+    if (!listener) {
+      return { data, unsubscribe: () => {} };
+    }
+
+    let listeners = entry.singleListenersByValue.get(value);
+    if (!listeners) {
+      listeners = new Set();
+      entry.singleListenersByValue.set(value, listeners);
+    }
+    listeners.add(listener);
+
+    return {
+      data,
+      unsubscribe: () => {
+        const set = entry.singleListenersByValue.get(value);
+        if (!set) return;
+        set.delete(listener);
+        if (set.size === 0) entry.singleListenersByValue.delete(value);
+      }
+    };
+  }
+
+  /**
+   * Subscribe to *all* rows whose `field === value`. Same scaling
+   * properties as `subscribeIndexedSingle`. Listener fires on any row
+   * change that affects the matching set: a new row entering, an existing
+   * row's other-field update, a row leaving (via update or delete).
+   */
+  subscribeIndexedList(
+    field: string,
+    value: unknown,
+    listener?: (rows: PossiblyTentativeResult<ResultOne>[]) => void
+  ): { data: PossiblyTentativeResult<ResultOne>[]; unsubscribe: () => void } {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call subscribeIndexedList(${field}, ${String(value)}).`
+      );
+    }
+    const entry = this._ensureIndex(field);
+    const data = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+
+    if (!listener) {
+      return { data, unsubscribe: () => {} };
+    }
+
+    let listeners = entry.listListenersByValue.get(value);
+    if (!listeners) {
+      listeners = new Set();
+      entry.listListenersByValue.set(value, listeners);
+    }
+    listeners.add(listener);
+
+    return {
+      data,
+      unsubscribe: () => {
+        const set = entry.listListenersByValue.get(value);
+        if (!set) return;
+        set.delete(listener);
+        if (set.size === 0) entry.listListenersByValue.delete(value);
+      }
+    };
+  }
+
+  /**
+   * Notify indexed listeners after a row mutation. Walks every existing
+   * index entry (one per indexed field) and re-derives the matching rows
+   * for any value that was affected by this row's old/new state. Designed
+   * to be called from `_addRow` / `_updateRow` / `_removeRow`.
+   *
+   * `oldValueByField` and `newValueByField` distinguish three cases per
+   * field:
+   *   - both undefined → field unaffected (no notification).
+   *   - same value → row content changed but field unchanged → re-notify
+   *     listeners for that single value (their row data may have changed).
+   *   - different values → row moved between value-buckets → notify
+   *     listeners on BOTH the old and new values.
+   *
+   * `oldValueByField` may be omitted on insert; `newValueByField` may be
+   * omitted on delete.
+   */
+  private _notifyIndexedListeners(
+    rowId: IDType,
+    operation: "add" | "update" | "remove",
+    oldRow?: PossiblyTentativeResult<ResultOne>,
+    newRow?: PossiblyTentativeResult<ResultOne>
+  ): void {
+    if (this._indexes.size === 0) return;
+    for (const [field, entry] of this._indexes) {
+      const oldValue = oldRow !== undefined ? (oldRow as unknown as Record<string, unknown>)[field] : undefined;
+      const newValue = newRow !== undefined ? (newRow as unknown as Record<string, unknown>)[field] : undefined;
+
+      // Maintain forward index based on the actual operation.
+      if (operation === "add" && newValue !== undefined && newValue !== null) {
+        let ids = entry.rowIdsByValue.get(newValue);
+        if (!ids) {
+          ids = new Set();
+          entry.rowIdsByValue.set(newValue, ids);
+        }
+        ids.add(rowId);
+      } else if (operation === "remove" && oldValue !== undefined && oldValue !== null) {
+        const ids = entry.rowIdsByValue.get(oldValue);
+        if (ids) {
+          ids.delete(rowId);
+          if (ids.size === 0) entry.rowIdsByValue.delete(oldValue);
+        }
+      } else if (operation === "update") {
+        // Field-level set/move/clear.
+        const moved = oldValue !== newValue;
+        if (moved) {
+          if (oldValue !== undefined && oldValue !== null) {
+            const ids = entry.rowIdsByValue.get(oldValue);
+            if (ids) {
+              ids.delete(rowId);
+              if (ids.size === 0) entry.rowIdsByValue.delete(oldValue);
+            }
+          }
+          if (newValue !== undefined && newValue !== null) {
+            let ids = entry.rowIdsByValue.get(newValue);
+            if (!ids) {
+              ids = new Set();
+              entry.rowIdsByValue.set(newValue, ids);
+            }
+            ids.add(rowId);
+          }
+        }
+      }
+
+      // Determine which values' listeners need to fire.
+      const affectedValues = new Set<unknown>();
+      if (oldValue !== undefined && oldValue !== null) affectedValues.add(oldValue);
+      if (newValue !== undefined && newValue !== null) affectedValues.add(newValue);
+
+      for (const value of affectedValues) {
+        const ids = entry.rowIdsByValue.get(value);
+        // Single-row listeners.
+        const singleListeners = entry.singleListenersByValue.get(value);
+        if (singleListeners && singleListeners.size > 0) {
+          const matched = this._resolveIndexedRows(ids);
+          const single = matched.length > 0 ? matched[0] : undefined;
+          for (const l of singleListeners) l(single);
+        }
+        // List listeners.
+        const listListeners = entry.listListenersByValue.get(value);
+        if (listListeners && listListeners.size > 0) {
+          const matched = this._resolveIndexedRows(ids);
+          for (const l of listListeners) l(matched);
+        }
+      }
+    }
+  }
+
   async invalidate(id: IDType) {
     if (this._closed) {
       throw new Error(
@@ -2658,6 +2996,12 @@ export default class TableController<
     }
 
     this._rows = [...this._rows, row];
+    // Notify indexed listeners FIRST so they see the row in `_rows` when
+    // they re-resolve via `_resolveIndexedRows`. Then the broad
+    // `_listDataListeners` fan-out runs (the legacy O(N) path).
+    if ("id" in row) {
+      this._notifyIndexedListeners((row as ResultOne & { id: IDType }).id, "add", undefined, row);
+    }
     this._listDataListeners.forEach((listener) => listener(this._rows, { entered: [row], left: [] }));
     if ("id" in row) {
       //Should always be true, fix up types later...
@@ -2686,6 +3030,11 @@ export default class TableController<
       itemListeners.forEach((listener) => listener(this._rows[index]));
     }
 
+    // Notify indexed listeners against the in-place updated row. We pass
+    // both `oldRow` and the freshly merged row so the helper can detect
+    // field-value movement (row leaving one bucket and entering another).
+    this._notifyIndexedListeners(id, "update", oldRow, this._rows[index]);
+
     // Create new array reference to ensure React detects the change
     const newRowsArray = [...this._rows];
     this._listDataListeners.forEach((listener) => listener(newRowsArray, { entered: [], left: [] }));
@@ -2704,6 +3053,9 @@ export default class TableController<
       return;
     }
     this._rows = this._rows.filter((r) => (r as ResultOne & { id: IDType }).id !== id);
+    // Indexed listeners need to see the row gone from the index BEFORE the
+    // legacy fan-out runs. The helper handles the index-pruning side.
+    this._notifyIndexedListeners(id, "remove", rowToRemove, undefined);
     this._listDataListeners.forEach((listener) =>
       listener(this._rows, { entered: [], left: [rowToRemove as ResultOne] })
     );

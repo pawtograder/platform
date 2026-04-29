@@ -231,7 +231,15 @@ export function DiscussionThreadsControllerProvider({
       });
     });
 
-    // Create TableController with BOTH class and thread-specific realtime controllers
+    // Create TableController with BOTH class and thread-specific realtime controllers.
+    //
+    // Hot path: rehydrate from the per-course LRU cache so the second
+    // (and subsequent) visits to a thread skip the SELECT round trip
+    // entirely. The TableController will still do a since-watermark
+    // refetch once the realtime channel joins, picking up any replies
+    // that arrived while the user was off this thread — see
+    // `_needsCatchUpAfterInitialDataHydration` in TableController.
+    const cachedRows = courseController.getCachedDiscussionThreadRows(root_id);
     const tableController = new TableController({
       client: courseController.client,
       table: "discussion_threads",
@@ -243,7 +251,8 @@ export function DiscussionThreadsControllerProvider({
       classRealTimeController: courseController.classRealTimeController,
       additionalRealTimeControllers: [threadRealTimeController],
       realtimeFilter: { root: root_id },
-      loadEntireTable: true
+      loadEntireTable: true,
+      initialData: cachedRows
     });
 
     // Create DiscussionThreadsController
@@ -259,6 +268,13 @@ export function DiscussionThreadsControllerProvider({
 
     return () => {
       if (controllersRef.current) {
+        // Snapshot rows BEFORE closing — `close()` clears `_rows`. Caching
+        // these means the next mount for the same `root_id` rehydrates
+        // synchronously and skips the REST round trip.
+        const snapshot = controllersRef.current.tableController.rows as DiscussionThread[];
+        if (snapshot.length > 0) {
+          courseController.cacheDiscussionThreadRows(root_id, snapshot);
+        }
         // threadController.close() already closes the realtime controller
         // (DiscussionThreadsController.close at line ~168), so no explicit
         // threadRealTimeController.close here.

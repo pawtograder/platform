@@ -6,7 +6,8 @@ import {
   useDiscussionThreadTeaser,
   useDiscussionTopics,
   useRootDiscussionThreadReadStatuses,
-  useCourseController
+  useCourseController,
+  usePrefetchDiscussionThreadOnHover
 } from "@/hooks/useCourseController";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
@@ -44,6 +45,14 @@ export function PostRow({
   showTopicBadge?: boolean;
   variant?: "default" | "compact";
 }) {
+  // Hover-intent prefetch: warm BOTH the per-thread row cache (our custom
+  // CourseController-managed cache) and Next.js's Router cache for this
+  // href, so the page-level RSC payload is already present when the user
+  // clicks. Disabled for the currently-selected row.
+  const prefetchHandlers = usePrefetchDiscussionThreadOnHover(threadId, {
+    enabled: !selected,
+    href
+  });
   const thread = useDiscussionThreadTeaser(threadId);
   const topics = useDiscussionTopics();
   const topic = useMemo(() => topics?.find((t) => t.id === thread?.topic_id), [topics, thread?.topic_id]);
@@ -133,7 +142,7 @@ export function PostRow({
   if (variant === "compact") {
     return (
       <Box asChild>
-        <Link href={href} aria-label={thread.subject + " (#" + thread.id + ")"}>
+        <Link href={href} aria-label={thread.subject + " (#" + thread.id + ")"} {...prefetchHandlers}>
           <Box
             px="4"
             py="2"
@@ -238,7 +247,7 @@ export function PostRow({
 
   return (
     <Box asChild>
-      <Link href={href} aria-label={thread.subject + " (#" + thread.id + ")"}>
+      <Link href={href} aria-label={thread.subject + " (#" + thread.id + ")"} {...prefetchHandlers}>
         <HStack
           gap="3"
           px="4"

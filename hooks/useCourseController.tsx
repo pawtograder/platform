@@ -3,8 +3,9 @@
 import { toaster } from "@/components/ui/toaster";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
-  PossiblyTentativeResult,
   useFindTableControllerValue,
+  useIndexedTableControllerValue,
+  useIndexedTableControllerValues,
   useIsTableControllerReady,
   useListTableControllerValues,
   useTableControllerTableValues,
@@ -18,7 +19,6 @@ import {
   ClassSection,
   Course,
   DiscussionThread,
-  DiscussionThreadReadStatus,
   DiscussionThreadWatcher,
   DiscussionTopic,
   HelpRequestWatcher,
@@ -39,6 +39,7 @@ import { LiveEvent, useList } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -200,12 +201,13 @@ export function useUpdateThreadTeaser() {
 }
 export function useRootDiscussionThreadReadStatuses(threadId: number) {
   const controller = useCourseController();
-  const rootPredicate = useMemo(
-    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) => data.discussion_thread_root_id === threadId,
-    [threadId]
-  );
-  const readStatuses = useListTableControllerValues(controller.discussionThreadReadStatus, rootPredicate);
-  return readStatuses;
+  // Uses the indexed-by-`discussion_thread_root_id` subscription path
+  // instead of a predicate scan. The discussion-perf trace showed the old
+  // `useListTableControllerValues` path getting up to ~400 listeners
+  // on a 2,859-row table, with each broadcast costing
+  // O(listeners × rows) ≈ 1M predicate evaluations. The indexed path
+  // notifies only the listener whose root_id matches.
+  return useIndexedTableControllerValues(controller.discussionThreadReadStatus, "discussion_thread_root_id", threadId);
 }
 /**
  * Returns a hook that returns the read status of a thread.
@@ -217,12 +219,19 @@ export function useRootDiscussionThreadReadStatuses(threadId: number) {
 export function useDiscussionThreadReadStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
-  const predicate = useMemo(
-    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) =>
-      data.discussion_thread_id === threadId && data.user_id === user?.id,
-    [threadId, user?.id]
+  // The controller's underlying query already filters by `user_id`
+  // (`.eq("user_id", this._userId)` in the lazy getter), so the previous
+  // compound `discussion_thread_id === threadId && user_id === user?.id`
+  // predicate was redundantly re-checking user_id. The indexed path
+  // matches on `discussion_thread_id` alone, which is correct given that
+  // every row in the controller is already this user's. Same scaling
+  // motivation as `useRootDiscussionThreadReadStatuses`.
+  void user; // kept in scope for the setUnread callback below
+  const readStatus = useIndexedTableControllerValue(
+    controller.discussionThreadReadStatus,
+    "discussion_thread_id",
+    threadId
   );
-  const readStatus = useFindTableControllerValue(controller.discussionThreadReadStatus, predicate);
 
   const setUnread = useCallback(
     async (root_threadId: number, threadId: number, isUnread: boolean) => {
@@ -301,6 +310,89 @@ export function useDiscussionThreadTeasers() {
   }, [controller]);
   return teasers;
 }
+/**
+ * Hover-intent prefetch handlers for a discussion thread row. Returns
+ * `onMouseEnter` / `onMouseLeave` / `onFocus` props the consumer can spread
+ * onto an interactive element (typically a sidebar `<Link>`).
+ *
+ * - 100 ms hover-intent timer so casual mouse traversal across a long row
+ *   list doesn't fan out into N parallel SELECTs / RSC requests.
+ *   Cancelled on `mouseleave` / `blur` if it hasn't fired yet.
+ * - The actual prefetch fire is fire-and-forget and intentionally NOT
+ *   cancelled on mouseleave: if it's already in flight, we'd rather
+ *   complete and populate the cache than abandon the work.
+ * - When `href` is supplied, the hover ALSO calls `router.prefetch(href)`.
+ *   Next.js's default `<Link>` prefetch on a dynamic route only warms the
+ *   route up to the nearest `loading.tsx` boundary (so the skeleton shows
+ *   instantly on click but the actual page-level RSC payload still has to
+ *   be fetched). The discussion-perf trace showed a stable ~2 s wait
+ *   between click and the page-level RSC starting to fetch — calling
+ *   `router.prefetch` explicitly populates the page cache too, so the
+ *   click is satisfied from cache instead of starting a fresh fetch.
+ *
+ * Pass `enabled={false}` to disable (e.g. for the currently-viewed thread —
+ * no point prefetching what's already open).
+ */
+export function usePrefetchDiscussionThreadOnHover(
+  rootId: number,
+  options: { enabled?: boolean; delayMs?: number; href?: string } = {}
+) {
+  const { enabled = true, delayMs = 100, href } = options;
+  const controller = useCourseController();
+  const router = useRouter();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const routePrefetchedRef = useRef<string | null>(null);
+
+  // Clear any pending timer if the hook unmounts (e.g. row scrolled out of
+  // a virtualized list before hover-intent fires).
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, []);
+
+  const fire = useCallback(() => {
+    if (!enabled) return;
+    if (timerRef.current !== null) return;
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      void controller.prefetchDiscussionThread(rootId);
+      // Tell Next.js's Router to warm its own RSC cache for this href.
+      // Idempotent per-href (Next.js dedupes internally + we cheaply guard
+      // here) and free if the URL is already cached.
+      if (href && routePrefetchedRef.current !== href) {
+        routePrefetchedRef.current = href;
+        try {
+          router.prefetch(href);
+        } catch {
+          // router.prefetch occasionally throws on stale router instances;
+          // not worth surfacing.
+        }
+      }
+    }, delayMs);
+  }, [controller, rootId, enabled, delayMs, href, router]);
+
+  const cancel = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  return useMemo(
+    () => ({
+      onMouseEnter: fire,
+      onMouseLeave: cancel,
+      onFocus: fire,
+      onBlur: cancel
+    }),
+    [fire, cancel]
+  );
+}
+
 type DiscussionThreadFields = keyof DiscussionThreadTeaser;
 export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: DiscussionThreadFields[]) {
   const controller = useCourseController();
@@ -449,6 +541,31 @@ export class CourseController {
   private _gradebookColumns?: TableController<"gradebook_columns">;
   private _discussionThreadLikes?: TableController<"discussion_thread_likes">;
   private _discussionTopics?: TableController<"discussion_topics">;
+  /**
+   * Per-thread row cache for `<DiscussionThreadsControllerProvider>`.
+   *
+   * Without this, each thread navigation pays a `SELECT * FROM discussion_threads
+   * WHERE root = X` round trip (100–400 ms warm, 1+ s cold). We snapshot
+   * the rows on provider unmount and rehydrate them as
+   * `TableController.initialData` on the next mount, skipping the REST
+   * fetch entirely. The TableController's
+   * `_needsCatchUpAfterInitialDataHydration` path does a since-watermark
+   * refetch once realtime channels join, so any new replies that arrived
+   * while the thread was off-screen still surface within a couple seconds.
+   *
+   * Insertion-ordered `Map` gives O(1) LRU: re-set a key to mark it as
+   * most-recently-used. `_DISCUSSION_THREAD_CACHE_LIMIT` caps memory; older
+   * entries are evicted on overflow.
+   */
+  private _discussionThreadRowsCache: Map<number, DiscussionThread[]> = new Map();
+  private static readonly _DISCUSSION_THREAD_CACHE_LIMIT = 12;
+  /**
+   * In-flight prefetch promises keyed by `root_id`. Stored so that concurrent
+   * `prefetchDiscussionThread()` calls for the same thread (e.g. mouseenter
+   * fires 5x as the user wiggles over a row) coalesce into a single network
+   * round trip instead of N redundant SELECTs.
+   */
+  private _discussionThreadPrefetches: Map<number, Promise<void>> = new Map();
   private _calendarEvents?: TableController<"calendar_events">;
   private _classStaffSettings?: TableController<"class_staff_settings">;
   private _discordChannels?: TableController<"discord_channels">;
@@ -606,6 +723,100 @@ export class CourseController {
       });
     }
     return this._discussionThreadTeasers;
+  }
+
+  /**
+   * Look up cached rows for a thread the user previously visited. Returns
+   * undefined on miss. Hits are reordered to MRU position so the LRU
+   * eviction in {@link cacheDiscussionThreadRows} keeps the most-useful
+   * entries.
+   */
+  getCachedDiscussionThreadRows(rootId: number): DiscussionThread[] | undefined {
+    const rows = this._discussionThreadRowsCache.get(rootId);
+    if (!rows) return undefined;
+    // Mark as MRU by re-inserting (Map preserves insertion order).
+    this._discussionThreadRowsCache.delete(rootId);
+    this._discussionThreadRowsCache.set(rootId, rows);
+    return rows;
+  }
+
+  /**
+   * Snapshot a per-thread `TableController`'s rows for fast rehydration on
+   * the user's next visit. Strips the controller's `__db_pending` flag so
+   * the rows are clean inputs for `TableController.initialData`.
+   *
+   * No-op on empty inputs — caching `[]` would teach the next mount that
+   * the thread has no children, which would briefly hide them while the
+   * since-watermark refetch finishes. Better to just refetch.
+   */
+  cacheDiscussionThreadRows(rootId: number, rows: readonly DiscussionThread[]): void {
+    if (rows.length === 0) return;
+    // Defensive copy + strip controller-private metadata. Spread is safe:
+    // these rows are about to be passed back through `TableController` which
+    // re-stamps `__db_pending` itself.
+    const cleaned = rows.map((r) => {
+      const copy = { ...r } as DiscussionThread & { __db_pending?: boolean };
+      delete copy.__db_pending;
+      return copy as DiscussionThread;
+    });
+    // Re-insert (or insert) at MRU position.
+    this._discussionThreadRowsCache.delete(rootId);
+    this._discussionThreadRowsCache.set(rootId, cleaned);
+    // LRU eviction. `Map.keys().next()` returns the oldest key in
+    // insertion order — exactly what we want.
+    while (this._discussionThreadRowsCache.size > CourseController._DISCUSSION_THREAD_CACHE_LIMIT) {
+      const oldest = this._discussionThreadRowsCache.keys().next();
+      if (oldest.done) break;
+      this._discussionThreadRowsCache.delete(oldest.value);
+    }
+  }
+
+  /**
+   * Best-effort prefetch of a thread's rows so the user's actual click feels
+   * instant. Wired on hover/focus from `<PostRow>`.
+   *
+   * - Cache hit → returns a resolved promise without touching the network.
+   * - In-flight coalesce → repeated calls during the same hover collapse
+   *   into one round trip.
+   * - Errors are silently swallowed: a failed prefetch is harmless — the
+   *   user will simply pay the cost on click as if prefetch hadn't
+   *   existed.
+   *
+   * Runs as a single non-paginated SELECT (PostgREST default cap ~1000 rows).
+   * Threads with >1000 replies are vanishingly rare in practice; if one
+   * shows up, the cache is incomplete but still useful — the
+   * `_needsCatchUpAfterInitialDataHydration` path on the per-thread
+   * `TableController` fills the gap once the user actually navigates in.
+   */
+  prefetchDiscussionThread(rootId: number): Promise<void> {
+    if (this._discussionThreadRowsCache.has(rootId)) {
+      // Mark as MRU so the entry doesn't get evicted right before the user
+      // actually clicks it.
+      this.getCachedDiscussionThreadRows(rootId);
+      return Promise.resolve();
+    }
+    const inFlight = this._discussionThreadPrefetches.get(rootId);
+    if (inFlight) return inFlight;
+
+    const promise = (async () => {
+      try {
+        const { data, error } = await this.client
+          .from("discussion_threads")
+          .select("*")
+          .eq("root", rootId)
+          .order("created_at", { ascending: true });
+        if (error) throw error;
+        if (data && data.length > 0) {
+          this.cacheDiscussionThreadRows(rootId, data as DiscussionThread[]);
+        }
+      } catch {
+        // best-effort; ignore
+      } finally {
+        this._discussionThreadPrefetches.delete(rootId);
+      }
+    })();
+    this._discussionThreadPrefetches.set(rootId, promise);
+    return promise;
   }
 
   get tags(): TableController<"tags"> {
@@ -1443,6 +1654,9 @@ export class CourseController {
     this._livePolls?.close();
     this._surveys?.close();
     this._surveySeries?.close();
+
+    this._discussionThreadRowsCache.clear();
+    this._discussionThreadPrefetches.clear();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();

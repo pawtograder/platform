@@ -68,7 +68,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentType
+  type ComponentType,
+  type CSSProperties
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -82,6 +83,10 @@ import RequestRegradeDialog from "./request-regrade-dialog";
 import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+
+// Module-stable style — see `components/ui/markdown.tsx`. Inline
+// `style={{...}}` literals defeat `<Markdown>`'s `memo` wrapper.
+const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
 export type RubricCheckSubOption = {
   label: string;
@@ -576,7 +581,7 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                 </Flex>
               </Box>
               <Box pl={2}>
-                <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
+                <Markdown style={RUBRIC_CHECK_DESCRIPTION_STYLE}>{rubricCheck.description}</Markdown>
               </Box>
               <Box pl={2} w="100%">
                 {isEditing ? (

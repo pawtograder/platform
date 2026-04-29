@@ -91,8 +91,12 @@ import { useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { FaCheckCircle, FaDownload, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
+
+// Module-stable style — `<Markdown>` is `memo`-wrapped (see
+// `components/ui/markdown.tsx`); inline literals defeat the memo.
+const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
 function FilePicker({ curFile, onSelect }: { curFile: number; onSelect: (fileId: number) => void }) {
   const submission = useSubmission();
@@ -291,7 +295,7 @@ function ArtifactAnnotation({
             </Flex>
           </Box>
           <Box pl={2}>
-            <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
+            <Markdown style={RUBRIC_CHECK_DESCRIPTION_STYLE}>{rubricCheck.description}</Markdown>
           </Box>
           <Box pl={2}>
             {isEditing ? (

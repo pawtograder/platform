@@ -35,8 +35,34 @@ import {
 import excerpt from "@stefanprobst/remark-excerpt";
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type ComponentProps } from "react";
 import { FaFilter, FaHeart, FaPlus, FaThumbtack } from "react-icons/fa";
+
+// Module-stable plugin and component overrides for the teaser preview.
+// `<Markdown>` in `components/ui/markdown.tsx` memoizes the underlying
+// `unified()` processor on plugin-array identity; passing a fresh
+// `[[excerpt, { maxLength: 100 }]]` literal on every render would defeat
+// that memo and re-run the whole highlight.js / unified setup per teaser.
+// Same idea for the `components` override — keeping a single object lets
+// react-markdown reuse its component map.
+type MarkdownComponents = ComponentProps<typeof Markdown>["components"];
+const TEASER_REMARK_PLUGINS = [[excerpt, { maxLength: 100 }]] as const satisfies ComponentProps<
+  typeof Markdown
+>["remarkPlugins"];
+const TEASER_COMPONENTS: MarkdownComponents = {
+  a: ({ children }) => children,
+  img: () => (
+    <Text as="span" color="gray.500">
+      [image]
+    </Text>
+  ),
+  code: ({ children }) => children,
+  pre: ({ children }) => children,
+  blockquote: ({ children }) => children,
+  h1: ({ children }) => children,
+  h2: ({ children }) => children,
+  h3: ({ children }) => children
+};
 
 interface Props {
   thread_id: number;
@@ -101,23 +127,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
               </Box>
             )}
             <Box color="fg.subtle" truncate>
-              <Markdown
-                components={{
-                  a: ({ children }) => children,
-                  img: () => (
-                    <Text as="span" color="gray.500">
-                      [image]
-                    </Text>
-                  ),
-                  code: ({ children }) => children,
-                  pre: ({ children }) => children,
-                  blockquote: ({ children }) => children,
-                  h1: ({ children }) => children,
-                  h2: ({ children }) => children,
-                  h3: ({ children }) => children
-                }}
-                remarkPlugins={[[excerpt, { maxLength: 100 }]]}
-              >
+              <Markdown components={TEASER_COMPONENTS} remarkPlugins={TEASER_REMARK_PLUGINS}>
                 {thread?.body}
               </Markdown>
               <HStack>

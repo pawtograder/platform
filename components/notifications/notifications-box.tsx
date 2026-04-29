@@ -5,10 +5,17 @@ import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/comp
 import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser, { SystemNotification } from "./notification-teaser";
-import { useState, useEffect, useMemo } from "react";
+import { CSSProperties, useState, useEffect, useMemo } from "react";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import Markdown from "@/components/ui/markdown";
+
+// Module-stable style — inline `{{...}}` literals defeat `<Markdown>`'s
+// `memo` because the prop changes identity each render.
+const SYSTEM_BANNER_BODY_STYLE: CSSProperties = {
+  fontSize: "0.875rem",
+  color: "var(--chakra-colors-fg-default)"
+};
 
 export default function NotificationsBox() {
   const { notifications, set_read, dismiss } = useNotifications();
@@ -273,9 +280,7 @@ export default function NotificationsBox() {
                             <Text fontWeight="semibold" fontSize="sm" color="fg.default">
                               {body.title}
                             </Text>
-                            <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)" }}>
-                              {body.message}
-                            </Markdown>
+                            <Markdown style={SYSTEM_BANNER_BODY_STYLE}>{body.message}</Markdown>
                           </VStack>
                           <Button
                             size="xs"

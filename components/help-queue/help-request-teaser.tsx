@@ -6,6 +6,29 @@ import { formatRelative } from "date-fns";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
+
+// Module-stable references — see `components/ui/markdown.tsx`. Inline
+// `components` / `remarkPlugins` literals would force `react-markdown`
+// to rebuild its `unified()` processor every render and re-register
+// highlight.js languages, which dominates discussion-list scrolling cost.
+const TEASER_REMARK_PLUGINS = [[excerpt, { maxLength: 100 }]] as const satisfies Parameters<
+  typeof Markdown
+>[0]["remarkPlugins"];
+const TEASER_COMPONENTS: Parameters<typeof Markdown>[0]["components"] = {
+  a: ({ children }) => children,
+  img: () => (
+    <Text as="span" color="gray.500">
+      [image]
+    </Text>
+  ),
+  code: ({ children }) => children,
+  pre: ({ children }) => children,
+  blockquote: ({ children }) => children,
+  h1: ({ children }) => children,
+  h2: ({ children }) => children,
+  h3: ({ children }) => children
+};
+
 interface MessageData {
   user: string;
   updatedAt: string;
@@ -174,23 +197,7 @@ export const HelpRequestTeaser = (props: Props) => {
           </HStack>
         </HStack>
         <Box truncate>
-          <Markdown
-            components={{
-              a: ({ children }) => children,
-              img: () => (
-                <Text as="span" color="gray.500">
-                  [image]
-                </Text>
-              ),
-              code: ({ children }) => children,
-              pre: ({ children }) => children,
-              blockquote: ({ children }) => children,
-              h1: ({ children }) => children,
-              h2: ({ children }) => children,
-              h3: ({ children }) => children
-            }}
-            remarkPlugins={[[excerpt, { maxLength: 100 }]]}
-          >
+          <Markdown components={TEASER_COMPONENTS} remarkPlugins={TEASER_REMARK_PLUGINS}>
             {message}
           </Markdown>
         </Box>

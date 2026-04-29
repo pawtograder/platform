@@ -19,6 +19,23 @@ import { BsChat } from "react-icons/bs";
 import { FaCheckCircle, FaHeart, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { Skeleton } from "./skeleton";
+
+// Module-stable references — `<Markdown>` (memoized) keys its internal
+// unified-pipeline cache on prop identity. Re-creating these as inline
+// literals on every render forced `react-markdown` to rebuild the
+// `unified()` processor + re-register highlight.js languages on every
+// render, which was the dominant cost in the discussion-board navigation
+// trace (`Trace-20260428T213244.json`). See `components/ui/markdown.tsx`
+// for the full diagnosis.
+const SUMMARY_REMARK_PLUGINS = [[excerpt, { maxLength: 500 }]] as const satisfies Parameters<
+  typeof Markdown
+>[0]["remarkPlugins"];
+const SUMMARY_COMPONENTS: Parameters<typeof Markdown>[0]["components"] = {
+  a: ({ children }) => {
+    return <>{children}</>;
+  }
+};
+
 export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThreadType | ThreadWithChildren }) {
   const { private_profile_id } = useClassProfiles();
   const likeStatus = useDiscussionThreadLikes(thread.id);
@@ -99,14 +116,7 @@ export function DiscussionPostSummary({
               {thread.subject}
             </Text>
           </Box>
-          <Markdown
-            components={{
-              a: ({ children }) => {
-                return <>{children}</>;
-              }
-            }}
-            remarkPlugins={[[excerpt, { maxLength: 500 }]]}
-          >
+          <Markdown components={SUMMARY_COMPONENTS} remarkPlugins={SUMMARY_REMARK_PLUGINS}>
             {thread.body}
           </Markdown>
 
