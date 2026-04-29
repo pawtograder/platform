@@ -1,0 +1,144 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "pawtograder.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.global.hostname | quote }}
+        {{- if .Values.global.apiOnSeparateHost }}
+        - "api.{{ .Values.global.hostname }}"
+        {{- end }}
+        {{- range .Values.ingress.extraHosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.global.hostname | quote }}
+      http:
+        paths:
+          {{- if not .Values.global.apiOnSeparateHost }}
+          - path: /auth/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /rest/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /realtime/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /storage/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          - path: /functions/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.web.host" . }}
+                port:
+                  number: {{ .Values.web.service.port }}
+    {{- if .Values.global.apiOnSeparateHost }}
+    - host: "api.{{ .Values.global.hostname }}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" . }}
+                port:
+                  number: {{ .Values.kong.service.port }}
+    {{- end }}
+    {{- /*
+    extraHosts get the same routing as the primary hostname so a TLS
+    SAN listed in .ingress.tls.hosts actually serves traffic. Without
+    this, requests to those hostnames hit the ingress controller's
+    default backend (404).
+    */ -}}
+    {{- range .Values.ingress.extraHosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          {{- if not $.Values.global.apiOnSeparateHost }}
+          - path: /auth/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /rest/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /realtime/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /storage/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          - path: /functions/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.kong.host" $ }}
+                port:
+                  number: {{ $.Values.kong.service.port }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pawtograder.web.host" $ }}
+                port:
+                  number: {{ $.Values.web.service.port }}
+    {{- end }}
+{{- end }}

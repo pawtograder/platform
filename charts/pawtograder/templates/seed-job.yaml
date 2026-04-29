@@ -1,0 +1,59 @@
+{{- if and .Values.postgres.enabled .Values.seed.enabled }}
+# Seed Job: applies supabase/seed.sql to create the Demo Class (and
+# canned auth.users / assignments / submissions). Runs as a
+# post-install,post-upgrade Helm hook so migrations + supabase services
+# are already up. Idempotent — seed.sh skips if the demo class exists.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "seed") }}-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "seed") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "seed") | nindent 8 }}
+    spec:
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.migrations.image) }}
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          command: ["/usr/local/bin/seed"]
+          env:
+            - name: PGHOST
+              value: {{ include "pawtograder.postgres.host" . }}
+            - name: PGPORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
+            # supabase_admin is needed because seed.sql writes into
+            # auth.users (owned by supabase_auth_admin) and other schemas
+            # the demoted `postgres` role can't reach.
+            - name: PGUSER
+              value: supabase_admin
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+          resources:
+            {{- toYaml .Values.seed.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.postgres)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.postgres)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

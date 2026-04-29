@@ -1,7 +1,21 @@
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Retry npm ci to absorb transient download flakes — particularly the
+# `supabase` dev-dep's postinstall script, which fetches the supabase CLI
+# tarball from github.com/releases and occasionally truncates mid-stream
+# (Z_DATA_ERROR: incorrect header check). The retries here cover both
+# npm's own fetcher (npm config) and the postinstall scripts (outer loop).
+RUN npm config set fetch-retries 5 \
+ && npm config set fetch-retry-mintimeout 10000 \
+ && npm config set fetch-retry-maxtimeout 60000 \
+ && success=0 \
+ && for i in 1 2 3; do \
+      if npm ci; then success=1; break; fi; \
+      echo "npm ci attempt $i failed; sleeping 10s"; \
+      sleep 10; \
+    done \
+ && test "$success" -eq 1
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app

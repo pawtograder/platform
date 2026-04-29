@@ -1161,6 +1161,39 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       try {
+        // E2E load-test fast path: bypass GitHub entirely. When E2E_MOCK_GITHUB is set
+        // and this is an E2E repo, skip cloneRepository/zip-extraction/getRepoTarballURL
+        // and insert one canned submission_files row so submit-feedback can still
+        // resolve file_name lookups for synthetic line comments.
+        const e2eMockGithub = isE2ERun && Deno.env.get("E2E_MOCK_GITHUB") === "true";
+        if (e2eMockGithub && !isRegressionRerun) {
+          if (submission_id === undefined) {
+            throw new UserVisibleError("Internal error: submission id missing while saving E2E mock files", 500);
+          }
+          const mockContents = "// E2E mock submission\npublic class Main { public static void main(String[] a) {} }\n";
+          const { error: textFileError } = await adminSupabase.from("submission_files").insert({
+            submission_id,
+            name: "Main.java",
+            profile_id: repoData.profile_id,
+            assignment_group_id: repoData.assignment_group_id,
+            contents: mockContents,
+            class_id: repoData.assignments.class_id!,
+            is_binary: false,
+            file_size: mockContents.length
+          });
+          if (textFileError) {
+            Sentry.captureException(textFileError, scope);
+            throw new UserVisibleError(
+              `Internal error: Failed to insert mock submission file: ${textFileError.message}`
+            );
+          }
+          return {
+            grader_url: "e2e-mock-grader-url",
+            grader_sha: "e2e-mock-grader-sha",
+            submission_id
+          };
+        }
+
         // Clone the repository
         const repoToClone = getRepoToCloneConsideringE2E(repository);
         const repo = await handleGitHubApiCall(

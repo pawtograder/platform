@@ -1,0 +1,120 @@
+{{- if .Values.edgeFunctions.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.edgeFunctions.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.edgeFunctions.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
+---
+# The functions image is built upstream from this chart by the pawtograder
+# release pipeline: it copies supabase/functions/ on top of supabase/edge-runtime
+# and pins a deno cache. We just point edge-runtime at /home/deno/functions.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.edgeFunctions.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
+spec:
+  replicas: {{ .Values.edgeFunctions.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: functions
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.edgeFunctions.image) }}
+          imagePullPolicy: {{ .Values.edgeFunctions.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.edgeFunctions.service.port }}
+          command: ["edge-runtime"]
+          # NOTE: --no-verify-jwt isn't supported by edge-runtime v1.69.5;
+          # JWT verification (or lack thereof) is handled inside main.ts.
+          args:
+            - start
+            - --main-service
+            - /home/deno/functions/main
+            - -p
+            - "{{ .Values.edgeFunctions.service.port }}"
+            - --policy
+            - {{ .Values.edgeFunctions.policy | quote }}
+          env:
+            - name: SUPABASE_URL
+              value: "http://{{ include "pawtograder.kong.host" . }}:{{ .Values.kong.service.port }}"
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: ANON_KEY
+            - name: SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: SERVICE_ROLE_KEY
+            # POSTGRES_PASSWORD MUST come before SUPABASE_DB_URL so the
+            # `$(POSTGRES_PASSWORD)` reference below substitutes — k8s only
+            # interpolates env vars defined earlier in the same container.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            - name: SUPABASE_DB_URL
+              value: "postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
+            - name: VERIFY_JWT
+              value: {{ .Values.edgeFunctions.verifyJwt | quote }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            {{- if .Values.edgeFunctions.e2e.enabled }}
+            - name: E2E_ENABLE
+              value: "true"
+            {{- end }}
+            {{- if .Values.edgeFunctions.e2e.mockGitHub }}
+            - name: E2E_MOCK_GITHUB
+              value: "true"
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.names.edgeFunctions }}
+                optional: true
+            {{- range .Values.edgeFunctions.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+                optional: true
+            {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.edgeFunctions.resources | nindent 12 }}
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.edgeFunctions)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.edgeFunctions)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}

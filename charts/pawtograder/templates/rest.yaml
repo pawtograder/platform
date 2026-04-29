@@ -1,0 +1,111 @@
+{{- if .Values.rest.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.rest.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.rest.service.port }}
+      targetPort: http
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "rest") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pawtograder.rest.host" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest") | nindent 4 }}
+spec:
+  replicas: {{ .Values.rest.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "rest") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "rest") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.serviceAccountName" . }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: postgrest
+          image: {{ include "pawtograder.image" (dict "ctx" . "image" .Values.rest.image) }}
+          imagePullPolicy: {{ .Values.rest.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.rest.service.port }}
+          env:
+            # POSTGRES_PASSWORD MUST come before PGRST_DB_URI so the
+            # `$(POSTGRES_PASSWORD)` reference below substitutes — k8s only
+            # interpolates env vars defined earlier in the same container.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.postgres }}
+                  key: POSTGRES_PASSWORD
+            # Direct postgres, NOT supavisor: supavisor requires explicit
+            # tenant registration via its management API; without that you
+            # get "FATAL: Tenant or user not found". For load testing we
+            # rely on postgres' native connection limits and PostgREST's
+            # internal pooling. Switch back to supavisor once we've wired
+            # tenant registration into the chart.
+            - name: PGRST_DB_URI
+              value: "postgres://authenticator:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
+            - name: PGRST_DB_SCHEMAS
+              value: {{ .Values.rest.schemas | quote }}
+            - name: PGRST_DB_EXTRA_SEARCH_PATH
+              value: {{ .Values.rest.extraSearchPath | quote }}
+            - name: PGRST_DB_ANON_ROLE
+              value: anon
+            - name: PGRST_DB_USE_LEGACY_GUCS
+              value: "false"
+            - name: PGRST_DB_MAX_ROWS
+              value: {{ .Values.rest.maxRows | quote }}
+            # PostgREST verifies JWTs against a JWKS containing both the
+            # ES256 session key and the HS256 oct key (for ANON/SERVICE).
+            # `@<file>` form loads the JSON Web Key Set from disk.
+            - name: PGRST_JWT_SECRET
+              value: "@/etc/postgrest/jwks.json"
+            - name: PGRST_APP_SETTINGS_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            - name: PGRST_APP_SETTINGS_JWT_EXP
+              value: {{ .Values.auth.jwtExpiry | quote }}
+            - name: PGRST_SERVER_PORT
+              value: {{ .Values.rest.service.port | quote }}
+          volumeMounts:
+            - name: jwks
+              mountPath: /etc/postgrest
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.rest.resources | nindent 12 }}
+      volumes:
+        - name: jwks
+          secret:
+            secretName: {{ .Values.secrets.names.jwt }}
+            items:
+              - key: JWT_PUBLIC_JWKS
+                path: jwks.json
+      {{- with (include "pawtograder.nodeSelector" (dict "ctx" . "component" .Values.rest)) }}
+      nodeSelector:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with (include "pawtograder.tolerations" (dict "ctx" . "component" .Values.rest)) }}
+      tolerations:
+        {{- . | nindent 8 }}
+      {{- end }}
+{{- end }}
