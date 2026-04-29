@@ -950,6 +950,22 @@ export type SelfReviewSettings = GetResult<
   "*"
 >;
 
+export type GradingAssignmentDefaultProfile = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["grading_assignment_default_profiles"]["Row"],
+  "grading_assignment_default_profiles",
+  Database["public"]["Tables"]["grading_assignment_default_profiles"]["Relationships"],
+  "*"
+>;
+
+export type AssignmentGradingAutomationState = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignment_grading_automation_state"]["Row"],
+  "assignment_grading_automation_state",
+  Database["public"]["Tables"]["assignment_grading_automation_state"]["Relationships"],
+  "*"
+>;
+
 export type ReviewAssignments = GetResult<
   Database["public"],
   Database["public"]["Tables"]["review_assignments"]["Row"],

@@ -8,26 +8,32 @@ import {
 } from "@/lib/edgeFunctions";
 import { revalidateCourseDerivedCachesClient } from "@/lib/revalidateCourseDerivedCachesClient";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
-import CreateAssignment from "./form";
 import { Box, Heading, Text } from "@chakra-ui/react";
+import CreateAssignment, { AssignmentFormValues } from "./form";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
-  const form = useForm<Assignment>({
+  const form = useForm<AssignmentFormValues>({
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
       allow_not_graded_submissions: true,
-      permit_empty_submissions: true
+      permit_empty_submissions: true,
+      grading_default_profile_id: null,
+      auto_assign_at_deadline: false,
+      auto_assign_assignee_pool: "graders",
+      auto_assign_review_due_hours: 72,
+      late_grading_reminders_enabled: false,
+      late_grading_reminder_interval_hours: 12,
+      late_grading_reply_to: null,
+      late_grading_cc_emails: { emails: [] }
     }
   });
   const router = useRouter();
-  const { getValues } = form;
   const { time_zone } = useCourse();
   const timezone = time_zone || "America/New_York";
 
@@ -55,14 +61,14 @@ export default function NewAssignmentPage() {
       try {
         const supabase = createClient();
         // create the self eval configuration first
-        const isEnabled = getValues("eval_config") === "use_eval";
+        const isEnabled = form.getValues("eval_config") === "use_eval";
         const settings = await mutateAsync(
           {
             resource: "assignment_self_review_settings",
             values: {
               enabled: isEnabled,
-              deadline_offset: isEnabled ? getValues("deadline_offset") : null,
-              allow_early: isEnabled ? getValues("allow_early") : null,
+              deadline_offset: isEnabled ? form.getValues("deadline_offset") : null,
+              allow_early: isEnabled ? form.getValues("allow_early") : null,
               class_id: course_id
             }
           },
@@ -77,35 +83,47 @@ export default function NewAssignmentPage() {
           return;
         }
 
+        const remindersEnabled = form.getValues("late_grading_reminders_enabled") ?? false;
+
         const { data, error } = await supabase
           .from("assignments")
           .insert({
-            title: getValues("title"),
-            slug: getValues("slug"),
-            release_date: getValues("release_date")
-              ? new TZDate(getValues("release_date"), timezone).toISOString()
+            title: form.getValues("title"),
+            slug: form.getValues("slug"),
+            release_date: form.getValues("release_date")
+              ? new TZDate(form.getValues("release_date"), timezone).toISOString()
               : "",
-            due_date: getValues("due_date") ? new TZDate(getValues("due_date"), timezone).toISOString() : "",
-            allow_late: getValues("allow_late"),
-            description: getValues("description"),
-            max_late_tokens: getValues("max_late_tokens") || null,
-            allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
-            permit_empty_submissions: getValues("permit_empty_submissions") !== false,
-            total_points: getValues("total_points"),
-            template_repo: getValues("template_repo"),
-            submission_files: getValues("submission_files"),
+            due_date: form.getValues("due_date") ? new TZDate(form.getValues("due_date"), timezone).toISOString() : "",
+            allow_late: form.getValues("allow_late"),
+            description: form.getValues("description"),
+            max_late_tokens: form.getValues("max_late_tokens") || null,
+            allow_not_graded_submissions: form.getValues("allow_not_graded_submissions"),
+            permit_empty_submissions: form.getValues("permit_empty_submissions") !== false,
+            total_points: form.getValues("total_points"),
+            template_repo: form.getValues("template_repo"),
+            submission_files: form.getValues("submission_files"),
             has_autograder: true,
             has_handgrader: true,
             class_id: Number.parseInt(course_id as string),
-            group_config: getValues("group_config"),
-            min_group_size: getValues("min_group_size") || null,
-            max_group_size: getValues("max_group_size") || null,
-            allow_student_formed_groups: getValues("allow_student_formed_groups"),
-            enable_repo_analytics: getValues("enable_repo_analytics") || false,
+            group_config: form.getValues("group_config"),
+            min_group_size: form.getValues("min_group_size") || null,
+            max_group_size: form.getValues("max_group_size") || null,
+            allow_student_formed_groups: form.getValues("allow_student_formed_groups"),
+            enable_repo_analytics: form.getValues("enable_repo_analytics") || false,
             self_review_setting_id: settings.data.id as number,
-            group_formation_deadline: getValues("group_formation_deadline")
-              ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
-              : null
+            group_formation_deadline: form.getValues("group_formation_deadline")
+              ? new TZDate(form.getValues("group_formation_deadline"), timezone).toISOString()
+              : null,
+            grading_default_profile_id: form.getValues("grading_default_profile_id") ?? null,
+            auto_assign_at_deadline: form.getValues("auto_assign_at_deadline") ?? false,
+            auto_assign_assignee_pool: form.getValues("auto_assign_assignee_pool") ?? "graders",
+            auto_assign_review_due_hours: form.getValues("auto_assign_review_due_hours") ?? 72,
+            late_grading_reminders_enabled: remindersEnabled,
+            late_grading_reminder_interval_hours: remindersEnabled
+              ? (form.getValues("late_grading_reminder_interval_hours") ?? 12)
+              : null,
+            late_grading_reply_to: form.getValues("late_grading_reply_to") ?? null,
+            late_grading_cc_emails: form.getValues("late_grading_cc_emails") ?? { emails: [] }
           })
           .select("id")
           .single();
@@ -124,10 +142,10 @@ export default function NewAssignmentPage() {
             supabase
           );
           //Potentially copy groups from another assignment
-          if (getValues("copy_groups_from_assignment")) {
+          if (form.getValues("copy_groups_from_assignment")) {
             await assignmentGroupCopyGroupsFromAssignment(
               {
-                source_assignment_id: getValues("copy_groups_from_assignment"),
+                source_assignment_id: form.getValues("copy_groups_from_assignment"),
                 target_assignment_id: data.id,
                 class_id: Number.parseInt(course_id as string)
               },
@@ -158,7 +176,7 @@ export default function NewAssignmentPage() {
       }
     }
     await create();
-  }, [course_id, getValues, router, mutateAsync, timezone]);
+  }, [course_id, form, router, mutateAsync, timezone]);
   return (
     <Box p={4}>
       <Heading size="lg">Create New Assignment</Heading>

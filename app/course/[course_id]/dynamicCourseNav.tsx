@@ -169,6 +169,12 @@ const LinkItems = (courseID: number) => [
       },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       {
+        name: "Grading Assignment Defaults",
+        instructors_only: true,
+        icon: FiClock,
+        target: `/course/${courseID}/manage/course/grading-assignment-defaults`
+      },
+      {
         name: "Due Date Extensions",
         instructors_only: true,
         icon: FiClock,
