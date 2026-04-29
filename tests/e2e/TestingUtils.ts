@@ -2030,7 +2030,7 @@ export async function createRegradeRequest(
   grader_profile_id: string,
   rubric_check_id: number,
   class_id: number,
-  status: "opened" | "resolved" | "closed",
+  status: "draft" | "opened" | "resolved" | "escalated" | "closed",
   options?: {
     commentPoints?: number;
     initialPoints?: number;
@@ -2063,20 +2063,29 @@ export async function createRegradeRequest(
     throw new Error(`Failed to create submission comment: ${commentError.message}`);
   }
 
+  const nowIso = new Date().toISOString();
+  const openedAt = status === "draft" ? null : nowIso;
+  const resolvedBy = status === "resolved" || status === "closed" ? grader_profile_id : null;
+  const resolvedAt = status === "resolved" || status === "closed" ? nowIso : null;
+  const escalatedAt = status === "escalated" ? nowIso : null;
+  const escalatedBy = status === "escalated" ? student_profile_id : null;
+
   const { data: regradeData, error: regradeError } = await supabase
     .from("submission_regrade_requests")
     .insert({
       submission_id: submission_id,
       class_id: class_id,
       assignment_id: assignment_id,
-      opened_at: new Date().toISOString(),
+      opened_at: openedAt,
       created_by: student_profile_id,
       assignee: grader_profile_id,
       closed_by: status === "closed" ? grader_profile_id : null,
-      closed_at: status === "closed" ? new Date().toISOString() : null,
+      closed_at: status === "closed" ? nowIso : null,
       status: status,
-      resolved_by: status === "resolved" || status === "closed" ? grader_profile_id : null,
-      resolved_at: status === "resolved" || status === "closed" ? new Date().toISOString() : null,
+      resolved_by: resolvedBy,
+      resolved_at: resolvedAt,
+      escalated_at: escalatedAt,
+      escalated_by: escalatedBy,
       submission_comment_id: commentData.id, // Reference the comment we just created
       initial_points: options?.initialPoints ?? Math.floor(Math.random() * 100),
       resolved_points:
@@ -2084,7 +2093,7 @@ export async function createRegradeRequest(
           ? (options?.resolvedPoints ?? Math.floor(Math.random() * 100))
           : null,
       closed_points: status === "closed" ? (options?.closedPoints ?? Math.floor(Math.random() * 100)) : null,
-      last_updated_at: new Date().toISOString()
+      last_updated_at: nowIso
     })
     .select("*")
     .single();
