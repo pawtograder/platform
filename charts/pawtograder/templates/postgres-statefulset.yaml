@@ -106,8 +106,12 @@ spec:
             exec:
               command:
                 - pg_isready
+                # Probe the bootstrap superuser, not `postgres`. The
+                # `postgres` role is created later by migrate.sh; on first
+                # boot it doesn't exist yet, so probing it would keep the
+                # pod NotReady (or trip liveness) until migrations finish.
                 - -U
-                - postgres
+                - supabase_admin
                 - -d
                 - {{ .Values.postgres.database }}
             initialDelaySeconds: 10
@@ -117,8 +121,12 @@ spec:
             exec:
               command:
                 - pg_isready
+                # Probe the bootstrap superuser, not `postgres`. The
+                # `postgres` role is created later by migrate.sh; on first
+                # boot it doesn't exist yet, so probing it would keep the
+                # pod NotReady (or trip liveness) until migrations finish.
                 - -U
-                - postgres
+                - supabase_admin
                 - -d
                 - {{ .Values.postgres.database }}
             initialDelaySeconds: 30
@@ -127,6 +135,15 @@ spec:
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
       volumes:
+        {{- if not .Values.postgres.persistence.enabled }}
+        # No PVC requested — back the data dir with an emptyDir so the pod
+        # can still start. NOTE: emptyDir is ephemeral; the database is
+        # wiped whenever the pod is rescheduled. Only useful for previews
+        # / disposable test environments. Persistent deployments must set
+        # postgres.persistence.enabled=true.
+        - name: data
+          emptyDir: {}
+        {{- end }}
         - name: config
           configMap:
             name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-config") }}

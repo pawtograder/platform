@@ -68,13 +68,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: SERVICE_ROLE_KEY
-            - name: SUPABASE_DB_URL
-              value: "postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
+            # POSTGRES_PASSWORD MUST come before SUPABASE_DB_URL so the
+            # `$(POSTGRES_PASSWORD)` reference below substitutes — k8s only
+            # interpolates env vars defined earlier in the same container.
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            - name: SUPABASE_DB_URL
+              value: "postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "pawtograder.postgres.host" . }}:{{ .Values.postgres.service.port }}/{{ .Values.postgres.database }}"
             - name: VERIFY_JWT
               value: {{ .Values.edgeFunctions.verifyJwt | quote }}
             - name: JWT_SECRET
