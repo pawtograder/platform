@@ -154,9 +154,28 @@ jobs:
           MINIO_SECRET: ${{ secrets.MINIO_PREVIEW_SECRET_KEY }}
         run: |
           set -euo pipefail
-          if kubectl -n "$NS" get secret pawtograder-jwt >/dev/null 2>&1; then
-            echo "pawtograder-jwt exists — reusing existing namespace secrets"
+          # All-or-nothing semantics: if every required secret exists we
+          # reuse them; if none exist we generate fresh; partial state is a
+          # hard error (deleting one secret out from under the chart and
+          # auto-filling it would silently change the JWT keys / DB password
+          # for an in-flight preview).
+          required=(pawtograder-jwt pawtograder-postgres pawtograder-e2e pawtograder-s3)
+          present=()
+          missing=()
+          for s in "${required[@]}"; do
+            if kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
+              present+=("$s")
+            else
+              missing+=("$s")
+            fi
+          done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "All required secrets present in $NS — reusing"
             exit 0
+          fi
+          if [ "${#present[@]}" -ne 0 ]; then
+            echo "::error::Namespace $NS has a partial secret set. Present: ${present[*]}. Missing: ${missing[*]}. Refusing to auto-fill — delete the remaining secrets (or the whole namespace) and re-run to regenerate."
+            exit 1
           fi
           if [ -z "${MINIO_ACCESS:-}" ] || [ -z "${MINIO_SECRET:-}" ]; then
             echo "::error::MINIO_PREVIEW_ACCESS_KEY / MINIO_PREVIEW_SECRET_KEY required for first install"
@@ -349,12 +368,16 @@ jobs:
           # The chart's migrations Job runs as a regular install resource
           # with init containers waiting on supabase services. helm --wait
           # only waits for Deployments/StatefulSets, so we explicitly poll.
-          kubectl -n "${{ needs.meta.outputs.namespace }}" wait \
+          # Fail loudly on timeout: a preview without a migrated schema is a
+          # broken preview, and we don't want the comment-on-PR step to post
+          # "Preview deployed" over the top of it.
+          if ! kubectl -n "${{ needs.meta.outputs.namespace }}" wait \
             --for=condition=Complete --timeout=10m \
-            job -l app.kubernetes.io/component=migrations || {
-              echo "::warning::migrations job didn't complete; preview may be partially functional"
-              kubectl -n "${{ needs.meta.outputs.namespace }}" get pods,jobs
-            }
+            job -l app.kubernetes.io/component=migrations; then
+            echo "::error::migrations job didn't complete within 10m"
+            kubectl -n "${{ needs.meta.outputs.namespace }}" get pods,jobs
+            exit 1
+          fi
 
       - name: Status snapshot
         if: always()
