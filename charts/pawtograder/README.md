@@ -51,19 +51,43 @@ SOPS-encrypted manifests) and set `secrets.create=false`.
 
 ## Required Secrets when `secrets.create=false`
 
-| Secret name (default)        | Required keys                                                |
-| ---------------------------- | ------------------------------------------------------------ |
-| `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                  |
-| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`                 |
-| `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (if SMTP) |
-| `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage) |
-| `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for |
-|                              | GitHub App, Discord, Canvas, LLM credentials, etc.           |
-| `pawtograder-edge-functions` | Optional. Same idea, mounted into the edge-runtime pod.      |
+| Secret name (default)        | Required keys                                                                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pawtograder-postgres`       | `POSTGRES_PASSWORD`, `PAWTOGRADER_PASSWORD`                                                                                                                                                                                                                  |
+| `pawtograder-jwt`            | `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `JWT_PRIVATE_JWKS`, `JWT_PUBLIC_JWKS`, `JWT_REALTIME_JWKS`, `REALTIME_ENC_KEY`, `PG_META_CRYPTO_KEY`, `PGSODIUM_ROOT_KEY` (+ `SUPAVISOR_SECRET_KEY_BASE`, `SUPAVISOR_VAULT_ENC_KEY`, `SUPAVISOR_API_JWT_SECRET`, `SUPAVISOR_METRICS_JWT_SECRET` if `supavisor.enabled=true`) |
+| `pawtograder-smtp`           | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (if SMTP)                                                                                                                                                                                                 |
+| `pawtograder-s3`             | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (if S3 storage)                                                                                                                                                                                                 |
+| `pawtograder-web`            | Optional. Mounted via envFrom into the web pod. Use this for GitHub App, Discord, Canvas, LLM credentials, etc.                                                                                                                                              |
+| `pawtograder-edge-functions` | Optional. Same idea, mounted into the edge-runtime pod.                                                                                                                                                                                                      |
+
+The full set of keys consumed from `pawtograder-jwt`:
+
+- `JWT_SECRET` — HS256 secret used by GoTrue, PostgREST, Realtime, Kong, the
+  edge runtime, and the bootstrap superuser's `app.jwt_secret` GUC. Sized at
+  ≥ 32 bytes.
+- `ANON_KEY`, `SERVICE_ROLE_KEY` — long-lived HS256 JWTs (`role=anon` and
+  `role=service_role`) signed with `JWT_SECRET`.
+- `JWT_PRIVATE_JWKS` — JSON array of private JWKs for asymmetric session
+  signing (consumed by GoTrue as `GOTRUE_JWT_KEYS`).
+- `JWT_PUBLIC_JWKS` — JWK Set object `{"keys":[…]}` of public material for
+  PostgREST / storage-api verification.
+- `JWT_REALTIME_JWKS` — EC-only JWK Set (Joken can't accept `oct` JWK maps);
+  Realtime falls back to `JWT_SECRET` for HS256 verification.
+- `REALTIME_ENC_KEY` — AES-128 (exactly 16 bytes) for realtime tenant
+  secret encryption.
+- `PG_META_CRYPTO_KEY` — AES-256 (base64) shared between postgres-meta and
+  Studio for encrypting saved DB connection strings.
+- `PGSODIUM_ROOT_KEY` — 32-byte hex; mounted as a file into the postgres
+  pod for `pgsodium` server-secret-key initialization.
+- `SUPAVISOR_*` — distinct per-purpose secrets used only when supavisor is
+  enabled (Phoenix endpoint key, Vault encryption, API JWT, metrics JWT —
+  each has its own length / role requirement; do not reuse one value
+  across all four).
 
 `ANON_KEY` and `SERVICE_ROLE_KEY` are JWTs signed with `JWT_SECRET`. Generate
-them using the helper script in `scripts/generate-jwt.ts` (or any JWT library)
-with claims:
+the entire bundle (private/public/realtime JWKs, anon + service-role tokens,
+realtime/pg-meta/pgsodium keys, postgres passwords) using the helper script
+in `scripts/GenerateJwtKeys.ts` (or any JWT library) with claims:
 
 ```json
 { "iss": "supabase", "ref": "pawtograder", "role": "anon",         "iat": <now>, "exp": <far-future> }
