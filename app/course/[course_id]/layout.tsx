@@ -44,8 +44,12 @@ const ProtectedLayout = async ({
     redirect("/");
   }
 
-  // Pre-fetch all course controller data on the server with caching
-  const initialData = await fetchCourseControllerData(Number.parseInt(course_id), user_role.role);
+  // Staff pages should stream quickly even for very large classes; avoid blocking layout render
+  // on a full table prefetch bundle.
+  const shouldPrefetchCourseData = user_role.role === "student";
+  const initialData = shouldPrefetchCourseData
+    ? await fetchCourseControllerData(Number.parseInt(course_id), user_role.role)
+    : undefined;
 
   // Get course information for timezone
   const course = await getCourse(Number.parseInt(course_id));

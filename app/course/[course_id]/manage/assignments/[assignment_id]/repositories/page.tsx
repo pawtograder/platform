@@ -3,6 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -706,6 +707,11 @@ export default function RepositoriesPage() {
   }, [data]);
 
   const selectedCount = getSelectedRowModel().rows.length;
+  const tableRows = getRowModel().rows;
+  const rowWindow = useVirtualizedRowWindow(tableRows, {
+    estimatedRowHeight: 72,
+    minRowsForVirtualization: 80
+  });
 
   return (
     <VStack w="100%">
@@ -743,7 +749,7 @@ export default function RepositoriesPage() {
             </Button>
           </HStack>
         )}
-        <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
+        <Box overflowX="auto" maxW="100vw" w="100%">
           <HStack justifyContent="space-between" alignItems="flex-start" w="100%" mb={2}>
             <Heading size="sm">Repository Status</Heading>
             <FixRepoPermissionsButton
@@ -752,121 +758,133 @@ export default function RepositoriesPage() {
               tableController={repositories}
             />
           </HStack>
-          <Table.Root minW="0" w="100%">
-            <Table.Header>
-              {getHeaderGroups().map((headerGroup) => (
-                <Table.Row key={headerGroup.id} bg="bg.subtle">
-                  {headerGroup.headers.map((header) => (
-                    <Table.ColumnHeader key={header.id}>
-                      {header.isPlaceholder ? null : (
-                        <>
-                          <Text onClick={header.column.getToggleSortingHandler()}>
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            {{
-                              asc: " 🔼",
-                              desc: " 🔽"
-                            }[header.column.getIsSorted() as string] ?? " 🔄"}
-                          </Text>
-                          {header.id === "group_name" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.groups.map((name) => ({ label: name, value: name }))}
-                              placeholder="Filter by group..."
-                            />
-                          )}
-                          {header.id === "profile_name" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.students.map((name) => ({ label: name, value: name }))}
-                              placeholder="Filter by student..."
-                            />
-                          )}
-                          {header.id === "repository" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.repos.map((repo) => ({ label: repo, value: repo }))}
-                              placeholder="Filter by repository..."
-                            />
-                          )}
-                          {header.id === "is_github_ready" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                { label: "Yes", value: "Yes" },
-                                { label: "No", value: "No" }
-                              ]}
-                              placeholder="Filter by readiness..."
-                            />
-                          )}
-                          {header.id === "synced_sha" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.syncedShas.map((sha) => ({ label: sha, value: sha }))}
-                              placeholder="Filter by synced SHA..."
-                            />
-                          )}
-                          {header.id === "sync_status" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                { label: "No Sync Requested", value: "No Sync Requested" },
-                                { label: "Synced", value: "Synced" },
-                                { label: "Not Up-to-date", value: "Not Up-to-date" },
-                                { label: "PR Open", value: "PR Open" },
-                                { label: "Sync Finalizing", value: "Sync Finalizing" },
-                                { label: "Sync in Progress", value: "Sync in Progress" },
-                                { label: "Sync Error", value: "Sync Error" }
-                              ]}
-                              placeholder="Filter by sync status..."
-                            />
-                          )}
-                        </>
-                      )}
-                    </Table.ColumnHeader>
-                  ))}
-                </Table.Row>
-              ))}
-            </Table.Header>
-            <Table.Body>
-              {getRowModel().rows.map((row) => (
-                <Table.Row key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                  ))}
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
+          <Box ref={rowWindow.containerRef} onScroll={rowWindow.onScroll} overflowY="auto" maxH="70vh">
+            <Table.Root minW="0" w="100%">
+              <Table.Header>
+                {getHeaderGroups().map((headerGroup) => (
+                  <Table.Row key={headerGroup.id} bg="bg.subtle">
+                    {headerGroup.headers.map((header) => (
+                      <Table.ColumnHeader key={header.id}>
+                        {header.isPlaceholder ? null : (
+                          <>
+                            <Text onClick={header.column.getToggleSortingHandler()}>
+                              {flexRender(header.column.columnDef.header, header.getContext())}
+                              {{
+                                asc: " 🔼",
+                                desc: " 🔽"
+                              }[header.column.getIsSorted() as string] ?? " 🔄"}
+                            </Text>
+                            {header.id === "group_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.groups.map((name) => ({ label: name, value: name }))}
+                                placeholder="Filter by group..."
+                              />
+                            )}
+                            {header.id === "profile_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.students.map((name) => ({ label: name, value: name }))}
+                                placeholder="Filter by student..."
+                              />
+                            )}
+                            {header.id === "repository" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.repos.map((repo) => ({ label: repo, value: repo }))}
+                                placeholder="Filter by repository..."
+                              />
+                            )}
+                            {header.id === "is_github_ready" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Yes", value: "Yes" },
+                                  { label: "No", value: "No" }
+                                ]}
+                                placeholder="Filter by readiness..."
+                              />
+                            )}
+                            {header.id === "synced_sha" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.syncedShas.map((sha) => ({ label: sha, value: sha }))}
+                                placeholder="Filter by synced SHA..."
+                              />
+                            )}
+                            {header.id === "sync_status" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "No Sync Requested", value: "No Sync Requested" },
+                                  { label: "Synced", value: "Synced" },
+                                  { label: "Not Up-to-date", value: "Not Up-to-date" },
+                                  { label: "PR Open", value: "PR Open" },
+                                  { label: "Sync Finalizing", value: "Sync Finalizing" },
+                                  { label: "Sync in Progress", value: "Sync in Progress" },
+                                  { label: "Sync Error", value: "Sync Error" }
+                                ]}
+                                placeholder="Filter by sync status..."
+                              />
+                            )}
+                          </>
+                        )}
+                      </Table.ColumnHeader>
+                    ))}
+                  </Table.Row>
+                ))}
+              </Table.Header>
+              <Table.Body>
+                {rowWindow.shouldVirtualize && rowWindow.paddingTop > 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
+                  </Table.Row>
+                ) : null}
+                {rowWindow.visibleRows.map((row) => (
+                  <Table.Row key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
+                    ))}
+                  </Table.Row>
+                ))}
+                {rowWindow.shouldVirtualize && rowWindow.paddingBottom > 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
+                  </Table.Row>
+                ) : null}
+              </Table.Body>
+            </Table.Root>
+          </Box>
         </Box>
 
         <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
