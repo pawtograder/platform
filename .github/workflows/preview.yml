@@ -107,35 +107,20 @@ jobs:
           } | tee -a "$GITHUB_OUTPUT"
 
   # --------------------------------------------------------------------------
-  # keys — for each preview namespace, REUSE existing secrets when the
-  # release is already installed (so PR sync pushes don't rotate the DB
-  # password / anon key out from under the running pods). Generate fresh
-  # only on first install.
+  # secrets — ensure the preview namespace has all chart-required secrets
+  # before build / deploy. The cluster is the source of truth: subsequent
+  # jobs READ from the namespace rather than receive secret values via job
+  # outputs (GH Actions strips outputs that match registered secret masks).
   #
-  # The same values feed:
-  #   - build-web (NEXT_PUBLIC_SUPABASE_ANON_KEY inlined into client bundle)
-  #   - deploy (--set-string secrets.values.* — chart re-applies the same
-  #     values, idempotent)
-  # so build/runtime keys always match.
+  # First install: generate fresh values via GenerateJwtKeys.ts and write
+  # pawtograder-{jwt,postgres,e2e,s3}.
+  # Subsequent installs: leave existing Secrets alone — same DB password +
+  # anon key persist across PR-sync pushes.
   # --------------------------------------------------------------------------
-  keys:
+  secrets:
     needs: meta
     if: needs.meta.outputs.mode == 'deploy'
     runs-on: ubuntu-latest
-    outputs:
-      anon_key: ${{ steps.gen.outputs.anon_key }}
-      service_role_key: ${{ steps.gen.outputs.service_role_key }}
-      jwt_secret: ${{ steps.gen.outputs.jwt_secret }}
-      jwt_private_jwks: ${{ steps.gen.outputs.jwt_private_jwks }}
-      jwt_public_jwks: ${{ steps.gen.outputs.jwt_public_jwks }}
-      jwt_realtime_jwks: ${{ steps.gen.outputs.jwt_realtime_jwks }}
-      realtime_enc_key: ${{ steps.gen.outputs.realtime_enc_key }}
-      pg_meta_crypto_key: ${{ steps.gen.outputs.pg_meta_crypto_key }}
-      pgsodium_root_key: ${{ steps.gen.outputs.pgsodium_root_key }}
-      postgres_password: ${{ steps.gen.outputs.postgres_password }}
-      pawtograder_password: ${{ steps.gen.outputs.pawtograder_password }}
-      end_to_end_secret: ${{ steps.gen.outputs.end_to_end_secret }}
-      edge_function_secret: ${{ steps.gen.outputs.edge_function_secret }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -146,66 +131,59 @@ jobs:
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
-      - name: Write kubeconfig
+      - name: Write kubeconfig + ensure namespace
         env:
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+          NS: ${{ needs.meta.outputs.namespace }}
         run: |
           set -euo pipefail
           if [ -z "${KUBECONFIG_B64:-}" ]; then
-            echo "::error::KUBECONFIG_BASE64 is required (used to read existing preview secrets)"
+            echo "::error::KUBECONFIG_BASE64 is required"
             exit 1
           fi
           mkdir -p "$HOME/.kube"
           echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
-      - id: gen
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+      - name: Ensure secrets in namespace
         env:
           NS: ${{ needs.meta.outputs.namespace }}
+          MINIO_ACCESS: ${{ secrets.MINIO_PREVIEW_ACCESS_KEY }}
+          MINIO_SECRET: ${{ secrets.MINIO_PREVIEW_SECRET_KEY }}
         run: |
           set -euo pipefail
-
-          emit() {
-            local name="$1" val="$2"
-            echo "::add-mask::$val"
-            local lower
-            lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
-            {
-              printf '%s<<__EOF__\n' "$lower"
-              printf '%s\n' "$val"
-              printf '__EOF__\n'
-            } >> "$GITHUB_OUTPUT"
-          }
-
-          read_secret_field() {
-            local secret="$1" key="$2"
-            kubectl -n "$NS" get secret "$secret" -o jsonpath="{.data.$key}" 2>/dev/null | base64 -d
-          }
-
           if kubectl -n "$NS" get secret pawtograder-jwt >/dev/null 2>&1; then
-            echo "Reusing existing secrets in namespace $NS"
-            for k in JWT_SECRET ANON_KEY SERVICE_ROLE_KEY JWT_PRIVATE_JWKS JWT_PUBLIC_JWKS JWT_REALTIME_JWKS REALTIME_ENC_KEY PG_META_CRYPTO_KEY PGSODIUM_ROOT_KEY; do
-              emit "$k" "$(read_secret_field pawtograder-jwt "$k")"
-            done
-            for k in POSTGRES_PASSWORD PAWTOGRADER_PASSWORD; do
-              emit "$k" "$(read_secret_field pawtograder-postgres "$k")"
-            done
-            # pawtograder-e2e is created only when edgeFunctions.e2e.enabled.
-            # If absent (older preview / e2e off), generate fresh values for
-            # the emit so the chart-rendered Secret has something to write.
-            if kubectl -n "$NS" get secret pawtograder-e2e >/dev/null 2>&1; then
-              emit END_TO_END_SECRET    "$(read_secret_field pawtograder-e2e END_TO_END_SECRET)"
-              emit EDGE_FUNCTION_SECRET "$(read_secret_field pawtograder-e2e EDGE_FUNCTION_SECRET)"
-            else
-              emit END_TO_END_SECRET    "$(openssl rand -hex 32)"
-              emit EDGE_FUNCTION_SECRET "$(openssl rand -hex 32)"
-            fi
-          else
-            echo "First install for namespace $NS — generating fresh keys"
-            while IFS='=' read -r k v; do
-              [ -n "$k" ] || continue
-              emit "$k" "$v"
-            done < <(npx -y tsx scripts/GenerateJwtKeys.ts --env)
+            echo "pawtograder-jwt exists — reusing existing namespace secrets"
+            exit 0
           fi
+          if [ -z "${MINIO_ACCESS:-}" ] || [ -z "${MINIO_SECRET:-}" ]; then
+            echo "::error::MINIO_PREVIEW_ACCESS_KEY / MINIO_PREVIEW_SECRET_KEY required for first install"
+            exit 1
+          fi
+          echo "First install for $NS — generating + creating secrets"
+          # Source generated KEY=VALUE pairs into the shell.
+          while IFS='=' read -r k v; do
+            [ -n "$k" ] && export "$k=$v"
+          done < <(npx -y tsx scripts/GenerateJwtKeys.ts --env)
+          kubectl -n "$NS" create secret generic pawtograder-jwt \
+            --from-literal=JWT_SECRET="$JWT_SECRET" \
+            --from-literal=ANON_KEY="$ANON_KEY" \
+            --from-literal=SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" \
+            --from-literal=JWT_PRIVATE_JWKS="$JWT_PRIVATE_JWKS" \
+            --from-literal=JWT_PUBLIC_JWKS="$JWT_PUBLIC_JWKS" \
+            --from-literal=JWT_REALTIME_JWKS="$JWT_REALTIME_JWKS" \
+            --from-literal=REALTIME_ENC_KEY="$REALTIME_ENC_KEY" \
+            --from-literal=PG_META_CRYPTO_KEY="$PG_META_CRYPTO_KEY" \
+            --from-literal=PGSODIUM_ROOT_KEY="$PGSODIUM_ROOT_KEY"
+          kubectl -n "$NS" create secret generic pawtograder-postgres \
+            --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            --from-literal=PAWTOGRADER_PASSWORD="$PAWTOGRADER_PASSWORD"
+          kubectl -n "$NS" create secret generic pawtograder-e2e \
+            --from-literal=END_TO_END_SECRET="$END_TO_END_SECRET" \
+            --from-literal=EDGE_FUNCTION_SECRET="$EDGE_FUNCTION_SECRET"
+          kubectl -n "$NS" create secret generic pawtograder-s3 \
+            --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET"
 
   # --------------------------------------------------------------------------
   # build-* — per-PR images. web is the only one whose build args change
@@ -213,13 +191,31 @@ jobs:
   # are PR-content-dependent only, no per-preview args.
   # --------------------------------------------------------------------------
   build-web:
-    needs: [meta, keys]
+    needs: [meta, secrets]
     if: needs.meta.outputs.mode == 'deploy'
     runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - name: Read anon key from cluster
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_BASE64 }}
+          NS: ${{ needs.meta.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          ANON=$(kubectl -n "$NS" get secret pawtograder-jwt -o jsonpath='{.data.ANON_KEY}' | base64 -d)
+          [ -n "$ANON" ] || { echo "::error::ANON_KEY missing in $NS/pawtograder-jwt"; exit 1; }
+          echo "::add-mask::$ANON"
+          # Stash in env for the build step. Within a single job env is
+          # mask-aware but not subject to the cross-job output stripping.
+          echo "ANON_KEY=$ANON" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -234,12 +230,12 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/web:${{ needs.meta.outputs.tag }}
           # NEXT_PUBLIC_SUPABASE_ANON_KEY is inlined into the client bundle
-          # by Next.js. The same value is passed to helm at deploy time
-          # (chart's secrets.create=true path) so build and runtime match.
+          # by Next.js. We read the same value the cluster uses (created in
+          # the secrets job) so build/runtime match.
           build-args: |
             NEXT_PUBLIC_PAWTOGRADER_WEB_URL=https://${{ needs.meta.outputs.hostname }}
             NEXT_PUBLIC_SUPABASE_URL=https://${{ needs.meta.outputs.api_hostname }}
-            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ needs.keys.outputs.anon_key }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ env.ANON_KEY }}
             NEXT_PUBLIC_GIT_COMMIT_SHA=${{ github.sha }}
             NEXT_PUBLIC_ENABLE_SIGNUPS=true
             SENTRY_RELEASE=${{ needs.meta.outputs.tag }}
@@ -300,7 +296,7 @@ jobs:
   # deploy — helm install/upgrade against ripley
   # --------------------------------------------------------------------------
   deploy:
-    needs: [meta, keys, build-web, build-edge-functions, build-migrations]
+    needs: [meta, secrets, build-web, build-edge-functions, build-migrations]
     if: needs.meta.outputs.mode == 'deploy'
     runs-on: ubuntu-latest
     steps:
@@ -327,57 +323,22 @@ jobs:
           kubectl version --client=true --output=yaml | head -20
 
       - name: helm upgrade --install
-        env:
-          # Map the keys job outputs into env so they can be passed via
-          # --set-string without leaking into the rendered yaml command.
-          JWT_SECRET: ${{ needs.keys.outputs.jwt_secret }}
-          ANON_KEY: ${{ needs.keys.outputs.anon_key }}
-          SERVICE_ROLE_KEY: ${{ needs.keys.outputs.service_role_key }}
-          JWT_PRIVATE_JWKS: ${{ needs.keys.outputs.jwt_private_jwks }}
-          JWT_PUBLIC_JWKS: ${{ needs.keys.outputs.jwt_public_jwks }}
-          JWT_REALTIME_JWKS: ${{ needs.keys.outputs.jwt_realtime_jwks }}
-          REALTIME_ENC_KEY: ${{ needs.keys.outputs.realtime_enc_key }}
-          PG_META_CRYPTO_KEY: ${{ needs.keys.outputs.pg_meta_crypto_key }}
-          PGSODIUM_ROOT_KEY: ${{ needs.keys.outputs.pgsodium_root_key }}
-          POSTGRES_PASSWORD: ${{ needs.keys.outputs.postgres_password }}
-          PAWTOGRADER_PASSWORD: ${{ needs.keys.outputs.pawtograder_password }}
-          END_TO_END_SECRET: ${{ needs.keys.outputs.end_to_end_secret }}
-          EDGE_FUNCTION_SECRET: ${{ needs.keys.outputs.edge_function_secret }}
-          # MinIO creds for the shared previews bucket (s3.talos.ripley.cloud /
-          # pawtograder-previews-shared). Treat as a single credential pair.
-          MINIO_ACCESS_KEY: ${{ secrets.MINIO_PREVIEW_ACCESS_KEY }}
-          MINIO_SECRET_KEY: ${{ secrets.MINIO_PREVIEW_SECRET_KEY }}
         run: |
           set -euo pipefail
-          # Override secrets.autogenerate=true from values-preview.yaml.
-          # Workflow-managed keys are passed via --set-string so build/runtime
-          # match.
+          # secrets.create=false: chart consumes the pawtograder-{jwt,
+          # postgres,e2e,s3} Secrets created by the `secrets` job.
+          # secrets.autogenerate=false: skip the in-cluster bootstrap Job
+          # (we already provisioned everything from CI).
           helm upgrade --install "${{ needs.meta.outputs.release }}" \
             ./charts/pawtograder \
             --namespace "${{ needs.meta.outputs.namespace }}" \
-            --create-namespace \
             -f charts/pawtograder/examples/values-preview.yaml \
             --set global.hostname="${{ needs.meta.outputs.hostname }}" \
             --set web.image.tag="${{ needs.meta.outputs.tag }}" \
             --set edgeFunctions.image.tag="${{ needs.meta.outputs.tag }}" \
             --set migrations.image.tag="${{ needs.meta.outputs.tag }}" \
             --set secrets.autogenerate=false \
-            --set secrets.create=true \
-            --set-string secrets.values.postgres.password="$POSTGRES_PASSWORD" \
-            --set-string secrets.values.postgres.pawtograderPassword="$PAWTOGRADER_PASSWORD" \
-            --set-string secrets.values.jwt.secret="$JWT_SECRET" \
-            --set-string secrets.values.jwt.anonKey="$ANON_KEY" \
-            --set-string secrets.values.jwt.serviceRoleKey="$SERVICE_ROLE_KEY" \
-            --set-string secrets.values.jwt.privateJwks="$JWT_PRIVATE_JWKS" \
-            --set-string secrets.values.jwt.publicJwks="$JWT_PUBLIC_JWKS" \
-            --set-string secrets.values.jwt.realtimeJwks="$JWT_REALTIME_JWKS" \
-            --set-string secrets.values.jwt.realtimeEncKey="$REALTIME_ENC_KEY" \
-            --set-string secrets.values.jwt.pgMetaCryptoKey="$PG_META_CRYPTO_KEY" \
-            --set-string secrets.values.jwt.pgsodiumRootKey="$PGSODIUM_ROOT_KEY" \
-            --set-string secrets.values.e2e.endToEndSecret="$END_TO_END_SECRET" \
-            --set-string secrets.values.e2e.edgeFunctionSecret="$EDGE_FUNCTION_SECRET" \
-            --set-string secrets.values.s3.accessKey="$MINIO_ACCESS_KEY" \
-            --set-string secrets.values.s3.secretKey="$MINIO_SECRET_KEY" \
+            --set secrets.create=false \
             --wait --timeout 10m
 
       - name: Wait for migrations to complete
