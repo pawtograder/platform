@@ -62,6 +62,7 @@ export class OfficeHoursRealTimeController implements PawtograderRealTimeControl
     this._profileId = profileId;
     this._isStaff = isStaff;
     this._channelManager = RealtimeChannelManager.getInstance();
+    this._channelManager.bindRealtimeAuth(client);
 
     // Start async initialization immediately
     this._initializationPromise = this._initializeGlobalChannels();

@@ -107,6 +107,7 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     this._profileId = profileId;
     this._isStaff = isStaff;
     this._channelManager = RealtimeChannelManager.getInstance();
+    this._channelManager.bindRealtimeAuth(client);
 
     if (config?.inactiveTabTimeoutSeconds) {
       this._inactiveTabTimeoutSeconds = config.inactiveTabTimeoutSeconds;
