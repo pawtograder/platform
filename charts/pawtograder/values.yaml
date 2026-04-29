@@ -101,6 +101,13 @@ secrets:
       realtimeEncKey: "" # AES-128 (16 bytes exactly) for tenant secrets
       pgMetaCryptoKey: "" # AES-256 base64; pg-meta + Studio share this
       pgsodiumRootKey: "" # 32-byte hex; postgres mounts as file
+      # Supavisor secrets — only required when supavisor.enabled=true (the
+      # chart default). Each has its own length/role requirement; do NOT
+      # reuse the same value across them.
+      supavisorSecretKeyBase: ""    # ≥ 64 chars (Phoenix endpoint key)
+      supavisorVaultEncKey: ""      # exactly 32 bytes (Vault encryption)
+      supavisorApiJwtSecret: ""     # tenant management API JWT signer
+      supavisorMetricsJwtSecret: "" # /metrics scrape JWT signer
     e2e:
       # Used only when edgeFunctions.e2e.enabled=true
       endToEndSecret: ""
@@ -539,6 +546,13 @@ backup:
     region: "us-east-1"
     bucket: "pawtograder-backups"
   retentionDays: 14
+  # `mc` (MinIO client) is downloaded at runtime because the
+  # supabase/postgres image doesn't include it. Pin both URL and
+  # SHA256 together; any mismatch fails the job before secrets are
+  # used. Update both when bumping the version.
+  mc:
+    url: "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-08-13T08-35-41Z"
+    sha256: "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
 
 # -----------------------------------------------------------------------------
 # ServiceAccount

@@ -68,26 +68,36 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.postgres }}
                   key: POSTGRES_PASSWORD
+            # Each Supavisor env var has its own length / format
+            # requirement and must be a distinct secret:
+            #   SECRET_KEY_BASE      — Phoenix endpoint key, ≥ 64 chars
+            #   VAULT_ENC_KEY        — exactly 32 bytes (Vault encryption)
+            #   API_JWT_SECRET       — signs tenant management API JWTs
+            #   METRICS_JWT_SECRET   — signs /metrics scrape JWTs
+            # Sharing a single value across them either fails the length
+            # check (Vault rejects anything ≠ 32 bytes) or lets a metrics
+            # scraper forge a tenant-management token. Each gets its own
+            # key in the JWT secret bundle.
             - name: SECRET_KEY_BASE
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
-                  key: JWT_SECRET
+                  key: SUPAVISOR_SECRET_KEY_BASE
             - name: VAULT_ENC_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
-                  key: JWT_SECRET
+                  key: SUPAVISOR_VAULT_ENC_KEY
             - name: API_JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
-                  key: JWT_SECRET
+                  key: SUPAVISOR_API_JWT_SECRET
             - name: METRICS_JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
-                  key: JWT_SECRET
+                  key: SUPAVISOR_METRICS_JWT_SECRET
             - name: REGION
               value: local
             - name: ERL_AFLAGS
