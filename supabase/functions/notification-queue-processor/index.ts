@@ -851,11 +851,13 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       return false;
     }
     const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
+    const isPostmarkEmail = Deno.env.get("SMTP_PORT") === "2525";
     const transporter = nodemailer.createTransport({
       pool: true,
       host: Deno.env.get("SMTP_HOST") || "",
       port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
-      secure: isInbucketEmail ? false : true, // use TLS
+      secure: isInbucketEmail || isPostmarkEmail ? false : true, // use TLS
+      requireTLS: isPostmarkEmail ? true : false,
       ignoreTLS: isInbucketEmail,
       auth: {
         user: Deno.env.get("SMTP_USER") || "",
