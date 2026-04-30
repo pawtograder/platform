@@ -4,6 +4,7 @@ import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignm
 import Link from "@/components/ui/link";
 import { useActiveSubmissions, useAssignmentGroups, useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useAllProfilesForClass, useGradersAndInstructors } from "@/hooks/useCourseController";
+import { useNextIncompleteReviewUrl } from "@/hooks/useNextIncompleteReview";
 import { Box, HStack, Text } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -32,7 +33,6 @@ type ReviewToolbarStats = {
   completedReviews: number;
   completionPercent: number;
   allComplete: boolean;
-  nextIncomplete: { reviewAssignmentId: number; submissionId: number } | null;
 };
 
 // Data types for grouped submission selector
@@ -268,19 +268,6 @@ export default function AssignmentGradingToolbar() {
     const completionPercent = totalReviews > 0 ? Math.round((completedReviews / totalReviews) * 100) : 0;
     const allComplete = options.every((opt) => opt.allReviewsComplete);
 
-    // Find next submission with any incomplete reviews (after current), else wrap to first incomplete
-    const nextIncompleteOption =
-      options.find((opt) => opt.hasIncompleteReview && (!selected || opt.submissionId > selected.submissionId)) ||
-      options.find((opt) => opt.hasIncompleteReview);
-
-    const nextIncomplete = nextIncompleteOption
-      ? (() => {
-          const ras = reviewAssignmentsBySubmission.get(nextIncompleteOption.submissionId) ?? [];
-          const target = ras.find((ra) => !ra.completed_at) ?? ras[0];
-          return target ? { reviewAssignmentId: target.id, submissionId: target.submission_id } : null;
-        })()
-      : null;
-
     return {
       selectOptions: options,
       currentlySelected: selected,
@@ -288,11 +275,12 @@ export default function AssignmentGradingToolbar() {
         totalReviews,
         completedReviews,
         completionPercent,
-        allComplete,
-        nextIncomplete
+        allComplete
       }
     };
   }, [isInReviewMode, reviewAssignmentsBySubmission, submissions_id, myReviewAssignments]);
+
+  const nextIncompleteUrl = useNextIncompleteReviewUrl();
 
   const handleSubmissionSelect = useCallback(
     (option: SubmissionSelectOption | null) => {
@@ -396,10 +384,8 @@ export default function AssignmentGradingToolbar() {
         <HStack gap={3} flex="0 0 auto">
           {/* Quick navigation: next incomplete if any, else show all done */}
           <HStack gap={3} fontSize="sm">
-            {stats && !stats.allComplete && stats.nextIncomplete ? (
-              <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${stats.nextIncomplete.submissionId}/files?review_assignment_id=${stats.nextIncomplete.reviewAssignmentId}`}
-              >
+            {stats && !stats.allComplete && nextIncompleteUrl ? (
+              <Link href={nextIncompleteUrl}>
                 <FaArrowRight style={{ marginRight: "4px" }} />
                 Next Incomplete
               </Link>
