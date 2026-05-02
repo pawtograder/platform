@@ -808,15 +808,19 @@ function KeyboardShortcutsButton() {
 
   return (
     <Tooltip content="Keyboard shortcuts (?)" showArrow>
-      <IconButton
+      <Button
         variant="outline"
         colorPalette="gray"
         size="sm"
         onClick={openHelp}
         aria-label="Open keyboard shortcuts"
+        px={{ base: 2, lg: 3 }}
       >
         <FiCommand />
-      </IconButton>
+        <Text as="span" display={{ base: "none", lg: "inline" }}>
+          Shortcuts
+        </Text>
+      </Button>
     </Tooltip>
   );
 }
