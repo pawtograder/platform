@@ -13,6 +13,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";
 import { getTimeZoneAbbr } from "@/lib/timezoneUtils";
@@ -33,7 +34,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { FiClock } from "react-icons/fi";
+import { FiClock, FiCommand } from "react-icons/fi";
 
 import { useInvalidate, useOne } from "@refinedev/core";
 import { useParams, useSearchParams } from "next/navigation";
@@ -49,6 +50,7 @@ import { signOutAction } from "../../actions";
 import MCPTokensMenu from "@/components/settings/MCPTokensMenu";
 
 function SupportMenu() {
+  const { openHelp } = useKeyboardShortcuts();
   // Track whether the build number has been successfully copied
   const [isCopied, setIsCopied] = useState(false);
 
@@ -119,6 +121,12 @@ function SupportMenu() {
       <Portal>
         <Menu.Positioner>
           <Menu.Content>
+            <Menu.Item value="keyboard-shortcuts" onClick={openHelp}>
+              <FiCommand /> Keyboard shortcuts
+              <Text as="span" color="fg.muted" fontSize="xs">
+                ?
+              </Text>
+            </Menu.Item>
             <Menu.Item value="github-help">
               <Link href={`/course/${course_id}/github-help`}>
                 <FaGithub /> GitHub Help
@@ -795,6 +803,24 @@ function ObfuscatedGradesModePicker() {
   );
 }
 
+function KeyboardShortcutsButton() {
+  const { openHelp } = useKeyboardShortcuts();
+
+  return (
+    <Tooltip content="Keyboard shortcuts (?)" showArrow>
+      <IconButton
+        variant="outline"
+        colorPalette="gray"
+        size="sm"
+        onClick={openHelp}
+        aria-label="Open keyboard shortcuts"
+      >
+        <FiCommand />
+      </IconButton>
+    </Tooltip>
+  );
+}
+
 /**
  * Shows realtime connection status for both class and office hours functionality.
  * Automatically detects office hours context and includes relevant channels.
@@ -951,6 +977,7 @@ export default function UserMenu() {
       <SafeTimeZoneIndicator />
       <ConnectionStatusIndicator />
       <SupportMenu />
+      <KeyboardShortcutsButton />
       <ColorModeButton colorPalette="gray" variant="outline" />
       <NotificationsBox />
       <ObfuscatedGradesModePicker />
