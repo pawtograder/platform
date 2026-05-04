@@ -37,7 +37,7 @@ import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
-import { useTableControllerTableValues } from "@/lib/TableController";
+import { useListTableControllerValues, useTableControllerTableValues } from "@/lib/TableController";
 
 type GradingAssigneePool = "graders" | "instructors" | "instructors_and_graders" | "lab_leaders" | "group_mentors";
 
