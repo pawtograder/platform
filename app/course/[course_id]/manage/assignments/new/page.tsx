@@ -14,7 +14,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { Box, Heading, Text } from "@chakra-ui/react";
-import CreateAssignment, { AssignmentFormValues } from "./form";
+import CreateAssignment, { AssignmentFormValues, normalizeProfileIdSubset } from "./form";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
@@ -27,6 +27,7 @@ export default function NewAssignmentPage() {
       auto_assign_at_deadline: false,
       auto_assign_assignee_pool: "graders",
       auto_assign_review_due_hours: 72,
+      auto_assign_grader_subset_private_profile_ids: [],
       late_grading_reminders_enabled: false,
       late_grading_reminder_interval_hours: 12,
       late_grading_reply_to: null,
@@ -84,6 +85,11 @@ export default function NewAssignmentPage() {
         }
 
         const remindersEnabled = form.getValues("late_grading_reminders_enabled") ?? false;
+        const assigneePool = form.getValues("auto_assign_assignee_pool") ?? "graders";
+        const graderSubset =
+          assigneePool === "graders"
+            ? normalizeProfileIdSubset(form.getValues("auto_assign_grader_subset_private_profile_ids"))
+            : [];
 
         const { data, error } = await supabase
           .from("assignments")
@@ -116,8 +122,9 @@ export default function NewAssignmentPage() {
               : null,
             grading_default_profile_id: form.getValues("grading_default_profile_id") ?? null,
             auto_assign_at_deadline: form.getValues("auto_assign_at_deadline") ?? false,
-            auto_assign_assignee_pool: form.getValues("auto_assign_assignee_pool") ?? "graders",
+            auto_assign_assignee_pool: assigneePool,
             auto_assign_review_due_hours: form.getValues("auto_assign_review_due_hours") ?? 72,
+            auto_assign_grader_subset_private_profile_ids: graderSubset,
             late_grading_reminders_enabled: remindersEnabled,
             late_grading_reminder_interval_hours: remindersEnabled
               ? (form.getValues("late_grading_reminder_interval_hours") ?? 12)

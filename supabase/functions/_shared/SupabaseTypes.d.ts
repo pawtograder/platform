@@ -1094,6 +1094,7 @@ export type Database = {
           auto_assign_assignee_pool: string;
           auto_assign_at_deadline: boolean;
           auto_assign_review_due_hours: number;
+          auto_assign_grader_subset_private_profile_ids: Json;
           autograder_points: number | null;
           class_id: number;
           created_at: string;
@@ -1140,6 +1141,7 @@ export type Database = {
           auto_assign_assignee_pool?: string;
           auto_assign_at_deadline?: boolean;
           auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
           autograder_points?: number | null;
           class_id: number;
           created_at?: string;
@@ -1186,6 +1188,7 @@ export type Database = {
           auto_assign_assignee_pool?: string;
           auto_assign_at_deadline?: boolean;
           auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
           autograder_points?: number | null;
           class_id?: number;
           created_at?: string;
@@ -4187,6 +4190,7 @@ export type Database = {
           auto_assign_assignee_pool: string;
           auto_assign_at_deadline: boolean;
           auto_assign_review_due_hours: number;
+          auto_assign_grader_subset_private_profile_ids: Json;
           class_id: number;
           created_at: string;
           description: string | null;
@@ -4202,6 +4206,7 @@ export type Database = {
           auto_assign_assignee_pool?: string;
           auto_assign_at_deadline?: boolean;
           auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
           class_id: number;
           created_at?: string;
           description?: string | null;
@@ -4217,6 +4222,7 @@ export type Database = {
           auto_assign_assignee_pool?: string;
           auto_assign_at_deadline?: boolean;
           auto_assign_review_due_hours?: number;
+          auto_assign_grader_subset_private_profile_ids?: Json;
           class_id?: number;
           created_at?: string;
           description?: string | null;

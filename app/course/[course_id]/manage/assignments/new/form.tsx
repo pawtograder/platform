@@ -12,7 +12,8 @@ import {
   NativeSelectField,
   NativeSelectRoot,
   Table,
-  Text
+  Text,
+  VStack
 } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 
@@ -20,7 +21,11 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { appendTimezoneOffset } from "@/lib/utils";
-import { Assignment, GradingAssignmentDefaultProfile } from "@/utils/supabase/DatabaseTypes";
+import {
+  Assignment,
+  GradingAssignmentDefaultProfile,
+  UserRoleWithPrivateProfileAndUser
+} from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { addMinutes } from "date-fns";
 import { useList } from "@refinedev/core";
@@ -34,20 +39,22 @@ import { useCourseController } from "@/hooks/useCourseController";
 import { LabSection, LabSectionMeeting } from "@/utils/supabase/DatabaseTypes";
 import { useTableControllerTableValues } from "@/lib/TableController";
 
-type GradingAssigneePool = "graders" | "instructors" | "instructors_and_graders";
+type GradingAssigneePool = "graders" | "instructors" | "instructors_and_graders" | "lab_leaders" | "group_mentors";
 
 type GradingCcEmails = {
   emails: string[];
 };
 
-export type AssignmentFormValues = Assignment & {
+export type AssignmentFormValues = Omit<
+  Assignment,
+  | "grading_default_profile_id"
+  | "auto_assign_assignee_pool"
+  | "auto_assign_grader_subset_private_profile_ids"
+  | "late_grading_cc_emails"
+> & {
   grading_default_profile_id: number | null;
-  auto_assign_at_deadline: boolean;
   auto_assign_assignee_pool: GradingAssigneePool;
-  auto_assign_review_due_hours: number;
-  late_grading_reminders_enabled: boolean;
-  late_grading_reminder_interval_hours: number | null;
-  late_grading_reply_to: string | null;
+  auto_assign_grader_subset_private_profile_ids: string[];
   late_grading_cc_emails: GradingCcEmails;
   copy_groups_from_assignment?: string;
   eval_config?: "base_only" | "use_eval";
@@ -78,6 +85,21 @@ const normalizeCcEmails = (value: unknown): GradingCcEmails => {
   }
   return { emails: [] };
 };
+
+/** Parses JSON/array values from API into unique private profile ids for the grader rotator whitelist. */
+export function normalizeProfileIdSubset(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    )
+  ];
+}
 
 // Helper function to calculate effective due date for a lab section
 function calculateLabSectionDueDate(
@@ -624,17 +646,41 @@ function GradingAutomationSubform({
   );
   const [applyProfileOnSelect, setApplyProfileOnSelect] = useState(true);
 
+  const { userRolesWithProfiles } = useCourseController();
+  const gradersOnlyRoles = useCallback(
+    (r: UserRoleWithPrivateProfileAndUser) => r.role === "grader" && !r.disabled,
+    []
+  );
+  const graderCourseRoles = useListTableControllerValues(userRolesWithProfiles, gradersOnlyRoles);
+  const gradersSortedForSubsetUi = useMemo(
+    () =>
+      [...graderCourseRoles].sort(
+        (a, b) =>
+          (a.profiles?.name || "").localeCompare(b.profiles?.name || "") ||
+          a.private_profile_id.localeCompare(b.private_profile_id)
+      ),
+    [graderCourseRoles]
+  );
+
   const {
     register,
     watch,
     setValue,
+    control,
     formState: { errors }
   } = form;
 
   const selectedProfileId = watch("grading_default_profile_id");
   const remindersEnabled = watch("late_grading_reminders_enabled");
   const autoAssignAtDeadline = watch("auto_assign_at_deadline");
+  const assigneePool = watch("auto_assign_assignee_pool");
   const selectedProfile = selectedProfileId ? profileMap[selectedProfileId] : undefined;
+
+  useEffect(() => {
+    if (assigneePool !== "graders") {
+      setValue("auto_assign_grader_subset_private_profile_ids", []);
+    }
+  }, [assigneePool, setValue]);
 
   useEffect(() => {
     if (!selectedProfile || !applyProfileOnSelect) {
@@ -643,6 +689,10 @@ function GradingAutomationSubform({
     setValue("auto_assign_at_deadline", selectedProfile.auto_assign_at_deadline);
     setValue("auto_assign_assignee_pool", selectedProfile.auto_assign_assignee_pool);
     setValue("auto_assign_review_due_hours", selectedProfile.auto_assign_review_due_hours);
+    setValue(
+      "auto_assign_grader_subset_private_profile_ids",
+      normalizeProfileIdSubset(selectedProfile.auto_assign_grader_subset_private_profile_ids)
+    );
     setValue("late_grading_reminders_enabled", selectedProfile.late_grading_reminders_enabled);
     setValue("late_grading_reminder_interval_hours", selectedProfile.late_grading_reminder_interval_hours);
     setValue("late_grading_reply_to", selectedProfile.late_grading_reply_to);
@@ -733,19 +783,77 @@ function GradingAutomationSubform({
             <Fieldset.Content>
               <Field
                 label="Assignee pool"
-                helperText="Who should receive auto-assigned grading work."
+                helperText={
+                  assigneePool === "lab_leaders"
+                    ? "Each submission is assigned to all lab leaders (grader/instructor only) for the submitters' lab section, matching bulk assign behavior."
+                    : assigneePool === "group_mentors"
+                      ? "Each submission is assigned to its assignment group's mentor when the group has a mentor who is staff (grader/instructor)."
+                      : "Who should receive auto-assigned grading work when rotating across staff."
+                }
                 errorText={errors.auto_assign_assignee_pool?.message?.toString()}
                 invalid={!!errors.auto_assign_assignee_pool}
               >
                 <NativeSelectRoot>
                   <NativeSelectField {...register("auto_assign_assignee_pool", { required: true })}>
-                    <option value="graders">Graders</option>
+                    <option value="graders">Graders (rotate across all / selected graders)</option>
                     <option value="instructors">Instructors</option>
                     <option value="instructors_and_graders">Instructors and graders</option>
+                    <option value="lab_leaders">Lab leaders</option>
+                    <option value="group_mentors">Group mentors</option>
                   </NativeSelectField>
                 </NativeSelectRoot>
               </Field>
             </Fieldset.Content>
+            {assigneePool === "graders" && (
+              <Fieldset.Content>
+                <Field
+                  label="Rotate among specific graders only"
+                  helperText="Pick graders to rotate between. Leave all unchecked to use every active grader in the course."
+                >
+                  <Controller
+                    name="auto_assign_grader_subset_private_profile_ids"
+                    control={control}
+                    render={({ field }) => {
+                      const selected = normalizeProfileIdSubset(field.value);
+                      return (
+                        <VStack align="stretch" maxH="220px" gap={2} overflowY="auto">
+                          {gradersSortedForSubsetUi.length === 0 ? (
+                            <Text fontSize="sm" color="fg.muted">
+                              No graders in this course yet.
+                            </Text>
+                          ) : (
+                            gradersSortedForSubsetUi.map((role) => {
+                              const pid = role.private_profile_id;
+                              const isChecked = selected.includes(pid);
+                              return (
+                                <Checkbox.Root
+                                  key={pid}
+                                  checked={isChecked}
+                                  onCheckedChange={(change) => {
+                                    const checked = !!change.checked;
+                                    if (checked) {
+                                      field.onChange(normalizeProfileIdSubset([...selected, pid]));
+                                    } else {
+                                      field.onChange(selected.filter((existing) => existing !== pid));
+                                    }
+                                  }}
+                                >
+                                  <Checkbox.HiddenInput />
+                                  <Checkbox.Control>
+                                    <LuCheck />
+                                  </Checkbox.Control>
+                                  <Checkbox.Label>{role.profiles?.name || "Unknown"}</Checkbox.Label>
+                                </Checkbox.Root>
+                              );
+                            })
+                          )}
+                        </VStack>
+                      );
+                    }}
+                  />
+                </Field>
+              </Fieldset.Content>
+            )}
             <Fieldset.Content>
               <Field
                 label="Review due hours after assignment deadline"

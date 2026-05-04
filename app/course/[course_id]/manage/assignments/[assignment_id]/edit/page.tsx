@@ -11,7 +11,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
-import AssignmentForm, { AssignmentFormValues } from "../../new/form";
+import AssignmentForm, { AssignmentFormValues, normalizeProfileIdSubset } from "../../new/form";
 
 export default function EditAssignment() {
   const { course_id, assignment_id } = useParams();
@@ -33,6 +33,9 @@ export default function EditAssignment() {
         auto_assign_at_deadline: values.auto_assign_at_deadline ?? false,
         auto_assign_assignee_pool: values.auto_assign_assignee_pool ?? "graders",
         auto_assign_review_due_hours: values.auto_assign_review_due_hours ?? 72,
+        auto_assign_grader_subset_private_profile_ids: normalizeProfileIdSubset(
+          values.auto_assign_grader_subset_private_profile_ids
+        ),
         late_grading_reminders_enabled: values.late_grading_reminders_enabled ?? false,
         late_grading_reminder_interval_hours: values.late_grading_reminder_interval_hours ?? 12,
         late_grading_reply_to: values.late_grading_reply_to ?? null,
@@ -109,6 +112,12 @@ export default function EditAssignment() {
           typeof values.late_grading_reply_to === "string" ? values.late_grading_reply_to.trim() : "";
         values.late_grading_reply_to = replyTrimmed.length > 0 ? replyTrimmed : null;
         values.late_grading_cc_emails = values.late_grading_cc_emails ?? { emails: [] };
+
+        values.auto_assign_grader_subset_private_profile_ids =
+          values.auto_assign_assignee_pool === "graders"
+            ? normalizeProfileIdSubset(values.auto_assign_grader_subset_private_profile_ids)
+            : [];
+
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {

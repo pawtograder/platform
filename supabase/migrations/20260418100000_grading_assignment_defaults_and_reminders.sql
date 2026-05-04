@@ -1,6 +1,7 @@
 -- Class-level grading automation profiles + per-assignment defaults/reminders
 -- Implements:
 -- 1) "Auto assign at deadline" defaults via reusable class profiles
+--    (staff rotation / lab leaders / group mentors / optional subset of graders)
 -- 2) Late grading reminders at deadline + recurring interval
 -- 3) Instructor-configurable CC + reply-to for reminder emails
 
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS public.grading_assignment_default_profiles (
   auto_assign_at_deadline boolean NOT NULL DEFAULT false,
   auto_assign_assignee_pool text NOT NULL DEFAULT 'graders',
   auto_assign_review_due_hours integer NOT NULL DEFAULT 72,
+  auto_assign_grader_subset_private_profile_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
   late_grading_reminders_enabled boolean NOT NULL DEFAULT false,
   late_grading_reminder_interval_hours integer,
   late_grading_reply_to text,
@@ -19,7 +21,23 @@ CREATE TABLE IF NOT EXISTS public.grading_assignment_default_profiles (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT grading_assignment_default_profiles_assignee_pool_check CHECK (
-    auto_assign_assignee_pool IN ('graders', 'instructors', 'instructors_and_graders')
+    auto_assign_assignee_pool IN (
+      'graders',
+      'instructors',
+      'instructors_and_graders',
+      'lab_leaders',
+      'group_mentors'
+    )
+  ),
+  CONSTRAINT grading_assignment_default_profiles_grader_subset_ids_check CHECK (
+    jsonb_typeof(auto_assign_grader_subset_private_profile_ids) = 'array'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM (
+        SELECT jsonb_array_elements(auto_assign_grader_subset_private_profile_ids) AS elt
+      ) sub
+      WHERE jsonb_typeof(sub.elt) IS DISTINCT FROM 'string'
+    )
   ),
   CONSTRAINT grading_assignment_default_profiles_due_hours_check CHECK (auto_assign_review_due_hours >= 0),
   CONSTRAINT grading_assignment_default_profiles_reminder_interval_check CHECK (
@@ -90,6 +108,7 @@ ALTER TABLE public.assignments
   ADD COLUMN IF NOT EXISTS auto_assign_at_deadline boolean NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS auto_assign_assignee_pool text NOT NULL DEFAULT 'graders',
   ADD COLUMN IF NOT EXISTS auto_assign_review_due_hours integer NOT NULL DEFAULT 72,
+  ADD COLUMN IF NOT EXISTS auto_assign_grader_subset_private_profile_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS late_grading_reminders_enabled boolean NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS late_grading_reminder_interval_hours integer,
   ADD COLUMN IF NOT EXISTS late_grading_reply_to text,
@@ -117,7 +136,31 @@ BEGIN
   ) THEN
     ALTER TABLE public.assignments
       ADD CONSTRAINT assignments_auto_assign_assignee_pool_check
-      CHECK (auto_assign_assignee_pool IN ('graders', 'instructors', 'instructors_and_graders'));
+      CHECK (
+        auto_assign_assignee_pool IN (
+          'graders',
+          'instructors',
+          'instructors_and_graders',
+          'lab_leaders',
+          'group_mentors'
+        )
+      );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'assignments_auto_assign_grader_subset_ids_check'
+  ) THEN
+    ALTER TABLE public.assignments
+      ADD CONSTRAINT assignments_auto_assign_grader_subset_ids_check CHECK (
+        jsonb_typeof(auto_assign_grader_subset_private_profile_ids) = 'array'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM (
+            SELECT jsonb_array_elements(auto_assign_grader_subset_private_profile_ids) AS elt
+          ) sub
+          WHERE jsonb_typeof(sub.elt) IS DISTINCT FROM 'string'
+        )
+      );
   END IF;
 
   IF NOT EXISTS (
@@ -210,6 +253,11 @@ DECLARE
   v_submission record;
   v_draft_assignments jsonb := '[]'::jsonb;
   v_result jsonb;
+  v_member_profiles uuid[];
+  v_student_profiles uuid[];
+  v_lab_section_id bigint;
+  v_leader_id uuid;
+  v_mentor_id uuid;
 BEGIN
   SELECT *
   INTO v_assignment
@@ -247,54 +295,222 @@ BEGIN
 
   PERFORM set_config('request.jwt.claim.sub', v_actor_user_id::text, true);
 
-  SELECT array_agg(ur.private_profile_id ORDER BY ur.private_profile_id)
-  INTO v_staff_ids
-  FROM public.user_roles ur
-  WHERE ur.class_id = v_assignment.class_id
-    AND ur.disabled = false
-    AND ur.private_profile_id IS NOT NULL
-    AND (
-      (v_assignment.auto_assign_assignee_pool = 'graders' AND ur.role = 'grader')
-      OR (v_assignment.auto_assign_assignee_pool = 'instructors' AND ur.role = 'instructor')
-      OR (
-        v_assignment.auto_assign_assignee_pool = 'instructors_and_graders'
-        AND ur.role IN ('grader', 'instructor')
+  v_review_due_date :=
+    v_assignment.due_date + make_interval(hours => GREATEST(v_assignment.auto_assign_review_due_hours, 0));
+
+  IF v_assignment.auto_assign_assignee_pool IN ('graders', 'instructors', 'instructors_and_graders') THEN
+    SELECT array_agg(ur.private_profile_id ORDER BY ur.private_profile_id)
+    INTO v_staff_ids
+    FROM public.user_roles ur
+    WHERE ur.class_id = v_assignment.class_id
+      AND ur.disabled = false
+      AND ur.private_profile_id IS NOT NULL
+      AND (
+        (
+          v_assignment.auto_assign_assignee_pool = 'graders'
+          AND ur.role = 'grader'
+        )
+        OR (
+          v_assignment.auto_assign_assignee_pool = 'instructors'
+          AND ur.role = 'instructor'
+        )
+        OR (
+          v_assignment.auto_assign_assignee_pool = 'instructors_and_graders'
+          AND ur.role IN ('grader', 'instructor')
+        )
       )
-    );
+      AND (
+        v_assignment.auto_assign_assignee_pool <> 'graders'
+        OR COALESCE(jsonb_array_length(v_assignment.auto_assign_grader_subset_private_profile_ids), 0) = 0
+        OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(v_assignment.auto_assign_grader_subset_private_profile_ids) AS subset_id(txt)
+          WHERE subset_id.txt IS NOT NULL
+            AND btrim(subset_id.txt) <> ''
+            AND subset_id.txt ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+            AND subset_id.txt::uuid = ur.private_profile_id
+        )
+      );
 
-  v_staff_count := COALESCE(array_length(v_staff_ids, 1), 0);
-  IF v_staff_count = 0 THEN
-    RAISE WARNING 'auto_assign skipped for assignment %: empty assignee pool (%).', v_assignment.id, v_assignment.auto_assign_assignee_pool;
-    RETURN -1;
-  END IF;
+    v_staff_count := COALESCE(array_length(v_staff_ids, 1), 0);
+    IF v_staff_count = 0 THEN
+      RAISE WARNING 'auto_assign skipped for assignment %: empty assignee pool (%).', v_assignment.id, v_assignment.auto_assign_assignee_pool;
+      RETURN -1;
+    END IF;
 
-  v_review_due_date := v_assignment.due_date + make_interval(hours => GREATEST(v_assignment.auto_assign_review_due_hours, 0));
+    FOR v_submission IN
+      SELECT s.id AS sid, s.profile_id AS pid, s.assignment_group_id AS agid
+      FROM public.submissions s
+      WHERE s.assignment_id = v_assignment.id
+        AND s.class_id = v_assignment.class_id
+        AND s.is_active = true
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.review_assignments ra
+          WHERE ra.assignment_id = v_assignment.id
+            AND ra.rubric_id = v_assignment.grading_rubric_id
+            AND ra.submission_id = s.id
+        )
+      ORDER BY s.id
+    LOOP
+      v_assignee := v_staff_ids[((v_idx - 1) % v_staff_count) + 1];
+      v_draft_assignments := v_draft_assignments || jsonb_build_array(
+        jsonb_build_object(
+          'assignee_profile_id', v_assignee,
+          'submission_id', v_submission.sid,
+          'rubric_part_id', NULL
+        )
+      );
+      v_idx := v_idx + 1;
+    END LOOP;
+  ELSIF v_assignment.auto_assign_assignee_pool = 'lab_leaders' THEN
+    FOR v_submission IN
+      SELECT s.id AS sid, s.profile_id AS pid, s.assignment_group_id AS agid
+      FROM public.submissions s
+      WHERE s.assignment_id = v_assignment.id
+        AND s.class_id = v_assignment.class_id
+        AND s.is_active = true
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.review_assignments ra
+          WHERE ra.assignment_id = v_assignment.id
+            AND ra.rubric_id = v_assignment.grading_rubric_id
+            AND ra.submission_id = s.id
+        )
+      ORDER BY s.id
+    LOOP
+      IF v_submission.agid IS NOT NULL THEN
+        SELECT COALESCE(array_agg(DISTINCT agm.profile_id), '{}'::uuid[])
+        INTO v_member_profiles
+        FROM public.assignment_groups_members agm
+        WHERE agm.assignment_group_id = v_submission.agid
+          AND agm.class_id = v_assignment.class_id
+          AND agm.assignment_id = v_assignment.id;
+      ELSE
+        v_member_profiles := '{}'::uuid[];
+      END IF;
 
-  FOR v_submission IN
-    SELECT s.id
-    FROM public.submissions s
-    WHERE s.assignment_id = v_assignment.id
-      AND s.class_id = v_assignment.class_id
-      AND s.is_active = true
-      AND NOT EXISTS (
+      v_student_profiles := ARRAY(
+        SELECT DISTINCT mp
+        FROM unnest(v_member_profiles || ARRAY[v_submission.pid]) AS t(mp)
+        WHERE mp IS NOT NULL
+      );
+
+      SELECT ur.lab_section_id INTO v_lab_section_id
+      FROM public.user_roles ur
+      WHERE ur.class_id = v_assignment.class_id
+        AND ur.lab_section_id IS NOT NULL
+        AND ur.private_profile_id = ANY(v_student_profiles)
+      LIMIT 1;
+
+      IF v_lab_section_id IS NULL THEN
+        CONTINUE;
+      END IF;
+
+      FOR v_leader_id IN
+        SELECT lsl.profile_id
+        FROM public.lab_section_leaders lsl
+        JOIN public.user_roles ur
+          ON ur.private_profile_id = lsl.profile_id
+          AND ur.class_id = v_assignment.class_id
+          AND ur.disabled = false
+          AND ur.role IN ('grader', 'instructor')
+        WHERE lsl.class_id = v_assignment.class_id
+          AND lsl.lab_section_id = v_lab_section_id
+      LOOP
+        IF EXISTS (
+          SELECT 1
+          FROM public.grading_conflicts gc
+          WHERE gc.class_id = v_assignment.class_id
+            AND gc.grader_profile_id = v_leader_id
+            AND gc.student_profile_id = ANY(v_student_profiles)
+        ) THEN
+          CONTINUE;
+        END IF;
+
+        v_draft_assignments := v_draft_assignments || jsonb_build_array(
+          jsonb_build_object(
+            'assignee_profile_id', v_leader_id,
+            'submission_id', v_submission.sid,
+            'rubric_part_id', NULL
+          )
+        );
+      END LOOP;
+    END LOOP;
+  ELSIF v_assignment.auto_assign_assignee_pool = 'group_mentors' THEN
+    FOR v_submission IN
+      SELECT s.id AS sid, s.profile_id AS pid, s.assignment_group_id AS agid
+      FROM public.submissions s
+      WHERE s.assignment_id = v_assignment.id
+        AND s.class_id = v_assignment.class_id
+        AND s.is_active = true
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.review_assignments ra
+          WHERE ra.assignment_id = v_assignment.id
+            AND ra.rubric_id = v_assignment.grading_rubric_id
+            AND ra.submission_id = s.id
+        )
+      ORDER BY s.id
+    LOOP
+      IF v_submission.agid IS NULL THEN
+        CONTINUE;
+      END IF;
+
+      SELECT ag.mentor_profile_id
+      INTO v_mentor_id
+      FROM public.assignment_groups ag
+      WHERE ag.id = v_submission.agid
+        AND ag.class_id = v_assignment.class_id
+        AND ag.assignment_id = v_assignment.id;
+
+      IF v_mentor_id IS NULL THEN
+        CONTINUE;
+      END IF;
+
+      IF NOT EXISTS (
         SELECT 1
-        FROM public.review_assignments ra
-        WHERE ra.assignment_id = v_assignment.id
-          AND ra.rubric_id = v_assignment.grading_rubric_id
-          AND ra.submission_id = s.id
-      )
-    ORDER BY s.id
-  LOOP
-    v_assignee := v_staff_ids[((v_idx - 1) % v_staff_count) + 1];
-    v_draft_assignments := v_draft_assignments || jsonb_build_array(
-      jsonb_build_object(
-        'assignee_profile_id', v_assignee,
-        'submission_id', v_submission.id,
-        'rubric_part_id', NULL
-      )
-    );
-    v_idx := v_idx + 1;
-  END LOOP;
+        FROM public.user_roles ur
+        WHERE ur.private_profile_id = v_mentor_id
+          AND ur.class_id = v_assignment.class_id
+          AND ur.disabled = false
+          AND ur.role IN ('grader', 'instructor')
+      ) THEN
+        CONTINUE;
+      END IF;
+
+      SELECT COALESCE(array_agg(DISTINCT agm.profile_id), '{}'::uuid[])
+      INTO v_member_profiles
+      FROM public.assignment_groups_members agm
+      WHERE agm.assignment_group_id = v_submission.agid
+        AND agm.class_id = v_assignment.class_id
+        AND agm.assignment_id = v_assignment.id;
+
+      v_student_profiles := ARRAY(
+        SELECT DISTINCT mp
+        FROM unnest(v_member_profiles || ARRAY[v_submission.pid]) AS t(mp)
+        WHERE mp IS NOT NULL
+      );
+
+      IF EXISTS (
+        SELECT 1
+        FROM public.grading_conflicts gc
+        WHERE gc.class_id = v_assignment.class_id
+          AND gc.grader_profile_id = v_mentor_id
+          AND gc.student_profile_id = ANY(v_student_profiles)
+      ) THEN
+        CONTINUE;
+      END IF;
+
+      v_draft_assignments := v_draft_assignments || jsonb_build_array(
+        jsonb_build_object(
+          'assignee_profile_id', v_mentor_id,
+          'submission_id', v_submission.sid,
+          'rubric_part_id', NULL
+        )
+      );
+    END LOOP;
+  END IF;
 
   IF jsonb_array_length(v_draft_assignments) = 0 THEN
     RETURN 0;
