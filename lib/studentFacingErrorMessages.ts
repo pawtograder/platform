@@ -2,7 +2,15 @@ export type StudentFacingErrorContext = {
   isStudent?: boolean;
   /** When set with `isStudent`, refines Postgres permission errors during self-review */
   rubricReviewRound?: string | null;
+  /**
+   * When true with Postgres 42501, maps to copy for TAs blocked because hand-grading feedback
+   * was already released on the submission review (RLS issue #446).
+   */
+  releasedReviewGraderBlocked?: boolean;
 };
+
+export const GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE =
+  "This grading feedback has already been released to students, so you cannot add or change marks. Ask your instructor to click Unrelease on this submission review if a change is needed; after edits, they can release again.";
 
 const SELF_REVIEW_PAST_DUE_MESSAGE =
   "The self-review due date has passed, so you can no longer add or change checks. If you need more time, ask your instructor.";
@@ -20,6 +28,10 @@ export function getStudentFacingErrorMessage(error: unknown, context?: StudentFa
   }
 
   const code = getErrorCode(error);
+
+  if (code === "42501" && context?.releasedReviewGraderBlocked) {
+    return GRADING_FEEDBACK_RELEASED_GRADER_MESSAGE;
+  }
 
   if (code === "42501" && context?.isStudent && context.rubricReviewRound === "self-review") {
     return SELF_REVIEW_PAST_DUE_MESSAGE;

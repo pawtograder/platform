@@ -18,7 +18,7 @@ export default function EmptySurveysState({ courseId }: EmptySurveysStateProps) 
           Manage Surveys
         </Heading>
         {isInstructor && (
-          <Button size="sm" asChild variant="solid" bg="green.500" color="white" _hover={{ bg: "green.600" }}>
+          <Button size="sm" asChild variant="solid" colorPalette="green">
             <NextLink href={`/course/${courseId}/manage/surveys/new`}>+ Create New Survey</NextLink>
           </Button>
         )}
@@ -48,7 +48,7 @@ export default function EmptySurveysState({ courseId }: EmptySurveysStateProps) 
           </Text>
           {isInstructor && (
             <VStack p={2}>
-              <Button size="xs" asChild variant="solid" bg="green.500" color="white" _hover={{ bg: "green.600" }}>
+              <Button size="xs" asChild variant="solid" colorPalette="green">
                 <NextLink href={`/course/${courseId}/manage/surveys/new`}>+ Create a New Survey</NextLink>
               </Button>
             </VStack>

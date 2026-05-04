@@ -6,6 +6,29 @@ import { formatRelative } from "date-fns";
 import { BsCameraVideo, BsChatText, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
+
+// Module-stable references — see `components/ui/markdown.tsx`. Inline
+// `components` / `remarkPlugins` literals would force `react-markdown`
+// to rebuild its `unified()` processor every render and re-register
+// highlight.js languages, which dominates discussion-list scrolling cost.
+const TEASER_REMARK_PLUGINS = [[excerpt, { maxLength: 100 }]] as const satisfies Parameters<
+  typeof Markdown
+>[0]["remarkPlugins"];
+const TEASER_COMPONENTS: Parameters<typeof Markdown>[0]["components"] = {
+  a: ({ children }) => children,
+  img: () => (
+    <Text as="span" color="gray.500">
+      [image]
+    </Text>
+  ),
+  code: ({ children }) => children,
+  pre: ({ children }) => children,
+  blockquote: ({ children }) => children,
+  h1: ({ children }) => children,
+  h2: ({ children }) => children,
+  h3: ({ children }) => children
+};
+
 interface MessageData {
   user: string;
   updatedAt: string;
@@ -83,7 +106,7 @@ export const HelpRequestTeaser = (props: Props) => {
     if (effectiveStudents.length === 0) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={(creatorProfile?.avatar_url || undefined) as string | undefined} />
+          <Avatar.Image src={(creatorProfile?.avatar_url || undefined) as string | undefined} alt="" />
           <Avatar.Fallback>{(creatorProfile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
@@ -93,7 +116,7 @@ export const HelpRequestTeaser = (props: Props) => {
       const displayProfile = student1Profile || creatorProfile;
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={(displayProfile?.avatar_url || undefined) as string | undefined} />
+          <Avatar.Image src={(displayProfile?.avatar_url || undefined) as string | undefined} alt="" />
           <Avatar.Fallback>{(displayProfile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
@@ -122,7 +145,7 @@ export const HelpRequestTeaser = (props: Props) => {
       <AvatarGroup size="sm">
         {avatars.map((p) => (
           <Avatar.Root key={p.id} size="sm">
-            <Avatar.Image src={p.avatar_url} />
+            <Avatar.Image src={p.avatar_url} alt="" />
             <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}
@@ -174,23 +197,7 @@ export const HelpRequestTeaser = (props: Props) => {
           </HStack>
         </HStack>
         <Box truncate>
-          <Markdown
-            components={{
-              a: ({ children }) => children,
-              img: () => (
-                <Text as="span" color="gray.500">
-                  [image]
-                </Text>
-              ),
-              code: ({ children }) => children,
-              pre: ({ children }) => children,
-              blockquote: ({ children }) => children,
-              h1: ({ children }) => children,
-              h2: ({ children }) => children,
-              h3: ({ children }) => children
-            }}
-            remarkPlugins={[[excerpt, { maxLength: 100 }]]}
-          >
+          <Markdown components={TEASER_COMPONENTS} remarkPlugins={TEASER_REMARK_PLUGINS}>
             {message}
           </Markdown>
         </Box>

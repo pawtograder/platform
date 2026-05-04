@@ -11,6 +11,27 @@ import { BsCameraVideo, BsChatText, BsGeoAlt, BsPersonCheck, BsPersonDash } from
 import Markdown from "@/components/ui/markdown";
 import excerpt from "@stefanprobst/remark-excerpt";
 
+// Module-stable references — see `components/ui/markdown.tsx` for why
+// `<Markdown>` props need stable identity (memoized internal `unified()`
+// processor, lowlight grammar registration, etc.).
+const REQUEST_REMARK_PLUGINS = [[excerpt, { maxLength: 100 }]] as const satisfies Parameters<
+  typeof Markdown
+>[0]["remarkPlugins"];
+const REQUEST_COMPONENTS: Parameters<typeof Markdown>[0]["components"] = {
+  a: ({ children }) => children,
+  img: () => (
+    <Text as="span" color="gray.500">
+      [image]
+    </Text>
+  ),
+  code: ({ children }) => children,
+  pre: ({ children }) => children,
+  blockquote: ({ children }) => children,
+  h1: ({ children }) => children,
+  h2: ({ children }) => children,
+  h3: ({ children }) => children
+};
+
 /**
  * Get icon for queue type
  */
@@ -99,7 +120,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
     if (effectiveStudents.length === 1) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={(student1Profile?.avatar_url || undefined) as string | undefined} />
+          <Avatar.Image src={(student1Profile?.avatar_url || undefined) as string | undefined} alt="" />
           <Avatar.Fallback>{(student1Profile?.name || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
@@ -128,7 +149,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
       <AvatarGroup size="sm">
         {avatars.map((p) => (
           <Avatar.Root key={p.id} size="sm">
-            <Avatar.Image src={p.avatar_url} />
+            <Avatar.Image src={p.avatar_url} alt="" />
             <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}
@@ -232,23 +253,7 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
             </HStack>
 
             <Box truncate>
-              <Markdown
-                components={{
-                  a: ({ children }) => children,
-                  img: () => (
-                    <Text as="span" color="gray.500">
-                      [image]
-                    </Text>
-                  ),
-                  code: ({ children }) => children,
-                  pre: ({ children }) => children,
-                  blockquote: ({ children }) => children,
-                  h1: ({ children }) => children,
-                  h2: ({ children }) => children,
-                  h3: ({ children }) => children
-                }}
-                remarkPlugins={[[excerpt, { maxLength: 100 }]]}
-              >
+              <Markdown components={REQUEST_COMPONENTS} remarkPlugins={REQUEST_REMARK_PLUGINS}>
                 {request.request}
               </Markdown>
             </Box>

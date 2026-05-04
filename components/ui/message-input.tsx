@@ -59,6 +59,10 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
    * @default true (files are inserted inline by default)
    */
   inlineFileUpload?: boolean;
+  /**
+   * When true, the editor and toolbar are non-interactive (e.g. parent form is submitting).
+   */
+  disabled?: boolean;
 };
 
 export default function MessageInput(props: MessageInputProps) {
@@ -82,6 +86,7 @@ export default function MessageInput(props: MessageInputProps) {
     uploadFolder = "discussion",
     maxCodeLines = 300,
     inlineFileUpload = true, // Default to inline mode
+    disabled: disabledProp = false,
     ...editorProps
   } = props;
   const { course_id } = useParams();
@@ -373,7 +378,17 @@ export default function MessageInput(props: MessageInputProps) {
   );
   if (singleLine) {
     return (
-      <VStack align="stretch" spaceY="0" p="0" gap="2" w="100%" ref={containerRef} position="relative">
+      <VStack
+        align="stretch"
+        spaceY="0"
+        p="0"
+        gap="2"
+        w="100%"
+        ref={containerRef}
+        position="relative"
+        opacity={disabledProp ? 0.65 : 1}
+        pointerEvents={disabledProp ? "none" : "auto"}
+      >
         {showMarkdownPreview && (
           <Box width="100%" p="2" bg="bg.muted" border={"1px solid"} borderColor="border.subtle" rounded="md" m="0">
             <Markdown>{value}</Markdown>
@@ -383,7 +398,7 @@ export default function MessageInput(props: MessageInputProps) {
         <Textarea
           p="2"
           width="100%"
-          disabled={isSending}
+          disabled={isSending || disabledProp}
           aria-label={ariaLabel ?? placeholder ?? "Reply..."}
           placeholder={placeholder ?? "Reply..."}
           m="0"
@@ -433,6 +448,9 @@ export default function MessageInput(props: MessageInputProps) {
             }
             if (e.key === "Enter" && !(e.shiftKey || e.metaKey || !enterToSend)) {
               e.preventDefault();
+              if (disabledProp) {
+                return;
+              }
               if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
                 toaster.create({
                   title: "Empty message",
@@ -495,6 +513,7 @@ export default function MessageInput(props: MessageInputProps) {
                   size="xs"
                   colorPalette={anonymousMode ? "red" : "teal"}
                   p={0}
+                  disabled={disabledProp}
                 >
                   <FaUserSecret />
                 </Button>
@@ -509,6 +528,7 @@ export default function MessageInput(props: MessageInputProps) {
                   size="xs"
                   colorPalette="teal"
                   p={0}
+                  disabled={disabledProp}
                 >
                   <FaPaperclip />
                 </Button>
@@ -522,6 +542,7 @@ export default function MessageInput(props: MessageInputProps) {
                 size="xs"
                 colorPalette="teal"
                 p={0}
+                disabled={disabledProp}
               >
                 <TbMathFunction />
               </Button>
@@ -545,6 +566,7 @@ export default function MessageInput(props: MessageInputProps) {
                     colorPalette="teal"
                     p={0}
                     onClick={() => setShowGiphyPicker(!showGiphyPicker)}
+                    disabled={disabledProp}
                   >
                     GIF
                   </Button>
@@ -574,6 +596,7 @@ export default function MessageInput(props: MessageInputProps) {
                   size="xs"
                   colorPalette="teal"
                   p={0}
+                  disabled={disabledProp}
                 >
                   <FaSmile />
                 </Button>
@@ -583,11 +606,11 @@ export default function MessageInput(props: MessageInputProps) {
           <Box>
             <Field.Root orientation="horizontal">
               <Field.Label fontSize="xs">{sendButtonText ? `Enter to ${sendButtonText}` : "Enter to send"}</Field.Label>
-              <Checkbox checked={enterToSend} onChange={() => setEnterToSend(!enterToSend)} />
+              <Checkbox checked={enterToSend} onChange={() => setEnterToSend(!enterToSend)} disabled={disabledProp} />
             </Field.Root>
           </Box>
           {onClose && (
-            <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2}>
+            <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2} disabled={disabledProp}>
               {closeButtonText ?? "Close"}
             </Button>
           )}
@@ -597,6 +620,9 @@ export default function MessageInput(props: MessageInputProps) {
               aria-label={props.sendButtonText ? props.sendButtonText : "Send message"}
               onClick={async () => {
                 if (!sendMessage) {
+                  return;
+                }
+                if (disabledProp) {
                   return;
                 }
                 if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
@@ -627,6 +653,7 @@ export default function MessageInput(props: MessageInputProps) {
               colorPalette="green"
               size="xs"
               m={2}
+              disabled={disabledProp}
             >
               {props.sendButtonText ? props.sendButtonText : "Send"}
             </Button>
@@ -636,7 +663,17 @@ export default function MessageInput(props: MessageInputProps) {
     );
   }
   return (
-    <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%" ref={containerRef} position="relative">
+    <VStack
+      align="stretch"
+      spaceY="0"
+      p="0"
+      gap="0"
+      w="100%"
+      ref={containerRef}
+      position="relative"
+      opacity={disabledProp ? 0.65 : 1}
+      pointerEvents={disabledProp ? "none" : "auto"}
+    >
       <MDEditor
         ref={mdEditorRef}
         value={value}
@@ -676,7 +713,7 @@ export default function MessageInput(props: MessageInputProps) {
           }
         }}
         textareaProps={{
-          disabled: isSending,
+          disabled: isSending || disabledProp,
           onKeyDown: handleKeyDown,
           onInput: (e) => {
             // Update cursor position on every keystroke
@@ -740,6 +777,7 @@ export default function MessageInput(props: MessageInputProps) {
                 size="xs"
                 colorPalette={anonymousMode ? "red" : "teal"}
                 p={0}
+                disabled={disabledProp}
               >
                 <FaUserSecret />
               </Button>
@@ -754,6 +792,7 @@ export default function MessageInput(props: MessageInputProps) {
                 size="xs"
                 colorPalette="teal"
                 p={0}
+                disabled={disabledProp}
               >
                 <FaPaperclip />
               </Button>
@@ -767,6 +806,7 @@ export default function MessageInput(props: MessageInputProps) {
               size="xs"
               colorPalette="teal"
               p={0}
+              disabled={disabledProp}
             >
               <TbMathFunction />
             </Button>
@@ -790,6 +830,7 @@ export default function MessageInput(props: MessageInputProps) {
                   colorPalette="teal"
                   p={0}
                   onClick={() => setShowGiphyPicker(!showGiphyPicker)}
+                  disabled={disabledProp}
                 >
                   GIF
                 </Button>
@@ -819,6 +860,7 @@ export default function MessageInput(props: MessageInputProps) {
                 size="xs"
                 colorPalette="teal"
                 p={0}
+                disabled={disabledProp}
               >
                 <FaSmile />
               </Button>
@@ -826,7 +868,7 @@ export default function MessageInput(props: MessageInputProps) {
           )}
         </HStack>
         {onClose && (
-          <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2}>
+          <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2} disabled={disabledProp}>
             {closeButtonText ?? "Close"}
           </Button>
         )}
@@ -835,6 +877,9 @@ export default function MessageInput(props: MessageInputProps) {
             loading={isSending}
             aria-label="Send message"
             onClick={async () => {
+              if (disabledProp) {
+                return;
+              }
               if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
                 toaster.create({
                   title: "Empty message",
@@ -863,6 +908,7 @@ export default function MessageInput(props: MessageInputProps) {
             colorPalette="green"
             size="xs"
             ml={2}
+            disabled={disabledProp}
           >
             {props.sendButtonText ? props.sendButtonText : "Send"}
           </Button>

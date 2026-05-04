@@ -11,7 +11,7 @@ import {
 } from "./TestingUtils";
 import { Course, Assignment, RubricPart, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student: TestingUser | undefined;

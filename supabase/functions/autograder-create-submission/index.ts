@@ -963,6 +963,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       if (!isRegressionRerun) {
+        // Group assignment: once a student is on a team, personal-repo pushes must not create submissions.
+        if (
+          repoData.profile_id &&
+          (repoData.assignment_group_id === null || repoData.assignment_group_id === undefined)
+        ) {
+          const { data: teamMembership, error: teamMembershipError } = await adminSupabase
+            .from("assignment_groups_members")
+            .select("assignment_group_id, assignment_groups(name)")
+            .eq("assignment_id", assignment_id)
+            .eq("profile_id", repoData.profile_id)
+            .maybeSingle();
+          if (teamMembershipError) {
+            Sentry.captureException(teamMembershipError, scope);
+            throw new UserVisibleError(`Internal error: ${teamMembershipError.message}`);
+          }
+          if (teamMembership) {
+            const groupName = teamMembership.assignment_groups?.name ?? `group ${teamMembership.assignment_group_id}`;
+            throw new UserVisibleError(
+              `Your assignment is now being submitted as a group. Please push to your group repository instead of your personal repository. (assignment: ${assignment_id}, group: ${groupName}) If the group repository is not ready yet, wait for it to be provisioned or ask your instructor or TA.`
+            );
+          }
+        }
         // First check if there's an existing submission with this unique key
         const { data: existingSubmission } = await adminSupabase
           .from("submissions")
@@ -1238,6 +1260,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               file.type === "File" && // Do not submit directories
               expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
           );
+          if (submittedFiles.length === 0) {
+            if (submission_id !== undefined) {
+              try {
+                await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+                submission_id = undefined;
+              } catch (cleanupErr) {
+                Sentry.captureException(cleanupErr, scope);
+              }
+            }
+            throw new UserVisibleError(
+              `No files in the repository matched the assignment's submissionFiles patterns (${expectedFiles.join(", ")}). ` +
+                `Instructor: check pawtograder.yml in grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha} — the patterns appear not to match any file in the student repository.`,
+              400
+            );
+          }
           // Make sure that all files that are NOT glob patterns are present
           const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
           const allNonGlobFilesPresent = nonGlobFiles.every((file) =>

@@ -14,7 +14,7 @@ import {
   type SurveyConfig
 } from "./DatabaseSeedingUtils";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // ============================
 // TEMPLATE CONFIGURATIONS

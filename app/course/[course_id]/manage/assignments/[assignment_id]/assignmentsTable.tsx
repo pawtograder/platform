@@ -14,6 +14,7 @@ import {
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import TableController from "@/lib/TableController";
 import { useTimeZone } from "@/lib/TimeZoneProvider";
 import { createClient } from "@/utils/supabase/client";
@@ -42,7 +43,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { TZDate } from "@date-fns/tz";
 import * as Sentry from "@sentry/nextjs";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { ColumnDef, flexRender, RowSelectionState } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams, useRouter } from "next/navigation";
@@ -150,19 +151,35 @@ function ScoreLink({
   );
 }
 
-/** Per-student combined total from `per_student_grading_totals`, if present. */
-function getPerStudentCombinedGradingTotal(submission: ActiveSubmissionsWithGradesForAssignment): number | null {
-  const studentId = submission.student_private_profile_id;
-  if (!studentId) return null;
-  const perStudentTotals = submission.per_student_grading_totals as IndividualScores | null | undefined;
-  return perStudentTotals && typeof perStudentTotals[studentId] === "number"
-    ? (perStudentTotals[studentId] as number)
-    : null;
+/** Per-student line from `per_student_grading_totals` only (for tooltips). */
+function getPerStudentCombinedGradingTotal(
+  submission: ActiveSubmissionsWithGradesForAssignment,
+  studentId: string
+): number | null {
+  return getDisplayedGradingTotalForStudent(
+    {
+      total_score: null,
+      per_student_grading_totals: submission.per_student_grading_totals,
+      individual_scores: undefined
+    },
+    studentId
+  );
 }
 
-/** Same numeric total as the Total Score column (per-student combined total, else `total_score`). */
+/** Total Score column: per_student_grading_totals, else individual_scores, else total_score (see gradebook). */
 function getDisplayedTotalScore(submission: ActiveSubmissionsWithGradesForAssignment): number | null {
-  return getPerStudentCombinedGradingTotal(submission) ?? submission.total_score ?? null;
+  const studentId = submission.student_private_profile_id;
+  if (studentId) {
+    return getDisplayedGradingTotalForStudent(
+      {
+        total_score: submission.total_score,
+        per_student_grading_totals: submission.per_student_grading_totals,
+        individual_scores: submission.individual_scores
+      },
+      studentId
+    );
+  }
+  return submission.total_score ?? null;
 }
 
 /** Total score when `student_private_profile_id` is missing (no per-student obfuscation target). */
@@ -219,7 +236,7 @@ function TotalScoreCellWithStudent({
   assignment_id: string;
   studentId: string;
 }) {
-  const perStudentCombined = getPerStudentCombinedGradingTotal(row.original);
+  const perStudentCombined = getPerStudentCombinedGradingTotal(row.original, studentId);
   const individualScores = row.original.individual_scores as IndividualScores | null | undefined;
   const hasIndividual = individualScores && Object.keys(individualScores).length > 0;
   const isObfuscated = useObfuscatedGradesMode();
@@ -294,15 +311,22 @@ export default function AssignmentsTable({
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
   const [isMarkingAllComplete, setIsMarkingAllComplete] = useState(false);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
   // Get sections and assignment data for default visibility logic
   const classSections = useClassSections();
   const hasGroups = useMemo(() => assignmentGroups.length > 0, [assignmentGroups]);
+  const hasAnyGroupMentor = useMemo(
+    () => assignmentGroups.some((g) => g.mentor_profile_id != null),
+    [assignmentGroups]
+  );
+  const showGroupMentorColumn = hasGroups && hasAnyGroupMentor;
 
   // Column visibility state with dynamic defaults
   const [columnVisibility, setColumnVisibility] = useState(() => {
     return {
       groupname: false,
+      assignment_group_mentor_name: false,
       class_section_name: false,
       lab_section_name: false,
       late_due_date: false,
@@ -322,14 +346,73 @@ export default function AssignmentsTable({
       setColumnVisibility((prev) => ({
         ...prev,
         groupname: hasGroups,
+        assignment_group_mentor_name: showGroupMentorColumn,
         class_section_name: hasMultipleClassSections,
         lab_section_name: hasLabScheduling
       }));
     }
-  }, [classSections.length, assignment, hasGroups]);
+  }, [classSections.length, assignment, hasGroups, showGroupMentorColumn]);
 
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
+      {
+        id: "select",
+        size: 44,
+        header: ({ table }) => {
+          const filteredRows = table.getFilteredRowModel().rows;
+          const selectableRows = filteredRows.filter((r) => r.original.activesubmissionid != null);
+          const selectedInView = selectableRows.filter((r) => r.getIsSelected()).length;
+          const allSelected = selectableRows.length > 0 && selectedInView === selectableRows.length;
+          const someSelected = selectedInView > 0 && !allSelected;
+          return (
+            <VStack align="stretch" gap={1} onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                aria-label="Select all rows matching current filters"
+                checked={someSelected ? "indeterminate" : allSelected}
+                disabled={selectableRows.length === 0}
+                onCheckedChange={(details) => {
+                  const checked = details.checked === true;
+                  for (const r of selectableRows) {
+                    r.toggleSelected(checked);
+                  }
+                }}
+              />
+              <HStack gap={1} flexWrap="wrap">
+                <Button
+                  size="2xs"
+                  variant="plain"
+                  disabled={selectableRows.length === 0}
+                  onClick={() => {
+                    for (const r of selectableRows) {
+                      r.toggleSelected(true);
+                    }
+                  }}
+                >
+                  All in view
+                </Button>
+                <Button size="2xs" variant="plain" onClick={() => table.resetRowSelection()}>
+                  None
+                </Button>
+              </HStack>
+            </VStack>
+          );
+        },
+        cell: ({ row }) => {
+          const canSelect = row.original.activesubmissionid != null;
+          return (
+            <Box onClick={(e) => e.stopPropagation()} py={2} px={1}>
+              <Checkbox
+                aria-label={canSelect ? "Select row for bulk actions" : "No submission to select"}
+                checked={row.getIsSelected()}
+                disabled={!canSelect}
+                onCheckedChange={(details) => row.toggleSelected(details.checked === true)}
+              />
+            </Box>
+          );
+        },
+        enableSorting: false,
+        enableColumnFilter: false
+      },
       {
         id: "assignment_id",
         accessorKey: "assignment_id",
@@ -381,6 +464,25 @@ export default function AssignmentsTable({
         accessorKey: "groupname",
         header: "Group"
       },
+      ...(showGroupMentorColumn
+        ? ([
+            {
+              id: "assignment_group_mentor_name",
+              accessorKey: "assignment_group_mentor_name",
+              header: "Group mentor",
+              enableColumnFilter: true,
+              filterFn: (row, id, filterValue) => {
+                if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+                const values = Array.isArray(filterValue) ? filterValue : [filterValue];
+                if (!row.original.assignment_group_mentor_name) return values.includes("No mentor");
+                return values.some((val) =>
+                  row.original.assignment_group_mentor_name!.toLowerCase().includes(val.toLowerCase())
+                );
+              },
+              cell: (props) => <Text>{(props.getValue() as string | null | undefined) ?? "—"}</Text>
+            }
+          ] satisfies ColumnDef<ActiveSubmissionsWithGradesForAssignment>[])
+        : []),
       {
         id: "class_section_name",
         accessorKey: "class_section_name",
@@ -579,7 +681,7 @@ export default function AssignmentsTable({
         }
       }
     ],
-    [timeZone, course_id, assignment_id, assignment]
+    [timeZone, course_id, assignment_id, assignment, showGroupMentorColumn]
   );
 
   const [internalTableController, setInternalTableController] = useState<TableController<"submissions"> | null>(null);
@@ -622,6 +724,7 @@ export default function AssignmentsTable({
   const {
     getHeaderGroups,
     getRowModel,
+    getFilteredRowModel,
     getCoreRowModel,
     getState,
     getRowCount,
@@ -632,12 +735,17 @@ export default function AssignmentsTable({
     nextPage,
     previousPage,
     setPageSize,
-    isLoading
+    isLoading,
+    resetRowSelection
   } = useTableControllerTable({
     columns,
     //TODO: Longer term, we should fix to make this work with views!
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tableController: tableController as any,
+    getRowId: (row) => String((row as ActiveSubmissionsWithGradesForAssignment).id),
+    enableRowSelection: (row) => row.original.activesubmissionid != null,
+    rowSelection,
+    onRowSelectionChange: setRowSelection,
     initialState: {
       columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
       pagination: {
@@ -648,6 +756,17 @@ export default function AssignmentsTable({
     }
   });
   const isInstructor = classRole.role === "instructor";
+
+  const selectedSubmissionIds = getFilteredRowModel()
+    .rows.filter((row) => row.getIsSelected() && row.original.activesubmissionid != null)
+    .map((row) => row.original.activesubmissionid as number);
+
+  const selectedCount = selectedSubmissionIds.length;
+
+  const columnFiltersKey = JSON.stringify(getState().columnFilters);
+  useEffect(() => {
+    setRowSelection({});
+  }, [columnFiltersKey]);
 
   const toggleColumnVisibility = (columnId: keyof typeof columnVisibility) => {
     setColumnVisibility((prev) => ({
@@ -665,12 +784,13 @@ export default function AssignmentsTable({
               colorPalette="green"
               variant="subtle"
               loading={isReleasingAll}
-              disabled={isReleasingAll || isUnreleasingAll}
+              disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
               onClick={async () => {
                 setIsReleasingAll(true);
                 try {
-                  const { error } = await supabase.rpc("release_all_grading_reviews_for_assignment", {
-                    assignment_id: Number(assignment_id)
+                  const { error } = await supabase.rpc("release_grading_reviews_for_submissions", {
+                    p_assignment_id: Number(assignment_id),
+                    p_submission_ids: selectedSubmissionIds
                   });
 
                   if (error) {
@@ -678,11 +798,18 @@ export default function AssignmentsTable({
                   }
 
                   await tableController?.refetchAll();
+                  resetRowSelection();
 
-                  toaster.success({ title: "Success", description: "All submission reviews released" });
+                  toaster.success({
+                    title: "Success",
+                    description:
+                      selectedCount === 1
+                        ? "1 selected submission review released"
+                        : `${selectedCount} selected submission reviews released`
+                  });
                 } catch (error) {
                   // eslint-disable-next-line no-console
-                  console.error("Error releasing all grading reviews:", error);
+                  console.error("Error releasing grading reviews for selection:", error);
                   toaster.error({
                     title: "Error",
                     description:
@@ -693,18 +820,21 @@ export default function AssignmentsTable({
                 }
               }}
             >
-              Release All Submission Reviews
+              {selectedCount === 0
+                ? "Release selected submission reviews"
+                : `Release ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
             </Button>
             <Button
               variant="ghost"
               colorPalette="red"
               loading={isUnreleasingAll}
-              disabled={isReleasingAll || isUnreleasingAll}
+              disabled={isReleasingAll || isUnreleasingAll || selectedCount === 0}
               onClick={async () => {
                 setIsUnreleasingAll(true);
                 try {
-                  const { error } = await supabase.rpc("unrelease_all_grading_reviews_for_assignment", {
-                    assignment_id: Number(assignment_id)
+                  const { error } = await supabase.rpc("unrelease_grading_reviews_for_submissions", {
+                    p_assignment_id: Number(assignment_id),
+                    p_submission_ids: selectedSubmissionIds
                   });
 
                   if (error) {
@@ -712,10 +842,17 @@ export default function AssignmentsTable({
                   }
 
                   await tableController?.refetchAll();
-                  toaster.success({ title: "Success", description: "All submission reviews unreleased" });
+                  resetRowSelection();
+                  toaster.success({
+                    title: "Success",
+                    description:
+                      selectedCount === 1
+                        ? "1 selected submission review unreleased"
+                        : `${selectedCount} selected submission reviews unreleased`
+                  });
                 } catch (error) {
                   // eslint-disable-next-line no-console
-                  console.error("Error unreleasing all grading reviews:", error);
+                  console.error("Error unreleasing grading reviews for selection:", error);
                   toaster.error({
                     title: "Error",
                     description:
@@ -726,7 +863,9 @@ export default function AssignmentsTable({
                 }
               }}
             >
-              Unrelease All Submission Reviews
+              {selectedCount === 0
+                ? "Unrelease selected submission reviews"
+                : `Unrelease ${selectedCount} selected submission${selectedCount === 1 ? "" : "s"}`}
             </Button>
             <MarkAllCompleteButton
               assignment_id={Number(assignment_id)}
@@ -750,6 +889,14 @@ export default function AssignmentsTable({
             <Checkbox checked={columnVisibility.groupname} onCheckedChange={() => toggleColumnVisibility("groupname")}>
               Group
             </Checkbox>
+            {showGroupMentorColumn && (
+              <Checkbox
+                checked={columnVisibility.assignment_group_mentor_name}
+                onCheckedChange={() => toggleColumnVisibility("assignment_group_mentor_name")}
+              >
+                Group mentor
+              </Checkbox>
+            )}
             <Checkbox
               checked={columnVisibility.class_section_name}
               onCheckedChange={() => toggleColumnVisibility("class_section_name")}
@@ -803,10 +950,14 @@ export default function AssignmentsTable({
                     .filter(
                       (h) =>
                         h.id !== "assignment_id" &&
-                        (h.id === "name" ||
+                        (h.id === "select" ||
+                          h.id === "name" ||
                           h.id === "autograder_score" ||
                           h.id === "total_score" ||
                           h.id === "released" ||
+                          (h.id === "assignment_group_mentor_name" &&
+                            showGroupMentorColumn &&
+                            columnVisibility.assignment_group_mentor_name) ||
                           columnVisibility[h.id as keyof typeof columnVisibility])
                     )
                     .map((header, colIdx) => (
@@ -818,31 +969,35 @@ export default function AssignmentsTable({
                           top: 0,
                           left: colIdx === 0 ? 0 : undefined,
                           zIndex: colIdx === 0 ? 21 : 20,
-                          minWidth: colIdx === 0 ? 180 : undefined,
-                          width: colIdx === 0 ? 180 : undefined
+                          minWidth: colIdx === 0 ? 72 : colIdx === 1 ? 180 : undefined,
+                          width: colIdx === 0 ? 72 : colIdx === 1 ? 180 : undefined
                         }}
                       >
                         {header.isPlaceholder ? null : (
                           <>
-                            <Text onClick={header.column.getToggleSortingHandler()}>
-                              {flexRender(header.column.columnDef.header, header.getContext())}
-                              {{
-                                asc: (
+                            {header.id === "select" ? (
+                              flexRender(header.column.columnDef.header, header.getContext())
+                            ) : (
+                              <Text onClick={header.column.getToggleSortingHandler()}>
+                                {flexRender(header.column.columnDef.header, header.getContext())}
+                                {{
+                                  asc: (
+                                    <Icon size="md">
+                                      <FaSortUp />
+                                    </Icon>
+                                  ),
+                                  desc: (
+                                    <Icon size="md">
+                                      <FaSortDown />
+                                    </Icon>
+                                  )
+                                }[header.column.getIsSorted() as string] ?? (
                                   <Icon size="md">
-                                    <FaSortUp />
+                                    <FaSort />
                                   </Icon>
-                                ),
-                                desc: (
-                                  <Icon size="md">
-                                    <FaSortDown />
-                                  </Icon>
-                                )
-                              }[header.column.getIsSorted() as string] ?? (
-                                <Icon size="md">
-                                  <FaSort />
-                                </Icon>
-                              )}
-                            </Text>
+                                )}
+                              </Text>
+                            )}
                             {header.id === "name" && (
                               <Select
                                 isMulti={true}
@@ -913,6 +1068,31 @@ export default function AssignmentsTable({
                                   { label: "Not assigned", value: "Not assigned" }
                                 ]}
                                 placeholder="Filter by lab section..."
+                              />
+                            )}
+                            {header.id === "assignment_group_mentor_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    getCoreRowModel()
+                                      .rows.reduce((map, row) => {
+                                        const mentorName = row.original.assignment_group_mentor_name;
+                                        if (mentorName && !map.has(mentorName)) {
+                                          map.set(mentorName, mentorName);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((name) => ({ label: name, value: name })),
+                                  { label: "No mentor", value: "No mentor" }
+                                ]}
+                                placeholder="Filter by group mentor..."
                               />
                             )}
                             {header.id === "gradername" && (
@@ -1136,10 +1316,14 @@ export default function AssignmentsTable({
                           h.headers.filter(
                             (header) =>
                               header.id !== "assignment_id" &&
-                              (header.id === "name" ||
+                              (header.id === "select" ||
+                                header.id === "name" ||
                                 header.id === "autograder_score" ||
                                 header.id === "total_score" ||
                                 header.id === "released" ||
+                                (header.id === "assignment_group_mentor_name" &&
+                                  showGroupMentorColumn &&
+                                  columnVisibility.assignment_group_mentor_name) ||
                                 columnVisibility[header.id as keyof typeof columnVisibility])
                           ).length
                       )
@@ -1191,10 +1375,14 @@ export default function AssignmentsTable({
                         .filter(
                           (c) =>
                             c.column.id !== "assignment_id" &&
-                            (c.column.id === "name" ||
+                            (c.column.id === "select" ||
+                              c.column.id === "name" ||
                               c.column.id === "autograder_score" ||
                               c.column.id === "total_score" ||
                               c.column.id === "released" ||
+                              (c.column.id === "assignment_group_mentor_name" &&
+                                showGroupMentorColumn &&
+                                columnVisibility.assignment_group_mentor_name) ||
                               columnVisibility[c.column.id as keyof typeof columnVisibility])
                         )
                         .map((cell, colIdx) => (
@@ -1202,14 +1390,14 @@ export default function AssignmentsTable({
                             key={cell.id}
                             p={0}
                             style={
-                              colIdx === 0
+                              colIdx === 0 || colIdx === 1
                                 ? {
                                     position: "sticky",
-                                    left: 0,
+                                    left: colIdx === 0 ? 0 : 72,
                                     zIndex: 1,
                                     background: "bg.subtle",
-                                    borderRight: "1px solid",
-                                    borderColor: "border.muted"
+                                    borderRight: colIdx === 1 ? "1px solid" : undefined,
+                                    borderColor: colIdx === 1 ? "border.muted" : undefined
                                   }
                                 : {}
                             }
