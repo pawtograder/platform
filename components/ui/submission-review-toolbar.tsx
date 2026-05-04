@@ -322,7 +322,7 @@ export function CompleteReviewAssignmentButton() {
   return (
     <Popover.Root lazyMount>
       <Popover.Trigger asChild>
-        <Button variant="surface" colorPalette="green">
+        <Button variant="solid" colorPalette="green">
           Complete Review Assignment
         </Button>
       </Popover.Trigger>
@@ -370,7 +370,7 @@ export function CompleteReviewButton() {
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="surface" colorPalette="green">
+        <Button variant="solid" colorPalette="green">
           Complete Review <Icon as={FaRegCheckCircle} />
         </Button>
       </Popover.Trigger>

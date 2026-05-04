@@ -90,7 +90,7 @@ function CreateGroupButton({
       }}
     >
       <Dialog.Trigger asChild>
-        <Button colorPalette="green" variant="surface">
+        <Button colorPalette="green" variant="solid">
           Create a new group
         </Button>
       </Dialog.Trigger>
@@ -214,7 +214,7 @@ function InviteButton({
       }}
     >
       <Dialog.Trigger asChild>
-        <Button variant="surface" colorPalette="green">
+        <Button variant="solid" colorPalette="green">
           Invite other students
         </Button>
       </Dialog.Trigger>
@@ -346,7 +346,7 @@ function JoinGroupButton({
       }}
     >
       <Dialog.Trigger asChild>
-        <Button variant="surface" colorPalette="green">
+        <Button variant="solid" colorPalette="green">
           Join a group
         </Button>
       </Dialog.Trigger>
@@ -604,7 +604,7 @@ function GroupMember({ profile_id }: { profile_id: string }) {
   return (
     <HStack>
       <Avatar.Root size="xs">
-        <Avatar.Image src={profile?.avatar_url} />
+        <Avatar.Image src={profile?.avatar_url} alt="" />
         <Avatar.Fallback>{profile?.name?.slice(0, 2)}</Avatar.Fallback>
       </Avatar.Root>
       <Text fontSize="sm" color="fg.muted">

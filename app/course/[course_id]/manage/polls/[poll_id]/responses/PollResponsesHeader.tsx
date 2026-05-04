@@ -68,7 +68,7 @@ export default function PollResponsesHeader({ courseID, pollUrl, onPresent, qrCo
           >
             {poll?.is_live ? "Stop Poll" : "Start Poll"}
           </Button>
-          <Button size="sm" bg="blue.500" color="white" _hover={{ bg: "blue.600" }} onClick={onPresent}>
+          <Button size="sm" colorPalette="blue" variant="solid" onClick={onPresent}>
             Present
           </Button>
         </HStack>

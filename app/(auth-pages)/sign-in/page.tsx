@@ -6,6 +6,10 @@ import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack 
 import { BsMicrosoft } from "react-icons/bs";
 import { isSignupsEnabled } from "@/lib/features";
 
+export const metadata = {
+  title: "Sign in · Pawtograder"
+};
+
 type SearchParams = Message & { email?: string; code?: string; redirect?: string };
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
   const { email, redirect: redirectParam, ...message } = await props.searchParams;

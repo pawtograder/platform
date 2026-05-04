@@ -262,7 +262,13 @@ const DropBoxAvatar = ({
           <Menu.Root positioning={{ placement: "bottom" }}>
             <Text fontWeight={"700"}>{avatarType} Avatar</Text>
             <Menu.Trigger asChild>
-              <Button background="transparent" height="100%" width="100%" borderRadius={"full"}>
+              <Button
+                aria-label="Edit avatar"
+                background="transparent"
+                height="100%"
+                width="100%"
+                borderRadius={"full"}
+              >
                 <Avatar.Root
                   colorPalette="gray"
                   width="100px"
@@ -276,7 +282,7 @@ const DropBoxAvatar = ({
                   onMouseEnter={() => setIsHovered(true)}
                   onMouseLeave={() => setIsHovered(false)}
                 >
-                  <Avatar.Image src={avatarLink || undefined} />
+                  <Avatar.Image src={avatarLink || undefined} alt="" />
                   <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
                 </Avatar.Root>
                 {isHovered && (
@@ -710,11 +716,13 @@ function UserSettingsMenu() {
 
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
-      <Drawer.Trigger>
-        <Avatar.Root size="sm" colorPalette="gray">
-          <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-          <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
-        </Avatar.Root>
+      <Drawer.Trigger asChild>
+        <IconButton aria-label="Open user menu" variant="ghost" size="sm" borderRadius="full" p={0}>
+          <Avatar.Root size="sm" colorPalette="gray">
+            <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+            <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
+          </Avatar.Root>
+        </IconButton>
       </Drawer.Trigger>
       <Portal>
         <Drawer.Backdrop />
@@ -726,7 +734,7 @@ function UserSettingsMenu() {
                   <HStack flex={1} minWidth={0}>
                     <Avatar.Root size="sm" colorPalette="gray">
                       <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
+                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
                     </Avatar.Root>
                     <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
                       <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">

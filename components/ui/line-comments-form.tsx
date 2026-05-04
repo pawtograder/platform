@@ -1,11 +1,12 @@
 import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useSubmissionController, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
 import {
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithGraderResultsAndFiles
 } from "@/utils/supabase/DatabaseTypes";
+import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { Box, Skeleton } from "@chakra-ui/react";
 import { useCallback, useState } from "react";
 import { Checkbox } from "./checkbox";
@@ -39,6 +40,8 @@ export default function LineCommentForm({
   const submissionController = useSubmissionController();
   const { private_profile_id, public_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isInstructor = useIsInstructor();
+  const isTaOnly = useIsGrader();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -71,6 +74,7 @@ export default function LineCommentForm({
         submission_review_id: submissionReviewId,
         rubric_check_id: rubricCheckId ?? null,
         points: defaultPoints ?? null,
+        released: fetchedSubmissionReview?.released ?? true,
         eventually_visible: isGraderOrInstructor ? eventuallyVisible : true
       };
       try {
@@ -86,7 +90,13 @@ export default function LineCommentForm({
         if (onCancel) onCancel();
         toaster.success({ title: "Comment posted" });
       } catch (err) {
-        toaster.error({ title: "Error posting comment", description: (err as Error).message });
+        toaster.error({
+          title: "Error posting comment",
+          description: getStudentFacingErrorMessage(err, {
+            releasedReviewGraderBlocked:
+              isGraderOrInstructor && !isInstructor && isTaOnly && Boolean(fetchedSubmissionReview?.released)
+          })
+        });
       } finally {
         setIsLoading(false);
       }
@@ -104,6 +114,8 @@ export default function LineCommentForm({
       rubricCheckId,
       defaultPoints,
       isGraderOrInstructor,
+      isInstructor,
+      isTaOnly,
       onSubmitted,
       onCancel
     ]

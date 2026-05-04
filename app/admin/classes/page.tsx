@@ -6,6 +6,10 @@ import { Plus } from "lucide-react";
 import { VStack, Flex, Heading, Text, HStack } from "@chakra-ui/react";
 import Link from "next/link";
 
+export const metadata = {
+  title: "Classes"
+};
+
 /**
  * Class management page for admins
  */

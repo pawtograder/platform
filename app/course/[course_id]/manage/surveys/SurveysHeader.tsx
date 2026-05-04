@@ -21,7 +21,7 @@ export default function SurveysHeader({ courseId }: SurveysHeaderProps) {
           <Button size="sm" asChild variant="outline">
             <NextLink href={`/course/${courseId}/manage/surveys/series`}>Manage Series</NextLink>
           </Button>
-          <Button size="sm" asChild variant="solid" bg="green.500" color="white" _hover={{ bg: "green.600" }}>
+          <Button size="sm" asChild variant="solid" colorPalette="green">
             <NextLink href={`/course/${courseId}/manage/surveys/new`}>+ Create New Survey</NextLink>
           </Button>
         </HStack>

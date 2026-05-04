@@ -102,15 +102,17 @@ export default function DiscussionPage() {
     return counts;
   }, [readAtByThreadId, threads]);
 
-  const feedThreads = useMemo(() => {
-    return threads
-      .filter((t) => followedThreadIds.has(t.id) || followedTopicIds.has(t.topic_id))
-      .filter((t) => {
-        if (!q) return true;
-        return (t.subject ?? "").toLowerCase().includes(q) || (t.body ?? "").toLowerCase().includes(q);
-      })
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }, [followedThreadIds, followedTopicIds, q, threads]);
+  const feedThreads = useMemo(
+    () =>
+      threads
+        .filter((t) => followedThreadIds.has(t.id) || followedTopicIds.has(t.topic_id))
+        .filter((t) => {
+          if (!q) return true;
+          return (t.subject ?? "").toLowerCase().includes(q) || (t.body ?? "").toLowerCase().includes(q);
+        })
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [followedThreadIds, followedTopicIds, q, threads]
+  );
 
   const selectedTopic = useMemo(
     () => (selectedTopicId != null ? sortedTopics.find((t) => t.id === selectedTopicId) : undefined),

@@ -3,7 +3,7 @@ import { createAdminClient } from "@/utils/supabase/client";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import fs from "fs";
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 function printUsage() {
   console.log("Usage:");
