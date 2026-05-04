@@ -122,10 +122,15 @@ function SupportMenu() {
         <Menu.Positioner>
           <Menu.Content>
             <Menu.Item value="keyboard-shortcuts" onClick={openHelp}>
-              <FiCommand /> Keyboard shortcuts
-              <Text as="span" color="fg.muted" fontSize="xs">
-                ?
-              </Text>
+              <HStack gap={2} width="100%" justifyContent="space-between">
+                <HStack gap={2}>
+                  <FiCommand />
+                  Keyboard shortcuts
+                </HStack>
+                <Text as="span" color="fg.muted" fontSize="xs">
+                  ?
+                </Text>
+              </HStack>
             </Menu.Item>
             <Menu.Item value="github-help">
               <Link href={`/course/${course_id}/github-help`}>
