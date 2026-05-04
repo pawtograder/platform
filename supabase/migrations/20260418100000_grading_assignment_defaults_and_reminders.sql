@@ -461,9 +461,14 @@ BEGIN
         SET auto_assigned_at = now(),
             updated_at = now()
         WHERE assignment_id = v_assignment.id;
+        IF v_auto_assigned_count > 0 THEN
+          RAISE LOG 'Auto-assigned grading for assignment %: created/updated=%', v_assignment.id, v_auto_assigned_count;
+        ELSE
+          RAISE LOG 'Auto-assign grading for assignment %: marked complete (no new review assignments required)', v_assignment.id;
+        END IF;
+      ELSE
+        RAISE LOG 'Auto-assign grading for assignment %: deferred or failed (code %)', v_assignment.id, v_auto_assigned_count;
       END IF;
-
-      RAISE LOG 'Auto-assigned grading for assignment %, created/updated=%', v_assignment.id, v_auto_assigned_count;
     END IF;
 
     IF v_assignment.late_grading_reminders_enabled

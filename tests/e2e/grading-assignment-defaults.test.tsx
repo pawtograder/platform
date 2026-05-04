@@ -72,6 +72,11 @@ test("instructors can manage grading default profiles and apply them on assignme
   await expect(page.getByText(gradingProfileName)).toBeVisible();
   await expect(page.getByText("Auto assign: on | Reminder: every 12h")).toBeVisible();
 
+  const throwawayProfileName = `E2E Throwaway Profile ${profileNameSuffix}`;
+  await page.getByLabel("Profile name").fill(throwawayProfileName);
+  await page.getByRole("button", { name: "Create profile" }).click();
+  await expect(page.getByText(throwawayProfileName)).toBeVisible();
+
   const { data: createdProfile, error: createdProfileError } = await supabase
     .from("grading_assignment_default_profiles")
     .select("*")
@@ -89,6 +94,14 @@ test("instructors can manage grading default profiles and apply them on assignme
     await dialog.dismiss();
   });
   await page.getByRole("button", { name: "Delete" }).first().click();
+  await expect(page.getByText(gradingProfileName)).toBeVisible();
+
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("Delete this grading default profile?");
+    await dialog.accept();
+  });
+  await page.getByRole("button", { name: "Delete" }).nth(1).click();
+  await expect(page.getByText(throwawayProfileName)).not.toBeVisible();
   await expect(page.getByText(gradingProfileName)).toBeVisible();
 
   await page.goto(`/course/${course.id}/manage/assignments/new`);

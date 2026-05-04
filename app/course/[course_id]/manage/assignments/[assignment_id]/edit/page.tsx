@@ -99,11 +99,16 @@ export default function EditAssignment() {
         values.eval_config = undefined;
         values.allow_early = undefined;
         values.deadline_offset = undefined;
+        const reminderInterval = values.late_grading_reminder_interval_hours;
         values.late_grading_reminder_interval_hours = values.late_grading_reminders_enabled
-          ? (values.late_grading_reminder_interval_hours ?? 12)
+          ? typeof reminderInterval === "number" && Number.isFinite(reminderInterval)
+            ? reminderInterval
+            : 12
           : null;
-        values.late_grading_reply_to = values.late_grading_reply_to || null;
-        values.late_grading_cc_emails = values.late_grading_cc_emails || { emails: [] };
+        const replyTrimmed =
+          typeof values.late_grading_reply_to === "string" ? values.late_grading_reply_to.trim() : "";
+        values.late_grading_reply_to = replyTrimmed.length > 0 ? replyTrimmed : null;
+        values.late_grading_cc_emails = values.late_grading_cc_emails ?? { emails: [] };
         await form.refineCore.onFinish(values);
         await revalidateCourseDerivedCachesClient(Number.parseInt(course_id as string, 10));
         if (values.template_repo) {

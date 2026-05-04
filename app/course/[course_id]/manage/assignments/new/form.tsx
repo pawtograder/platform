@@ -55,6 +55,15 @@ export type AssignmentFormValues = Assignment & {
   allow_early?: boolean | null;
 };
 
+/** Coerce number inputs so toggling visibility never leaves `NaN` in form state (NaN breaks `??` fallbacks). */
+const numberInputValueAs = (emptyFallback: number | null) => (value: unknown) => {
+  if (value === "" || value === null || value === undefined) {
+    return emptyFallback;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : emptyFallback;
+};
+
 const normalizeCcEmails = (value: unknown): GradingCcEmails => {
   if (value && typeof value === "object" && "emails" in value) {
     const emails = (value as { emails?: unknown }).emails;
@@ -598,7 +607,8 @@ function GradingAutomationSubform({
   } = useList<GradingAssignmentDefaultProfile>({
     resource: "grading_assignment_default_profiles",
     filters: [{ field: "class_id", operator: "eq", value: courseId }],
-    pagination: { pageSize: 200 }
+    pagination: { pageSize: 200 },
+    queryOptions: { enabled: Number.isFinite(courseId) }
   });
   const profiles = useMemo(() => profileData?.data ?? [], [profileData?.data]);
   const profileMap = useMemo(
@@ -748,7 +758,7 @@ function GradingAutomationSubform({
                   {...register("auto_assign_review_due_hours", {
                     required: autoAssignAtDeadline ? "This is required when auto assign is enabled" : false,
                     min: { value: 0, message: "Must be at least 0 hours" },
-                    valueAsNumber: true
+                    setValueAs: numberInputValueAs(72)
                   })}
                 />
               </Field>
@@ -789,7 +799,7 @@ function GradingAutomationSubform({
                   {...register("late_grading_reminder_interval_hours", {
                     required: remindersEnabled ? "This is required when reminders are enabled" : false,
                     min: { value: 1, message: "Must be at least 1 hour" },
-                    valueAsNumber: true
+                    setValueAs: numberInputValueAs(null)
                   })}
                 />
               </Field>

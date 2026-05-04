@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { createClient } from "@/utils/supabase/client";
 import type { GradingAssignmentDefaultProfile } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -76,6 +77,14 @@ const normalizeCcEmails = (value: unknown): GradingCcEmails => {
 };
 
 const toCcText = (value: unknown): string => normalizeCcEmails(value).emails.join(", ");
+
+const numberInputValueAs = (emptyFallback: number | null) => (value: unknown) => {
+  if (value === "" || value === null || value === undefined) {
+    return emptyFallback;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : emptyFallback;
+};
 
 export default function GradingAssignmentDefaultsPage() {
   const { course_id } = useParams();
@@ -182,7 +191,26 @@ export default function GradingAssignmentDefaultsPage() {
   });
 
   const handleDelete = async (id: number) => {
-    const confirmed = window.confirm("Delete this grading default profile?");
+    const supabase = createClient();
+    const { count, error: countError } = await supabase
+      .from("assignments")
+      .select("*", { count: "exact", head: true })
+      .eq("grading_default_profile_id", id);
+
+    if (countError) {
+      toaster.error({
+        title: "Could not check assignment references",
+        description: countError.message
+      });
+      return;
+    }
+
+    const refCount = count ?? 0;
+    const refNote =
+      refCount > 0
+        ? ` ${refCount} assignment${refCount === 1 ? "" : "s"} reference this profile; those assignments will show no saved profile after deletion.`
+        : "";
+    const confirmed = window.confirm(`Delete this grading default profile?${refNote}`);
     if (!confirmed) {
       return;
     }
@@ -287,8 +315,8 @@ export default function GradingAssignmentDefaultsPage() {
                         <Input
                           type="number"
                           {...register("auto_assign_review_due_hours", {
-                            valueAsNumber: true,
-                            min: { value: 0, message: "Must be at least 0 hours" }
+                            min: { value: 0, message: "Must be at least 0 hours" },
+                            setValueAs: numberInputValueAs(72)
                           })}
                         />
                       </Field>
@@ -326,8 +354,8 @@ export default function GradingAssignmentDefaultsPage() {
                         <Input
                           type="number"
                           {...register("late_grading_reminder_interval_hours", {
-                            valueAsNumber: true,
-                            min: { value: 1, message: "Must be at least 1 hour" }
+                            min: { value: 1, message: "Must be at least 1 hour" },
+                            setValueAs: numberInputValueAs(null)
                           })}
                         />
                       </Field>
