@@ -817,9 +817,6 @@ function KeyboardShortcutsButton() {
         px={{ base: 2, lg: 3 }}
       >
         <FiCommand />
-        <Text as="span" display={{ base: "none", lg: "inline" }}>
-          Shortcuts
-        </Text>
       </Button>
     </Tooltip>
   );
