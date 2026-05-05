@@ -920,6 +920,11 @@ async function streamScoresFromTable(
  * the dual-nullability that captures whether a test scored an individual or
  * a group. Output is included only when with_test_output=true and is
  * truncated to test_output_max_bytes — single test outputs can be megabytes.
+ *
+ * The join goes through grader_results.submission_id rather than
+ * grader_result_tests.submission_id directly. Both columns exist on the
+ * schema, but the latter is a denormalization that seeded test data leaves
+ * NULL; the canonical FK is grader_result_id → grader_results.id.
  */
 async function streamGraderTests(
   supabase: ReturnType<typeof getAdminClient>,
@@ -933,16 +938,33 @@ async function streamGraderTests(
   if (submissionIds.length === 0) return 0;
   let total = 0;
 
+  // Step 1: resolve submission_id → grader_result_id list. Most submissions
+  // have a single grader_result; multi-attempt runs can have several.
+  const graderResultIdToSubmission = new Map<number, number>();
   for (const batch of chunked(submissionIds, 500)) {
+    const { data, error } = await supabase
+      .from("grader_results")
+      .select("id, submission_id")
+      .in("submission_id", batch);
+    if (error) throw new CLICommandError(`Failed to load grader_results: ${error.message}`, 500);
+    for (const r of data ?? []) {
+      if (r.submission_id !== null) graderResultIdToSubmission.set(r.id, r.submission_id);
+    }
+  }
+  const graderResultIds = Array.from(graderResultIdToSubmission.keys());
+  if (graderResultIds.length === 0) return 0;
+
+  // Step 2: page through grader_result_tests for those grader_result_ids.
+  for (const batch of chunked(graderResultIds, 500)) {
     let cursor = 0;
     while (true) {
       const { data: rows, error } = await supabase
         .from("grader_result_tests")
         .select(
-          "id, submission_id, student_id, assignment_group_id, name, part, score, max_score, is_released, name_format, output_format, extra_data" +
+          "id, grader_result_id, submission_id, student_id, assignment_group_id, name, part, score, max_score, is_released, name_format, output_format, extra_data" +
             (withOutput ? ", output" : "")
         )
-        .in("submission_id", batch)
+        .in("grader_result_id", batch)
         .gt("id", cursor)
         .order("id", { ascending: true })
         .limit(FACT_PAGE_SIZE);
@@ -954,6 +976,7 @@ async function streamGraderTests(
       // concatenation, so we narrow to the row shape we actually requested.
       const typedRows = rows as unknown as Array<{
         id: number;
+        grader_result_id: number;
         submission_id: number | null;
         student_id: string | null;
         assignment_group_id: number | null;
@@ -969,12 +992,16 @@ async function streamGraderTests(
       }>;
 
       for (const row of typedRows) {
+        // Resolve submission_id via grader_result_id (canonical FK), falling
+        // back to the denormalized submission_id column when present.
+        const resolvedSubmissionId =
+          graderResultIdToSubmission.get(row.grader_result_id) ?? row.submission_id ?? null;
         const submissionRef =
-          row.submission_id === null
+          resolvedSubmissionId === null
             ? null
             : tokenizer === null
-              ? { id: row.submission_id }
-              : { token: await tokenizer.token("submission", row.submission_id) };
+              ? { id: resolvedSubmissionId }
+              : { token: await tokenizer.token("submission", resolvedSubmissionId) };
         const studentRef =
           row.student_id === null
             ? null
@@ -1187,15 +1214,15 @@ async function handleGradebookExport(ctx: MCPAuthContext, rawParams: Record<stri
       for (const row of rows) {
         const subjectRef =
           tokenizer === null ? { id: row.student_id } : { token: await tokenizer.token("subject", row.student_id) };
-        const columnRef =
-          tokenizer === null
-            ? { id: row.gradebook_column_id }
-            : { token: await tokenizer.token("gradebook_column", row.gradebook_column_id) };
+        // Gradebook columns aren't PII (the slug is course design metadata)
+        // and `gradebook-columns.json` always emits raw {id, slug, name, ...},
+        // so scores reference columns by id too — joining the two files is a
+        // direct id match without a tokenization detour.
 
         await writer.write({
           kind: "gradebook_score",
           subject: subjectRef,
-          column: columnRef,
+          column: { id: row.gradebook_column_id },
           score: row.score,
           score_override: row.score_override,
           score_override_note: row.score_override_note,
