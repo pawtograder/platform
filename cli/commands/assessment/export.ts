@@ -487,9 +487,7 @@ async function streamGradebookToDir(
     {
       onRetry: (attempt, err, delayMs) => {
         const message = err instanceof Error ? err.message : String(err);
-        logger.warning(
-          `gradebook: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`
-        );
+        logger.warning(`gradebook: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`);
       }
     }
   );

@@ -71,10 +71,7 @@ describe("withTransientRetry", () => {
   });
 
   it("retries on transient error and succeeds on second attempt", async () => {
-    const fn = jest
-      .fn()
-      .mockRejectedValueOnce(new TypeError("terminated"))
-      .mockResolvedValue("recovered");
+    const fn = jest.fn().mockRejectedValueOnce(new TypeError("terminated")).mockResolvedValue("recovered");
     const onRetry = jest.fn();
     const result = await withTransientRetry(fn, { baseDelayMs: 1, onRetry });
     expect(result).toBe("recovered");
@@ -110,9 +107,9 @@ describe("withTransientRetry", () => {
     const err = new TypeError("terminated");
     const fn = jest.fn().mockRejectedValue(err);
     const delays: number[] = [];
-    await expect(
-      withTransientRetry(fn, { baseDelayMs: 100, onRetry: (_a, _e, d) => delays.push(d) })
-    ).rejects.toBe(err);
+    await expect(withTransientRetry(fn, { baseDelayMs: 100, onRetry: (_a, _e, d) => delays.push(d) })).rejects.toBe(
+      err
+    );
     // 3 attempts → 2 retries with delays 100ms (2^0) and 200ms (2^1).
     expect(delays).toEqual([100, 200]);
   });

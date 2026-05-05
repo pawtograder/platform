@@ -994,8 +994,7 @@ async function streamGraderTests(
       for (const row of typedRows) {
         // Resolve submission_id via grader_result_id (canonical FK), falling
         // back to the denormalized submission_id column when present.
-        const resolvedSubmissionId =
-          graderResultIdToSubmission.get(row.grader_result_id) ?? row.submission_id ?? null;
+        const resolvedSubmissionId = graderResultIdToSubmission.get(row.grader_result_id) ?? row.submission_id ?? null;
         const submissionRef =
           resolvedSubmissionId === null
             ? null
