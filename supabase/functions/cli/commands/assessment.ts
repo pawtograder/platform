@@ -62,8 +62,16 @@ async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unk
       400
     );
   }
-  if ((mode === "hash" || mode === "opaque") && (!params.salt || typeof params.salt !== "string")) {
-    throw new CLICommandError(`identity_mode=${mode} requires a salt`);
+  if (mode === "hash" || mode === "opaque") {
+    if (!params.salt || typeof params.salt !== "string") {
+      throw new CLICommandError(`identity_mode=${mode} requires a salt`);
+    }
+    // Mirror createTokenizer's contract here so a too-short salt surfaces as
+    // a 400 validation error instead of a generic 500 from inside the
+    // tokenizer constructor.
+    if (params.salt.length < 16) {
+      throw new CLICommandError(`identity_mode=${mode} requires a salt of at least 16 characters`);
+    }
   }
 
   const supabase = getAdminClient();

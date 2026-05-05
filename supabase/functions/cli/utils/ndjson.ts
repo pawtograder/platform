@@ -61,16 +61,19 @@ export function streamNdjson(handler: (writer: NdjsonWriter) => Promise<void>): 
   };
 
   // Run the handler asynchronously; do not await, so the Response is returned
-  // (with headers flushed) while the body is still being filled.
+  // (with headers flushed) while the body is still being filled. Both abort
+  // and close can reject if the consumer disconnected mid-stream — swallow
+  // those so a broken pipe doesn't surface as an unhandled rejection in the
+  // edge runtime (broken pipe is exactly when we most want a quiet death).
   (async () => {
     try {
       await handler(writer);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await writer.abort(message);
+      await writer.abort(message).catch(() => {});
       return;
     }
-    await writer.close();
+    await writer.close().catch(() => {});
   })();
 
   return new Response(stream.readable, {

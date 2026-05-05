@@ -11,6 +11,7 @@ import type { AnyCommandDefinition, CommandDefinition, StreamCommandDefinition }
 import { isStreamCommand } from "./commands/base.ts";
 import { requireScope } from "../_shared/MCPAuth.ts";
 import type { MCPAuthContext } from "../_shared/MCPAuth.ts";
+import { CLICommandError } from "./errors.ts";
 import type { CLIRequest, CLIResponse } from "./types.ts";
 
 const commands = new Map<string, AnyCommandDefinition>();
@@ -40,8 +41,9 @@ export async function dispatch(ctx: MCPAuthContext, request: CLIRequest): Promis
   }
 
   if (isStreamCommand(command)) {
-    throw new Error(
-      `Command ${request.command} is a streaming command and must be invoked via the streaming dispatch path`
+    throw new CLICommandError(
+      `Command ${request.command} is a streaming command and must be invoked via the streaming dispatch path`,
+      400
     );
   }
 
@@ -67,8 +69,9 @@ export async function dispatchStream(
   }
 
   if (!isStreamCommand(command)) {
-    throw new Error(
-      `Command ${request.command} is not a streaming command; use the standard JSON dispatch path`
+    throw new CLICommandError(
+      `Command ${request.command} is not a streaming command; use the standard JSON dispatch path`,
+      400
     );
   }
 

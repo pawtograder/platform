@@ -81,7 +81,16 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
       args.output ??
       path.join(process.cwd(), `assessment-export-${sanitizeForFilename(args.class)}-${timestamp()}`);
 
-    fs.mkdirSync(outputDir, { recursive: true });
+    // 0o700 so other local users can't read PII even if they have shell
+    // access on a multi-user host. mkdirSync's mode arg only affects the
+    // final segment — chmod the path explicitly to defend against existing
+    // intermediate dirs being more permissive.
+    fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(outputDir, 0o700);
+    } catch {
+      // Best-effort on platforms where chmod is a no-op (e.g. Windows).
+    }
 
     logger.step(`Exporting assessment data for class: ${args.class}`);
     logger.info(`Output: ${outputDir}`);
@@ -132,6 +141,13 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
       throw new CLIError("Server stream ended without an {end} marker — the dump may be incomplete");
     }
 
+    // Cross-check server-reported counts against what we actually buffered.
+    // A truncated stream that happens to flush an {end} line — e.g. a
+    // crashing server that wrote the header before failing on a subject
+    // page — would otherwise be accepted silently.
+    assertExpectedCount(endRecord, "subjects", subjects.length);
+    assertExpectedCount(endRecord, "sections", sections.length);
+
     writeJson(path.join(outputDir, "manifest.json"), manifest);
     writeJson(path.join(outputDir, "subjects.json"), subjects);
     writeJson(path.join(outputDir, "sections.json"), sections);
@@ -143,7 +159,36 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
 }
 
 function writeJson(filePath: string, data: unknown): void {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", "utf8");
+  // 0o600 so PII files match the 0o700 directory's posture. writeFileSync's
+  // mode option only applies on file creation; chmod afterwards covers the
+  // overwrite case where the file already existed with looser perms.
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // Best-effort on platforms where chmod is a no-op (e.g. Windows).
+  }
+}
+
+/**
+ * Confirm the server-reported count for a section matches what we actually
+ * received. Stops a partially-flushed stream from being silently accepted
+ * just because it happened to include the trailing {end} line.
+ */
+function assertExpectedCount(
+  endRecord: Record<string, unknown>,
+  field: "subjects" | "sections",
+  actual: number
+): void {
+  const counts = endRecord.counts as Record<string, unknown> | undefined;
+  const expected = counts?.[field];
+  if (typeof expected !== "number") return; // server didn't report this count; nothing to verify
+  if (expected !== actual) {
+    throw new CLIError(
+      `Stream count mismatch for ${field}: server reported ${expected} but received ${actual}. ` +
+        "The dump is incomplete; do not use it for analysis."
+    );
+  }
 }
 
 function sanitizeForFilename(s: string): string {
