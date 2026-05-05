@@ -27,6 +27,14 @@ interface ExportArgs {
   "i-understand-pii"?: boolean;
   iUnderstandPii?: boolean;
   output?: string;
+  assignment?: string[];
+  "gradebook-column"?: string[];
+  gradebookColumn?: string[];
+  concurrency?: number;
+  "with-test-output"?: boolean;
+  withTestOutput?: boolean;
+  "test-output-max-bytes"?: number;
+  testOutputMaxBytes?: number;
 }
 
 export const exportBuilder = (yargs: Argv) => {
@@ -56,6 +64,34 @@ export const exportBuilder = (yargs: Argv) => {
       alias: "o",
       describe: "Output directory (default: ./assessment-export-<class>-<timestamp>)",
       type: "string"
+    })
+    .option("assignment", {
+      alias: "a",
+      describe:
+        "Assignment selector — id, slug, or glob (e.g. 'hw-*'). Repeatable. Omit to export all assignments in the class.",
+      type: "string",
+      array: true
+    })
+    .option("gradebook-column", {
+      describe:
+        "Gradebook column selector — id, slug, or glob. Repeatable. Omit to export all columns (instructor_only included).",
+      type: "string",
+      array: true
+    })
+    .option("concurrency", {
+      describe: "Parallel per-assignment streams (1–8)",
+      type: "number",
+      default: 4
+    })
+    .option("with-test-output", {
+      describe: "Include grader_result_tests.output (truncated). Off by default — outputs can be MB each.",
+      type: "boolean",
+      default: false
+    })
+    .option("test-output-max-bytes", {
+      describe: "Per-test output cap when --with-test-output is set (default 4096)",
+      type: "number",
+      default: 4096
     })
     .check((argv) => {
       if (argv.identity === "raw" && !argv["i-understand-pii"]) {
@@ -107,10 +143,15 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     };
     if (salt !== null) params.salt = salt;
     if (mode === "raw") params.confirm_pii = true;
+    if (args.assignment && args.assignment.length > 0) params.assignments = args.assignment;
+    if (args.gradebookColumn && args.gradebookColumn.length > 0) params.gradebook_columns = args.gradebookColumn;
 
     let manifest: Record<string, unknown> | null = null;
     const subjects: Record<string, unknown>[] = [];
     const sections: Record<string, unknown>[] = [];
+    const assignments: Record<string, unknown>[] = [];
+    const gradebookColumns: Record<string, unknown>[] = [];
+    const warnings: Record<string, unknown>[] = [];
     let endRecord: Record<string, unknown> | null = null;
 
     for await (const record of streamApiCall({ command: "assessment.export.preamble", params })) {
@@ -124,6 +165,15 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
         case "section":
           sections.push(record);
           break;
+        case "assignment":
+          assignments.push(record);
+          break;
+        case "gradebook_column":
+          gradebookColumns.push(record);
+          break;
+        case "warning":
+          warnings.push(record);
+          break;
         case "end":
           endRecord = record;
           break;
@@ -132,6 +182,10 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
           // additions don't break older CLIs.
           break;
       }
+    }
+
+    for (const w of warnings) {
+      logger.warning(`${String(w.scope)}: ${String(w.message)} — ${JSON.stringify(w.selectors)}`);
     }
 
     if (manifest === null) {
@@ -147,12 +201,51 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     // page — would otherwise be accepted silently.
     assertExpectedCount(endRecord, "subjects", subjects.length);
     assertExpectedCount(endRecord, "sections", sections.length);
+    assertExpectedCount(endRecord, "assignments", assignments.length);
+    assertExpectedCount(endRecord, "gradebook_columns", gradebookColumns.length);
 
     writeJson(path.join(outputDir, "manifest.json"), manifest);
     writeJson(path.join(outputDir, "subjects.json"), subjects);
     writeJson(path.join(outputDir, "sections.json"), sections);
+    writeJson(path.join(outputDir, "assignments.json"), assignments);
+    writeJson(path.join(outputDir, "gradebook-columns.json"), gradebookColumns);
 
-    logger.success(`Wrote ${subjects.length} subjects and ${sections.length} sections to ${outputDir}`);
+    logger.success(
+      `Preamble: ${subjects.length} subjects, ${sections.length} sections, ${assignments.length} assignments, ${gradebookColumns.length} gradebook columns`
+    );
+
+    // Phase 2: parallel per-assignment streams + one gradebook stream.
+    const assignmentsDir = path.join(outputDir, "assignments");
+    fs.mkdirSync(assignmentsDir, { recursive: true, mode: 0o700 });
+
+    const concurrency = Math.max(1, Math.min(8, args.concurrency ?? 4));
+    const perAssignmentTotals = await runWithConcurrency(
+      assignments.map((a) => async () => {
+        const slug = String(a.slug ?? a.id);
+        const dir = path.join(assignmentsDir, sanitizeForFilename(slug));
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const totals = await streamAssignmentToDir(args, salt, mode, dumpId, a.id as number, slug, dir);
+        logger.info(
+          `  ${slug}: ${totals.submissions} submissions, ${totals.scores} scores, ${totals.grader_tests} tests, ${totals.hints} hints`
+        );
+        return totals;
+      }),
+      concurrency
+    );
+
+    const gradebookTotals = await streamGradebookToDir(args, salt, mode, dumpId, outputDir);
+    logger.info(`  gradebook: ${gradebookTotals.gradebook_scores} private cells`);
+
+    // Backfill the manifest with grand totals across all phases. Doing this
+    // post-hoc avoids racing the preamble (which doesn't know how many
+    // submissions/scores will arrive across the per-assignment fan-out).
+    const grand = aggregateTotals(perAssignmentTotals, gradebookTotals);
+    const enrichedManifest = { ...manifest, totals: grand };
+    writeJson(path.join(outputDir, "manifest.json"), enrichedManifest);
+
+    logger.success(
+      `Done. ${assignments.length} assignment(s), ${grand.submissions} submissions, ${grand.scores} scores, ${grand.grader_tests} tests, ${grand.hints} hints, ${grand.gradebook_scores} gradebook cells in ${outputDir}`
+    );
   } catch (error) {
     handleError(error);
   }
@@ -177,7 +270,7 @@ function writeJson(filePath: string, data: unknown): void {
  */
 function assertExpectedCount(
   endRecord: Record<string, unknown>,
-  field: "subjects" | "sections",
+  field: string,
   actual: number
 ): void {
   const counts = endRecord.counts as Record<string, unknown> | undefined;
@@ -229,4 +322,186 @@ function base32Encode(bytes: Buffer): string {
     out += BASE32_ALPHABET[(value << (5 - bits)) & 0x1f];
   }
   return out;
+}
+
+interface AssignmentTotals {
+  rubric_checks: number;
+  autograder_tests: number;
+  groups: number;
+  submissions: number;
+  scores: number;
+  grader_tests: number;
+  hints: number;
+}
+
+interface GradebookTotals {
+  gradebook_scores: number;
+}
+
+/**
+ * Stream one assignment's per-assignment data into its own subdirectory.
+ * Demuxes NDJSON record kinds into separate files (rubric.json, groups.json,
+ * submissions.json, scores.json, tests.json, hints.json) so analysts can
+ * load just the table they care about without parsing the whole stream.
+ */
+async function streamAssignmentToDir(
+  args: ArgumentsCamelCase<ExportArgs>,
+  salt: string | null,
+  mode: IdentityMode,
+  dumpId: string,
+  assignmentId: number,
+  slug: string,
+  dir: string
+): Promise<AssignmentTotals> {
+  const params: Record<string, unknown> = {
+    class: args.class,
+    identity_mode: mode,
+    dump_id: dumpId,
+    assignment: assignmentId,
+    with_test_output: args.withTestOutput === true,
+    test_output_max_bytes: args.testOutputMaxBytes ?? 4096
+  };
+  if (salt !== null) params.salt = salt;
+  if (mode === "raw") params.confirm_pii = true;
+
+  const buckets: Record<string, Record<string, unknown>[]> = {
+    rubric: [],
+    rubric_part: [],
+    rubric_criteria: [],
+    rubric_check: [],
+    autograder: [],
+    autograder_test: [],
+    autograder_raw_config: [],
+    group: [],
+    submission: [],
+    score: [],
+    grader_test: [],
+    hint: []
+  };
+  let manifest: Record<string, unknown> | null = null;
+  let endRecord: Record<string, unknown> | null = null;
+
+  for await (const record of streamApiCall({ command: "assessment.export.assignment", params })) {
+    if (record.kind === "manifest") {
+      manifest = record;
+      continue;
+    }
+    if (record.kind === "end") {
+      endRecord = record;
+      continue;
+    }
+    const bucket = buckets[String(record.kind)];
+    if (bucket) bucket.push(record);
+  }
+
+  if (manifest === null) throw new CLIError(`assignment ${slug}: missing manifest`);
+  if (endRecord === null) throw new CLIError(`assignment ${slug}: stream ended without {end}`);
+
+  // Verify counts against server-reported totals so a truncated per-assignment
+  // stream doesn't silently produce a partial dump.
+  assertExpectedCount(endRecord, "scores", buckets.score!.length);
+  assertExpectedCount(endRecord, "submissions", buckets.submission!.length);
+  assertExpectedCount(endRecord, "grader_tests", buckets.grader_test!.length);
+  assertExpectedCount(endRecord, "hints", buckets.hint!.length);
+
+  writeJson(path.join(dir, "manifest.json"), manifest);
+  writeJson(path.join(dir, "rubric.json"), {
+    rubric: buckets.rubric![0] ?? null,
+    parts: buckets.rubric_part,
+    criteria: buckets.rubric_criteria,
+    checks: buckets.rubric_check
+  });
+  writeJson(path.join(dir, "autograder.json"), {
+    autograder: buckets.autograder![0] ?? null,
+    tests: buckets.autograder_test,
+    raw_config: buckets.autograder_raw_config![0]?.config ?? null
+  });
+  if (buckets.group!.length > 0) writeJson(path.join(dir, "groups.json"), buckets.group);
+  writeJson(path.join(dir, "submissions.json"), buckets.submission);
+  writeJson(path.join(dir, "scores.json"), buckets.score);
+  writeJson(path.join(dir, "tests.json"), buckets.grader_test);
+  writeJson(path.join(dir, "hints.json"), buckets.hint);
+
+  const counts = (endRecord.counts as Record<string, number>) ?? {};
+  return {
+    rubric_checks: counts.rubric_checks ?? buckets.rubric_check!.length,
+    autograder_tests: counts.autograder_tests ?? buckets.autograder_test!.length,
+    groups: counts.groups ?? buckets.group!.length,
+    submissions: counts.submissions ?? buckets.submission!.length,
+    scores: counts.scores ?? buckets.score!.length,
+    grader_tests: counts.grader_tests ?? buckets.grader_test!.length,
+    hints: counts.hints ?? buckets.hint!.length
+  };
+}
+
+async function streamGradebookToDir(
+  args: ArgumentsCamelCase<ExportArgs>,
+  salt: string | null,
+  mode: IdentityMode,
+  dumpId: string,
+  outputDir: string
+): Promise<GradebookTotals> {
+  const params: Record<string, unknown> = {
+    class: args.class,
+    identity_mode: mode,
+    dump_id: dumpId
+  };
+  if (salt !== null) params.salt = salt;
+  if (mode === "raw") params.confirm_pii = true;
+  if (args.gradebookColumn && args.gradebookColumn.length > 0) {
+    params.gradebook_columns = args.gradebookColumn;
+  }
+
+  const cells: Record<string, unknown>[] = [];
+  let endRecord: Record<string, unknown> | null = null;
+
+  for await (const record of streamApiCall({ command: "assessment.export.gradebook", params })) {
+    if (record.kind === "gradebook_score") cells.push(record);
+    else if (record.kind === "end") endRecord = record;
+  }
+
+  if (endRecord === null) throw new CLIError("gradebook stream ended without {end}");
+  assertExpectedCount(endRecord, "gradebook_scores", cells.length);
+
+  const dir = path.join(outputDir, "gradebook");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeJson(path.join(dir, "scores.json"), cells);
+
+  return { gradebook_scores: cells.length };
+}
+
+/**
+ * Run a list of async tasks with bounded parallelism. Promise.all + chunking
+ * would force lockstep batches; this runs N workers each picking the next
+ * task off the queue so a slow assignment doesn't stall the whole pool.
+ */
+async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let nextIdx = 0;
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+    while (true) {
+      const idx = nextIdx++;
+      if (idx >= tasks.length) return;
+      results[idx] = await tasks[idx]!();
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function aggregateTotals(
+  perAssignment: AssignmentTotals[],
+  gradebook: GradebookTotals
+): AssignmentTotals & GradebookTotals {
+  const sum = (key: keyof AssignmentTotals) => perAssignment.reduce((acc, t) => acc + t[key], 0);
+  return {
+    rubric_checks: sum("rubric_checks"),
+    autograder_tests: sum("autograder_tests"),
+    groups: sum("groups"),
+    submissions: sum("submissions"),
+    scores: sum("scores"),
+    grader_tests: sum("grader_tests"),
+    hints: sum("hints"),
+    gradebook_scores: gradebook.gradebook_scores
+  };
 }
