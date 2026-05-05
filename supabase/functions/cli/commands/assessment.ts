@@ -29,11 +29,7 @@ import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { streamNdjson } from "../utils/ndjson.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
-import {
-  createTokenizer,
-  type IdentityMode,
-  type Tokenizer
-} from "../utils/tokenization.ts";
+import { createTokenizer, type IdentityMode, type Tokenizer } from "../utils/tokenization.ts";
 
 const SCHEMA_VERSION = 1;
 const STUDENT_PAGE_SIZE = 500;
@@ -59,7 +55,6 @@ interface PreambleParams {
   /** Gradebook column selectors, same id|slug|glob shape. Empty => all columns. */
   gradebook_columns?: Array<string | number>;
 }
-
 
 async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as PreambleParams;
@@ -108,12 +103,7 @@ async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unk
     const subjectCount = await streamStudents(supabase, classData.id, mode, tokenizer, writer);
     const sectionCount = await streamSections(supabase, classData.id, mode, tokenizer, writer);
     const assignmentCount = await streamAssignments(supabase, classData.id, params.assignments, writer);
-    const gradebookColumnCount = await streamGradebookColumns(
-      supabase,
-      classData.id,
-      params.gradebook_columns,
-      writer
-    );
+    const gradebookColumnCount = await streamGradebookColumns(supabase, classData.id, params.gradebook_columns, writer);
 
     await writer.write({
       kind: "end",
@@ -417,16 +407,16 @@ interface AssignmentExportParams {
  * passing the same salt so subject/group/submission tokens line up across
  * calls.
  */
-async function handleAssignmentExport(
-  ctx: MCPAuthContext,
-  rawParams: Record<string, unknown>
-): Promise<Response> {
+async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as AssignmentExportParams;
   const classIdentifier = params.class;
   const assignmentIdentifier = params.assignment;
   const mode: IdentityMode = params.identity_mode ?? "opaque";
   const withTestOutput = params.with_test_output === true;
-  const testOutputMax = Math.max(0, Math.min(1024 * 1024, params.test_output_max_bytes ?? DEFAULT_TEST_OUTPUT_MAX_BYTES));
+  const testOutputMax = Math.max(
+    0,
+    Math.min(1024 * 1024, params.test_output_max_bytes ?? DEFAULT_TEST_OUTPUT_MAX_BYTES)
+  );
 
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("assignment is required");
@@ -582,9 +572,7 @@ async function streamRubric(
         max_checks_per_submission: criteria.max_checks_per_submission
       });
       for (const check of criteria.rubric_checks ?? []) {
-        const ref = tokenizer === null
-          ? { id: check.id }
-          : { token: await tokenizer.token("rubric_check", check.id) };
+        const ref = tokenizer === null ? { id: check.id } : { token: await tokenizer.token("rubric_check", check.id) };
         await writer.write({
           kind: "rubric_check",
           ...ref,
@@ -617,7 +605,9 @@ async function streamAutograderConfig(
 ): Promise<number> {
   const { data, error } = await supabase
     .from("autograder")
-    .select("id, config, grader_repo, grader_commit_sha, latest_autograder_sha, max_submissions_count, max_submissions_period_secs")
+    .select(
+      "id, config, grader_repo, grader_commit_sha, latest_autograder_sha, max_submissions_count, max_submissions_period_secs"
+    )
     .eq("id", assignmentId)
     .maybeSingle();
   if (error) throw new CLICommandError(`Failed to load autograder config: ${error.message}`, 500);
@@ -746,9 +736,7 @@ async function streamSubmissions(
 
     for (const row of rows) {
       const submissionRef =
-        tokenizer === null
-          ? { id: row.id }
-          : { token: await tokenizer.token("submission", row.id) };
+        tokenizer === null ? { id: row.id } : { token: await tokenizer.token("submission", row.id) };
 
       const subjectRef =
         row.profile_id === null
@@ -812,10 +800,7 @@ async function streamScores(
   // Step 1: load grading_review_id for each is_active submission.
   const submissionToReview = new Map<number, number>();
   for (const batch of chunked(submissionIds, 500)) {
-    const { data, error } = await supabase
-      .from("submissions")
-      .select("id, grading_review_id")
-      .in("id", batch);
+    const { data, error } = await supabase.from("submissions").select("id, grading_review_id").in("id", batch);
     if (error) throw new CLICommandError(`Failed to load grading review ids: ${error.message}`, 500);
     for (const r of data ?? []) {
       if (r.grading_review_id !== null) submissionToReview.set(r.id, r.grading_review_id);
@@ -896,9 +881,7 @@ async function streamScoresFromTable(
         if (submissionId === undefined) continue;
 
         const submissionRef =
-          tokenizer === null
-            ? { id: submissionId }
-            : { token: await tokenizer.token("submission", submissionId) };
+          tokenizer === null ? { id: submissionId } : { token: await tokenizer.token("submission", submissionId) };
         const rubricCheckRef =
           tokenizer === null
             ? { id: row.rubric_check_id }
@@ -1004,10 +987,7 @@ async function streamGraderTests(
             : tokenizer === null
               ? { id: row.assignment_group_id }
               : { token: await tokenizer.token("group", row.assignment_group_id) };
-        const testRef =
-          tokenizer === null
-            ? { id: row.id }
-            : { token: await tokenizer.token("grader_test", row.id) };
+        const testRef = tokenizer === null ? { id: row.id } : { token: await tokenizer.token("grader_test", row.id) };
 
         const record: Record<string, unknown> = {
           kind: "grader_test",
@@ -1089,9 +1069,7 @@ async function streamHints(
             ? { id: row.grader_result_tests_id }
             : { token: await tokenizer.token("grader_test", row.grader_result_tests_id) };
         const raterRef =
-          tokenizer === null
-            ? { id: row.created_by }
-            : { token: await tokenizer.token("subject", row.created_by) };
+          tokenizer === null ? { id: row.created_by } : { token: await tokenizer.token("subject", row.created_by) };
 
         await writer.write({
           kind: "hint",
@@ -1140,10 +1118,7 @@ interface GradebookExportParams {
  * about), and instructor_only columns are always included regardless of
  * selectors.
  */
-async function handleGradebookExport(
-  ctx: MCPAuthContext,
-  rawParams: Record<string, unknown>
-): Promise<Response> {
+async function handleGradebookExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as GradebookExportParams;
   const classIdentifier = params.class;
   const mode: IdentityMode = params.identity_mode ?? "opaque";
@@ -1211,9 +1186,7 @@ async function handleGradebookExport(
 
       for (const row of rows) {
         const subjectRef =
-          tokenizer === null
-            ? { id: row.student_id }
-            : { token: await tokenizer.token("subject", row.student_id) };
+          tokenizer === null ? { id: row.student_id } : { token: await tokenizer.token("subject", row.student_id) };
         const columnRef =
           tokenizer === null
             ? { id: row.gradebook_column_id }

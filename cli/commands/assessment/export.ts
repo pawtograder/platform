@@ -95,7 +95,9 @@ export const exportBuilder = (yargs: Argv) => {
     })
     .check((argv) => {
       if (argv.identity === "raw" && !argv["i-understand-pii"]) {
-        throw new Error("--identity raw requires --i-understand-pii to acknowledge that real student data will be written to disk");
+        throw new Error(
+          "--identity raw requires --i-understand-pii to acknowledge that real student data will be written to disk"
+        );
       }
       if (argv.identity === "hash" && !argv.salt) {
         throw new Error("--identity hash requires --salt (any string of length >= 16)");
@@ -114,8 +116,7 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     const dumpId = crypto.randomUUID();
 
     const outputDir =
-      args.output ??
-      path.join(process.cwd(), `assessment-export-${sanitizeForFilename(args.class)}-${timestamp()}`);
+      args.output ?? path.join(process.cwd(), `assessment-export-${sanitizeForFilename(args.class)}-${timestamp()}`);
 
     // 0o700 so other local users can't read PII even if they have shell
     // access on a multi-user host. mkdirSync's mode arg only affects the
@@ -133,7 +134,9 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     logger.info(`Identity mode: ${mode}${mode === "opaque" ? " (random per-run salt, intra-dump only)" : ""}`);
     logger.info(`Dump id: ${dumpId}`);
     if (mode === "raw") {
-      logger.warning("Real student ids, emails, and names will be written to disk. Handle the output directory accordingly.");
+      logger.warning(
+        "Real student ids, emails, and names will be written to disk. Handle the output directory accordingly."
+      );
     }
 
     const params: Record<string, unknown> = {
@@ -268,11 +271,7 @@ function writeJson(filePath: string, data: unknown): void {
  * received. Stops a partially-flushed stream from being silently accepted
  * just because it happened to include the trailing {end} line.
  */
-function assertExpectedCount(
-  endRecord: Record<string, unknown>,
-  field: string,
-  actual: number
-): void {
+function assertExpectedCount(endRecord: Record<string, unknown>, field: string, actual: number): void {
   const counts = endRecord.counts as Record<string, unknown> | undefined;
   const expected = counts?.[field];
   if (typeof expected !== "number") return; // server didn't report this count; nothing to verify

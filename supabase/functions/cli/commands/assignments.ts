@@ -447,9 +447,7 @@ async function getOrCreateDefaultSelfReviewSetting(
     .select("id")
     .single();
   if (insertError || !created?.id) {
-    throw new CLICommandError(
-      `Failed to create default self-review setting: ${insertError?.message ?? "Unknown"}`
-    );
+    throw new CLICommandError(`Failed to create default self-review setting: ${insertError?.message ?? "Unknown"}`);
   }
   return created.id;
 }

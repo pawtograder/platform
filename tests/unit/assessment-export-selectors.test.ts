@@ -11,11 +11,7 @@
  * selector that should have worked. These tests pin the contract.
  */
 
-import {
-  resolveSelectors,
-  selectorPredicate,
-  type Identifiable
-} from "../../supabase/functions/cli/utils/selectors";
+import { resolveSelectors, selectorPredicate, type Identifiable } from "../../supabase/functions/cli/utils/selectors";
 
 const candidates: Identifiable[] = [
   { id: 1, slug: "hw-1" },
@@ -106,10 +102,7 @@ describe("resolveSelectors", () => {
   });
 
   it("collects selectors that match nothing into unmatched", () => {
-    const { resolved, unmatched } = resolveSelectors(
-      ["hw-*", "nonexistent-*", "lab-1", "also-missing"],
-      candidates
-    );
+    const { resolved, unmatched } = resolveSelectors(["hw-*", "nonexistent-*", "lab-1", "also-missing"], candidates);
     expect(resolved.map((c) => c.id)).toEqual([1, 2, 3]);
     expect(unmatched).toEqual(["nonexistent-*", "also-missing"]);
   });

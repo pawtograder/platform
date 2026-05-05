@@ -23,7 +23,10 @@ export function selectorPredicate(selector: string | number): (row: Identifiable
     return (row) => row.id === id;
   }
   if (s.includes("*") || s.includes("?")) {
-    const escaped = s.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+    const escaped = s
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".");
     const re = new RegExp(`^${escaped}$`);
     return (row) => row.slug !== null && re.test(row.slug);
   }

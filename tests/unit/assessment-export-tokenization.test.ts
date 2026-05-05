@@ -11,11 +11,7 @@
  * be joined on the analyst side. These tests pin that contract.
  */
 
-import {
-  createTokenizer,
-  generateRandomSalt,
-  base32
-} from "../../supabase/functions/cli/utils/tokenization";
+import { createTokenizer, generateRandomSalt, base32 } from "../../supabase/functions/cli/utils/tokenization";
 
 describe("assessment export tokenization", () => {
   const SALT = "test-salt-at-least-16-chars-long-aaaa";
