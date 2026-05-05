@@ -1187,7 +1187,21 @@ async function handleGradebookExport(ctx: MCPAuthContext, rawParams: Record<stri
     if (colErr) throw new CLICommandError(`Failed to load gradebook columns: ${colErr.message}`, 500);
 
     const candidates = (cols ?? []).map((c) => ({ id: c.id, slug: c.slug }));
-    const { resolved } = resolveSelectors(params.gradebook_columns, candidates);
+    const { resolved, unmatched } = resolveSelectors(params.gradebook_columns, candidates);
+
+    // Same warning contract as the preamble: typoed or wholly-redundant
+    // selectors surface as a {kind:"warning"} record rather than silently
+    // producing an empty/partial stream. This handler is independently
+    // dispatchable, so it can't rely on the preamble having warned first.
+    if (unmatched.length > 0) {
+      await writer.write({
+        kind: "warning",
+        scope: "gradebook_columns",
+        message: `${unmatched.length} gradebook column selector(s) matched nothing`,
+        selectors: unmatched
+      });
+    }
+
     const columnIds = new Set(resolved.map((c) => c.id));
     if (columnIds.size === 0) {
       await writer.write({ kind: "end", counts: { gradebook_scores: 0 } });

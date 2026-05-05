@@ -17,6 +17,7 @@ import * as crypto from "crypto";
 import type { Argv, ArgumentsCamelCase } from "yargs";
 import { streamApiCall } from "@/cli/utils/streamApi";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
+import { withTransientRetry } from "@/cli/utils/transientRetry";
 
 type IdentityMode = "raw" | "hash" | "opaque";
 
@@ -363,38 +364,56 @@ async function streamAssignmentToDir(
   if (salt !== null) params.salt = salt;
   if (mode === "raw") params.confirm_pii = true;
 
-  const buckets: Record<string, Record<string, unknown>[]> = {
-    rubric: [],
-    rubric_part: [],
-    rubric_criteria: [],
-    rubric_check: [],
-    autograder: [],
-    autograder_test: [],
-    autograder_raw_config: [],
-    group: [],
-    submission: [],
-    score: [],
-    grader_test: [],
-    hint: []
-  };
-  let manifest: Record<string, unknown> | null = null;
-  let endRecord: Record<string, unknown> | null = null;
+  // The whole stream is consumed under retry. Each attempt rebuilds buckets
+  // from scratch — a "terminated" mid-stream means we've buffered partial
+  // data and can't tell what we're missing, so we throw it away and re-fetch.
+  // Tokens are derived from the same per-run salt, so a retried call yields
+  // exactly the same data as the original.
+  const { manifest, buckets, endRecord } = await withTransientRetry(
+    async () => {
+      const buckets: Record<string, Record<string, unknown>[]> = {
+        rubric: [],
+        rubric_part: [],
+        rubric_criteria: [],
+        rubric_check: [],
+        autograder: [],
+        autograder_test: [],
+        autograder_raw_config: [],
+        group: [],
+        submission: [],
+        score: [],
+        grader_test: [],
+        hint: []
+      };
+      let manifest: Record<string, unknown> | null = null;
+      let endRecord: Record<string, unknown> | null = null;
 
-  for await (const record of streamApiCall({ command: "assessment.export.assignment", params })) {
-    if (record.kind === "manifest") {
-      manifest = record;
-      continue;
-    }
-    if (record.kind === "end") {
-      endRecord = record;
-      continue;
-    }
-    const bucket = buckets[String(record.kind)];
-    if (bucket) bucket.push(record);
-  }
+      for await (const record of streamApiCall({ command: "assessment.export.assignment", params })) {
+        if (record.kind === "manifest") {
+          manifest = record;
+          continue;
+        }
+        if (record.kind === "end") {
+          endRecord = record;
+          continue;
+        }
+        const bucket = buckets[String(record.kind)];
+        if (bucket) bucket.push(record);
+      }
 
-  if (manifest === null) throw new CLIError(`assignment ${slug}: missing manifest`);
-  if (endRecord === null) throw new CLIError(`assignment ${slug}: stream ended without {end}`);
+      if (manifest === null) throw new CLIError(`assignment ${slug}: missing manifest`);
+      if (endRecord === null) throw new CLIError(`assignment ${slug}: stream ended without {end}`);
+      return { manifest, buckets, endRecord };
+    },
+    {
+      onRetry: (attempt, err, delayMs) => {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warning(
+          `assignment ${slug}: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`
+        );
+      }
+    }
+  );
 
   // Verify counts against server-reported totals so a truncated per-assignment
   // stream doesn't silently produce a partial dump.
@@ -451,15 +470,34 @@ async function streamGradebookToDir(
     params.gradebook_columns = args.gradebookColumn;
   }
 
-  const cells: Record<string, unknown>[] = [];
-  let endRecord: Record<string, unknown> | null = null;
+  const { cells, warnings, endRecord } = await withTransientRetry(
+    async () => {
+      const cells: Record<string, unknown>[] = [];
+      const warnings: Record<string, unknown>[] = [];
+      let endRecord: Record<string, unknown> | null = null;
 
-  for await (const record of streamApiCall({ command: "assessment.export.gradebook", params })) {
-    if (record.kind === "gradebook_score") cells.push(record);
-    else if (record.kind === "end") endRecord = record;
+      for await (const record of streamApiCall({ command: "assessment.export.gradebook", params })) {
+        if (record.kind === "gradebook_score") cells.push(record);
+        else if (record.kind === "warning") warnings.push(record);
+        else if (record.kind === "end") endRecord = record;
+      }
+      if (endRecord === null) throw new CLIError("gradebook stream ended without {end}");
+      return { cells, warnings, endRecord };
+    },
+    {
+      onRetry: (attempt, err, delayMs) => {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warning(
+          `gradebook: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`
+        );
+      }
+    }
+  );
+
+  for (const w of warnings) {
+    logger.warning(`gradebook: ${String(w.message)} — ${JSON.stringify(w.selectors)}`);
   }
 
-  if (endRecord === null) throw new CLIError("gradebook stream ended without {end}");
   assertExpectedCount(endRecord, "gradebook_scores", cells.length);
 
   const dir = path.join(outputDir, "gradebook");

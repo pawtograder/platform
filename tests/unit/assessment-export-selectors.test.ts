@@ -107,10 +107,12 @@ describe("resolveSelectors", () => {
     expect(unmatched).toEqual(["nonexistent-*", "also-missing"]);
   });
 
-  it("does not flag a selector as unmatched if a previous selector already matched the same row", () => {
-    // A selector is unmatched only if it would have added zero new ids — but
-    // this is by design: once a row is in, a redundant selector covering it
-    // is not interesting to surface as a problem.
+  it("flags a selector as unmatched if a previous selector already covered every row it would match", () => {
+    // 'hw-*' matches ids {1, 2}; 'hw-1' would match id 1 but it's already in
+    // — so the second selector adds zero new ids and is reported as
+    // unmatched. This lets the user catch typos like '--assignment hw-1
+    // --assignment hw-1' or '--assignment hw-* --assignment ww-1' (where the
+    // second was meant to be 'hw-1') even when the first selector overlaps.
     const { unmatched } = resolveSelectors(["hw-*", "hw-1"], candidates);
     expect(unmatched).toEqual(["hw-1"]);
   });
