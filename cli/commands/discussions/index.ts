@@ -6,7 +6,7 @@
  */
 
 import type { Argv } from "yargs";
-import { logger } from "../../utils/logger";
+import { logger } from "@/cli/utils/logger";
 
 export const command = "discussions <action>";
 export const describe = "Manage discussion topics";

@@ -15,8 +15,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import type { Argv, ArgumentsCamelCase } from "yargs";
-import { streamApiCall } from "../../utils/streamApi";
-import { logger, handleError, CLIError } from "../../utils/logger";
+import { streamApiCall } from "@/cli/utils/streamApi";
+import { logger, handleError, CLIError } from "@/cli/utils/logger";
 
 type IdentityMode = "raw" | "hash" | "opaque";
 

@@ -7,9 +7,9 @@
  */
 
 import type { Argv } from "yargs";
-import { apiCall } from "../../utils/api";
-import { logger, handleError } from "../../utils/logger";
-import { runSyncGradeWorkflow, runCrossAssignmentCopy } from "../../lib/repos";
+import { apiCall } from "@/cli/utils/api";
+import { logger, handleError } from "@/cli/utils/logger";
+import { runSyncGradeWorkflow, runCrossAssignmentCopy } from "@/cli/lib/repos";
 
 export const command = "repos <action>";
 export const describe = "Student repository tools (API metadata + local git)";

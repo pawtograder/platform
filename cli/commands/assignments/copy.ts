@@ -15,11 +15,11 @@
  */
 
 import type { ArgumentsCamelCase } from "yargs";
-import { apiCall } from "../../utils/api";
-import { logger, handleError } from "../../utils/logger";
-import { parseAssignmentScheduleCsv, normalizeDate } from "../../utils/schedule";
-import { runCopyAssignmentRepos } from "../../lib/assignments/copyAssignmentRepos";
-import type { RepoCopyPair } from "../../lib/assignments/types";
+import { apiCall } from "@/cli/utils/api";
+import { logger, handleError } from "@/cli/utils/logger";
+import { parseAssignmentScheduleCsv, normalizeDate } from "@/cli/utils/schedule";
+import { runCopyAssignmentRepos } from "@/cli/lib/assignments/copyAssignmentRepos";
+import type { RepoCopyPair } from "@/cli/lib/assignments/types";
 
 interface CopyOptions {
   sourceClass: string;
