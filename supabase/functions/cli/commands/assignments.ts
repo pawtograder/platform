@@ -441,13 +441,15 @@ async function getOrCreateDefaultSelfReviewSetting(
     throw new CLICommandError(`Failed to fetch default self-review setting: ${error.message}`);
   }
   if (existing?.id) return existing.id;
-  const { data: created, error } = await supabase
+  const { data: created, error: insertError } = await supabase
     .from("assignment_self_review_settings")
     .insert({ class_id: classId, enabled: false })
     .select("id")
     .single();
-  if (error || !created?.id) {
-    throw new CLICommandError(`Failed to create default self-review setting: ${error?.message ?? "Unknown"}`);
+  if (insertError || !created?.id) {
+    throw new CLICommandError(
+      `Failed to create default self-review setting: ${insertError?.message ?? "Unknown"}`
+    );
   }
   return created.id;
 }
