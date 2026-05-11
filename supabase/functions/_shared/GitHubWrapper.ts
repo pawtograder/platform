@@ -1318,6 +1318,60 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     // Continue with invitation if we can't check membership
   }
 
+  // Proactively check whether the user is already an active member of the org.
+  // GitHub's POST /orgs/{org}/invitations endpoint only works for non-members; for users that are
+  // already in the org (e.g. invited via another class in the same org and accepted), we must add
+  // them to the team directly with PUT /orgs/{org}/teams/{team_slug}/memberships/{username}.
+  // Relying on the POST error message is fragile (it varies between "this org" and "this organization"),
+  // so we check membership state explicitly first.
+  let isAlreadyActiveOrgMember = false;
+  try {
+    const orgMembership = await octokit.request("GET /orgs/{org}/memberships/{username}", {
+      org,
+      username: githubUsername
+    });
+    const state = (orgMembership.data as { state?: string } | undefined)?.state;
+    if (orgMembership.status === 200 && state === "active") {
+      isAlreadyActiveOrgMember = true;
+    }
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `Org membership state for ${githubUsername} in ${org}: ${state ?? "unknown"}`,
+      level: "info"
+    });
+  } catch (e) {
+    const status = (e as { status?: number })?.status;
+    if (status === 404) {
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `User ${githubUsername} is not a member of ${org} (404), will send invitation`,
+        level: "info"
+      });
+    } else {
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `Error checking org membership for ${githubUsername} in ${org}: ${e}`,
+        level: "warning"
+      });
+    }
+  }
+
+  if (isAlreadyActiveOrgMember) {
+    scope?.addBreadcrumb({
+      category: "github",
+      message: `User ${githubUsername} is already in org ${org}; adding directly to team ${team_slug}`,
+      level: "info"
+    });
+    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+      org,
+      team_slug,
+      username: githubUsername,
+      role: "member"
+    });
+    await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
+    return false;
+  }
+
   try {
     const limiter = getCreateContentLimiter(org);
     const resp = await limiter.schedule(() =>
@@ -1342,7 +1396,7 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     });
     const errWithShape = err as {
       message?: unknown;
-      response?: { data?: { errors?: Array<{ message?: unknown }> } };
+      response?: { data?: { errors?: Array<{ message?: unknown; code?: unknown; field?: unknown }> } };
     };
     const collectedMessages: string[] = [];
     if (typeof errWithShape.message === "string") {
@@ -1362,20 +1416,32 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
       message: `Invitation error message: ${combinedMessage}`,
       level: "info"
     });
-    if (/already.*(part|member).*organization/i.test(combinedMessage)) {
+    // Detect "user is already in the organization" via either a structured "already_exists" error on
+    // the invitee_id field, or a permissive text match (GitHub's wording varies between
+    // "this org" and "this organization").
+    const structurallyAlreadyMember =
+      Array.isArray(responseErrors) &&
+      responseErrors.some(
+        (e) =>
+          (e?.code === "already_exists" || e?.code === "unprocessable") &&
+          (e?.field === "invitee_id" || e?.field === "data")
+      );
+    const textuallyAlreadyMember = /already.*(part|member).*(org|organization)/i.test(combinedMessage);
+    if (structurallyAlreadyMember || textuallyAlreadyMember) {
       scope?.addBreadcrumb({
         category: "github",
         message: `User ${githubUsername} appears to already be in org ${org}; adding to team ${team_slug}`,
         level: "info"
       });
-      await updateUserRolesForGithubOrg({ github_username: githubUsername, org });
-      //Update our user_role to mark that they are in the org!
+      //Add them to the team directly...
       await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
         org,
         team_slug,
         username: githubUsername,
         role: "member"
       });
+      //...and mark the corresponding class's user_role as org-confirmed.
+      await markUserRoleOrgConfirmedForTeam({ github_username: githubUsername, org, team_slug });
       return false;
     }
     throw err;
@@ -1693,51 +1759,82 @@ export async function syncRepoPermissions(
   }
   return { madeChanges };
 }
-async function updateUserRolesForGithubOrg({ github_username, org }: { github_username: string; org: string }) {
+/**
+ * Mark the user_role row for a specific (org, team_slug) as github_org_confirmed = true.
+ *
+ * The team slug encodes which class+role this is: `{classSlug}-staff` or `{classSlug}-students`.
+ * We deliberately scope the confirmation to the class whose team the user was just added to,
+ * NOT to every class in the org. Otherwise, when a user has roles in multiple classes that share
+ * a GitHub org, confirming one team would falsely mark them as confirmed in the others.
+ */
+async function markUserRoleOrgConfirmedForTeam({
+  github_username,
+  org,
+  team_slug
+}: {
+  github_username: string;
+  org: string;
+  team_slug: string;
+}) {
+  let courseSlug: string | undefined;
+  let allowedRoles: ("instructor" | "grader" | "student")[] = [];
+  if (team_slug.endsWith("-staff")) {
+    courseSlug = team_slug.slice(0, -"-staff".length);
+    allowedRoles = ["instructor", "grader"];
+  } else if (team_slug.endsWith("-students")) {
+    courseSlug = team_slug.slice(0, -"-students".length);
+    allowedRoles = ["student"];
+  } else {
+    console.warn(`markUserRoleOrgConfirmedForTeam: unrecognized team_slug "${team_slug}", skipping`);
+    return;
+  }
+
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
 
-  // First, find the user by github_username
   const { data: userData, error: userError } = await adminSupabase
     .from("users")
-    .select("*")
-    .eq("github_username", github_username)
-    .single();
-
+    .select("user_id")
+    .ilike("github_username", github_username)
+    .maybeSingle();
   if (userError) {
     throw new Error(`Error finding user with github_username ${github_username}: ${userError.message}`);
   }
-
   if (!userData) {
-    throw new Error(`User with github_username ${github_username} not found`);
+    console.warn(`markUserRoleOrgConfirmedForTeam: no user found for github_username ${github_username}`);
+    return;
   }
 
-  // Find all classes with the specified GitHub org
-  const { data: classes } = await adminSupabase.from("classes").select("id").eq("github_org", org);
-
-  if (!classes || classes.length === 0) {
-    throw new Error(`No classes found with GitHub org ${org}`);
+  const { data: classData, error: classError } = await adminSupabase
+    .from("classes")
+    .select("id")
+    .eq("github_org", org)
+    .eq("slug", courseSlug)
+    .maybeSingle();
+  if (classError) {
+    throw new Error(`Error finding class for org ${org} slug ${courseSlug}: ${classError.message}`);
+  }
+  if (!classData) {
+    console.warn(`markUserRoleOrgConfirmedForTeam: no class found for org ${org} slug ${courseSlug}`);
+    return;
   }
 
-  const classIds = classes.map((c) => c.id);
-
-  // Update user_roles for this user in all classes with the specified org
-  for (const classId of classIds) {
-    const { error: updateError } = await adminSupabase
-      .from("user_roles")
-      .update({ github_org_confirmed: true })
-      .eq("user_id", userData.user_id)
-      .eq("class_id", classId)
-      .select();
-    if (updateError) {
-      throw new Error(`Failed to update user roles for class ${classId}: ${updateError.message}`);
-    }
+  const { error: updateError } = await adminSupabase
+    .from("user_roles")
+    .update({ github_org_confirmed: true })
+    .eq("user_id", userData.user_id)
+    .eq("class_id", classData.id)
+    .in("role", allowedRoles);
+  if (updateError) {
+    throw new Error(
+      `Failed to mark user_role org-confirmed for ${github_username} in class ${classData.id}: ${updateError.message}`
+    );
   }
-
-  console.log(`Updated user roles for ${github_username} in classes with org ${org}`);
-  return;
+  console.log(
+    `Marked user_role github_org_confirmed=true for ${github_username} in class ${classData.id} (team ${team_slug})`
+  );
 }
 
 export async function listCommits(
