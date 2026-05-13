@@ -1269,3 +1269,127 @@ registerCommand({
   stream: true,
   handler: handleGradebookExport
 });
+
+// ---------------------------------------------------------------------------
+// assessment.export.roster — deanonymize: map subject tokens → student PII
+// ---------------------------------------------------------------------------
+
+interface RosterParams {
+  class?: string | number;
+  /** Must be "hash" — opaque tokens are per-run and unreproducible; raw has no tokens. */
+  identity_mode?: string;
+  salt?: string;
+  /** Required — explicit PII acknowledgement. */
+  confirm_pii?: boolean;
+}
+
+/**
+ * Stream one {kind:"roster_row"} per enrolled student, pairing the subject
+ * token (computed from the same salt as the export run) with the student's
+ * real identifiers: name, email, SIS user id, class section name, and lab
+ * section name.
+ *
+ * Only hash mode is supported. Opaque tokens are per-run random and cannot be
+ * reproduced after the fact; raw exports have no tokens to map back from.
+ */
+async function handleRoster(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
+  const params = rawParams as unknown as RosterParams;
+  const classIdentifier = params.class;
+  const mode = params.identity_mode;
+
+  if (!classIdentifier) throw new CLICommandError("class is required");
+  if (mode !== "hash") {
+    throw new CLICommandError(
+      "identity_mode must be \"hash\" — opaque tokens are per-run and cannot be reproduced; use the same salt as the original export run"
+    );
+  }
+  if (params.confirm_pii !== true) {
+    throw new CLICommandError(
+      "assessment.export.roster exposes real student names, emails, and SIS ids. Re-run with confirm_pii: true to acknowledge.",
+      400
+    );
+  }
+  if (!params.salt || typeof params.salt !== "string") {
+    throw new CLICommandError("salt is required for identity_mode=hash");
+  }
+  if (params.salt.length < 16) {
+    throw new CLICommandError("salt must be at least 16 characters");
+  }
+
+  const supabase = getAdminClient();
+  const classData = await resolveClass(supabase, classIdentifier);
+  await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
+
+  const tokenizer = await createTokenizer(params.salt);
+
+  // Pre-fetch section name maps so per-student rows don't need individual lookups.
+  const { data: classSectionRows, error: csErr } = await supabase
+    .from("class_sections")
+    .select("id, name")
+    .eq("class_id", classData.id);
+  if (csErr) throw new CLICommandError(`Failed to load class sections: ${csErr.message}`, 500);
+  const classSectionNames = new Map<number, string>(
+    (classSectionRows ?? []).map((s) => [s.id, s.name ?? ""])
+  );
+
+  const { data: labSectionRows, error: lsErr } = await supabase
+    .from("lab_sections")
+    .select("id, name")
+    .eq("class_id", classData.id);
+  if (lsErr) throw new CLICommandError(`Failed to load lab sections: ${lsErr.message}`, 500);
+  const labSectionNames = new Map<number, string>(
+    (labSectionRows ?? []).map((s) => [s.id, s.name ?? ""])
+  );
+
+  return streamNdjson(async (writer) => {
+    let cursor: string | null = null;
+    let total = 0;
+
+    while (true) {
+      let query = supabase
+        .from("user_roles")
+        .select(
+          "private_profile_id, class_section_id, lab_section_id, profiles!user_roles_private_profile_id_fkey(name), users(email, sis_user_id)"
+        )
+        .eq("class_id", classData.id)
+        .eq("disabled", false)
+        .eq("role", "student")
+        .order("private_profile_id", { ascending: true })
+        .limit(STUDENT_PAGE_SIZE);
+
+      if (cursor !== null) query = query.gt("private_profile_id", cursor);
+
+      const { data: rows, error } = await query;
+      if (error) throw new CLICommandError(`Failed to load students: ${error.message}`, 500);
+      if (!rows || rows.length === 0) break;
+
+      for (const row of rows) {
+        const token = await tokenizer.token("subject", row.private_profile_id);
+        const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
+        const u = Array.isArray(row.users) ? row.users[0] : row.users;
+        await writer.write({
+          kind: "roster_row",
+          token,
+          name: profile?.name ?? null,
+          email: u?.email ?? null,
+          sis_user_id: u?.sis_user_id ?? null,
+          class_section: row.class_section_id !== null ? (classSectionNames.get(row.class_section_id) ?? null) : null,
+          lab_section: row.lab_section_id !== null ? (labSectionNames.get(row.lab_section_id) ?? null) : null
+        });
+        total += 1;
+      }
+
+      if (rows.length < STUDENT_PAGE_SIZE) break;
+      cursor = rows[rows.length - 1]!.private_profile_id;
+    }
+
+    await writer.write({ kind: "end", counts: { rows: total } });
+  });
+}
+
+registerCommand({
+  name: "assessment.export.roster",
+  requiredScope: "cli:read",
+  stream: true,
+  handler: handleRoster
+});

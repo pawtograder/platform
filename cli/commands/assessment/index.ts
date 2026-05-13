@@ -12,6 +12,7 @@
 
 import type { Argv } from "yargs";
 import { exportHandler, exportBuilder } from "./export";
+import { deanonymizeHandler, deanonymizeBuilder } from "./deanonymize";
 
 export const command = "assessment <action>";
 export const describe = "Export class assessment data (rubrics, scores, tests, hints, gradebook)";
@@ -19,6 +20,12 @@ export const describe = "Export class assessment data (rubrics, scores, tests, h
 export const builder = (yargs: Argv) => {
   return yargs
     .command("export", "Export assessment data for a class", exportBuilder, exportHandler)
+    .command(
+      "deanonymize",
+      "Export a CSV mapping subject tokens to student identifiers (name, email, SIS id, sections)",
+      deanonymizeBuilder,
+      deanonymizeHandler
+    )
     .demandCommand(1, "You must specify an action");
 };
 
