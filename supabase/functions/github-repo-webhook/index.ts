@@ -134,15 +134,10 @@ const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
  */
 function pushTouchedFile(payload: PushEvent, path: string): boolean {
   const head = payload.head_commit;
-  if (
-    head &&
-    (head.modified.includes(path) || head.added.includes(path) || head.removed.includes(path))
-  ) {
+  if (head && (head.modified.includes(path) || head.added.includes(path) || head.removed.includes(path))) {
     return true;
   }
-  return payload.commits.some(
-    (c) => c.modified.includes(path) || c.added.includes(path) || c.removed.includes(path)
-  );
+  return payload.commits.some((c) => c.modified.includes(path) || c.added.includes(path) || c.removed.includes(path));
 }
 
 function sha256Hex(buf: Uint8Array): string {
