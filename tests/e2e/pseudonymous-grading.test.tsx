@@ -113,9 +113,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     // that finalize_submission_early completed and reviewAssignments has
     // refetched (see finalizeSubmissionEarly.tsx). Without it the next
     // assertion races the "Complete Self Review" button into existence.
-    // Chakra renders the toast title twice (visible toast + portal duplicate
-    // both with the same id), so .first() is required to satisfy strict mode.
-    await expect(page.getByText("Submission finalized").first()).toBeVisible();
+    // Visual-test mode removes toasts from layout before screenshots, so the
+    // explicit app signal is attachment rather than visibility.
+    await expect(page.getByText("Submission finalized").first()).toBeAttached();
     // Even after the toast appears, the "Complete Self Review" button only
     // renders once useMyReviewAssignments() observes the new row AND
     // useRubric("self-review") returns the matching rubric (see

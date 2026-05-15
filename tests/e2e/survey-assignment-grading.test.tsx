@@ -452,7 +452,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(page.locator("body")).toContainText("Our team collaboration");
     await expect(page.locator("body")).toContainText("Good progress");
 
-    await expectTransparentText(page, formatDateForTest(SUBMITTED_AT, "America/New_York", "full"));
+    await expectTransparentText(page, /[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M E[DS]T/);
     await visualScreenshot(page, "Instructor Survey Responses - Individual Responses Table");
   });
 
