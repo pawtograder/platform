@@ -221,7 +221,7 @@ export default function AssignmentPage() {
                         : `(Old #${submission.ordinal})`}
                     </Link>
                   </Table.Cell>
-                  <Table.Cell data-visual-test="blackout">
+                  <Table.Cell data-visual-test="transparent">
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
                       {format(new TZDate(submission.created_at, timeZone), "MMM d h:mm aaa")}
                     </Link>

@@ -668,7 +668,7 @@ export function CodeLineComment({ comment_id }: { comment_id: number }) {
                   </Text>
                 )}
               </Text>
-              <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
+              <Text data-visual-test="transparent">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
               {authorProfile?.flair ? (

@@ -634,6 +634,7 @@ export async function createUserInClass({
   lab_section_id,
   randomSuffix,
   name,
+  public_profile_name: requested_public_profile_name,
   email,
   rateLimitManager,
   useMagicLink = false
@@ -644,6 +645,7 @@ export async function createUserInClass({
   lab_section_id?: number;
   randomSuffix?: string;
   name?: string;
+  public_profile_name?: string;
   email?: string;
   rateLimitManager?: RateLimitManager;
   useMagicLink?: boolean;
@@ -652,9 +654,11 @@ export async function createUserInClass({
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
   const resolvedEmail = email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const resolvedName = name ? name : `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
-  const public_profile_name = name
-    ? `Pseudonym #${userIdx[role]}`
-    : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+  const public_profile_name =
+    requested_public_profile_name ??
+    (name
+      ? `Pseudonym #${userIdx[role]}`
+      : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
   const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
   // Try to create user, if it fails due to existing email, try to get the existing user
@@ -841,6 +845,7 @@ export async function createUsersInClass(
     lab_section_id?: number;
     randomSuffix?: string;
     name?: string;
+    public_profile_name?: string;
     email?: string;
     rateLimitManager?: RateLimitManager;
     useMagicLink?: boolean;
@@ -887,9 +892,11 @@ export async function createUsersInClass(
   for (const request of resolvedRequests) {
     const { role, class_id, section_id, lab_section_id, resolvedEmail, resolvedName, useMagicLink = false } = request;
 
-    const public_profile_name = request.name
-      ? `Pseudonym #${userIdx[role] - 1}`
-      : `Pseudonym #${userIdx[role] - 1} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+    const public_profile_name =
+      request.public_profile_name ??
+      (request.name
+        ? `Pseudonym #${userIdx[role] - 1}`
+        : `Pseudonym #${userIdx[role] - 1} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
     const private_profile_name = resolvedName;
 
     let userId: string;

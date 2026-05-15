@@ -63,5 +63,5 @@ export function TimeZoneAwareDate({
     }
   }, [date, format, timeZone]);
 
-  return <>{formattedDate}</>;
+  return <span data-visual-test="transparent">{formattedDate}</span>;
 }

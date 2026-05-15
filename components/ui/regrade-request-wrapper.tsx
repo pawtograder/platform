@@ -151,7 +151,7 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
                   </Text>
                 )}
               </Text>
-              <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
+              <Text data-visual-test="transparent">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
               {authorRole === "grader" || authorRole === "instructor" || authorProfile?.flair ? (
@@ -1095,7 +1095,7 @@ export default function RegradeRequestWrapper({
               <VStack align="flex-start" gap={0} flexGrow={10}>
                 <Heading size="sm">Regrade {config.label}</Heading>
                 {regradeRequest.opened_at && (
-                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="transparent">
                     Opened {formatRelative(regradeRequest.opened_at, new Date())}, initial score:{" "}
                     <Text as="span" fontWeight="semibold">
                       {regradeRequest.initial_points || 0}
@@ -1119,7 +1119,7 @@ export default function RegradeRequestWrapper({
                   </Text>
                 )}
                 {regradeRequest.resolved_at && (
-                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="transparent">
                     Resolved {formatRelative(regradeRequest.resolved_at, new Date())} by {resolver?.name}, new score:{" "}
                     {isInstructor ? (
                       <EditablePoints
@@ -1149,12 +1149,12 @@ export default function RegradeRequestWrapper({
                   </Text>
                 )}
                 {regradeRequest.escalated_at && (
-                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="transparent">
                     Escalated {formatRelative(regradeRequest.escalated_at, new Date())} by {escalator?.name}
                   </Text>
                 )}
                 {regradeRequest.closed_at && (
-                  <Text fontSize="xs" color="fg.muted" data-visual-test="blackout">
+                  <Text fontSize="xs" color="fg.muted" data-visual-test="transparent">
                     Closed {formatRelative(regradeRequest.closed_at, new Date())} by {closer?.name}, final score:{" "}
                     {/* Note: Instructors always sign final decisions with their real identity */}
                     {isInstructor ? (
