@@ -197,6 +197,63 @@ export type GenericResponse = {
   };
 };
 
+export type GitHubMembershipStatus = {
+  state: "active" | "pending" | "not_found" | "unknown";
+  isMember: boolean;
+  error?: string;
+};
+
+export type InstructorGitHubDiagnoseRequest = {
+  action: "diagnose";
+  courseId: number;
+  userRoleId: number;
+};
+
+export type InstructorGitHubSyncRequest = {
+  action: "sync";
+  courseId: number;
+  userRoleId: number;
+};
+
+export type InstructorGitHubUnlinkRequest = {
+  action: "unlink";
+  courseId: number;
+  userRoleId: number;
+};
+
+export type GitHubLinkStatus = {
+  courseId: number;
+  userRoleId: number;
+  userId: string;
+  email: string | null;
+  githubUsername: string | null;
+  githubUserId: string | null;
+  currentGithubUsername: string | null;
+  usernameChanged: boolean;
+  classOrg: string | null;
+  studentTeamSlug: string | null;
+  githubOrgConfirmed: boolean;
+  lastGithubUserSync: string | null;
+  orgMembership: GitHubMembershipStatus;
+  teamMembership: GitHubMembershipStatus;
+};
+
+export type InstructorGitHubDiagnoseResponse = {
+  status: GitHubLinkStatus;
+};
+
+export type InstructorGitHubSyncResponse = {
+  message: string;
+  status: GitHubLinkStatus;
+};
+
+export type InstructorGitHubUnlinkResponse = {
+  message: string;
+  removedFromOrg: boolean;
+  unlinkedIdentity: boolean;
+  status: GitHubLinkStatus;
+};
+
 export type AssignmentGroupJoinRequest = {
   assignment_group_id: number;
 };

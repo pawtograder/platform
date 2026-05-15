@@ -42,7 +42,7 @@ import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport } from "react-icons/fa";
+import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport, FaGithub } from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
@@ -50,6 +50,7 @@ import RemoveStudentModal from "./removeStudentModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import GitHubDiagnosticsModal from "./githubDiagnosticsModal";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -61,6 +62,10 @@ type RemoveStudentModalData = {
   userRoleId: string;
   userName: string | null | undefined;
   role: UserRoleWithPrivateProfileAndUser["role"];
+};
+type GitHubDiagnosticsModalData = {
+  userRoleId: number;
+  userName: string | null | undefined;
 };
 
 // Invitation type for display
@@ -125,6 +130,13 @@ export default function EnrollmentsTable() {
     openModal: openRemoveStudentModal,
     closeModal: closeRemoveStudentModal
   } = useModalManager<RemoveStudentModalData>();
+
+  const {
+    isOpen: isGitHubDiagnosticsModalOpen,
+    modalData: githubDiagnosticsData,
+    openModal: openGitHubDiagnosticsModal,
+    closeModal: closeGitHubDiagnosticsModal
+  } = useModalManager<GitHubDiagnosticsModalData>();
 
   const [pageCount, setPageCount] = useState(0);
 
@@ -768,6 +780,7 @@ export default function EnrollmentsTable() {
           const userRoleEntry = row.original;
           const isCurrentUserRow = currentUser?.id === userRoleEntry.user_id;
           const isTargetInstructor = userRoleEntry.role === "instructor";
+          const canDiagnoseGitHub = userRoleEntry.role === "student";
 
           const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
           let editRoleTooltipContent = "Edit user role";
@@ -789,6 +802,23 @@ export default function EnrollmentsTable() {
             <HStack gap={2} justifyContent="center">
               {profile && studentProfileId && (
                 <StudentSummaryTrigger student_id={studentProfileId} course_id={Number(course_id)} />
+              )}
+              {canDiagnoseGitHub && (
+                <Tooltip content="Diagnose GitHub errors">
+                  <Icon
+                    as={FaGithub}
+                    aria-label="Diagnose GitHub errors"
+                    cursor="pointer"
+                    color="purple.500"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openGitHubDiagnosticsModal({
+                        userRoleId: userRoleEntry.id,
+                        userName: profile?.name
+                      });
+                    }}
+                  />
+                </Tooltip>
               )}
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
@@ -849,6 +879,7 @@ export default function EnrollmentsTable() {
       course_id,
       openEditProfileModal,
       openEditUserRoleModal,
+      openGitHubDiagnosticsModal,
       openRemoveStudentModal,
       tagData,
       handleSingleCheckboxChange,
@@ -1642,6 +1673,15 @@ export default function EnrollmentsTable() {
           userRoleId={removingStudentData.userRoleId}
           onConfirmRemove={handleConfirmRemoveStudent}
           isLoading={isDeletingUserRole}
+        />
+      )}
+      {githubDiagnosticsData && (
+        <GitHubDiagnosticsModal
+          isOpen={isGitHubDiagnosticsModalOpen}
+          onClose={closeGitHubDiagnosticsModal}
+          courseId={Number(course_id)}
+          userRoleId={githubDiagnosticsData.userRoleId}
+          studentName={githubDiagnosticsData.userName}
         />
       )}
     </VStack>
