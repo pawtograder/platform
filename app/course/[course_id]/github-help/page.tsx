@@ -5,6 +5,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { syncGitHubAccount } from "@/lib/edgeFunctions";
 import { useTableControllerTableValues } from "@/lib/TableController";
+import { PageContainer } from "@/components/ui/page-container";
 import { Box, Button, Heading, Link, List, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { useCallback, useMemo, useState } from "react";
@@ -44,8 +45,11 @@ export default function GitHubHelpPage() {
     setSyncing(false);
   }, [courseController.client]);
   return (
-    <VStack p={4} alignItems="flex-start" gap={4}>
-      <Heading>GitHub Access Troubleshooting</Heading>
+    <PageContainer>
+      <VStack alignItems="flex-start" gap={4}>
+        <Heading as="h1" size="lg">
+          GitHub Access Troubleshooting
+        </Heading>
       <Box>
         Your Pawtograder account is currently linked to the GitHub account {githubUsername} (ID: {githubUserId}). You
         can use this page to confirm that you can access repositories for this class, and to re-sync your GitHub account
@@ -81,6 +85,7 @@ export default function GitHubHelpPage() {
           Sync GitHub Account
         </Button>
       </Box>
-    </VStack>
+      </VStack>
+    </PageContainer>
   );
 }

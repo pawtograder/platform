@@ -69,7 +69,16 @@ const ProtectedLayout = async ({
               <HelpDrawerProvider>
                 <KeyboardShortcutsProvider courseId={Number.parseInt(course_id)}>
                   <DynamicCourseNav />
-                  <Box as="main" id="main-content" tabIndex={-1} pt="0" ml="0" mr="0" pb="80px" outline="none">
+                  <Box
+                    as="main"
+                    id="main-content"
+                    tabIndex={-1}
+                    pt="0"
+                    ml="0"
+                    mr="0"
+                    pb="80px"
+                    _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
+                  >
                     {children}
                   </Box>
                   <FloatingHelpRequestWidget />

@@ -23,6 +23,7 @@ import { format, formatDistanceToNow, isPast } from "date-fns";
 import { FaClipboardList, FaExclamationCircle } from "react-icons/fa";
 
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { DashboardQuickLinks } from "@/components/dashboard/dashboard-quick-links";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
@@ -161,6 +162,7 @@ export default async function StudentDashboard({
     <VStack spaceY={0} align="stretch" p={2}>
       {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+      <DashboardQuickLinks />
 
       {incompleteSurveysForBanner.length > 0 && (
         <Box w="100%" mb={3}>
@@ -229,7 +231,7 @@ export default async function StudentDashboard({
         <HStack gap={4} align="stretch" flexWrap="wrap">
           {/* Course Section Card */}
           {classSection && (
-            <CardRoot flex={1} minW="200px" h="100%">
+            <CardRoot flex={{ base: "1 1 100%", sm: "1 1 200px" }} h="100%">
               <CardBody p={3} h="100%" display="flex" flexDirection="column">
                 <Text fontSize="xs" color="fg.muted" mb={2} fontWeight="medium">
                   Course Section
@@ -255,7 +257,7 @@ export default async function StudentDashboard({
 
           {/* Lab Section Card */}
           {labSection && (
-            <CardRoot flex={1} minW="200px" h="100%">
+            <CardRoot flex={{ base: "1 1 100%", sm: "1 1 200px" }} h="100%">
               <CardBody p={3} h="100%" display="flex" flexDirection="column">
                 <Text fontSize="xs" color="fg.muted" mb={2} fontWeight="medium">
                   Lab Section

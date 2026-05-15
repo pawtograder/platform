@@ -1,5 +1,7 @@
 "use client";
 
+import { useAnnouncer } from "@/components/ui/live-announcer";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { IconButtonProps } from "@chakra-ui/react";
 import { ClientOnly, IconButton, Skeleton } from "@chakra-ui/react";
@@ -36,9 +38,16 @@ export function ColorModeWatcher() {
   // Intentional no-op: next-themes handles system changes; our hook applies overrides
   return <></>;
 }
+function describeColorMode(mode: UserColorMode): string {
+  if (mode === "light") return "light";
+  if (mode === "dark") return "dark";
+  return "system";
+}
+
 export function useColorMode() {
   const { resolvedTheme, setTheme } = useTheme();
   const [userColorMode, setUserColorMode] = React.useState<UserColorMode>("system");
+  const announce = useAnnouncer();
 
   useEffect(() => {
     const override = readUserColorModeOverride();
@@ -46,16 +55,25 @@ export function useColorMode() {
     setTheme(override === "system" ? "system" : override);
   }, [setTheme]);
 
-  const setColorMode = (mode: UserColorMode) => {
-    setUserColorMode(mode);
-    writeUserColorModeOverride(mode);
-    setTheme(mode === "system" ? "system" : mode);
-  };
+  const setColorMode = React.useCallback(
+    (mode: UserColorMode, options?: { announce?: boolean }) => {
+      setUserColorMode(mode);
+      writeUserColorModeOverride(mode);
+      setTheme(mode === "system" ? "system" : mode);
+      if (options?.announce ?? true) {
+        const label = describeColorMode(mode);
+        const description = mode === "system" ? "Following your system color mode" : `Switched to ${label} mode`;
+        toaster.create({ description, type: "info", duration: 2500 });
+        announce(description);
+      }
+    },
+    [announce, setTheme]
+  );
 
-  const toggleColorMode = () => {
+  const toggleColorMode = React.useCallback(() => {
     const nextMode: UserColorMode = userColorMode === "light" ? "dark" : userColorMode === "dark" ? "system" : "light";
     setColorMode(nextMode);
-  };
+  }, [setColorMode, userColorMode]);
 
   return { colorMode: resolvedTheme, userColorMode, setColorMode, toggleColorMode };
 }

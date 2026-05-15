@@ -299,11 +299,13 @@ export default function DynamicCourseNav() {
           <HStack justifyContent="space-between" alignItems="center">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
-              {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
-              ) : (
-                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
-              )}
+              <NextLink href="/course" aria-label="Pawtograder home">
+                {colorMode === "dark" ? (
+                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
+                ) : (
+                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
+                )}
+              </NextLink>
               <Text fontSize="md" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
                   {enrollment.classes.course_title ?? enrollment.classes.name}
@@ -425,11 +427,13 @@ export default function DynamicCourseNav() {
           <VStack gap="0" align="start">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
-              {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
-              ) : (
-                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
-              )}
+              <NextLink href="/course" aria-label="Pawtograder home">
+                {colorMode === "dark" ? (
+                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
+                ) : (
+                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
+                )}
+              </NextLink>
               <Text fontSize="xl" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
                   {enrollment.classes.course_title ?? enrollment.classes.name}

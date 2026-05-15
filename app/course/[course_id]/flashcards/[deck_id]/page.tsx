@@ -641,7 +641,7 @@ export default function FlashcardsDeckPage() {
         </HStack>
 
         {/* Progress bar */}
-        <VStack align="stretch" gap={2} height="100vh">
+        <VStack align="stretch" gap={2} minH={{ base: "auto", lg: "100vh" }}>
           <Box>
             <HStack justifyContent="space-between">
               <Text fontSize="sm">

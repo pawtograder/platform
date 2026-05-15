@@ -1864,16 +1864,18 @@ function RubricView() {
 
   return (
     <Box
-      position="sticky"
-      top="0"
+      as="aside"
+      aria-label="Grading summary"
+      position={{ base: "static", lg: "sticky" }}
+      top={{ base: "auto", lg: "0" }}
       borderTopWidth={{ base: "1px", lg: "0" }}
       borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
-      pb="80px"
-      height="100vh"
+      pb={{ base: "4", lg: "80px" }}
+      height={{ base: "auto", lg: "100vh" }}
       overflowX="hidden"
-      overflowY="auto"
+      overflowY={{ base: "visible", lg: "auto" }}
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
@@ -2105,7 +2107,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </HStack>
       </Flex>
 
-      <Box p={0} m={0} borderBottomColor="border.emphasized" borderBottomWidth="2px" bg="bg.muted">
+      <Box
+        as="nav"
+        aria-label="Submission tabs"
+        p={0}
+        m={0}
+        borderBottomColor="border.emphasized"
+        borderBottomWidth="2px"
+        bg="bg.muted"
+        display="flex"
+        flexWrap="wrap"
+      >
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
@@ -2127,11 +2139,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </NextLink>
         )}
       </Box>
-      <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>
+      <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
           {children}
         </Box>
-        <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>
+        <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
           <RubricView />
         </Box>
       </Flex>

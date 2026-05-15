@@ -1,5 +1,6 @@
 "use client";
 
+import { PageContainer } from "@/components/ui/page-container";
 import { Box, Heading, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -70,25 +71,29 @@ export default function StudentRegradeRequestsPage() {
   }, [course_id]);
 
   return (
-    <VStack align="stretch" gap={6} w="100%" p={4}>
-      <Box>
-        <Heading size="lg">My Regrade Requests</Heading>
-        <Text color="fg.muted" fontSize="sm">
-          If you feel that a rubric check has been graded incorrectly, you can request a regrade. The request will then
-          be marked as &quot;Pending&quot;, and the grader can exchange comments with you to discuss the request. When
-          the grader makes their final decision, they will mark the request as &quot;Resolved&quot;. If you are
-          unsatisfied with the final decision, you can escalate the request to an instructor.
-        </Text>
-      </Box>
-      {isLoading ? (
-        <Box>Loading...</Box>
-      ) : error ? (
+    <PageContainer>
+      <VStack align="stretch" gap={6} w="100%">
         <Box>
-          <Text color="red.500">Error: {error}</Text>
+          <Heading as="h1" size="lg">
+            My Regrade Requests
+          </Heading>
+          <Text color="fg.muted" fontSize="sm">
+            If you feel that a rubric check has been graded incorrectly, you can request a regrade. The request will
+            then be marked as &quot;Pending&quot;, and the grader can exchange comments with you to discuss the request.
+            When the grader makes their final decision, they will mark the request as &quot;Resolved&quot;. If you are
+            unsatisfied with the final decision, you can escalate the request to an instructor.
+          </Text>
         </Box>
-      ) : (
-        <RegradeRequestsTable regradeRequests={regradeRequests} courseId={Number(course_id)} />
-      )}
-    </VStack>
+        {isLoading ? (
+          <Box>Loading...</Box>
+        ) : error ? (
+          <Box>
+            <Text color="red.500">Error: {error}</Text>
+          </Box>
+        ) : (
+          <RegradeRequestsTable regradeRequests={regradeRequests} courseId={Number(course_id)} />
+        )}
+      </VStack>
+    </PageContainer>
   );
 }

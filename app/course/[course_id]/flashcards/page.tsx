@@ -1,10 +1,11 @@
-import { Box, Container, Heading, SimpleGrid, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { PageContainer } from "@/components/ui/page-container";
+import { Box, Heading, SimpleGrid, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { Suspense } from "react";
 import { FlashcardsDecksBody } from "./FlashcardsDecksBody";
 
 function FlashcardsDecksFallback() {
   return (
-    <SimpleGrid columns={{ base: 1, sm: 2, md: 3 }} gap={6} px={4} py={2}>
+    <SimpleGrid columns={{ base: 1, sm: 2, md: 3 }} gap={6} py={2}>
       {Array.from({ length: 6 }).map((_, i) => (
         <Skeleton key={i} height="140px" borderRadius="md" />
       ))}
@@ -20,10 +21,10 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
   const { course_id } = await params;
 
   return (
-    <Container py={8}>
+    <PageContainer py={8}>
       <VStack align="stretch" gap={8}>
         <Box textAlign="center" mb={4}>
-          <Heading size="2xl" mb={4}>
+          <Heading as="h1" size="2xl" mb={4}>
             Flashcard Decks
           </Heading>
           <Text fontSize="lg" mx="auto">
@@ -34,6 +35,6 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
           <FlashcardsDecksBody course_id={course_id} />
         </Suspense>
       </VStack>
-    </Container>
+    </PageContainer>
   );
 }

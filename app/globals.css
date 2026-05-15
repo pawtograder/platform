@@ -2,6 +2,13 @@
   --nav-height: 140px;
 }
 
+/* Chakra tokens (xs/sm/md/etc.) are rem-based, so anchoring the root at the
+   browser's default lets user-set Text Size / page zoom propagate end-to-end
+   (WCAG 1.4.4 Resize Text). Don't override font-size in px anywhere. */
+html {
+  font-size: 100%;
+}
+
 a,
 button,
 select {
