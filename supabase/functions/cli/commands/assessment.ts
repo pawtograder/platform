@@ -1300,7 +1300,7 @@ async function handleRoster(ctx: MCPAuthContext, rawParams: Record<string, unkno
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (mode !== "hash") {
     throw new CLICommandError(
-      "identity_mode must be \"hash\" — opaque tokens are per-run and cannot be reproduced; use the same salt as the original export run"
+      'identity_mode must be "hash" — opaque tokens are per-run and cannot be reproduced; use the same salt as the original export run'
     );
   }
   if (params.confirm_pii !== true) {
@@ -1328,18 +1328,14 @@ async function handleRoster(ctx: MCPAuthContext, rawParams: Record<string, unkno
     .select("id, name")
     .eq("class_id", classData.id);
   if (csErr) throw new CLICommandError(`Failed to load class sections: ${csErr.message}`, 500);
-  const classSectionNames = new Map<number, string>(
-    (classSectionRows ?? []).map((s) => [s.id, s.name ?? ""])
-  );
+  const classSectionNames = new Map<number, string>((classSectionRows ?? []).map((s) => [s.id, s.name ?? ""]));
 
   const { data: labSectionRows, error: lsErr } = await supabase
     .from("lab_sections")
     .select("id, name")
     .eq("class_id", classData.id);
   if (lsErr) throw new CLICommandError(`Failed to load lab sections: ${lsErr.message}`, 500);
-  const labSectionNames = new Map<number, string>(
-    (labSectionRows ?? []).map((s) => [s.id, s.name ?? ""])
-  );
+  const labSectionNames = new Map<number, string>((labSectionRows ?? []).map((s) => [s.id, s.name ?? ""]));
 
   return streamNdjson(async (writer) => {
     let cursor: string | null = null;
