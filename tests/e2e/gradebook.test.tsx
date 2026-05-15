@@ -2,7 +2,6 @@ import { resolveTargetStudentProfileIdForRubricComment } from "@/lib/rubricComme
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import type { Page, Locator } from "@playwright/test";
-import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { promises as fs } from "node:fs";
 import Papa from "papaparse";
@@ -17,6 +16,7 @@ import {
   createAuthenticatedClient
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { visualScreenshot } from "./VisualTestUtils";
 // removed unused import
 
 dotenv.config({ path: ".env.local", quiet: true });
@@ -213,6 +213,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const users = await createUsersInClass([
       {
         name: "Alice Anderson",
+        public_profile_name: "Gradebook Pseudonym Alice",
         email: "alice-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -220,6 +221,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Bob Brown",
+        public_profile_name: "Gradebook Pseudonym Bob",
         email: "bob-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -227,6 +229,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Charlie Chen",
+        public_profile_name: "Gradebook Pseudonym Charlie",
         email: "charlie-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -234,6 +237,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Professor Smith",
+        public_profile_name: "Gradebook Pseudonym Instructor",
         email: "prof-smith-gradebook@pawtograder.net",
         role: "instructor",
         class_id: course.id,
@@ -873,7 +877,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass({ timeout: 60_000 });
 
     // Take screenshot for visual regression testing
-    await argosScreenshot(page, "Gradebook Page - Full Data");
+    await visualScreenshot(page, "Gradebook Page - Full Data");
   });
 
   test("Editing a manual column updates the Participation cell value", async ({ page }) => {
