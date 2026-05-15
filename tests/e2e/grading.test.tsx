@@ -381,7 +381,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await expect(region).toBeVisible();
     await region.getByRole("button", { name: "Request regrade for this check" }).click();
-    await visualScreenshot(page, "Student can request a regrade", { stabilizeRubric: "Grading Rubric" });
+    await visualScreenshot(page, "Student can request a regrade");
     await page.getByRole("button", { name: "Draft Regrade Request" }).click();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -428,7 +428,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     ).toBeVisible();
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
-    await visualScreenshot(page, "Instructors can resolve the regrade request", { stabilizeRubric: "Grading Rubric" });
+    await visualScreenshot(page, "Instructors can resolve the regrade request");
     // Popover content is portalled (not under the rubric check region); scope to the resolve dialog.
     const resolveRegradePopover = page.getByRole("dialog").filter({ hasText: "Grade Adjustment:" });
     await expect(resolveRegradePopover).toBeVisible();
@@ -464,7 +464,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByLabel("Add Comment", { exact: true })
       .click();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Escalate to Instructor" }).click();
-    await visualScreenshot(page, "Students can appeal their regrade request", { stabilizeRubric: "Grading Rubric" });
+    await visualScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
     // Wait for the escalation to settle before axe runs — otherwise axe races
     // the closing popover / toast and reports transient focus-trap / labeling violations.
