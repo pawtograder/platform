@@ -1607,7 +1607,9 @@ function ReviewActions() {
       <ReviewStats />
       {showCompleteReviewButton && !review.completed_at && (
         <VStack>
-          <Heading size="md">Submission Review Actions</Heading>
+          <Heading as="h2" size="md">
+            Submission Review Actions
+          </Heading>
           <HStack w="100%" justify="space-between">
             {!review.completed_at && <CompleteReviewButton />}
             {/* {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
@@ -1646,7 +1648,9 @@ function UnGradedGradingSummary() {
 
   return (
     <Box>
-      <Heading size="xl">Grading Summary</Heading>
+      <Heading as="h2" size="xl">
+        Grading Summary
+      </Heading>
       <Text color="text.muted" fontSize="sm">
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
@@ -1908,7 +1912,7 @@ function RubricView() {
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
-            <Heading size="xl">
+            <Heading as="h2" size="xl">
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
@@ -1947,7 +1951,9 @@ function Comments() {
   }
   return (
     <Box>
-      <Heading size="md">Comments</Heading>
+      <Heading as="h2" size="md">
+        Comments
+      </Heading>
       <VStack align="start" gap={2}>
         {comments.map((comment) => (
           <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" />
