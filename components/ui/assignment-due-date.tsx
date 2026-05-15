@@ -110,8 +110,8 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                   the deadline passes you will no longer be able to apply tokens.{" "}
                 </>
               )}
-              The course late policy grants each student{" "}
-              {course.late_tokens_per_student} late tokens. Each token extends the due date by 24 hours.{" "}
+              The course late policy grants each student {course.late_tokens_per_student} late tokens. Each token
+              extends the due date by 24 hours.{" "}
               {requireTokensBeforeDueDate
                 ? "Tokens are not automatically applied - to use them, you must use this form to apply them BEFORE the assignment is due."
                 : "Tokens can be applied before the deadline using this form, or will be automatically applied when you submit after the deadline."}{" "}
