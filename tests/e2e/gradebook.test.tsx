@@ -1653,10 +1653,19 @@ test.describe("Gradebook column reorder (issue #531)", () => {
         return;
       }
       await waitForVirtualizerIdle(page);
-      const buttonNow = headerCellAfterMove.getByRole("button", { name: "Column options" });
+      const freshHeaderCellAfterMove = region
+        .locator("thead tr")
+        .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+        .locator("[data-col-id]")
+        .filter({ hasText: colName });
+      await freshHeaderCellAfterMove.scrollIntoViewIfNeeded();
+      await waitForVirtualizerIdle(page);
+      const buttonNow = freshHeaderCellAfterMove.getByRole("button", { name: "Column options" });
       await buttonNow.scrollIntoViewIfNeeded();
       await buttonNow.click();
-      await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
+      const moveRightItem = page.getByRole("menuitem", { name: "Move Right", exact: true });
+      await expect(moveRightItem).toBeVisible({ timeout: 5_000 });
+      await moveRightItem.click({ force: true });
       await expect(async () => {
         const { data: colAfterClick } = await supabase
           .from("gradebook_columns")
