@@ -1,5 +1,6 @@
 "use client";
 
+import { useGlobalSearch } from "@/components/ui/global-search";
 import ShortcutsHelpDialog from "@/components/ui/shortcuts-help-dialog";
 import { focusLandmark } from "@/components/ui/skip-nav";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -69,6 +70,7 @@ export function useKeyboardShortcuts() {
 
 export function KeyboardShortcutsProvider({ children, courseId }: { children: React.ReactNode; courseId: number }) {
   const router = useRouter();
+  const globalSearch = useGlobalSearch();
   const { role } = useClassProfiles();
   // The shape from useClassProfiles isn't guaranteed at the type level to include the
   // features join, so narrow via a runtime guard rather than an unchecked cast.
@@ -167,13 +169,20 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
         return;
       }
 
-      // s or / focuses search if present.
+      // s or / focuses search if present, else opens the global palette.
       if (!e.shiftKey && (e.key === "s" || e.key === "/")) {
         // s also starts the chord for surveys, but the chord requires a prior `g`.
         // Without a pending chord, treat s as search-focus.
         const pending = pendingChordRef.current;
-        if (!pending && focusSearch()) {
+        if (!pending) {
+          if (focusSearch()) {
+            e.preventDefault();
+            return;
+          }
+          // No per-page search input on this route — open the global palette
+          // instead so `/` and `s` always do something useful.
           e.preventDefault();
+          globalSearch.open();
           return;
         }
       }
@@ -207,7 +216,7 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [goMap, router, openHelp]);
+  }, [goMap, router, openHelp, globalSearch]);
 
   const value = React.useMemo<ShortcutsContextValue>(
     () => ({

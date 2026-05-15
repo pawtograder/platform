@@ -85,8 +85,12 @@ export function useColorModeValue<T>(light: T, dark: T) {
 
 export function ColorModeIcon() {
   const { userColorMode } = useColorMode();
-  if (userColorMode === "system") return <LuSunMoon />;
-  return userColorMode === "light" ? <LuSun /> : <LuMoon />;
+  if (userColorMode === "system") return <LuSunMoon aria-hidden focusable={false} />;
+  return userColorMode === "light" ? (
+    <LuSun aria-hidden focusable={false} />
+  ) : (
+    <LuMoon aria-hidden focusable={false} />
+  );
 }
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 interface ColorModeButtonProps extends Omit<IconButtonProps, "aria-label"> {}

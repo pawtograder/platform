@@ -101,8 +101,32 @@ export default function ShortcutsHelpDialog() {
                     }
                   />
                 ))}
-                <Row label="Focus search (when present)" keys={<Kbd>s</Kbd>} />
-                <Row label="Focus search (alternate)" keys={<Kbd>/</Kbd>} />
+                <Row label="Focus per-page search (when present)" keys={<Kbd>s</Kbd>} />
+                <Row label="Focus per-page search (alternate)" keys={<Kbd>/</Kbd>} />
+              </Box>
+            </Box>
+
+            <Box>
+              <Heading size="sm" mb="2">
+                Search
+              </Heading>
+              <Box as="ul" listStyleType="none" m="0" p="0">
+                <Row
+                  label="Open global search"
+                  keys={
+                    <>
+                      <Kbd>{MOD}</Kbd>+<Kbd>K</Kbd>
+                    </>
+                  }
+                />
+                <Row
+                  label="Open global search (when no inline search)"
+                  keys={
+                    <>
+                      <Kbd>s</Kbd> or <Kbd>/</Kbd>
+                    </>
+                  }
+                />
               </Box>
             </Box>
 
