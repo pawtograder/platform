@@ -2,7 +2,8 @@
 
 import { useAnnouncer } from "@/components/ui/live-announcer";
 import { DialogBody, DialogContent, DialogHeader, DialogRoot, DialogTitle } from "@/components/ui/dialog";
-import { filterSearchIndex, useGlobalSearchIndex, type SearchHit } from "@/hooks/useGlobalSearchIndex";
+import { useGlobalSearchIndex } from "@/hooks/useGlobalSearchIndex";
+import { filterSearchIndex, type SearchHit } from "@/lib/searchIndex";
 import { Box, Heading, HStack, Input, Kbd, Stack, Text, VisuallyHidden } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
 import * as React from "react";

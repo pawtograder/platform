@@ -8,22 +8,12 @@ import {
   usePublishedSurveys
 } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEffectiveEnabled, type CourseFeatureName } from "@/lib/courseFeatures";
+import type { SearchHit, SearchHitKind } from "@/lib/searchIndex";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import * as React from "react";
 
-export type SearchHitKind = "page" | "assignment" | "survey" | "discussion" | "setting";
-
-export type SearchHit = {
-  id: string;
-  kind: SearchHitKind;
-  title: string;
-  subtitle?: string;
-  url: string;
-  /** Extra strings searched alongside title/subtitle. */
-  keywords?: string[];
-  /** Higher = better. Tie-broken by title match position. */
-  rank?: number;
-};
+export { filterSearchIndex } from "@/lib/searchIndex";
+export type { SearchHit, SearchHitGroup, SearchHitKind } from "@/lib/searchIndex";
 
 type StaticPage = {
   label: string;
@@ -191,73 +181,4 @@ export function useGlobalSearchIndex(): SearchHit[] {
 
     return out;
   }, [assignments, courseId, features, isStaff, surveys, threads, topics]);
-}
-
-const PER_GROUP_CAP = 8;
-const TOTAL_CAP = 40;
-
-export type SearchHitGroup = { kind: SearchHitKind; label: string; hits: SearchHit[] };
-
-const GROUP_ORDER: { kind: SearchHitKind; label: string }[] = [
-  { kind: "assignment", label: "Assignments" },
-  { kind: "survey", label: "Surveys" },
-  { kind: "discussion", label: "Discussion" },
-  { kind: "page", label: "Pages" },
-  { kind: "setting", label: "Settings" }
-];
-
-export function filterSearchIndex(index: SearchHit[], rawQuery: string): SearchHitGroup[] {
-  const q = rawQuery.trim().toLowerCase();
-  if (!q) {
-    // Empty query: surface only pages so the palette is useful as a launcher.
-    const pageHits = index.filter((h) => h.kind === "page" || h.kind === "setting").slice(0, TOTAL_CAP);
-    return groupHits(pageHits);
-  }
-  const words = q.split(/\s+/).filter(Boolean);
-  const matches: { hit: SearchHit; rank: number }[] = [];
-  for (const hit of index) {
-    const title = hit.title.toLowerCase();
-    const subtitle = (hit.subtitle ?? "").toLowerCase();
-    const keywords = (hit.keywords ?? []).map((k) => k.toLowerCase());
-    let titleHits = 0;
-    let subtitleHits = 0;
-    let keywordHits = 0;
-    let missing = false;
-    for (const w of words) {
-      const inTitle = title.includes(w);
-      const inSub = subtitle.includes(w);
-      const inKw = keywords.some((k) => k.includes(w));
-      if (!inTitle && !inSub && !inKw) {
-        missing = true;
-        break;
-      }
-      if (inTitle) titleHits++;
-      else if (inSub) subtitleHits++;
-      else keywordHits++;
-    }
-    if (missing) continue;
-    // Title matches outweigh subtitle, subtitle outweighs keywords.
-    const rank = titleHits * 6 + subtitleHits * 2 + keywordHits * 1;
-    matches.push({ hit, rank });
-  }
-  matches.sort((a, b) => b.rank - a.rank || a.hit.title.localeCompare(b.hit.title));
-  return groupHits(
-    matches.map((m) => m.hit),
-    PER_GROUP_CAP,
-    TOTAL_CAP
-  );
-}
-
-function groupHits(hits: SearchHit[], perGroup: number = PER_GROUP_CAP, total: number = TOTAL_CAP): SearchHitGroup[] {
-  const groups: SearchHitGroup[] = GROUP_ORDER.map((g) => ({ ...g, hits: [] }));
-  let used = 0;
-  for (const hit of hits) {
-    if (used >= total) break;
-    const group = groups.find((g) => g.kind === hit.kind);
-    if (!group) continue;
-    if (group.hits.length >= perGroup) continue;
-    group.hits.push(hit);
-    used++;
-  }
-  return groups.filter((g) => g.hits.length > 0);
 }
