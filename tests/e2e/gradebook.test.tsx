@@ -1633,10 +1633,8 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     // chakra menu it controls. Retry the entire open+click sequence as a
     // single unit so a transient detach doesn't fail the test. Each attempt
     // re-resolves the locator (so the new mount is targeted), waits for
-    // virtualizer idle, opens the menu, and clicks Move Right. Any
-    // intermediate detach throws and we try again. The ultimate signal that
-    // the click succeeded is the "Column moved right" toast (matching how
-    // Move Left works above), and the DB sort_order assertion that follows.
+    // virtualizer idle, opens the menu, clicks Move Right, then verifies the
+    // DB sort_order. Any intermediate detach throws and we try again.
     await expect(async () => {
       // If a previous attempt's Move Right click already landed in the DB
       // (sort_order back to original) but the toast assertion timed out
@@ -1659,7 +1657,14 @@ test.describe("Gradebook column reorder (issue #531)", () => {
       await buttonNow.scrollIntoViewIfNeeded();
       await buttonNow.click();
       await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
-      await expect(page.getByText("Column moved right").first()).toBeAttached({ timeout: 5000 });
+      await expect(async () => {
+        const { data: colAfterClick } = await supabase
+          .from("gradebook_columns")
+          .select("sort_order")
+          .eq("id", colBefore!.id)
+          .single();
+        expect(colAfterClick?.sort_order).toBe(sortOrderBefore);
+      }).toPass({ timeout: 5_000, intervals: [250, 500] });
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
 
     // Verify sort_order restored to original
