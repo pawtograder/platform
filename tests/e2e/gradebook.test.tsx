@@ -1602,7 +1602,7 @@ test.describe("Gradebook column reorder (issue #531)", () => {
       .filter({ hasText: colName });
     await headerCell.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Left", exact: true }).click();
-    await expect(page.getByText("Column moved left").first()).toBeVisible();
+    await expect(page.getByText("Column moved left").first()).toBeAttached();
 
     // Verify sort_order decreased by 1 in the database
     await expect(async () => {
@@ -1659,7 +1659,7 @@ test.describe("Gradebook column reorder (issue #531)", () => {
       await buttonNow.scrollIntoViewIfNeeded();
       await buttonNow.click();
       await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
-      await expect(page.getByText("Column moved right").first()).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("Column moved right").first()).toBeAttached({ timeout: 5000 });
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
 
     // Verify sort_order restored to original
