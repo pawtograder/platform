@@ -571,9 +571,7 @@ async function copyBlobBetweenRepos(
   //    into one giant intermediate string. `fetch` streams the Blob without
   //    materializing it. Saves another full base64-string allocation that
   //    Octokit's JSON.stringify path would otherwise create.
-  const postUrl = `https://api.github.com/repos/${encodeURIComponent(sOwner)}/${encodeURIComponent(
-    sRepo
-  )}/git/blobs`;
+  const postUrl = `https://api.github.com/repos/${encodeURIComponent(sOwner)}/${encodeURIComponent(sRepo)}/git/blobs`;
   const body = new Blob(['{"content":"', base64, '","encoding":"base64"}'], {
     type: "application/json"
   });
@@ -1059,10 +1057,12 @@ export async function isRepoAlreadyInSync(
           return false;
         }
         try {
-          const { data: studentMeta } = await studentOctokit.request(
-            "GET /repos/{owner}/{repo}/contents/{path}",
-            { owner: studentOwner, repo: studentRepo, path: file.path, ref: "main" }
-          );
+          const { data: studentMeta } = await studentOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+            owner: studentOwner,
+            repo: studentRepo,
+            path: file.path,
+            ref: "main"
+          });
           const studentSha =
             studentMeta && typeof studentMeta === "object" && "sha" in studentMeta
               ? (studentMeta as { sha?: string }).sha
@@ -1078,9 +1078,7 @@ export async function isRepoAlreadyInSync(
           continue;
         } catch (error: unknown) {
           const status =
-            error && typeof error === "object" && "status" in error
-              ? (error as { status: number }).status
-              : undefined;
+            error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
           scope?.addBreadcrumb({
             message: `Error fetching binary file ${file.path} from student repo: status=${status}, error=${error}`,
             category: "sync",

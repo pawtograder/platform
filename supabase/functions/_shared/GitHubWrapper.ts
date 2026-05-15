@@ -1011,9 +1011,7 @@ export async function createBranchProtectionRuleset(
         message.includes("upgrade your account")
       ) {
         scope?.setTag("ruleset_unsupported_by_plan", "true");
-        console.log(
-          `Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`
-        );
+        console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
         return;
       }
     }
