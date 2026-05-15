@@ -512,6 +512,7 @@ export default function SurveyResponsesView({
             fontWeight="bold"
             color={isOverdue ? "red.fg" : isLessThan24Hours ? "orange.fg" : "fg"}
             data-visual-test="transparent"
+            data-visual-placeholder="relative-time"
           >
             {timeRemaining}
           </Text>

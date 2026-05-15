@@ -14,15 +14,64 @@ const VISUAL_TEST_CSS = `
   }
 
   /*
-   * Preserve layout and accessible/text queryability while making volatile
-   * values invisible in screenshots. This is intended for dates, relative
-   * times, and other values that tests assert separately before capture.
+   * Preserve accessible/text queryability while replacing volatile values with
+   * stable placeholders in screenshots. Transparent text alone can still
+   * change layout when a date or relative time is longer in one run than
+   * another, so visual mode fixes inline sizing and paints deterministic
+   * pseudo-content instead.
    */
-  html[data-visual-tests] [data-visual-test="transparent"],
+  html[data-visual-tests] [data-visual-test="transparent"] {
+    --visual-test-placeholder: "████████████";
+    --visual-test-placeholder-width: 18ch;
+    display: inline-block !important;
+    inline-size: var(--visual-test-placeholder-width) !important;
+    max-inline-size: var(--visual-test-placeholder-width) !important;
+    min-inline-size: var(--visual-test-placeholder-width) !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    vertical-align: baseline !important;
+    position: relative !important;
+    color: transparent !important;
+    text-shadow: none !important;
+    caret-color: transparent !important;
+  }
+
+  html[data-visual-tests] [data-visual-test="transparent"]::after {
+    content: var(--visual-test-placeholder) !important;
+    position: absolute !important;
+    inset-inline-start: 0 !important;
+    inset-block-start: 0 !important;
+    color: CanvasText !important;
+    opacity: 0.22 !important;
+    font: inherit !important;
+    letter-spacing: 0 !important;
+    pointer-events: none !important;
+  }
+
   html[data-visual-tests] [data-visual-test="transparent"] * {
     color: transparent !important;
     text-shadow: none !important;
     caret-color: transparent !important;
+  }
+
+  html[data-visual-tests] [data-visual-placeholder="date"] {
+    --visual-test-placeholder: "MMM 00, 0000 00:00 TZ";
+    --visual-test-placeholder-width: 22ch;
+  }
+
+  html[data-visual-tests] [data-visual-placeholder="relative-time"] {
+    --visual-test-placeholder: "relative time";
+    --visual-test-placeholder-width: 16ch;
+  }
+
+  html[data-visual-tests] [data-visual-placeholder="timestamp"] {
+    --visual-test-placeholder: "timestamp";
+    --visual-test-placeholder-width: 12ch;
+  }
+
+  html[data-visual-tests] [data-visual-placeholder="review-status"] {
+    --visual-test-placeholder: "review date/status";
+    --visual-test-placeholder-width: 28ch;
   }
 
   html[data-visual-tests] [data-visual-test="transparent"] svg,

@@ -526,8 +526,8 @@ function ReviewAssignmentActions() {
         {activeReviewAssignment.completed_by && rubric && (
           <Text>
             {rubric.name} completed on{" "}
-            <span data-visual-test="transparent">
-              <TimeZoneAwareDate date={activeReviewAssignment.completed_at} format="Pp" />
+            <span data-visual-test="transparent" data-visual-placeholder="review-status">
+              <TimeZoneAwareDate date={activeReviewAssignment.completed_at} format="Pp" visualPlaceholder="date" />
             </span>{" "}
             by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
           </Text>
@@ -543,8 +543,13 @@ function ReviewAssignmentActions() {
           <Text textAlign="left">
             Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} is required on this
             submission by{" "}
-            <span data-visual-test="transparent">
-              <TimeZoneAwareDate date={activeReviewAssignment.due_date} format="MMM d, h:mm a" />.
+            <span data-visual-test="transparent" data-visual-placeholder="review-status">
+              <TimeZoneAwareDate
+                date={activeReviewAssignment.due_date}
+                format="MMM d, h:mm a"
+                visualPlaceholder="date"
+              />
+              .
             </span>
           </Text>
           {!ignoreAssignedReview && (
@@ -563,8 +568,8 @@ function ReviewAssignmentActions() {
       {activeReviewAssignment && activeReviewAssignment.completed_at && activeReviewAssignment.completed_by && (
         <Text textAlign="left" fontSize="sm" color="fg.muted">
           Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} was completed on{" "}
-          <span data-visual-test="transparent">
-            <TimeZoneAwareDate date={activeReviewAssignment.completed_at} format="Pp" />
+          <span data-visual-test="transparent" data-visual-placeholder="review-status">
+            <TimeZoneAwareDate date={activeReviewAssignment.completed_at} format="Pp" visualPlaceholder="date" />
           </span>{" "}
           by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
         </Text>
@@ -605,8 +610,8 @@ function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id:
   return (
     <Text>
       {rubric.name} completed on{" "}
-      <span data-visual-test="transparent">
-        <TimeZoneAwareDate date={submissionReview?.completed_at} format="Pp" />
+      <span data-visual-test="transparent" data-visual-placeholder="review-status">
+        <TimeZoneAwareDate date={submissionReview?.completed_at} format="Pp" visualPlaceholder="date" />
       </span>{" "}
       by <PersonName uid={submissionReview.completed_by} showAvatar={false} />
     </Text>

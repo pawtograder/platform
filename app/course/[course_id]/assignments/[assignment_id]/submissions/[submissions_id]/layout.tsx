@@ -1885,7 +1885,7 @@ function RubricView() {
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
             <Text fontSize="sm">Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}</Text>
-            <Text fontSize="sm" data-visual-test="transparent">
+            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
               Due:{" "}
               {reviewAssignment.due_date ? (
                 <TimeZoneAwareDate date={reviewAssignment.due_date} format="MMM d, h:mm a" />
