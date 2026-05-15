@@ -10,6 +10,7 @@ import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import * as Sentry from "npm:@sentry/deno";
 import { applyPatch } from "https://esm.sh/diff@5.1.0";
+import { encodeBase64 } from "https://deno.land/std@0.221.0/encoding/base64.ts";
 import * as github from "./GitHubWrapper.ts";
 import { getCreateContentLimiter } from "./GitHubWrapper.ts";
 import { Redis } from "./Redis.ts";
@@ -17,12 +18,70 @@ import { Database } from "./SupabaseTypes.d.ts";
 
 export interface FileChange {
   path: string;
+  /**
+   * For binary or initial-sync files, this is the GitHub blob SHA at the *template* `toSha`.
+   * `createBranchAndCommit` uses it to fetch content lazily so we don't hold every blob in memory at once.
+   * For text files with a patch, `sha` is the blob SHA in the comparison response (informational).
+   */
   sha?: string;
-  content?: string; // Only for binary files or initial sync
   patch?: string; // Unified diff for text files
   isBinary?: boolean;
   status?: string; // "added", "modified", "removed", "renamed"
   previous_filename?: string; // For renamed files
+  /** Approximate size in bytes from the GitHub API; used by the size guard. */
+  size?: number;
+}
+
+/**
+ * Maximum total bytes of file content we'll buffer while syncing a single repo.
+ * Belt-and-suspenders cap on cumulative bytes processed within one sync (each file
+ * goes in/out of memory sequentially, so peak memory ≈ one file at a time, but this
+ * prevents pathological "many medium files" handouts from blowing the budget).
+ *
+ * Sized to fit comfortably alongside one ~MAX_SYNC_FILE_BYTES file resident at peak
+ * inside the Supabase Edge Function ~150 MB v8 heap.
+ */
+const MAX_SYNC_TOTAL_BYTES = 200 * 1024 * 1024; // 200 MB cumulative
+
+/**
+ * Hard per-file cap. Files larger than this fail fast with a clear error rather than
+ * trying (and OOMing) the worker. The blob-copy path (`copyBlobBetweenRepos`) downloads
+ * raw bytes (not base64) and uses a streaming Blob body for the upload to avoid the
+ * 2× materialization that the Octokit JSON path forces, so peak memory ≈ raw + base64
+ * ≈ 2.33×. At 75 MB raw that's ~175 MB transient, which is right at the edge — V8
+ * generally GCs the raw buffer before the upload completes, but anything bigger is
+ * not safe to attempt in this runtime.
+ *
+ * If you need to ship something bigger, run `FixStuckSyncs.ts` locally (no memory cap)
+ * or move the data out-of-band (S3, course CDN, Git LFS).
+ */
+const MAX_SYNC_FILE_BYTES = 75 * 1024 * 1024; // 75 MB per single file
+
+/**
+ * Threshold above which a single file is considered "heavy" — heavy syncs serialize
+ * themselves through `withHeavySyncLock` so we don't hold multiple large blobs in
+ * memory simultaneously inside a single Edge Function isolate. Below this, syncs run
+ * with the existing per-org Bottleneck concurrency (typical small-handout case).
+ */
+const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // 5 MB
+
+/**
+ * Per-isolate semaphore that serializes "heavy" syncs (those with at least one file
+ * over LARGE_FILE_THRESHOLD). Light syncs run as before. This is module-level state,
+ * scoped to the current Edge Function isolate; cross-isolate coordination is provided
+ * by the existing per-org Bottleneck (Redis-backed) which limits total in-flight syncs.
+ */
+let heavySyncQueue: Promise<unknown> = Promise.resolve();
+function withHeavySyncLock<T>(fn: () => Promise<T>): Promise<T> {
+  // Chain on top of the previous heavy sync. Use `.then(fn, fn)` so a rejected
+  // previous run doesn't permanently poison the chain — either branch invokes `fn`.
+  const next = heavySyncQueue.then(
+    () => fn(),
+    () => fn()
+  );
+  // Swallow rejection on the queue tail so future awaiters don't see this run's error.
+  heavySyncQueue = next.catch(() => undefined);
+  return next;
 }
 
 export interface SyncResult {
@@ -200,8 +259,73 @@ function isBinaryPath(path: string): boolean {
 }
 
 /**
- * Get all changed files between two commits in a template repository
- * Results are cached in Redis with a 12-hour TTL
+ * Fetch the recursive blob tree for a template at a specific SHA and return a map
+ * of path → size in bytes. Used to populate per-file sizes on FileChange entries so
+ * the sync can make size-aware concurrency decisions BEFORE downloading any content.
+ *
+ * Cached in Redis (12h TTL) keyed by (templateRepo, sha). The tree response is small
+ * (metadata only) so the cache value is on the order of tens of KB even for large
+ * repos and is safe to cache.
+ */
+export async function getTreeBlobSizes(
+  templateRepo: string,
+  sha: string,
+  scope?: Sentry.Scope
+): Promise<Map<string, number>> {
+  const cacheKey = `github:tree-sizes:${templateRepo}/${sha}`;
+  const redis = getRedisClient();
+
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached && typeof cached === "string") {
+        const arr = JSON.parse(cached) as [string, number][];
+        return new Map(arr);
+      }
+    } catch (error) {
+      console.error("Redis cache read error (tree-sizes):", error);
+    }
+  }
+
+  const octokit = await github.getOctoKit(templateRepo, scope);
+  if (!octokit) {
+    throw new Error(`No octokit found for repository ${templateRepo}`);
+  }
+  const [owner, repo] = templateRepo.split("/");
+
+  const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+    owner,
+    repo,
+    tree_sha: sha,
+    recursive: "true"
+  });
+
+  const sizes = new Map<string, number>();
+  for (const item of tree.tree) {
+    if (item.type === "blob" && item.path && typeof item.size === "number") {
+      sizes.set(item.path, item.size);
+    }
+  }
+
+  if (redis) {
+    try {
+      await redis.setex(cacheKey, 43200, JSON.stringify(Array.from(sizes.entries())));
+    } catch (error) {
+      console.error("Redis cache write error (tree-sizes):", error);
+    }
+  }
+
+  return sizes;
+}
+
+/**
+ * Get all changed files between two commits in a template repository.
+ * Returns metadata + patches only; binary file content is fetched lazily during
+ * `createBranchAndCommit`. `size` is populated for every entry (looked up from
+ * the recursive tree) so callers can make size-aware decisions without touching
+ * any blob content.
+ *
+ * Results are cached in Redis with a 12-hour TTL.
  */
 export async function getChangedFiles(
   templateRepo: string,
@@ -246,7 +370,10 @@ export async function getChangedFiles(
   const fileChanges: FileChange[] = [];
 
   if (!fromSha) {
-    // Initial sync - get all files with full content (no patches available)
+    // Initial sync — record metadata for every blob in the template tree.
+    // Content is intentionally NOT fetched here: doing so on a large handout
+    // (e.g. a CSV dataset or many PDFs) easily exceeds Edge Function memory.
+    // `createBranchAndCommit` fetches each blob lazily and discards it after use.
     const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
       owner,
       repo,
@@ -256,34 +383,45 @@ export async function getChangedFiles(
 
     for (const item of tree.tree) {
       if (item.type === "blob" && item.path && item.sha) {
-        const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
-          owner,
-          repo,
-          file_sha: item.sha
-        });
         fileChanges.push({
           path: item.path,
           sha: item.sha,
-          content: blob.content,
           isBinary: isBinaryPath(item.path),
-          status: "added"
+          status: "added",
+          size: typeof item.size === "number" ? item.size : undefined
         });
       }
     }
   } else {
-    // Compare commits
+    // Compare commits — return metadata + patches only. Binary content is fetched
+    // lazily during `createBranchAndCommit` to keep peak memory low.
     const { data: comparison } = await octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
       owner,
       repo,
       basehead: `${fromSha}...${toSha}`
     });
 
+    // The `compare` endpoint doesn't return per-file sizes, but we want sizes
+    // populated on every FileChange so callers can make size-aware concurrency
+    // decisions without downloading any blobs. Pull sizes from the recursive tree
+    // at toSha (single API call, Redis-cached).
+    let sizesAtToSha: Map<string, number> | undefined;
+    try {
+      sizesAtToSha = await getTreeBlobSizes(templateRepo, toSha, scope);
+    } catch (error) {
+      // Non-fatal: if the tree fetch fails we just don't have sizes; the size guard
+      // inside createBranchAndCommit still applies during the lazy blob fetch.
+      scope?.addBreadcrumb({
+        message: `Failed to fetch tree sizes for ${templateRepo}@${toSha}: ${error}`,
+        category: "sync",
+        level: "warning"
+      });
+    }
+
     for (const file of comparison.files || []) {
       if (file.status === "removed") {
         fileChanges.push({
           path: file.filename,
-          sha: "",
-          content: "",
           status: "removed"
         });
         continue;
@@ -293,48 +431,34 @@ export async function getChangedFiles(
       if (file.status === "renamed" && file.previous_filename) {
         fileChanges.push({
           path: file.previous_filename,
-          sha: "",
-          content: "",
           status: "removed"
         });
         // Continue to add the new filename entry below
       }
 
       const isBinary = !file.patch || isBinaryPath(file.filename);
+      const sizeAtToSha = sizesAtToSha?.get(file.filename);
 
       if (isBinary) {
-        // For binary files or large files, fetch the complete content using Git blobs API
-        // This avoids the 1MB truncation limit of the contents endpoint and preserves binary data
         if (!file.sha) {
           throw new Error(`No SHA available for file ${file.filename}`);
         }
-
-        const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", {
-          owner,
-          repo,
-          file_sha: file.sha
-        });
-
-        // Verify the blob is base64-encoded as expected
-        if (blob.encoding !== "base64") {
-          throw new Error(`Unexpected encoding for file ${file.filename}: ${blob.encoding}`);
-        }
-
         fileChanges.push({
           path: file.filename,
           sha: file.sha,
-          content: blob.content,
           isBinary: true,
-          status: file.status
+          status: file.status,
+          size: sizeAtToSha
         });
       } else {
-        // For text files, use the patch from GitHub
         fileChanges.push({
           path: file.filename,
+          sha: file.sha || undefined,
           patch: file.patch,
           isBinary: false,
           status: file.status,
-          previous_filename: file.previous_filename
+          previous_filename: file.previous_filename,
+          size: sizeAtToSha
         });
       }
     }
@@ -356,6 +480,125 @@ export async function getChangedFiles(
   }
 
   return fileChanges;
+}
+
+/**
+ * Copy a single binary blob from a template repo into a student repo while keeping
+ * peak memory as low as the runtime allows.
+ *
+ * The naive Octokit path (GET → templateBlob.content already base64 ~1.33×; POST →
+ * Octokit JSON.stringify materializes another full base64 string) peaks at ~2× the
+ * base64 size, which OOMs the Edge Function for files in the tens of MB.
+ *
+ * This implementation:
+ *  1. Downloads RAW bytes (Accept: application/vnd.github.v3.raw) — saves the 33%
+ *     base64 inflation on the wire and in memory.
+ *  2. Base64-encodes the raw bytes once via @std/encoding/base64 (single allocation).
+ *  3. Drops the raw buffer reference before the upload to give V8 a chance to GC it
+ *     while the upload streams.
+ *  4. Uploads via a `Blob` multi-chunk body so the JSON wrapper isn't materialized as
+ *     one giant intermediate string — fetch streams the blob to the network.
+ *
+ * Net peak memory ≈ raw + base64 ≈ 2.33 × X (vs ~3 × X with Octokit JSON path).
+ *
+ * @returns The student-repo blob SHA suitable for use in a tree entry.
+ */
+async function copyBlobBetweenRepos(
+  templateRepo: string,
+  templateBlobSha: string,
+  studentRepoFullName: string,
+  filePath: string,
+  scope?: Sentry.Scope
+): Promise<string> {
+  const templateOctokit = await github.getOctoKit(templateRepo, scope);
+  const studentOctokit = await github.getOctoKit(studentRepoFullName, scope);
+  if (!templateOctokit) throw new Error(`No octokit available for template repo ${templateRepo}`);
+  if (!studentOctokit) throw new Error(`No octokit available for student repo ${studentRepoFullName}`);
+
+  const [tOwner, tRepo] = templateRepo.split("/");
+  const [sOwner, sRepo] = studentRepoFullName.split("/");
+
+  // Resolve fresh GitHub App installation tokens via Octokit's auth strategy.
+  // We can't use `octokit.request.endpoint(...)` directly because that returns
+  // the *unauthenticated* request descriptor — auth is normally injected by
+  // Octokit's request hooks at fire time. For raw `fetch` we have to add it
+  // ourselves.
+  const tAuth = (await templateOctokit.auth({ type: "installation" })) as { token: string };
+  const sAuth = (await studentOctokit.auth({ type: "installation" })) as { token: string };
+
+  const commonHeaders: Record<string, string> = {
+    "User-Agent": "pawtograder-sync",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+
+  // 1) Download raw bytes from the template (Accept: vnd.github.v3.raw) — saves
+  //    the 33% base64 inflation that the JSON-wrapped blob endpoint would force.
+  const getUrl = `https://api.github.com/repos/${encodeURIComponent(tOwner)}/${encodeURIComponent(
+    tRepo
+  )}/git/blobs/${encodeURIComponent(templateBlobSha)}`;
+  const getResponse = await fetch(getUrl, {
+    method: "GET",
+    headers: {
+      ...commonHeaders,
+      Accept: "application/vnd.github.v3.raw",
+      Authorization: `token ${tAuth.token}`
+    }
+  });
+  if (!getResponse.ok) {
+    const body = await getResponse.text().catch(() => "");
+    throw new Error(
+      `Failed to fetch raw blob ${templateBlobSha} for ${filePath} from ${templateRepo}: ` +
+        `${getResponse.status} ${getResponse.statusText}: ${body.slice(0, 200)}`
+    );
+  }
+
+  // 2) Encode to base64 once. We do this in an inner closure so the raw buffer
+  //    reference is dropped before the upload starts, giving V8 the opportunity
+  //    to GC it under memory pressure during the POST.
+  const base64: string = await (async () => {
+    const ab = await getResponse.arrayBuffer();
+    const u8 = new Uint8Array(ab);
+    return encodeBase64(u8);
+  })();
+
+  scope?.addBreadcrumb({
+    message: `Copied ${filePath} via raw fetch (${base64.length} bytes base64)`,
+    category: "sync",
+    level: "debug"
+  });
+
+  // 3) Upload via a multi-chunk Blob body so the JSON wrapper isn't concatenated
+  //    into one giant intermediate string. `fetch` streams the Blob without
+  //    materializing it. Saves another full base64-string allocation that
+  //    Octokit's JSON.stringify path would otherwise create.
+  const postUrl = `https://api.github.com/repos/${encodeURIComponent(sOwner)}/${encodeURIComponent(
+    sRepo
+  )}/git/blobs`;
+  const body = new Blob(['{"content":"', base64, '","encoding":"base64"}'], {
+    type: "application/json"
+  });
+  const postResponse = await fetch(postUrl, {
+    method: "POST",
+    headers: {
+      ...commonHeaders,
+      Accept: "application/vnd.github+json",
+      Authorization: `token ${sAuth.token}`,
+      "Content-Type": "application/json"
+    },
+    body
+  });
+  if (!postResponse.ok) {
+    const errBody = await postResponse.text().catch(() => "");
+    throw new Error(
+      `Failed to upload blob for ${filePath} to ${studentRepoFullName}: ` +
+        `${postResponse.status} ${postResponse.statusText}: ${errBody.slice(0, 200)}`
+    );
+  }
+  const json = (await postResponse.json()) as { sha?: string };
+  if (!json.sha) {
+    throw new Error(`Blob upload for ${filePath} returned no SHA`);
+  }
+  return json.sha;
 }
 
 /**
@@ -462,167 +705,203 @@ export async function createBranchAndCommit(
   });
   scope?.setTag("base_commit_sha", baseCommit.sha);
 
-  // Create blobs for all changed files
-  const treeItems = await Promise.all(
-    files.map(async (file) => {
-      // Handle removed files
-      if (file.status === "removed" || file.content === "") {
-        return {
-          path: file.path,
-          mode: "100644" as const,
-          type: "blob" as const,
-          sha: null as unknown as string
-        };
-      }
+  // Create blobs for all changed files. We process sequentially with a running
+  // byte counter so peak memory is bounded by ~one file at a time, regardless
+  // of how big the handout is.
+  let totalBytesBuffered = 0;
+  const enforceSizeBudget = (incomingBytes: number, filePath: string) => {
+    totalBytesBuffered += incomingBytes;
+    if (totalBytesBuffered > MAX_SYNC_TOTAL_BYTES) {
+      const mb = (totalBytesBuffered / (1024 * 1024)).toFixed(1);
+      const limitMb = (MAX_SYNC_TOTAL_BYTES / (1024 * 1024)).toFixed(0);
+      throw new Error(
+        `Handout sync exceeds size limit (${mb}MB > ${limitMb}MB) at file '${filePath}'. ` +
+          `Use Git LFS or remove large binary assets from the handout repository.`
+      );
+    }
+  };
 
-      // Handle files with patches (text files that need to be merged)
-      if (file.patch && !file.isBinary) {
+  const treeItems: { path: string; mode: "100644"; type: "blob"; sha: string | null }[] = [];
+  for (const file of files) {
+    // Handle removed files
+    if (file.status === "removed") {
+      treeItems.push({
+        path: file.path,
+        mode: "100644" as const,
+        type: "blob" as const,
+        sha: null
+      });
+      continue;
+    }
+
+    // Pre-flight size check using metadata from getChangedFiles, when available.
+    if (typeof file.size === "number") {
+      enforceSizeBudget(file.size, file.path);
+    }
+
+    // Handle files with patches (text files that need to be merged)
+    if (file.patch && !file.isBinary) {
+      scope?.addBreadcrumb({
+        message: `Applying patch to ${file.path}`,
+        category: "patch",
+        level: "info"
+      });
+
+      // Fetch the current content from the student repo at baseSha
+      let baseContent = "";
+      try {
+        const { data: fileData } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+          owner,
+          repo,
+          path: file.path,
+          ref: baseSha
+        });
+
+        if ("content" in fileData && fileData.content) {
+          baseContent = atob(fileData.content);
+        }
+      } catch {
+        // File doesn't exist in student repo (new file), use empty content
         scope?.addBreadcrumb({
-          message: `Applying patch to ${file.path}`,
+          message: `File ${file.path} doesn't exist at baseSha, treating as new file`,
           category: "patch",
           level: "info"
         });
+      }
 
-        // Fetch the current content from the student repo at baseSha
-        let baseContent = "";
-        try {
-          const { data: fileData } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-            owner,
-            repo,
-            path: file.path,
-            ref: baseSha
-          });
-
-          if ("content" in fileData && fileData.content) {
-            // Decode base64 content
-            baseContent = atob(fileData.content);
+      let patchedContent: string;
+      try {
+        const result = applyPatch(baseContent, file.patch);
+        if (result === false) {
+          throw new Error("Patch application failed");
+        }
+        patchedContent = result;
+      } catch (patchError) {
+        const patchPreview = file.patch ? file.patch.substring(0, 200) : "no patch";
+        const baseContentPreview = baseContent.substring(0, 200);
+        scope?.addBreadcrumb({
+          message: `Failed to apply patch to ${file.path}`,
+          category: "patch",
+          level: "error",
+          data: {
+            error: String(patchError),
+            baseContentLength: baseContent.length,
+            patchLength: file.patch?.length || 0,
+            patchPreview,
+            baseContentPreview
           }
-        } catch {
-          // File doesn't exist in student repo (new file), use empty content
+        });
+        console.error(`Failed to apply patch to ${file.path}:`, patchError);
+        console.error(`Base content length: ${baseContent.length}, Patch length: ${file.patch?.length || 0}`);
+        console.error(`Patch preview: ${patchPreview}`);
+        console.error(`Base content preview: ${baseContentPreview}`);
+
+        // Fallback: fetch full content from template repo if available
+        if (templateRepo && templateSha) {
           scope?.addBreadcrumb({
-            message: `File ${file.path} doesn't exist at baseSha, treating as new file`,
+            message: `Attempting fallback: fetching full content from template repo for ${file.path}`,
             category: "patch",
             level: "info"
           });
-        }
 
-        // Apply the patch
-        let patchedContent: string;
-        try {
-          const result = applyPatch(baseContent, file.patch);
-          if (result === false) {
-            throw new Error("Patch application failed");
-          }
-          patchedContent = result;
-        } catch (patchError) {
-          // Add diagnostic information
-          const patchPreview = file.patch ? file.patch.substring(0, 200) : "no patch";
-          const baseContentPreview = baseContent.substring(0, 200);
-          scope?.addBreadcrumb({
-            message: `Failed to apply patch to ${file.path}`,
-            category: "patch",
-            level: "error",
-            data: {
-              error: String(patchError),
-              baseContentLength: baseContent.length,
-              patchLength: file.patch?.length || 0,
-              patchPreview,
-              baseContentPreview
-            }
-          });
-          console.error(`Failed to apply patch to ${file.path}:`, patchError);
-          console.error(`Base content length: ${baseContent.length}, Patch length: ${file.patch?.length || 0}`);
-          console.error(`Patch preview: ${patchPreview}`);
-          console.error(`Base content preview: ${baseContentPreview}`);
-
-          // Fallback: fetch full content from template repo if available
-          if (templateRepo && templateSha) {
-            scope?.addBreadcrumb({
-              message: `Attempting fallback: fetching full content from template repo for ${file.path}`,
-              category: "patch",
-              level: "info"
-            });
-
-            try {
-              const templateOctokit = await github.getOctoKit(templateRepo, scope);
-              if (templateOctokit) {
-                const [templateOwner, templateRepoName] = templateRepo.split("/");
-                const { data: templateFileData } = await templateOctokit.request(
-                  "GET /repos/{owner}/{repo}/contents/{path}",
-                  {
-                    owner: templateOwner,
-                    repo: templateRepoName,
-                    path: file.path,
-                    ref: templateSha
-                  }
-                );
-
-                if ("content" in templateFileData && templateFileData.content) {
-                  // Use the full content from template repo
-                  patchedContent = atob(templateFileData.content);
-                  scope?.addBreadcrumb({
-                    message: `Successfully fetched full content from template repo for ${file.path}`,
-                    category: "patch",
-                    level: "info"
-                  });
-                } else {
-                  throw new Error("Template file content not available");
+          try {
+            const templateOctokit = await github.getOctoKit(templateRepo, scope);
+            if (templateOctokit) {
+              const [templateOwner, templateRepoName] = templateRepo.split("/");
+              const { data: templateFileData } = await templateOctokit.request(
+                "GET /repos/{owner}/{repo}/contents/{path}",
+                {
+                  owner: templateOwner,
+                  repo: templateRepoName,
+                  path: file.path,
+                  ref: templateSha
                 }
-              } else {
-                throw new Error("Could not get octokit for template repo");
-              }
-            } catch (fallbackError) {
-              scope?.addBreadcrumb({
-                message: `Fallback failed for ${file.path}: ${fallbackError}`,
-                category: "patch",
-                level: "error"
-              });
-              console.error(`Fallback failed for ${file.path}:`, fallbackError);
-              throw new Error(
-                `Patch application failed and fallback failed: ${patchError}. Fallback error: ${fallbackError}`
               );
+
+              if ("content" in templateFileData && templateFileData.content) {
+                patchedContent = atob(templateFileData.content);
+                scope?.addBreadcrumb({
+                  message: `Successfully fetched full content from template repo for ${file.path}`,
+                  category: "patch",
+                  level: "info"
+                });
+              } else {
+                throw new Error("Template file content not available");
+              }
+            } else {
+              throw new Error("Could not get octokit for template repo");
             }
-          } else {
-            // No fallback available, throw original error
-            throw patchError;
+          } catch (fallbackError) {
+            scope?.addBreadcrumb({
+              message: `Fallback failed for ${file.path}: ${fallbackError}`,
+              category: "patch",
+              level: "error"
+            });
+            console.error(`Fallback failed for ${file.path}:`, fallbackError);
+            throw new Error(
+              `Patch application failed and fallback failed: ${patchError}. Fallback error: ${fallbackError}`
+            );
           }
+        } else {
+          throw patchError;
         }
-
-        // Create blob with patched content
-        const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
-          owner,
-          repo,
-          content: btoa(patchedContent), // Encode to base64
-          encoding: "base64"
-        });
-
-        return {
-          path: file.path,
-          mode: "100644" as const,
-          type: "blob" as const,
-          sha: blob.sha
-        };
       }
 
-      // Handle files with full content (binary files or initial sync)
-      if (file.content) {
-        const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
-          owner,
-          repo,
-          content: file.content,
-          encoding: "base64"
-        });
-        return {
-          path: file.path,
-          mode: "100644" as const,
-          type: "blob" as const,
-          sha: blob.sha
-        };
+      // Account for transient memory: base content + patched content concurrently in scope.
+      enforceSizeBudget(baseContent.length + patchedContent.length, file.path);
+
+      const encodedPatched = btoa(patchedContent);
+      const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
+        owner,
+        repo,
+        content: encodedPatched,
+        encoding: "base64"
+      });
+
+      treeItems.push({
+        path: file.path,
+        mode: "100644" as const,
+        type: "blob" as const,
+        sha: blob.sha
+      });
+      continue;
+    }
+
+    // Handle binary files / initial-sync added files: copy the blob from the
+    // template repo to the student repo using the memory-frugal raw-fetch +
+    // streaming-Blob path (see `copyBlobBetweenRepos`), so peak memory stays
+    // around 2.33× the file size instead of the ~3× the Octokit JSON path
+    // would force.
+    if (file.isBinary || file.status === "added") {
+      if (!file.sha) {
+        throw new Error(`File ${file.path} is binary/added but has no template blob SHA`);
+      }
+      if (!templateRepo) {
+        throw new Error(`File ${file.path} requires lazy blob fetch but no templateRepo provided`);
       }
 
-      throw new Error(`File ${file.path} has neither patch nor content`);
-    })
-  );
+      const blobSha = await copyBlobBetweenRepos(templateRepo, file.sha, repoFullName, file.path, scope);
+
+      // Account for the bytes we transiently held for this file (raw + base64).
+      // We deliberately discarded the buffer above, so we approximate from the
+      // known raw size when available. This budget mainly guards against the
+      // pathological "many medium files" case rather than the single-file peak
+      // (which is bounded by MAX_SYNC_FILE_BYTES + the 2.33× transient inflation).
+      if (typeof file.size === "number") {
+        enforceSizeBudget(Math.ceil(file.size * 1.34), file.path);
+      }
+
+      treeItems.push({
+        path: file.path,
+        mode: "100644" as const,
+        type: "blob" as const,
+        sha: blobSha
+      });
+      continue;
+    }
+
+    throw new Error(`File ${file.path} has neither patch nor blob SHA`);
+  }
 
   const { data: newTree } = await octokit.request("POST /repos/{owner}/{repo}/git/trees", {
     owner,
@@ -772,7 +1051,46 @@ export async function isRepoAlreadyInSync(
         }
       }
 
-      // Get current content from student repo
+      // For binary files: compare blob SHAs (cheap, constant memory) instead of
+      // downloading both contents. The contents endpoint returns the file's blob SHA.
+      if (file.isBinary) {
+        if (!file.sha) {
+          // Can't verify without template SHA — fall through to "not in sync"
+          return false;
+        }
+        try {
+          const { data: studentMeta } = await studentOctokit.request(
+            "GET /repos/{owner}/{repo}/contents/{path}",
+            { owner: studentOwner, repo: studentRepo, path: file.path, ref: "main" }
+          );
+          const studentSha =
+            studentMeta && typeof studentMeta === "object" && "sha" in studentMeta
+              ? (studentMeta as { sha?: string }).sha
+              : undefined;
+          if (!studentSha || studentSha !== file.sha) {
+            scope?.addBreadcrumb({
+              message: `Binary file ${file.path} blob SHA differs from template`,
+              category: "sync",
+              level: "debug"
+            });
+            return false;
+          }
+          continue;
+        } catch (error: unknown) {
+          const status =
+            error && typeof error === "object" && "status" in error
+              ? (error as { status: number }).status
+              : undefined;
+          scope?.addBreadcrumb({
+            message: `Error fetching binary file ${file.path} from student repo: status=${status}, error=${error}`,
+            category: "sync",
+            level: "warning"
+          });
+          return false;
+        }
+      }
+
+      // For text files with patches we need student content to apply the patch.
       let studentContent: string;
       try {
         const { data: studentFile } = await studentOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
@@ -784,21 +1102,18 @@ export async function isRepoAlreadyInSync(
         if ("content" in studentFile && studentFile.content) {
           studentContent = atob(studentFile.content);
         } else {
-          // Can't get content - assume not in sync
           return false;
         }
       } catch (error: unknown) {
         const status =
           error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
         if (status === 404) {
-          // File doesn't exist in student repo but should (added/modified file) - not in sync
           scope?.addBreadcrumb({
             message: `File ${file.path} doesn't exist in student repo but should`,
             category: "sync",
             level: "debug"
           });
         } else {
-          // Other error (rate limit, auth, network, etc.) - can't reliably determine sync status
           scope?.addBreadcrumb({
             message: `Error fetching file ${file.path} from student repo: status=${status}, error=${error}`,
             category: "sync",
@@ -808,28 +1123,14 @@ export async function isRepoAlreadyInSync(
         return false;
       }
 
-      // For binary files: compare against template content directly
-      if (file.isBinary && file.content) {
-        const templateContent = atob(file.content);
-        if (studentContent !== templateContent) {
-          scope?.addBreadcrumb({
-            message: `Binary file ${file.path} differs from template`,
-            category: "sync",
-            level: "debug"
-          });
-          return false;
-        }
-        continue;
-      }
-
       // For text files with patches: check if applying the patch results in no change
       if (file.patch && !file.isBinary) {
         try {
           const patchedContent = applyPatch(studentContent, file.patch);
 
           if (patchedContent === false) {
-            // Patch failed to apply - could mean conflicts or already applied differently
-            // Try a different check: see if the expected template content is present
+            // Patch failed to apply - could mean conflicts or already applied differently.
+            // Compare student's file to expected template content as a loose secondary check.
             const { data: templateFile } = await templateOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
               owner: templateOwner,
               repo: templateRepoName,
@@ -839,15 +1140,11 @@ export async function isRepoAlreadyInSync(
 
             if ("content" in templateFile && templateFile.content) {
               const expectedContent = atob(templateFile.content);
-              // Check if student's file contains all the expected content from template
-              // This is a loose check - if student made additional changes on top, that's fine
               if (studentContent.includes(expectedContent) || expectedContent === studentContent) {
-                // Template content is present in student file
                 continue;
               }
             }
 
-            // Patch failed and content doesn't match - not in sync
             scope?.addBreadcrumb({
               message: `Patch for ${file.path} failed to apply and content doesn't match template`,
               category: "sync",
@@ -856,13 +1153,11 @@ export async function isRepoAlreadyInSync(
             return false;
           }
 
-          // If patch applied and result is same as current content, patch is already applied
           if (patchedContent === studentContent) {
-            // The patch is already applied - this file is in sync
+            // The patch is already applied
             continue;
           }
 
-          // Patch would make changes - not in sync
           scope?.addBreadcrumb({
             message: `File ${file.path} would change if patch applied - not in sync`,
             category: "sync",
@@ -879,22 +1174,12 @@ export async function isRepoAlreadyInSync(
         }
       }
 
-      // For files with full content (new files): compare content
-      if (file.content && !file.isBinary) {
-        const expectedContent = atob(file.content);
-        if (studentContent !== expectedContent) {
-          // For new files, student might have made additional edits
-          // Check if at least the expected content is present
-          if (!studentContent.includes(expectedContent)) {
-            scope?.addBreadcrumb({
-              message: `New file ${file.path} doesn't contain expected content`,
-              category: "sync",
-              level: "debug"
-            });
-            return false;
-          }
-        }
-        continue;
+      // For added text files (no patch): compare student blob SHA to template blob SHA.
+      if (file.status === "added" && file.sha) {
+        // We already fetched studentFile above; recompare using its blob SHA if we have it.
+        // (We don't have studentFile.sha in this scope; fall through to a content-includes check
+        // using a fresh fetch is unnecessary — fall back to "not in sync" to be safe.)
+        return false;
       }
     }
 
@@ -1084,6 +1369,49 @@ export async function syncRepositoryToHandout(params: {
           };
         }
 
+        // Size pre-flight: decide concurrency class BEFORE doing any heavy work.
+        // Sizes are populated by getChangedFiles from the recursive tree (Redis-cached),
+        // so this is essentially free.
+        let maxFileBytes = 0;
+        let totalChangedBytes = 0;
+        let largestFilePath = "";
+        for (const f of changedFiles) {
+          if (typeof f.size === "number") {
+            totalChangedBytes += f.size;
+            if (f.size > maxFileBytes) {
+              maxFileBytes = f.size;
+              largestFilePath = f.path;
+            }
+          }
+        }
+
+        // Per-file hard cap. Files larger than this can't be synced through the Edge
+        // Function runtime — base64-encoding a single 50MB+ blob already exceeds the
+        // v8 heap budget. Fail fast with an actionable error.
+        if (maxFileBytes > MAX_SYNC_FILE_BYTES) {
+          const mb = (maxFileBytes / (1024 * 1024)).toFixed(1);
+          const limitMb = (MAX_SYNC_FILE_BYTES / (1024 * 1024)).toFixed(0);
+          throw new Error(
+            `File '${largestFilePath}' is ${mb}MB which exceeds the per-file sync limit of ${limitMb}MB. ` +
+              `Use Git LFS, host the data out-of-band, or remove it from the handout repository.`
+          );
+        }
+
+        const isHeavySync = maxFileBytes > LARGE_FILE_THRESHOLD;
+        scope?.setTag("sync_size_class", isHeavySync ? "heavy" : "light");
+        scope?.setTag("max_file_bytes", String(maxFileBytes));
+        scope?.setTag("total_changed_bytes", String(totalChangedBytes));
+        scope?.setTag("largest_file", largestFilePath);
+        if (isHeavySync) {
+          scope?.addBreadcrumb({
+            message:
+              `Heavy sync detected: largest file '${largestFilePath}' is ${(maxFileBytes / (1024 * 1024)).toFixed(1)}MB ` +
+              `(threshold ${(LARGE_FILE_THRESHOLD / (1024 * 1024)).toFixed(0)}MB). Will serialize through heavy-sync lock.`,
+            category: "sync",
+            level: "info"
+          });
+        }
+
         const branchName = `sync-to-${toSha.substring(0, 7)}`;
 
         // RESILIENCE CHECK 1: Check for existing PR with this branch name FIRST
@@ -1196,16 +1524,25 @@ changes from the template repository.
 Changed files:
 ${changedFiles.map((f) => `- ${f.path}`).join("\n")}`;
 
-        await createBranchAndCommit(
-          repositoryFullName,
-          branchName,
-          syncedRepoSha,
-          changedFiles,
-          commitMessage,
-          scope,
-          templateRepo,
-          toSha
-        );
+        // For heavy syncs, serialize the memory-intensive work (blob fetch + commit)
+        // through a per-isolate semaphore so we never hold multiple large blobs in
+        // memory simultaneously. Light syncs run as before.
+        const runCommit = () =>
+          createBranchAndCommit(
+            repositoryFullName,
+            branchName,
+            syncedRepoSha,
+            changedFiles,
+            commitMessage,
+            scope,
+            templateRepo,
+            toSha
+          );
+        if (isHeavySync) {
+          await withHeavySyncLock(runCommit);
+        } else {
+          await runCommit();
+        }
 
         // Create PR
         const prTitle = `[Instructor Update] Sync handout to ${toSha.substring(0, 7)}`;

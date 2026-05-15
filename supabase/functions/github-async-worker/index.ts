@@ -555,19 +555,66 @@ async function checkAndTripErrorCircuitBreaker(
   }
 }
 
+/**
+ * Maximum pgmq `read_ct` (number of times a message has been made visible and consumed)
+ * before we treat the message as poison and DLQ it. This is distinct from `retry_count`
+ * (which only increments via `requeueWithDelay`); a message that keeps getting read but
+ * neither archived nor explicitly requeued — e.g. because the Edge Function isolate is
+ * killed mid-handler by a memory limit — has its `read_ct` climb without bound.
+ */
+const PGMQ_MAX_READ_CT = 10;
+
 export async function processEnvelope(
   adminSupabase: SupabaseClient<Database>,
   envelope: GitHubAsyncEnvelope,
-  meta: { msg_id: number; enqueued_at: string; queue_name?: string },
+  meta: { msg_id: number; enqueued_at: string; read_ct?: number; queue_name?: string },
   _scope: Sentry.Scope
 ): Promise<boolean> {
   const queueName = meta.queue_name ?? "async_calls";
   const scope = _scope?.clone();
   scope.setTag("msg_id", String(meta.msg_id));
+  if (typeof meta.read_ct === "number") scope.setTag("read_ct", String(meta.read_ct));
   scope.setTag("async_api_log_id", envelope.log_id);
   scope.setTag("async_method", envelope.method);
   if (envelope.class_id) scope.setTag("class_id", String(envelope.class_id));
   if (envelope.debug_id) scope.setTag("debug_id", envelope.debug_id);
+
+  // Poison-pill protection: if this message has been read too many times without
+  // ever being archived or successfully requeued, send it to the DLQ so it stops
+  // monopolizing worker capacity. This catches the "isolate dies mid-handler"
+  // failure mode where neither the success path (which archives) nor the failure
+  // path (which writes sync_data + throws) ever runs to completion.
+  if (typeof meta.read_ct === "number" && meta.read_ct >= PGMQ_MAX_READ_CT) {
+    const error = new Error(
+      `pgmq read_ct=${meta.read_ct} exceeded max=${PGMQ_MAX_READ_CT} without archive — DLQing as poison message`
+    );
+    scope.setTag("poison_message", "true");
+    Sentry.captureException(error, scope);
+    // Best-effort: also surface this on any sync_repo_to_handout row so the UI shows it.
+    if (envelope.method === "sync_repo_to_handout") {
+      const args = envelope.args as SyncRepoToHandoutArgs;
+      try {
+        await adminSupabase
+          .from("repositories")
+          .update({
+            sync_data: {
+              status: "error",
+              last_sync_error: `Sync handler kept failing without leaving a trace (likely Edge Function memory limit). Message was sent to the dead-letter queue after ${meta.read_ct} attempts.`,
+              last_sync_attempt: new Date().toISOString(),
+              msg_id: meta.msg_id
+            }
+          })
+          .eq("id", args.repository_id);
+      } catch (e) {
+        Sentry.captureException(e, scope);
+      }
+    }
+    const dlqSuccess = await sendToDeadLetterQueue(adminSupabase, envelope, meta, error, scope);
+    if (dlqSuccess) {
+      await archiveMessage(adminSupabase, meta.msg_id, scope, queueName);
+    }
+    return false;
+  }
   // Circuit breaker: check both org-level and method-specific circuits
   try {
     const org = ((): string | undefined => {
@@ -1097,19 +1144,40 @@ export async function processEnvelope(
         });
 
         try {
-          // Check to see if the repo is already up to date, using first 6 chars of SHA
+          // Check to see if the repo is already up to date. Use full-SHA equality
+          // (NOT a 6-char prefix — short prefixes can collide and have caused
+          // truncated-SHA false-positives in the past, see FixStuckSyncs `[truncated SHA]`).
           const { data: currentRepo } = await adminSupabase
             .from("repositories")
             .select("synced_handout_sha, synced_repo_sha")
             .eq("id", repository_id)
             .maybeSingle();
-          if (currentRepo?.synced_handout_sha?.substring(0, 6) === to_sha.substring(0, 6)) {
+          if (currentRepo?.synced_handout_sha === to_sha) {
             Sentry.addBreadcrumb({
               message: `Repository ${repository_full_name} is already up to date`,
               level: "info"
             });
             return true;
           }
+
+          // Persist an "in_progress" marker BEFORE the long work. This gives us
+          // (a) durable evidence of the attempt even if the Edge Function isolate
+          // is killed mid-handler (e.g. memory limit exceeded) — without this,
+          // sync_data stays at the default `{}` and the repo looks like it was
+          // never even tried, and (b) operational visibility (we can spot stuck
+          // rows immediately in SQL without scraping pgmq).
+          await adminSupabase
+            .from("repositories")
+            .update({
+              sync_data: {
+                status: "in_progress",
+                started_at: new Date().toISOString(),
+                msg_id: meta.msg_id,
+                from_sha,
+                to_sha
+              }
+            })
+            .eq("id", repository_id);
 
           // Get syncedRepoSha - either from DB or fetch first commit if not set
           let syncedRepoSha = currentRepo?.synced_repo_sha;
@@ -2202,9 +2270,15 @@ export async function processEnvelope(
 }
 
 export async function processBatch(adminSupabase: SupabaseClient<Database>, scope: Sentry.Scope) {
+  // VT (sleep_seconds) needs to comfortably exceed worst-case handler runtime.
+  // sync_repo_to_handout in particular can take minutes when many files change,
+  // and a too-short VT causes a re-read storm: the message stays in q_async_calls
+  // with read_ct climbing forever and `sync_data` never updating because the
+  // Edge Function isolate is killed mid-handler. 300s is well above the Edge
+  // Function wall clock and well above observed p99 handler durations.
   let result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "async_calls",
-    sleep_seconds: 60,
+    sleep_seconds: 300,
     n: 4
   });
 
@@ -2219,7 +2293,7 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
   if (messages.length === 0) {
     result = await adminSupabase.schema("pgmq_public").rpc("read", {
       queue_name: "async_calls_low_priority",
-      sleep_seconds: 60,
+      sleep_seconds: 300,
       n: 4
     });
     if (result.error) {
@@ -2237,7 +2311,7 @@ export async function processBatch(adminSupabase: SupabaseClient<Database>, scop
       const ok = await processEnvelope(
         adminSupabase,
         msg.message,
-        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, queue_name: queueName },
+        { msg_id: msg.msg_id, enqueued_at: msg.enqueued_at, read_ct: msg.read_ct, queue_name: queueName },
         scope
       );
       if (ok) {

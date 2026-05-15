@@ -999,6 +999,23 @@ export async function createBranchProtectionRuleset(
         }
         // If it's 422/409 but not a duplicate error, rethrow so callers can handle it
       }
+
+      // Free GitHub accounts can't enable branch protection on private repositories.
+      // GitHub returns "Upgrade to GitHub Pro or make this repository public to enable
+      // this feature." — there's no way for the platform to satisfy this from server
+      // side, so swallow it: the repo is created and usable, just without the ruleset.
+      const message = (e.message || "").toLowerCase();
+      if (
+        message.includes("upgrade to github pro") ||
+        message.includes("upgrade your github plan") ||
+        message.includes("upgrade your account")
+      ) {
+        scope?.setTag("ruleset_unsupported_by_plan", "true");
+        console.log(
+          `Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`
+        );
+        return;
+      }
     }
     throw e;
   }
