@@ -33,6 +33,8 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
     assignmentGroupId: assignment_group_id
   });
   const hoursExtended = dueDate.hoursExtended;
+  const requireTokensBeforeDueDate = (assignment as Assignment & { require_tokens_before_due_date: boolean })
+    .require_tokens_before_due_date;
 
   if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
@@ -91,19 +93,28 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
           Extend Due Date
         </Button>
       </Dialog.Trigger>
-      <Text fontSize="sm" color="fg.muted">
-        Tokens must be applied before the due date.
-      </Text>
+      {requireTokensBeforeDueDate && (
+        <Text fontSize="sm" color="fg.muted">
+          Tokens must be applied before the due date.
+        </Text>
+      )}
       <Dialog.Backdrop />
       <Dialog.Positioner>
         <Dialog.Content>
           <Dialog.Header>
             <Dialog.Description>
               <Dialog.Title>Extend Due Date For {assignment.title}</Dialog.Title>
-              You must apply token before <TimeZoneAwareDate date={dueDate.dueDate} format="MMM d, h:mm a" /> - once the
-              deadline passes you will no longer be able to apply tokens. The course late policy grants each student{" "}
-              {course.late_tokens_per_student} late tokens. Each token extends the due date by 24 hours, but are not
-              automatically applied - to use them, you must use this form to apply them BEFORE the assignment is due.
+              {requireTokensBeforeDueDate && (
+                <>
+                  You must apply token before <TimeZoneAwareDate date={dueDate.dueDate} format="MMM d, h:mm a" /> - once
+                  the deadline passes you will no longer be able to apply tokens.{" "}
+                </>
+              )}
+              The course late policy grants each student{" "}
+              {course.late_tokens_per_student} late tokens. Each token extends the due date by 24 hours.{" "}
+              {requireTokensBeforeDueDate
+                ? "Tokens are not automatically applied - to use them, you must use this form to apply them BEFORE the assignment is due."
+                : "Tokens can be applied before the deadline using this form, or will be automatically applied when you submit after the deadline."}{" "}
               You can apply up to {assignment.max_late_tokens} tokens to this assignment. You have already applied{" "}
               {lateTokensAppliedToAssignment} tokens to this assignment.
               {assignment.max_late_tokens > 1 && (
