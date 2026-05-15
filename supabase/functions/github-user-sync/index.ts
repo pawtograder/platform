@@ -6,6 +6,55 @@ import { createRepo, getOctoKit, reinviteToOrgTeam, syncRepoPermissions } from "
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
+async function ensureStaffOrgMembership(userID: string, githubUsername: string, scope: Sentry.Scope) {
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+  const { data: staffRoles, error: staffError } = await adminSupabase
+    .from("user_roles")
+    .select("class_id, role, github_org_confirmed, classes(slug, github_org)")
+    .eq("disabled", false)
+    .in("role", ["instructor", "grader"])
+    .eq("user_id", userID);
+  if (staffError) {
+    Sentry.captureException(staffError, scope);
+    return { madeChanges: false, errorMessages: ["Error fetching staff roles"] };
+  }
+  if (!staffRoles || staffRoles.length === 0) {
+    return { madeChanges: false, errorMessages: [] };
+  }
+  let madeChanges = false;
+  const errorMessages: string[] = [];
+  for (const c of staffRoles) {
+    if (!c.classes?.github_org || !c.classes?.slug) {
+      continue;
+    }
+    const team_slug = `${c.classes.slug}-staff`;
+    Sentry.addBreadcrumb({
+      category: "github",
+      message: `Ensuring staff org/team membership: ${githubUsername} -> ${c.classes.github_org}/${team_slug}`,
+      level: "info"
+    });
+    try {
+      const resp = await reinviteToOrgTeam(c.classes.github_org, team_slug, githubUsername, scope);
+      madeChanges = madeChanges || resp;
+      if (!resp) {
+        // Either already in the team, or just added directly via PUT. Mark confirmed for this class.
+        await adminSupabase
+          .from("user_roles")
+          .update({ github_org_confirmed: true })
+          .eq("user_id", userID)
+          .eq("class_id", c.class_id);
+      }
+    } catch (e) {
+      Sentry.captureException(e, scope);
+      errorMessages.push(`Error inviting ${githubUsername} to ${c.classes.github_org}/${team_slug}`);
+    }
+  }
+  return { madeChanges, errorMessages };
+}
+
 async function ensureAllReposExist(userID: string, githubUsername: string, scope: Sentry.Scope) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
@@ -398,8 +447,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("Error updating user");
   }
 
+  // Ensure staff org/team membership for any instructor/grader roles this user has.
+  // (ensureAllReposExist only operates on student roles.)
+  const staffResult = await ensureStaffOrgMembership(user.id, gitHubUser.data.login, scope);
+
   //For good measure, make sure that all repos for the student exist and have the correct permissions
-  const { madeChanges, errorMessages } = await ensureAllReposExist(user.id, gitHubUser.data.login, scope);
+  const { madeChanges: studentMadeChanges, errorMessages: studentErrorMessages } = await ensureAllReposExist(
+    user.id,
+    gitHubUser.data.login,
+    scope
+  );
+  const madeChanges = staffResult.madeChanges || studentMadeChanges;
+  const errorMessages = [...staffResult.errorMessages, ...studentErrorMessages];
   const changedUsername = userData.github_username !== gitHubUser.data.login;
   const messages = [];
   if (changedUsername) {
