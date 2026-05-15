@@ -19,6 +19,9 @@ DECLARE
     v_submission_ids bigint[];
     v_enqueued integer := 0;
     v_deleted_repos integer := 0;
+    v_repositories_skipped_unparseable integer := 0;
+    v_skipped_org_mismatch integer := 0;
+    v_skipped_org_mismatch_details jsonb := '[]'::jsonb;
 BEGIN
     IF auth.uid() IS NULL THEN
         RAISE EXCEPTION 'Not authenticated';
@@ -56,7 +59,10 @@ BEGIN
             'summary', jsonb_build_object(
                 'repositories_enqueued_for_archive', 0,
                 'repositories_deleted', 0,
-                'submissions_deleted', 0
+                'submissions_deleted', 0,
+                'repositories_skipped_unparseable', 0,
+                'skipped_org_mismatch', 0,
+                'skipped_org_mismatch_details', '[]'::jsonb
             )
         );
     END IF;
@@ -76,6 +82,7 @@ BEGIN
            OR v_repo.repository = ''
            OR position('/' IN v_repo.repository) = 0
         THEN
+            v_repositories_skipped_unparseable := v_repositories_skipped_unparseable + 1;
             CONTINUE;
         END IF;
 
@@ -83,12 +90,19 @@ BEGIN
         v_repo_name := split_part(v_repo.repository, '/', 2);
 
         IF v_org_name IS NULL OR v_org_name = '' OR v_repo_name IS NULL OR v_repo_name = '' THEN
+            v_repositories_skipped_unparseable := v_repositories_skipped_unparseable + 1;
             CONTINUE;
         END IF;
 
         IF v_org_name != v_github_org THEN
-            RAISE EXCEPTION 'Repository % org (%) does not match class github_org (%)',
-                v_repo.repository, v_org_name, v_github_org;
+            v_skipped_org_mismatch := v_skipped_org_mismatch + 1;
+            v_skipped_org_mismatch_details := v_skipped_org_mismatch_details || jsonb_build_array(
+                jsonb_build_object(
+                    'repository', v_repo.repository,
+                    'org_name', v_org_name
+                )
+            );
+            CONTINUE;
         END IF;
 
         IF coalesce(v_repo.is_github_ready, false) THEN
@@ -237,7 +251,10 @@ BEGIN
         'summary', jsonb_build_object(
             'repositories_enqueued_for_archive', v_enqueued,
             'repositories_deleted', v_deleted_repos,
-            'submissions_deleted', coalesce(cardinality(v_submission_ids), 0)::integer
+            'submissions_deleted', coalesce(cardinality(v_submission_ids), 0)::integer,
+            'repositories_skipped_unparseable', v_repositories_skipped_unparseable,
+            'skipped_org_mismatch', v_skipped_org_mismatch,
+            'skipped_org_mismatch_details', v_skipped_org_mismatch_details
         )
     );
 END;

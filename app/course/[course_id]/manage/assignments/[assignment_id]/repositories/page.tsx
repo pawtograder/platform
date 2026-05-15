@@ -12,6 +12,8 @@ import {
   Box,
   Button,
   Code,
+  FieldLabel,
+  FieldRoot,
   Heading,
   HStack,
   Icon,
@@ -339,6 +341,7 @@ function FixRepoPermissionsButton({
 }
 
 const CLEANUP_CONFIRM_PHRASE = "CLEANUP";
+const CLEANUP_CONFIRM_INPUT_ID = "cleanup-individual-repos-confirm-input";
 
 function CleanupIndividualReposButton({
   courseId,
@@ -438,8 +441,8 @@ function CleanupIndividualReposButton({
                 </Text>
                 <Box as="ul" pl={5} fontSize="sm" style={{ listStyleType: "disc" }}>
                   <li>
-                    Archive {individualRepoCount} individual student repositor
-                    {individualRepoCount === 1 ? "y" : "ies"} on GitHub (async queue)
+                    Archive {individualRepoCount} individual student{" "}
+                    {individualRepoCount === 1 ? "repository" : "repositories"} on GitHub (async queue)
                   </li>
                   <li>Delete related submissions, grades, and workflow data from Pawtograder</li>
                   <li>Remove the individual repository records (group repos are unchanged)</li>
@@ -453,12 +456,16 @@ function CleanupIndividualReposButton({
                 <Text fontSize="sm">
                   Type <Code>{CLEANUP_CONFIRM_PHRASE}</Code> below to confirm. This runs the cleanup immediately.
                 </Text>
-                <Input
-                  placeholder={CLEANUP_CONFIRM_PHRASE}
-                  value={confirmText}
-                  onChange={(e) => setConfirmText(e.target.value)}
-                  autoComplete="off"
-                />
+                <FieldRoot gap={1.5}>
+                  <FieldLabel htmlFor={CLEANUP_CONFIRM_INPUT_ID}>{CLEANUP_CONFIRM_PHRASE}</FieldLabel>
+                  <Input
+                    id={CLEANUP_CONFIRM_INPUT_ID}
+                    placeholder={CLEANUP_CONFIRM_PHRASE}
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    autoComplete="off"
+                  />
+                </FieldRoot>
               </VStack>
             )}
           </DialogBody>
