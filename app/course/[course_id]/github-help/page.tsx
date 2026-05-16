@@ -50,41 +50,41 @@ export default function GitHubHelpPage() {
         <Heading as="h1" size="lg">
           GitHub Access Troubleshooting
         </Heading>
-      <Box>
-        Your Pawtograder account is currently linked to the GitHub account {githubUsername} (ID: {githubUserId}). You
-        can use this page to confirm that you can access repositories for this class, and to re-sync your GitHub account
-        if you are having issues, or if you have changed your username on GitHub.
-      </Box>
-      <Box>
-        <Text>
-          You should be able to access the following repositories on GitHub.com if you are signed in with the account{" "}
-          {githubUsername}:
-        </Text>
-        <List.Root as="ul" px={4}>
-          {repositories.map((repository) => (
-            <List.Item key={repository.id}>
-              <Link href={`https://github.com/${repository.repository}`} target="_blank">
-                {repository.repository}
-              </Link>
-            </List.Item>
-          ))}
-        </List.Root>
-      </Box>
-      <Box>
-        If you are able to access these pages in your browser, but are not able to access them on your computer, please
-        work with your course staff to troubleshoot the issue: this process confirms that there is nothing wrong between
-        Pawtograder and GitHub.
-      </Box>
-      <Box>
-        <Text>
-          If you are certain that you are signed in with the account {githubUsername} and you still cannot access the
-          repositories, you can (no more than once a day) manually trigger a sync of your GitHub account. This will also
-          update your username, in the event that you have used GitHub&apos;s change username feature.
-        </Text>
-        <Button colorPalette="green" onClick={doSync} loading={syncing} disabled={!canSync}>
-          Sync GitHub Account
-        </Button>
-      </Box>
+        <Box>
+          Your Pawtograder account is currently linked to the GitHub account {githubUsername} (ID: {githubUserId}). You
+          can use this page to confirm that you can access repositories for this class, and to re-sync your GitHub
+          account if you are having issues, or if you have changed your username on GitHub.
+        </Box>
+        <Box>
+          <Text>
+            You should be able to access the following repositories on GitHub.com if you are signed in with the account{" "}
+            {githubUsername}:
+          </Text>
+          <List.Root as="ul" px={4}>
+            {repositories.map((repository) => (
+              <List.Item key={repository.id}>
+                <Link href={`https://github.com/${repository.repository}`} target="_blank">
+                  {repository.repository}
+                </Link>
+              </List.Item>
+            ))}
+          </List.Root>
+        </Box>
+        <Box>
+          If you are able to access these pages in your browser, but are not able to access them on your computer,
+          please work with your course staff to troubleshoot the issue: this process confirms that there is nothing
+          wrong between Pawtograder and GitHub.
+        </Box>
+        <Box>
+          <Text>
+            If you are certain that you are signed in with the account {githubUsername} and you still cannot access the
+            repositories, you can (no more than once a day) manually trigger a sync of your GitHub account. This will
+            also update your username, in the event that you have used GitHub&apos;s change username feature.
+          </Text>
+          <Button colorPalette="green" onClick={doSync} loading={syncing} disabled={!canSync}>
+            Sync GitHub Account
+          </Button>
+        </Box>
       </VStack>
     </PageContainer>
   );

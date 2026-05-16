@@ -1,7 +1,14 @@
 import { filterSearchIndex, type SearchHit } from "@/lib/searchIndex";
 
 const sampleIndex: SearchHit[] = [
-  { id: "a1", kind: "assignment", title: "Project 3: Streams", subtitle: "project-3", url: "/a/1", keywords: ["streams"] },
+  {
+    id: "a1",
+    kind: "assignment",
+    title: "Project 3: Streams",
+    subtitle: "project-3",
+    url: "/a/1",
+    keywords: ["streams"]
+  },
   { id: "a2", kind: "assignment", title: "Lab 7: Generics", subtitle: "lab-7", url: "/a/2" },
   { id: "a3", kind: "assignment", title: "Final exam review", subtitle: "final", url: "/a/3" },
   { id: "s1", kind: "survey", title: "Mid-semester feedback", subtitle: "Tell us how it's going", url: "/s/1" },
@@ -68,8 +75,6 @@ describe("filterSearchIndex", () => {
   it("is case-insensitive", () => {
     const lower = filterSearchIndex(sampleIndex, "lab");
     const upper = filterSearchIndex(sampleIndex, "LAB");
-    expect(lower.flatMap((g) => g.hits).map((h) => h.id)).toEqual(
-      upper.flatMap((g) => g.hits).map((h) => h.id)
-    );
+    expect(lower.flatMap((g) => g.hits).map((h) => h.id)).toEqual(upper.flatMap((g) => g.hits).map((h) => h.id));
   });
 });
