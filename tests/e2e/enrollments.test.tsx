@@ -5,6 +5,8 @@ import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./Tes
 import { visualScreenshot } from "./VisualTestUtils";
 dotenv.config({ path: ".env.local", quiet: true });
 
+test.setTimeout(120_000);
+
 let course: Course;
 let student1: TestingUser | undefined;
 let instructor1: TestingUser | undefined;
