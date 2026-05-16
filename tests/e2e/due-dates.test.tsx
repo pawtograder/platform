@@ -236,6 +236,7 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
@@ -249,6 +250,7 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
@@ -264,6 +266,7 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
