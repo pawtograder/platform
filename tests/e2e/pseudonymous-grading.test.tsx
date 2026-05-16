@@ -428,6 +428,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByPlaceholder("Add a comment to continue the").click();
     await region.getByPlaceholder("Add a comment to continue the").fill(INSTRUCTOR_FINAL_DECISION);
     await region.getByLabel("Add Comment", { exact: true }).click();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
 
     // Close the escalated regrade request
     await region.getByRole("button", { name: "Decide Escalation" }).click();
