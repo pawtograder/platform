@@ -97,6 +97,10 @@ function findFirstTlsPair() {
 
 const hostname = process.env.HOSTNAME || "localhost";
 const port = Number.parseInt(process.env.PORT || "3443", 10);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  console.error(`Invalid PORT "${process.env.PORT}". Expected an integer between 1 and 65535.`);
+  process.exit(1);
+}
 
 let keyPath;
 let certPath;

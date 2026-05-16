@@ -854,19 +854,20 @@ export async function createUsersInClass(
 ): Promise<TestingUser[]> {
   // Resolve all emails first
   const resolvedRequests = userRequests.map((req) => {
+    const roleOrdinal = userIdx[req.role];
     const extra_randomness = req.randomSuffix ?? Math.random().toString(36).substring(2, 20);
     const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-    const resolvedEmail =
-      req.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${userIdx[req.role]}@pawtograder.net`;
+    const resolvedEmail = req.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${roleOrdinal}@pawtograder.net`;
     const resolvedName = req.name
       ? req.name
-      : `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${userIdx[req.role]}Test`;
+      : `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${roleOrdinal}Test`;
     userIdx[req.role]++;
 
     return {
       ...req,
       resolvedEmail,
-      resolvedName
+      resolvedName,
+      roleOrdinal
     };
   });
 
@@ -895,8 +896,8 @@ export async function createUsersInClass(
     const public_profile_name =
       request.public_profile_name ??
       (request.name
-        ? `Pseudonym #${userIdx[role] - 1}`
-        : `Pseudonym #${userIdx[role] - 1} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
+        ? `Pseudonym #${request.roleOrdinal}`
+        : `Pseudonym #${request.roleOrdinal} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
     const private_profile_name = resolvedName;
 
     let userId: string;
