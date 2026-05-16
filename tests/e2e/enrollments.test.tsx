@@ -34,7 +34,8 @@ async function stabilizeImportPreviewDialog(page: import("@playwright/test").Pag
   return dialog;
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
+  testInfo.setTimeout(120_000);
   course = await createClass();
   [student1, instructor1] = await createUsersInClass([
     {
