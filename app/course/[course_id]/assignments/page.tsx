@@ -212,7 +212,7 @@ export default function StudentPage() {
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by name, repo, or group"
+              placeholder="Search assignments"
               aria-label="Search assignments"
               data-shortcut="search"
               size="sm"

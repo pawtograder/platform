@@ -32,7 +32,7 @@ export function GlobalSearchTrigger() {
     >
       <BsSearch aria-hidden />
       <Kbd aria-hidden display={{ base: "none", lg: "inline-flex" }}>
-        {isMac ? "⌘" : "Ctrl"}K
+        {isMac ? "⌘K" : "Ctrl+K"}
       </Kbd>
     </Button>
   );

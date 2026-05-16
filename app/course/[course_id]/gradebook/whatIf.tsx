@@ -374,9 +374,9 @@ function GradebookCard({
           </Float>
         </Tooltip>
       )}
-      <HStack align="top" flexWrap="wrap" gap={2} w="100%">
+      <HStack align="start" flexWrap="wrap" gap={2} w="100%">
         <Card.Header flexGrow={10} minW={0} p={0}>
-          <VStack align="left" w="100%">
+          <VStack align="start" w="100%">
             <Heading size="sm" id={`grade-title-${column.id}`}>
               {column.name}
             </Heading>

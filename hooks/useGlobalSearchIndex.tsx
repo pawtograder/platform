@@ -8,7 +8,7 @@ import {
   usePublishedSurveys
 } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEffectiveEnabled, type CourseFeatureName } from "@/lib/courseFeatures";
-import type { SearchHit, SearchHitKind } from "@/lib/searchIndex";
+import type { SearchHit } from "@/lib/searchIndex";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import * as React from "react";
 

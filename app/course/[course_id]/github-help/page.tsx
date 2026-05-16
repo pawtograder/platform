@@ -63,7 +63,11 @@ export default function GitHubHelpPage() {
           <List.Root as="ul" px={4}>
             {repositories.map((repository) => (
               <List.Item key={repository.id}>
-                <Link href={`https://github.com/${repository.repository}`} target="_blank">
+                <Link
+                  href={`https://github.com/${repository.repository}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   {repository.repository}
                 </Link>
               </List.Item>
