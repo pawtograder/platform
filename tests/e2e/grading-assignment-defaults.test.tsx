@@ -460,11 +460,36 @@ test("auto-assign with 'instructors' pool rotates submissions across active inst
   const suffix = makeSuffix("instructors-pool");
 
   const [extraInstructorA, extraInstructorB, student1, student2, student3] = await createUsersInClass([
-    { name: `E2E Inst Pool A ${suffix}`, email: `e2e-inst-pool-a-${suffix}@pawtograder.net`, role: "instructor", class_id: course.id },
-    { name: `E2E Inst Pool B ${suffix}`, email: `e2e-inst-pool-b-${suffix}@pawtograder.net`, role: "instructor", class_id: course.id },
-    { name: `E2E IP Student 1 ${suffix}`, email: `e2e-ip-s1-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E IP Student 2 ${suffix}`, email: `e2e-ip-s2-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E IP Student 3 ${suffix}`, email: `e2e-ip-s3-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E Inst Pool A ${suffix}`,
+      email: `e2e-inst-pool-a-${suffix}@pawtograder.net`,
+      role: "instructor",
+      class_id: course.id
+    },
+    {
+      name: `E2E Inst Pool B ${suffix}`,
+      email: `e2e-inst-pool-b-${suffix}@pawtograder.net`,
+      role: "instructor",
+      class_id: course.id
+    },
+    {
+      name: `E2E IP Student 1 ${suffix}`,
+      email: `e2e-ip-s1-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E IP Student 2 ${suffix}`,
+      email: `e2e-ip-s2-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E IP Student 3 ${suffix}`,
+      email: `e2e-ip-s3-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   const a = await insertAssignment({
@@ -475,9 +500,21 @@ test("auto-assign with 'instructors' pool rotates submissions across active inst
   });
   await configureAutoAssign(a.id, { auto_assign_assignee_pool: "instructors" });
 
-  await insertPreBakedSubmission({ student_profile_id: student1.private_profile_id, assignment_id: a.id, class_id: course.id });
-  await insertPreBakedSubmission({ student_profile_id: student2.private_profile_id, assignment_id: a.id, class_id: course.id });
-  await insertPreBakedSubmission({ student_profile_id: student3.private_profile_id, assignment_id: a.id, class_id: course.id });
+  await insertPreBakedSubmission({
+    student_profile_id: student1.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: student2.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: student3.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
 
   const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
   expect(rpcError).toBeNull();
@@ -504,10 +541,30 @@ test("auto-assign with 'instructors_and_graders' pool rotates across both roles"
   const suffix = makeSuffix("inst-graders-pool");
 
   const [graderA, graderB, student1, student2] = await createUsersInClass([
-    { name: `E2E IG Grader A ${suffix}`, email: `e2e-ig-grader-a-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E IG Grader B ${suffix}`, email: `e2e-ig-grader-b-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E IG Student 1 ${suffix}`, email: `e2e-ig-s1-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E IG Student 2 ${suffix}`, email: `e2e-ig-s2-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E IG Grader A ${suffix}`,
+      email: `e2e-ig-grader-a-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E IG Grader B ${suffix}`,
+      email: `e2e-ig-grader-b-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E IG Student 1 ${suffix}`,
+      email: `e2e-ig-s1-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E IG Student 2 ${suffix}`,
+      email: `e2e-ig-s2-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   const a = await insertAssignment({
@@ -518,8 +575,16 @@ test("auto-assign with 'instructors_and_graders' pool rotates across both roles"
   });
   await configureAutoAssign(a.id, { auto_assign_assignee_pool: "instructors_and_graders" });
 
-  await insertPreBakedSubmission({ student_profile_id: student1.private_profile_id, assignment_id: a.id, class_id: course.id });
-  await insertPreBakedSubmission({ student_profile_id: student2.private_profile_id, assignment_id: a.id, class_id: course.id });
+  await insertPreBakedSubmission({
+    student_profile_id: student1.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: student2.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
 
   const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
   expect(rpcError).toBeNull();
@@ -550,11 +615,36 @@ test("auto-assign with 'graders' subset restricts rotation to the selected grade
   const suffix = makeSuffix("graders-subset");
 
   const [allowedGrader, excludedGrader, student1, student2, student3] = await createUsersInClass([
-    { name: `E2E Allowed Grader ${suffix}`, email: `e2e-allowed-grader-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Excluded Grader ${suffix}`, email: `e2e-excluded-grader-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E GS Student 1 ${suffix}`, email: `e2e-gs-s1-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E GS Student 2 ${suffix}`, email: `e2e-gs-s2-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E GS Student 3 ${suffix}`, email: `e2e-gs-s3-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E Allowed Grader ${suffix}`,
+      email: `e2e-allowed-grader-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E Excluded Grader ${suffix}`,
+      email: `e2e-excluded-grader-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E GS Student 1 ${suffix}`,
+      email: `e2e-gs-s1-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E GS Student 2 ${suffix}`,
+      email: `e2e-gs-s2-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E GS Student 3 ${suffix}`,
+      email: `e2e-gs-s3-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   const a = await insertAssignment({
@@ -568,9 +658,21 @@ test("auto-assign with 'graders' subset restricts rotation to the selected grade
     auto_assign_grader_subset_private_profile_ids: [allowedGrader.private_profile_id]
   });
 
-  await insertPreBakedSubmission({ student_profile_id: student1.private_profile_id, assignment_id: a.id, class_id: course.id });
-  await insertPreBakedSubmission({ student_profile_id: student2.private_profile_id, assignment_id: a.id, class_id: course.id });
-  await insertPreBakedSubmission({ student_profile_id: student3.private_profile_id, assignment_id: a.id, class_id: course.id });
+  await insertPreBakedSubmission({
+    student_profile_id: student1.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: student2.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: student3.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
 
   const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
   expect(rpcError).toBeNull();
@@ -593,8 +695,18 @@ test("auto-assign with 'lab_leaders' pool assigns submissions to section leaders
     { name: `E2E LL A1 ${suffix}`, email: `e2e-ll-a1-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
     { name: `E2E LL A2 ${suffix}`, email: `e2e-ll-a2-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
     { name: `E2E LL B ${suffix}`, email: `e2e-ll-b-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E LL Student A ${suffix}`, email: `e2e-ll-sa-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E LL Student B ${suffix}`, email: `e2e-ll-sb-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E LL Student A ${suffix}`,
+      email: `e2e-ll-sa-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E LL Student B ${suffix}`,
+      email: `e2e-ll-sb-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   // Section A has two leaders. Leader A1 has a conflict with student A, so only Leader A2 should
@@ -629,15 +741,26 @@ test("auto-assign with 'lab_leaders' pool assigns submissions to section leaders
   });
   await configureAutoAssign(a.id, { auto_assign_assignee_pool: "lab_leaders" });
 
-  const subA = await insertPreBakedSubmission({ student_profile_id: studentA.private_profile_id, assignment_id: a.id, class_id: course.id });
-  const subB = await insertPreBakedSubmission({ student_profile_id: studentB.private_profile_id, assignment_id: a.id, class_id: course.id });
+  const subA = await insertPreBakedSubmission({
+    student_profile_id: studentA.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  const subB = await insertPreBakedSubmission({
+    student_profile_id: studentB.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
 
   const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
   expect(rpcError).toBeNull();
 
   const rows = await fetchReviewAssignments(a.id, a.grading_rubric_id!);
   const byAssignee = (sid: number) =>
-    rows.filter((r) => r.submission_id === sid).map((r) => r.assignee_profile_id).sort();
+    rows
+      .filter((r) => r.submission_id === sid)
+      .map((r) => r.assignee_profile_id)
+      .sort();
 
   // Submission A should have exactly one review assignment: leaderA2 (leaderA1 was conflicted out).
   expect(byAssignee(subA.submission_id)).toEqual([leaderA2.private_profile_id].sort());
@@ -650,10 +773,30 @@ test("auto-assign with 'group_mentors' pool assigns submissions to mentor and sk
   const suffix = makeSuffix("group-mentors");
 
   const [mentorClean, mentorConflict, memberClean, memberConflict] = await createUsersInClass([
-    { name: `E2E Mentor Clean ${suffix}`, email: `e2e-mentor-clean-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Mentor Conflict ${suffix}`, email: `e2e-mentor-conflict-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E GM Member Clean ${suffix}`, email: `e2e-gm-mc-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E GM Member Conflict ${suffix}`, email: `e2e-gm-mx-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E Mentor Clean ${suffix}`,
+      email: `e2e-mentor-clean-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E Mentor Conflict ${suffix}`,
+      email: `e2e-mentor-conflict-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E GM Member Clean ${suffix}`,
+      email: `e2e-gm-mc-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E GM Member Conflict ${suffix}`,
+      email: `e2e-gm-mx-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   const a = await insertAssignment({
@@ -692,8 +835,16 @@ test("auto-assign with 'group_mentors' pool assigns submissions to mentor and sk
     createdByProfileId: instructor!.private_profile_id
   });
 
-  const subClean = await insertPreBakedSubmission({ assignment_group_id: cleanGroupId, assignment_id: a.id, class_id: course.id });
-  const subConflict = await insertPreBakedSubmission({ assignment_group_id: conflictGroupId, assignment_id: a.id, class_id: course.id });
+  const subClean = await insertPreBakedSubmission({
+    assignment_group_id: cleanGroupId,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  const subConflict = await insertPreBakedSubmission({
+    assignment_group_id: conflictGroupId,
+    assignment_id: a.id,
+    class_id: course.id
+  });
 
   const { error: rpcError } = await supabase.rpc("run_assignment_grading_automation");
   expect(rpcError).toBeNull();
@@ -713,9 +864,24 @@ test("run_assignment_grading_automation is idempotent across repeated calls", as
   const suffix = makeSuffix("idempotency");
 
   const [grader1, student1, student2] = await createUsersInClass([
-    { name: `E2E Idem Grader ${suffix}`, email: `e2e-idem-grader-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Idem S1 ${suffix}`, email: `e2e-idem-s1-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E Idem S2 ${suffix}`, email: `e2e-idem-s2-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E Idem Grader ${suffix}`,
+      email: `e2e-idem-grader-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E Idem S1 ${suffix}`,
+      email: `e2e-idem-s1-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E Idem S2 ${suffix}`,
+      email: `e2e-idem-s2-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   const a = await insertAssignment({
@@ -733,8 +899,16 @@ test("run_assignment_grading_automation is idempotent across repeated calls", as
     late_grading_cc_emails: { emails: ["idem-cc@example.edu"] }
   });
 
-  await insertPreBakedSubmission({ student_profile_id: student1.private_profile_id, assignment_id: a.id, class_id: course.id });
-  await insertPreBakedSubmission({ student_profile_id: student2.private_profile_id, assignment_id: a.id, class_id: course.id });
+  await insertPreBakedSubmission({
+    student_profile_id: student1.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
+  await insertPreBakedSubmission({
+    student_profile_id: student2.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
 
   // First run.
   const { error: firstError } = await supabase.rpc("run_assignment_grading_automation");
@@ -798,8 +972,18 @@ test("reminders only refire after the configured interval elapses", async () => 
   const intervalHours = 6;
 
   const [graderC, studentC] = await createUsersInClass([
-    { name: `E2E Cadence Grader ${suffix}`, email: `e2e-cad-grader-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Cadence Student ${suffix}`, email: `e2e-cad-s-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E Cadence Grader ${suffix}`,
+      email: `e2e-cad-grader-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E Cadence Student ${suffix}`,
+      email: `e2e-cad-s-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   const a = await insertAssignment({
@@ -817,7 +1001,11 @@ test("reminders only refire after the configured interval elapses", async () => 
     late_grading_cc_emails: { emails: ["cadence-cc@example.edu"] }
   });
 
-  await insertPreBakedSubmission({ student_profile_id: studentC.private_profile_id, assignment_id: a.id, class_id: course.id });
+  await insertPreBakedSubmission({
+    student_profile_id: studentC.private_profile_id,
+    assignment_id: a.id,
+    class_id: course.id
+  });
 
   const subjectLike = `Late grading reminder: ${a.title}%`;
 
@@ -851,14 +1039,45 @@ test("reminder email queue excludes completed, future-due, disabled, and wrong-r
   test.setTimeout(120_000);
   const suffix = makeSuffix("reminder-filters");
 
-  const [graderActive, graderDisabled, graderCompleted, graderFuture, graderWrongRubric, studentSeed] = await createUsersInClass([
-    { name: `E2E Active Grader ${suffix}`, email: `e2e-rf-active-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Disabled Grader ${suffix}`, email: `e2e-rf-disabled-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Completed Grader ${suffix}`, email: `e2e-rf-completed-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Future Grader ${suffix}`, email: `e2e-rf-future-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Wrong-Rubric Grader ${suffix}`, email: `e2e-rf-wr-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E RF Student ${suffix}`, email: `e2e-rf-student-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
-  ]);
+  const [graderActive, graderDisabled, graderCompleted, graderFuture, graderWrongRubric, studentSeed] =
+    await createUsersInClass([
+      {
+        name: `E2E Active Grader ${suffix}`,
+        email: `e2e-rf-active-${suffix}@pawtograder.net`,
+        role: "grader",
+        class_id: course.id
+      },
+      {
+        name: `E2E Disabled Grader ${suffix}`,
+        email: `e2e-rf-disabled-${suffix}@pawtograder.net`,
+        role: "grader",
+        class_id: course.id
+      },
+      {
+        name: `E2E Completed Grader ${suffix}`,
+        email: `e2e-rf-completed-${suffix}@pawtograder.net`,
+        role: "grader",
+        class_id: course.id
+      },
+      {
+        name: `E2E Future Grader ${suffix}`,
+        email: `e2e-rf-future-${suffix}@pawtograder.net`,
+        role: "grader",
+        class_id: course.id
+      },
+      {
+        name: `E2E Wrong-Rubric Grader ${suffix}`,
+        email: `e2e-rf-wr-${suffix}@pawtograder.net`,
+        role: "grader",
+        class_id: course.id
+      },
+      {
+        name: `E2E RF Student ${suffix}`,
+        email: `e2e-rf-student-${suffix}@pawtograder.net`,
+        role: "student",
+        class_id: course.id
+      }
+    ]);
 
   // Disable graderDisabled so the disabled-grader filter has work to do.
   const { error: disableError } = await supabase
@@ -1007,9 +1226,24 @@ test("late submission after deadline is auto-assigned at submission time without
   const suffix = makeSuffix("late-submission");
 
   const [graderLate, studentEarly, studentLate] = await createUsersInClass([
-    { name: `E2E Late Grader ${suffix}`, email: `e2e-late-grader-${suffix}@pawtograder.net`, role: "grader", class_id: course.id },
-    { name: `E2E Early Student ${suffix}`, email: `e2e-early-s-${suffix}@pawtograder.net`, role: "student", class_id: course.id },
-    { name: `E2E Late Student ${suffix}`, email: `e2e-late-s-${suffix}@pawtograder.net`, role: "student", class_id: course.id }
+    {
+      name: `E2E Late Grader ${suffix}`,
+      email: `e2e-late-grader-${suffix}@pawtograder.net`,
+      role: "grader",
+      class_id: course.id
+    },
+    {
+      name: `E2E Early Student ${suffix}`,
+      email: `e2e-early-s-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    },
+    {
+      name: `E2E Late Student ${suffix}`,
+      email: `e2e-late-s-${suffix}@pawtograder.net`,
+      role: "student",
+      class_id: course.id
+    }
   ]);
 
   const a = await insertAssignment({
