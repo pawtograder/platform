@@ -295,7 +295,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("link", { name: "1", exact: true }).click();
 
     await page.getByRole("button", { name: "Files" }).click();
-    await page.getByText("public int doMath(int a, int").click();
+    const doMathLine = page.getByText("public int doMath(int a, int");
+    await expect(doMathLine).toBeVisible();
+    await doMathLine.click({ force: true });
 
     const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);
     await expect(rubricSidebar).toContainText("Grading Review Criteria 20/20");
