@@ -17,7 +17,7 @@ type CapturedIssue = {
 const captured: CapturedIssue[] = [];
 let lastCspHeader: string | null = null;
 
-function hookPage(page: Page, label: string) {
+async function hookPage(page: Page, label: string) {
   const onConsole = (msg: ConsoleMessage) => {
     const type = msg.type();
     if (type !== "error" && type !== "warning") return;
@@ -37,8 +37,9 @@ function hookPage(page: Page, label: string) {
   page.on("pageerror", onPageError);
 
   // Listen for SecurityPolicyViolationEvent inside the page and forward to console.
-  // Must run before any document scripts.
-  page.addInitScript(() => {
+  // addInitScript returns a Promise that must resolve before the next navigation,
+  // or the listener won't be installed in time to catch early violations.
+  await page.addInitScript(() => {
     addEventListener("securitypolicyviolation", (e: SecurityPolicyViolationEvent) => {
       // Stringified payload so it surfaces via page.on('console') as a CSP violation.
       // eslint-disable-next-line no-console
@@ -47,6 +48,14 @@ function hookPage(page: Page, label: string) {
       );
     });
   });
+}
+
+// In report-only mode the suite is informational — print violations and pass.
+// Once enforcement is on, a CSP violation or page error is a real regression
+// and the suite must fail.
+const ENFORCING = process.env.CSP_REPORT_ONLY !== "1";
+function failingIssues(label: string): CapturedIssue[] {
+  return captured.filter((c) => c.page === label && c.kind !== "console");
 }
 
 async function captureCspHeader(page: Page, url: string) {
@@ -93,7 +102,7 @@ test.describe.configure({ mode: "serial" });
 test("CSP smoke walkthrough", async ({ page }) => {
   test.setTimeout(180_000);
 
-  hookPage(page, "global");
+  await hookPage(page, "global");
 
   // 1. Sign-in page — unauthenticated, must serve CSP.
   const BASE_URL = process.env.BASE_URL ?? "http://localhost:3001";
@@ -196,11 +205,15 @@ test("CSP smoke walkthrough", async ({ page }) => {
     // eslint-disable-next-line no-console
     console.log(`... (${captured.length - 50} more)`);
   }
+
+  if (ENFORCING) {
+    expect(failingIssues("global"), "unexpected CSP violations / page errors during student flow").toEqual([]);
+  }
 });
 
 test("CSP smoke walkthrough — instructor", async ({ page }) => {
   test.setTimeout(180_000);
-  hookPage(page, "instructor");
+  await hookPage(page, "instructor");
 
   await loginViaPassword(page, INSTRUCTOR_EMAIL);
   await dismissTimezoneDialogIfPresent(page);
@@ -223,5 +236,9 @@ test("CSP smoke walkthrough — instructor", async ({ page }) => {
   for (const c of captured.filter((c) => c.page === "instructor").slice(0, 50)) {
     // eslint-disable-next-line no-console
     console.log(`[${c.kind}] ${c.text.slice(0, 400)}`);
+  }
+
+  if (ENFORCING) {
+    expect(failingIssues("instructor"), "unexpected CSP violations / page errors during instructor flow").toEqual([]);
   }
 });
