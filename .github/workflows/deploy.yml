@@ -204,7 +204,8 @@ jobs:
           # destroyed at job end, so fsync/full_page_writes give us nothing.
           # synchronous_commit is SIGHUP-reloadable; fsync and full_page_writes
           # require a restart.
-          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c "
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" \
+            psql -v ON_ERROR_STOP=1 -U postgres -d postgres -c "
             ALTER SYSTEM SET synchronous_commit = off;
             ALTER SYSTEM SET fsync = off;
             ALTER SYSTEM SET full_page_writes = off;
