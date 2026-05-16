@@ -200,6 +200,35 @@ jobs:
             -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
             "${LOCAL_SUPABASE_URL}/rest/v1/"
 
+          # Ephemeral CI Postgres — trade durability for speed. The volume is
+          # destroyed at job end, so fsync/full_page_writes give us nothing.
+          # synchronous_commit is SIGHUP-reloadable; fsync and full_page_writes
+          # require a restart.
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c "
+            ALTER SYSTEM SET synchronous_commit = off;
+            ALTER SYSTEM SET fsync = off;
+            ALTER SYSTEM SET full_page_writes = off;
+            ALTER SYSTEM SET shared_buffers = '512MB';
+            ALTER SYSTEM SET work_mem = '32MB';
+            ALTER SYSTEM SET maintenance_work_mem = '256MB';
+            ALTER SYSTEM SET autovacuum = off;
+          "
+          docker restart "supabase_db_${SUPABASE_PROJECT}"
+
+          # Re-wait for REST after the db bounce — PostgREST reconnects lazily
+          # but Kong returns 5xx until the upstream is healthy again.
+          for i in $(seq 1 120); do
+            if curl -sf -o /dev/null \
+                 -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+                 "${LOCAL_SUPABASE_URL}/rest/v1/"; then
+              break
+            fi
+            sleep 1
+          done
+          curl -sf -o /dev/null \
+            -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+            "${LOCAL_SUPABASE_URL}/rest/v1/"
+
           # Audit table is partitioned; seed today's partition (and the next 7 days).
           docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
             "SELECT public.audit_maintain_partitions();"
