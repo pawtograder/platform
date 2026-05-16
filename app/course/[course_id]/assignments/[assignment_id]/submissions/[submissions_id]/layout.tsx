@@ -1503,9 +1503,27 @@ function ReviewStats() {
       )}
       {!isInstructor && <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />}
       {completed_by && <DataListItem label="Completed by" value={<PersonName size="2xs" uid={completed_by} />} />}
-      {completed_at && <DataListItem label="Completed at" value={formatRelative(completed_at, new Date())} />}
+      {completed_at && (
+        <DataListItem
+          label="Completed at"
+          value={
+            <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+              {formatRelative(completed_at, new Date())}
+            </Text>
+          }
+        />
+      )}
       {checked_by && <DataListItem label="Checked by" value={<PersonName size="2xs" uid={checked_by} />} />}
-      {checked_at && <DataListItem label="Checked at" value={formatRelative(checked_at, new Date())} />}
+      {checked_at && (
+        <DataListItem
+          label="Checked at"
+          value={
+            <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+              {formatRelative(checked_at, new Date())}
+            </Text>
+          }
+        />
+      )}
       {mostRecentGrader && (
         <DataListItem label="Last updated by" value={<PersonName size="2xs" uid={mostRecentGrader} />} />
       )}
@@ -1884,7 +1902,9 @@ function RubricView() {
               Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
-            <Text fontSize="sm">Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}</Text>
+            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
+              Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}
+            </Text>
             <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
               Due:{" "}
               {reviewAssignment.due_date ? (
