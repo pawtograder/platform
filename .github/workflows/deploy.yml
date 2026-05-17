@@ -266,7 +266,12 @@ jobs:
       - name: Start Next.js prod server
         run: |
           set -euo pipefail
-          nohup env PORT=3001 npm run start > $RUN_TMP/next-server.log 2>&1 &
+          # CSP is served in report-only mode for E2E so Playwright's
+          # page.evaluate / waitForFunction (string-eval via CDP) is not
+          # blocked by `script-src` strict-dynamic. The header is still
+          # emitted, so tests can still assert its shape; enforcement
+          # ships in prod via the default `Content-Security-Policy`.
+          nohup env PORT=3001 CSP_REPORT_ONLY=1 npm run start > $RUN_TMP/next-server.log 2>&1 &
           echo $! > $RUN_TMP/next-server.pid
           ready=0
           for i in $(seq 1 60); do
