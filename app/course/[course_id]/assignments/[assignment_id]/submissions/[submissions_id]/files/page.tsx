@@ -367,7 +367,9 @@ function ArtifactComment({
           >
             <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
               <Text fontWeight="bold">{authorProfile?.name}</Text>
-              <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
+              <Text data-visual-test="transparent" data-visual-placeholder="timestamp">
+                commented on {format(comment.created_at, "MMM d, yyyy")}
+              </Text>
             </HStack>
             <HStack>
               {isAuthor || authorProfile?.flair ? (

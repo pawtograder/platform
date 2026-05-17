@@ -1,6 +1,5 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
-import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -13,6 +12,7 @@ import {
   TestingUser
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { visualScreenshot } from "./VisualTestUtils";
 dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
@@ -28,6 +28,7 @@ test.beforeAll(async () => {
   [student, student2, instructor] = await createUsersInClass([
     {
       name: "Office Hours Student",
+      public_profile_name: "Office Hours Pseudonym Student",
       email: "office-hours-student@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -35,6 +36,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Office Hours Student 2",
+      public_profile_name: "Office Hours Pseudonym Student 2",
       email: "office-hours-student2@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -42,6 +44,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Office Hours Instructor",
+      public_profile_name: "Office Hours Pseudonym Instructor",
       email: "office-hours-instructor@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -116,7 +119,7 @@ test.describe("Office Hours", () => {
     await assertStudentPageAccessible(page, "office hours - new help request form");
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
-    await argosScreenshot(page, "Office Hours - Submit a Private Request");
+    await visualScreenshot(page, "Office Hours - Submit a Private Request");
     await page.getByRole("button", { name: "Submit Request" }).click();
 
     // newRequestForm.tsx awaits helpRequests.create() then router.push() to
@@ -130,7 +133,7 @@ test.describe("Office Hours", () => {
       .getByRole("textbox", { name: "Type your message" })
       .fill("Thanks in advance! I might try to open a more geeral request too.");
     await page.getByRole("button", { name: "Send" }).click();
-    await argosScreenshot(page, "Office Hours - Private Request with Comment");
+    await visualScreenshot(page, "Office Hours - Private Request with Comment");
 
     //Make a public request
     await page.getByRole("link", { name: "New Request" }).click();
@@ -160,7 +163,7 @@ test.describe("Office Hours", () => {
     await page.waitForURL("**/office-hours/**");
 
     await page.getByRole("button", { name: "View Chat" }).click();
-    await argosScreenshot(page, "Office Hours - View Queue with a public request");
+    await visualScreenshot(page, "Office Hours - View Queue with a public request");
     await expect(page.getByText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1)).toBeVisible();
     await expect(page.getByText(PRIVATE_HELP_REQUEST_MESSAGE_1)).not.toBeVisible();
 
@@ -179,11 +182,11 @@ test.describe("Office Hours", () => {
     await page.getByRole("link", { name: HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await expect(page.locator("body")).toContainText(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);
-    await argosScreenshot(page, "Office Hours - Instructor View Queue");
+    await visualScreenshot(page, "Office Hours - Instructor View Queue");
 
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_RESPONSE_1);
-    await argosScreenshot(page, "Office Hours - Instructor View Request with Comments");
+    await visualScreenshot(page, "Office Hours - Instructor View Request with Comments");
     await page.getByRole("button", { name: "Send" }).click();
     await page.getByRole("button", { name: "Show queue requests" }).click();
     await page.getByRole("link", { name: PRIVATE_HELP_REQUEST_MESSAGE_1 }).click();

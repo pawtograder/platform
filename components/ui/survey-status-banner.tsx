@@ -80,7 +80,12 @@ export function SurveyStatusBanner({ assignmentId, courseId }: { assignmentId: n
                     </Badge>
                   </HStack>
                   {survey.due_date && (
-                    <Text fontSize="xs" color="fg.muted">
+                    <Text
+                      fontSize="xs"
+                      color="fg.muted"
+                      data-visual-test="transparent"
+                      data-visual-placeholder="relative-time"
+                    >
                       {survey.is_submitted
                         ? `Submitted ${survey.submitted_at ? formatDistanceToNow(new Date(survey.submitted_at), { addSuffix: true }) : ""}`
                         : isOverdue

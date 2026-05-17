@@ -14,7 +14,7 @@ import {
   createSampleGradingResult
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
-import { argosScreenshot } from "@argos-ci/playwright";
+import { visualScreenshot } from "./VisualTestUtils";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -57,6 +57,7 @@ test.beforeAll(async () => {
   [student] = await createUsersInClass([
     {
       name: "Create Submission Student",
+      public_profile_name: "Create Submission Pseudonym Student",
       role: "student",
       class_id: course.id,
       useMagicLink: true
@@ -211,7 +212,9 @@ test.describe("Create submission", () => {
     await expect(notGradedRow).toBeVisible();
     await expect(activeRow.getByText("Pending")).toBeVisible();
     await expect(notGradedRow.getByText("Not for grading")).toBeVisible();
-    await argosScreenshot(page, "Showing active and not-graded submissions");
+    await expect(page.getByRole("row").filter({ hasText: activeSHA })).toHaveCount(1);
+    await expect(page.getByRole("row").filter({ hasText: notGradedSHA })).toHaveCount(1);
+    await visualScreenshot(page, "Showing active and not-graded submissions");
     await page.getByRole("link", { name: "Not for grading" }).click();
     await expect(page.getByText("Viewing a not-for-grading submission")).toBeVisible();
     await assertStudentPageAccessible(page, "create submission - not graded detail");

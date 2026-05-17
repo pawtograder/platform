@@ -1,8 +1,8 @@
 import { Course, DayOfWeek } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
-import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { supabase, createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { visualScreenshot } from "./VisualTestUtils";
 dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
@@ -26,6 +26,7 @@ test.beforeAll(async () => {
   [instructor1, instructor2] = await createUsersInClass([
     {
       name: "Lab Sections Instructor 1",
+      public_profile_name: "Lab Sections Pseudonym Instructor 1",
       email: "lab-sections-instructor1@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -33,6 +34,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Lab Sections Instructor 2",
+      public_profile_name: "Lab Sections Pseudonym Instructor 2",
       email: "lab-sections-instructor2@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -169,7 +171,7 @@ test.describe("Lab Sections Page", () => {
     }
     await expect(page.getByText("<Lab Section 1>", { exact: true })).toBeVisible();
     await page.getByText("No upcoming meetings").first().waitFor({ state: "hidden" });
-    await argosScreenshot(page, "Lab Sections Page Contents");
+    await visualScreenshot(page, "Lab Sections Page Contents");
   });
   test("Instructors can create a lab section", async ({ page }) => {
     // Create a lab section
