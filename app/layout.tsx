@@ -1,6 +1,7 @@
 import { Provider } from "@/components/ui/provider";
 import { Theme, ClientOnly } from "@chakra-ui/react";
 import { GeistSans } from "geist/font/sans";
+import { headers } from "next/headers";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 import "@uiw/react-markdown-preview/markdown.css";
@@ -19,15 +20,18 @@ export const metadata = {
 
 const geistSans = GeistSans;
 
-export default function RootLayout({
+export default async function RootLayout({
   children
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // CSP nonce set by middleware; passed to next-themes so its bootstrap
+  // <script> isn't blocked under the strict script-src policy.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" className={geistSans.className} suppressHydrationWarning>
       <body className="bg-background text-foreground">
-        <Provider>
+        <Provider nonce={nonce}>
           <Theme colorPalette="gray">
             <SkipNav />
             <ClientOnly>

@@ -742,23 +742,38 @@ function AssignmentControllerCreator({
     }
   });
 
-  // Wait for all table controllers to be ready
+  // Wait for all table controllers to be ready.
+  //
+  // Use Promise.allSettled instead of Promise.all: if any single controller's
+  // readyPromise rejects (transient fetch error, RLS hiccup, supabase timeout
+  // under heavy load), Promise.all would reject and `setTableControllersReady`
+  // would never fire — leaving `ready` permanently false and `{ready && children}`
+  // stuck on the empty render. E2E tests timeout in this state because the
+  // assignment description never paints. allSettled lets us proceed with whatever
+  // controllers did load; the components that need the missing data render their
+  // own empty/error states.
   useEffect(() => {
     let cancelled = false;
     setTableControllersReady(false);
-    const promises = [
-      controller.reviewAssignments.readyPromise,
-      controller.regradeRequests.readyPromise,
-      controller.rubricsController.readyPromise,
-      controller.rubricPartsController.readyPromise,
-      controller.rubricCriteriaController.readyPromise,
-      controller.rubricChecksController.readyPromise,
-      controller.rubricCheckReferencesController.readyPromise,
-      controller.submissions.readyPromise,
-      controller.assignmentGroups.readyPromise,
-      controller.leaderboard.readyPromise
+    const namedPromises: ReadonlyArray<[string, Promise<void>]> = [
+      ["reviewAssignments", controller.reviewAssignments.readyPromise],
+      ["regradeRequests", controller.regradeRequests.readyPromise],
+      ["rubrics", controller.rubricsController.readyPromise],
+      ["rubricParts", controller.rubricPartsController.readyPromise],
+      ["rubricCriteria", controller.rubricCriteriaController.readyPromise],
+      ["rubricChecks", controller.rubricChecksController.readyPromise],
+      ["rubricCheckReferences", controller.rubricCheckReferencesController.readyPromise],
+      ["submissions", controller.submissions.readyPromise],
+      ["assignmentGroups", controller.assignmentGroups.readyPromise],
+      ["leaderboard", controller.leaderboard.readyPromise]
     ];
-    Promise.all(promises).then(() => {
+    Promise.allSettled(namedPromises.map(([, p]) => p)).then((results) => {
+      results.forEach((r, i) => {
+        if (r.status === "rejected") {
+          // eslint-disable-next-line no-console -- surface load failures; otherwise the page would silently render with stale/empty data
+          console.warn(`AssignmentController: ${namedPromises[i][0]}.readyPromise rejected`, r.reason);
+        }
+      });
       if (!cancelled) setTableControllersReady(true);
     });
     return () => {

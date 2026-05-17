@@ -6,10 +6,12 @@ import { useMemo } from "react";
 
 export function TimeZoneAwareDate({
   date,
-  format = "full"
+  format = "full",
+  visualPlaceholder = "date"
 }: {
   date: string | Date | TZDate;
   format?: "full" | "compact" | "dateOnly" | "timeOnly" | "Pp" | "MMM d, h:mm a" | "MMM d";
+  visualPlaceholder?: "date" | "relative-time" | "timestamp" | "review-status";
 }) {
   const { timeZone } = useTimeZone();
 
@@ -63,5 +65,9 @@ export function TimeZoneAwareDate({
     }
   }, [date, format, timeZone]);
 
-  return <>{formattedDate}</>;
+  return (
+    <span data-visual-test="transparent" data-visual-placeholder={visualPlaceholder}>
+      {formattedDate}
+    </span>
+  );
 }

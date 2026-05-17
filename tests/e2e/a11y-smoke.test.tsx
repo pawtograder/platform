@@ -63,11 +63,7 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     await dialog.press("Escape");
     await expect(dialog).toBeHidden();
 
-    await page.getByRole("button", { name: /open keyboard shortcuts/i }).click();
-    await expect(dialog).toBeVisible();
-    await dialog.press("Escape");
-    await expect(dialog).toBeHidden();
-
+    // Discoverable via the Support & Documentation menu.
     await page.getByRole("button", { name: /support & documentation/i }).click();
     await page.getByRole("menuitem", { name: /keyboard shortcuts/i }).click();
     await expect(dialog).toBeVisible();
