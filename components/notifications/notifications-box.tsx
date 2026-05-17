@@ -7,6 +7,7 @@ import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser, { SystemNotification } from "./notification-teaser";
 import { useState, useEffect, useMemo, type CSSProperties } from "react";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { OPEN_NOTIFICATIONS_EVENT } from "@/lib/clientEvents";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import Markdown from "@/components/ui/markdown";
 
@@ -24,6 +25,16 @@ export default function NotificationsBox() {
   const [bannerNotifications, setBannerNotifications] = useState<Notification[]>([]);
   const { role: classRole } = useClassProfiles();
   const course_id = classRole?.class_id;
+
+  // Keyboard shortcut (Shift+N) and any other UI affordance can toggle the
+  // popover by dispatching this event on `window`.
+  useEffect(() => {
+    function onToggle() {
+      setIsOpen((v) => !v);
+    }
+    window.addEventListener(OPEN_NOTIFICATIONS_EVENT, onToggle);
+    return () => window.removeEventListener(OPEN_NOTIFICATIONS_EVENT, onToggle);
+  }, []);
 
   // Filter out notifications where the author is the current user and separate by display mode
   const allFilteredNotifications = useMemo(

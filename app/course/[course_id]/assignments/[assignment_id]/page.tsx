@@ -122,7 +122,9 @@ export default function AssignmentPage() {
         <GridItem>
           <Flex width="100%" alignItems={"center"}>
             <Box>
-              <Heading size="lg">{assignment.title}</Heading>
+              <Heading as="h1" size="lg">
+                {assignment.title}
+              </Heading>
               <HStack>
                 <AssignmentDueDate
                   assignment={assignment}

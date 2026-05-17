@@ -3,11 +3,13 @@
 import { useAnnouncer } from "@/components/ui/live-announcer";
 import { DialogBody, DialogContent, DialogHeader, DialogRoot, DialogTitle } from "@/components/ui/dialog";
 import { useGlobalSearchIndex } from "@/hooks/useGlobalSearchIndex";
+import { OPEN_SHORTCUTS_HELP_EVENT } from "@/lib/clientEvents";
 import { filterSearchIndex, type SearchHit } from "@/lib/searchIndex";
-import { Box, Heading, HStack, Input, Kbd, Stack, Text, VisuallyHidden } from "@chakra-ui/react";
+import { Box, Button, Heading, HStack, Input, Kbd, Spacer, Stack, Text, VisuallyHidden } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
-import { BsSearch } from "react-icons/bs";
+import { BsChevronLeft, BsChevronRight, BsSearch } from "react-icons/bs";
+import { FiCommand } from "react-icons/fi";
 
 type GlobalSearchContextValue = {
   open: () => void;
@@ -73,24 +75,50 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [focusedId, setFocusedId] = React.useState<string | null>(null);
   const listboxId = React.useId();
+  // When the user activates a hit with children (e.g. an instructor picks
+  // an assignment), we drill into a nested chooser of its sub-pages instead
+  // of navigating. Backspace on an empty query or Escape pops back out.
+  const [drilldown, setDrilldown] = React.useState<SearchHit | null>(null);
 
   React.useEffect(() => {
     if (!isOpen) {
       setQuery("");
       setDebounced("");
       setFocusedId(null);
+      setDrilldown(null);
       return;
     }
     const t = setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearTimeout(t);
   }, [isOpen]);
 
+  // Reset the query when entering/exiting a drill-down so the filter input
+  // doesn't carry over the parent's search term to a child list of ~12 items.
+  React.useEffect(() => {
+    setQuery("");
+    setDebounced("");
+    setFocusedId(null);
+    inputRef.current?.focus();
+  }, [drilldown]);
+
   React.useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim().toLowerCase()), DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [query]);
 
-  const groups = React.useMemo(() => filterSearchIndex(index, debounced), [index, debounced]);
+  const activeIndex = React.useMemo<SearchHit[]>(
+    () => (drilldown?.children ? drilldown.children : index),
+    [drilldown, index]
+  );
+  const groups = React.useMemo(() => {
+    // In drill-down mode with an empty query, show every child rather than
+    // the default "launcher view" (which only surfaces page/setting kinds
+    // and would hide an assignment's manage sub-pages).
+    if (drilldown && !debounced) {
+      return [{ kind: "page" as const, label: drilldown.title, hits: drilldown.children ?? [] }];
+    }
+    return filterSearchIndex(activeIndex, debounced);
+  }, [activeIndex, debounced, drilldown]);
   const flatHits = React.useMemo(() => groups.flatMap((g) => g.hits), [groups]);
 
   // Keep keyboard focus pinned to the first hit when results change.
@@ -126,6 +154,19 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
     [onClose, router]
   );
 
+  const activateHit = React.useCallback(
+    (hit: SearchHit) => {
+      // Hits with children open a nested chooser instead of navigating.
+      // We only do this at the top level; children themselves never nest.
+      if (!drilldown && hit.children && hit.children.length > 0) {
+        setDrilldown(hit);
+        return;
+      }
+      navigateTo(hit);
+    },
+    [drilldown, navigateTo]
+  );
+
   const moveFocus = React.useCallback(
     (delta: number) => {
       if (flatHits.length === 0) return;
@@ -146,9 +187,18 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
     } else if (e.key === "Enter") {
       e.preventDefault();
       const hit = flatHits.find((h) => h.id === focusedId);
-      if (hit) navigateTo(hit);
+      if (hit) activateHit(hit);
+    } else if (e.key === "Backspace" && drilldown && query.length === 0) {
+      // Empty-query backspace pops out of drill-down rather than deleting
+      // nothing; mirrors the gesture used by Linear/Raycast palettes.
+      e.preventDefault();
+      setDrilldown(null);
     } else if (e.key === "Escape") {
-      // Default dialog behavior, but clear query on subsequent opens.
+      if (drilldown) {
+        e.preventDefault();
+        setDrilldown(null);
+        return;
+      }
       onClose();
     }
   };
@@ -167,12 +217,34 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
               <Box color="fg.muted" aria-hidden>
                 <BsSearch />
               </Box>
+              {drilldown && (
+                <HStack
+                  gap={1}
+                  px={2}
+                  py={1}
+                  bg="bg.muted"
+                  borderRadius="md"
+                  fontSize="xs"
+                  fontWeight="medium"
+                  aria-label={`Browsing ${drilldown.title}`}
+                  cursor="pointer"
+                  onClick={() => setDrilldown(null)}
+                  title="Back (Esc)"
+                >
+                  <BsChevronLeft />
+                  <Text lineClamp={1} maxW="40">
+                    {drilldown.title}
+                  </Text>
+                </HStack>
+              )}
               <Input
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={onInputKeyDown}
-                placeholder="Search assignments, surveys, posts, pages…"
+                placeholder={
+                  drilldown ? `Jump to a page in ${drilldown.title}…` : "Search assignments, surveys, posts, pages…"
+                }
                 aria-label="Search Pawtograder"
                 aria-autocomplete="list"
                 aria-controls={listboxId}
@@ -213,13 +285,15 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                     </Heading>
                     {group.hits.map((hit) => {
                       const isFocused = hit.id === focusedId;
+                      const hasChildren = !drilldown && !!hit.children && hit.children.length > 0;
                       return (
                         <Box
                           key={hit.id}
                           id={`gs-option-${hit.id}`}
                           role="option"
                           aria-selected={isFocused}
-                          onClick={() => navigateTo(hit)}
+                          aria-haspopup={hasChildren ? "listbox" : undefined}
+                          onClick={() => activateHit(hit)}
                           onMouseEnter={() => setFocusedId(hit.id)}
                           px={2}
                           py={1.5}
@@ -228,15 +302,25 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                           bg={isFocused ? "bg.muted" : "transparent"}
                           _hover={{ bg: "bg.muted" }}
                         >
-                          <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
-                            {hit.title}
-                            <VisuallyHidden> ({group.label})</VisuallyHidden>
-                          </Text>
-                          {hit.subtitle && (
-                            <Text fontSize="xs" color="fg.muted" lineClamp={1}>
-                              {hit.subtitle}
-                            </Text>
-                          )}
+                          <HStack gap={2} justify="space-between" align="center">
+                            <Box minW={0} flex="1">
+                              <Text fontSize="sm" fontWeight="medium" lineClamp={1}>
+                                {hit.title}
+                                <VisuallyHidden> ({group.label})</VisuallyHidden>
+                                {hasChildren && <VisuallyHidden> — opens sub-pages</VisuallyHidden>}
+                              </Text>
+                              {hit.subtitle && (
+                                <Text fontSize="xs" color="fg.muted" lineClamp={1}>
+                                  {hit.subtitle}
+                                </Text>
+                              )}
+                            </Box>
+                            {hasChildren && (
+                              <Box color="fg.muted" aria-hidden flexShrink={0}>
+                                <BsChevronRight />
+                              </Box>
+                            )}
+                          </HStack>
                         </Box>
                       );
                     })}
@@ -261,12 +345,31 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
             </HStack>
             <HStack gap={1} fontSize="xs" color="fg.muted">
               <Kbd>Enter</Kbd>
-              <Text>open</Text>
+              <Text>{drilldown ? "open" : "open / drill in"}</Text>
             </HStack>
             <HStack gap={1} fontSize="xs" color="fg.muted">
               <Kbd>Esc</Kbd>
-              <Text>close</Text>
+              <Text>{drilldown ? "back" : "close"}</Text>
             </HStack>
+            <Spacer />
+            <Button
+              size="xs"
+              variant="ghost"
+              colorPalette="gray"
+              onClick={() => {
+                // Close the palette first so the help dialog doesn't render
+                // behind it, then ask the shortcuts provider to open.
+                onClose();
+                window.dispatchEvent(new Event(OPEN_SHORTCUTS_HELP_EVENT));
+              }}
+              aria-label="Open keyboard shortcuts"
+            >
+              <HStack gap={1}>
+                <FiCommand aria-hidden focusable={false} />
+                <Text fontSize="xs">Keyboard shortcuts</Text>
+                <Kbd>?</Kbd>
+              </HStack>
+            </Button>
           </Box>
         </DialogBody>
       </DialogContent>

@@ -809,25 +809,6 @@ function ObfuscatedGradesModePicker() {
   );
 }
 
-function KeyboardShortcutsButton() {
-  const { openHelp } = useKeyboardShortcuts();
-
-  return (
-    <Tooltip content="Keyboard shortcuts (?)" showArrow>
-      <Button
-        variant="outline"
-        colorPalette="gray"
-        size="sm"
-        onClick={openHelp}
-        aria-label="Open keyboard shortcuts"
-        px={{ base: 2, lg: 3 }}
-      >
-        <FiCommand aria-hidden focusable={false} />
-      </Button>
-    </Tooltip>
-  );
-}
-
 /**
  * Shows realtime connection status for both class and office hours functionality.
  * Automatically detects office hours context and includes relevant channels.
@@ -985,7 +966,6 @@ export default function UserMenu() {
       <SafeTimeZoneIndicator />
       <ConnectionStatusIndicator />
       <SupportMenu />
-      <KeyboardShortcutsButton />
       <ColorModeButton colorPalette="gray" variant="outline" />
       <NotificationsBox />
       <ObfuscatedGradesModePicker />

@@ -77,4 +77,36 @@ describe("filterSearchIndex", () => {
     const upper = filterSearchIndex(sampleIndex, "LAB");
     expect(lower.flatMap((g) => g.hits).map((h) => h.id)).toEqual(upper.flatMap((g) => g.hits).map((h) => h.id));
   });
+
+  it("groups help queues and discussion topics as their own kinds", () => {
+    const index: SearchHit[] = [
+      { id: "hq1", kind: "help-queue", title: "Project 3 Queue", subtitle: "Help with streams", url: "/oh/1" },
+      { id: "dt1", kind: "discussion-topic", title: "Generics Q&A", subtitle: "Ask questions here", url: "/d?t=1" }
+    ];
+    const groups = filterSearchIndex(index, "generics");
+    expect(groups.map((g) => g.kind)).toEqual(["discussion-topic"]);
+    expect(groups[0].hits.map((h) => h.id)).toEqual(["dt1"]);
+
+    const both = filterSearchIndex(index, "help");
+    const ids = both.flatMap((g) => g.hits).map((h) => h.id);
+    expect(ids).toContain("hq1");
+  });
+
+  it("preserves children on parent hits so the dialog can drill in", () => {
+    const index: SearchHit[] = [
+      {
+        id: "a1",
+        kind: "assignment",
+        title: "Project 3: Streams",
+        url: "/manage/a/1",
+        children: [
+          { id: "a1:edit", kind: "assignment", title: "Edit Assignment", url: "/manage/a/1/edit" },
+          { id: "a1:rubric", kind: "assignment", title: "Configure Rubric", url: "/manage/a/1/rubric" }
+        ]
+      }
+    ];
+    const groups = filterSearchIndex(index, "project");
+    const parent = groups.flatMap((g) => g.hits).find((h) => h.id === "a1");
+    expect(parent?.children?.map((c) => c.id)).toEqual(["a1:edit", "a1:rubric"]);
+  });
 });

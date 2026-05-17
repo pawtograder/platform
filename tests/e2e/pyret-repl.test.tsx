@@ -270,8 +270,14 @@ test.describe("Pyret REPL Integration", () => {
 
     await page.waitForLoadState("networkidle");
 
+    // Scan the `/results` route in its default collapsed state. Covers the
+    // Pyret REPL header (aria-controls only set while expanded), the Feedbot
+    // Textarea labeling, and any Switch toggles rendered above the table —
+    // all of which previously had WAVE-only violations because no test
+    // axe-scanned this route.
     const replToggle = page.getByRole("button", { name: /Interactive Pyret REPL/i }).first();
     await expect(replToggle).toBeVisible();
+    await assertStudentPageAccessible(page, "pyret /results route, REPLs collapsed");
     await replToggle.click();
 
     await expect(page.getByText("Initializing REPL...")).toBeVisible();

@@ -714,7 +714,7 @@ export default function HelpRequestForm() {
               Consider posting on the{" "}
               <Link
                 href={`/course/${course_id}/discussion`}
-                style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}
+                style={{ color: "var(--chakra-colors-blue-700)", textDecoration: "underline" }}
               >
                 Discussion Forum
               </Link>{" "}

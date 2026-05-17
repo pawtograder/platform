@@ -155,7 +155,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Students can submit self-review early", async ({ page }) => {
     await loginAsUser(page, student!, course);
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title }).click();
 
@@ -353,12 +353,18 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
+    // `/submissions/:id` auto-redirects to `/results` (when grader output
+    // exists) before this test clicks "Files". Scan the results route here so
+    // axe also covers the autograder output view, the Pyret REPL header
+    // (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
+    await expect(page).toHaveURL(/\/results(?:\?.*)?$/);
+    await assertStudentPageAccessible(page, "grading results /results route");
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 

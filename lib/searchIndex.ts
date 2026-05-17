@@ -3,7 +3,14 @@
  * palette. Kept separate from the React hook so unit tests can import
  * filterSearchIndex without booting Chakra.
  */
-export type SearchHitKind = "page" | "assignment" | "survey" | "discussion" | "setting";
+export type SearchHitKind =
+  | "page"
+  | "assignment"
+  | "survey"
+  | "discussion"
+  | "discussion-topic"
+  | "help-queue"
+  | "setting";
 
 export type SearchHit = {
   id: string;
@@ -13,6 +20,12 @@ export type SearchHit = {
   url: string;
   /** Extra strings searched alongside title/subtitle. */
   keywords?: string[];
+  /**
+   * Optional drill-down targets. When set, activating this hit in the palette
+   * opens a nested chooser of these children instead of navigating directly.
+   * Used for e.g. picking an assignment then selecting "Edit Rubric".
+   */
+  children?: SearchHit[];
 };
 
 export type SearchHitGroup = { kind: SearchHitKind; label: string; hits: SearchHit[] };
@@ -24,6 +37,8 @@ const GROUP_ORDER: { kind: SearchHitKind; label: string }[] = [
   { kind: "assignment", label: "Assignments" },
   { kind: "survey", label: "Surveys" },
   { kind: "discussion", label: "Discussion" },
+  { kind: "discussion-topic", label: "Discussion topics" },
+  { kind: "help-queue", label: "Help queues" },
   { kind: "page", label: "Pages" },
   { kind: "setting", label: "Settings" }
 ];

@@ -160,6 +160,9 @@ export default async function StudentDashboard({
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
+      <Heading as="h1" size="lg" mb={4}>
+        Course {course?.name} Dashboard
+      </Heading>
       {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
       <DashboardQuickLinks />

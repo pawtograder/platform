@@ -86,7 +86,7 @@ export function TimeZoneModal() {
                       <Text fontSize="sm" color="fg.muted" aria-hidden="true">
                         View all times in {formatTimeZoneName(courseTimeZone)}
                       </Text>
-                      <Text fontSize="xs" color="fg.subtle" aria-hidden="true">
+                      <Text fontSize="xs" color="fg.muted" aria-hidden="true">
                         Recommended for consistency with classmates and instructor
                       </Text>
                     </VStack>
@@ -111,7 +111,7 @@ export function TimeZoneModal() {
                       <Text fontSize="sm" color="fg.muted" aria-hidden="true">
                         View all times in {formatTimeZoneName(browserTimeZone)}
                       </Text>
-                      <Text fontSize="xs" color="fg.subtle" aria-hidden="true">
+                      <Text fontSize="xs" color="fg.muted" aria-hidden="true">
                         Times will be automatically converted to your local timezone
                       </Text>
                     </VStack>
@@ -120,7 +120,7 @@ export function TimeZoneModal() {
               </VStack>
             </RadioGroup.Root>
 
-            <Text fontSize="xs" color="fg.subtle" textAlign="center">
+            <Text fontSize="xs" color="fg.muted" textAlign="center">
               Your choice will be remembered for this course. You can change it later in your settings.
             </Text>
           </VStack>
