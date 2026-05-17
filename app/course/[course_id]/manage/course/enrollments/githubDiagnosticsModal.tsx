@@ -80,6 +80,7 @@ export default function GitHubDiagnosticsModal({
 
   const fetchStatus = useCallback(async () => {
     setIsLoading(true);
+    setStatus(null);
     try {
       const response = await diagnoseInstructorGitHubAccount({ courseId, userRoleId }, supabase);
       setStatus(response.status);
@@ -102,6 +103,7 @@ export default function GitHubDiagnosticsModal({
 
   const handleSync = useCallback(async () => {
     setIsSyncing(true);
+    setStatus(null);
     try {
       const response = await syncInstructorGitHubAccount({ courseId, userRoleId }, supabase);
       setStatus(response.status);
@@ -122,6 +124,7 @@ export default function GitHubDiagnosticsModal({
 
   const handleUnlink = useCallback(async () => {
     setIsUnlinking(true);
+    setStatus(null);
     try {
       const response = await unlinkInstructorGitHubAccount({ courseId, userRoleId }, supabase);
       setStatus(response.status);
@@ -141,6 +144,7 @@ export default function GitHubDiagnosticsModal({
   }, [courseId, supabase, userRoleId]);
 
   const linkedUsername = status?.currentGithubUsername ?? status?.githubUsername ?? null;
+  const isActionDisabled = isLoading || isSyncing || isUnlinking || !status;
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(details) => !details.open && onClose()}>
@@ -233,7 +237,7 @@ export default function GitHubDiagnosticsModal({
                 <PopConfirm
                   triggerLabel="Unlink GitHub identity"
                   trigger={
-                    <Button colorPalette="red" variant="surface" loading={isUnlinking} disabled={!status}>
+                    <Button colorPalette="red" variant="surface" loading={isUnlinking} disabled={isActionDisabled}>
                       Unlink GitHub identity
                     </Button>
                   }
@@ -246,7 +250,7 @@ export default function GitHubDiagnosticsModal({
                   <Button variant="ghost" onClick={onClose}>
                     Close
                   </Button>
-                  <Button colorPalette="green" onClick={handleSync} loading={isSyncing} disabled={!status}>
+                  <Button colorPalette="green" onClick={handleSync} loading={isSyncing} disabled={isActionDisabled}>
                     Sync permissions
                   </Button>
                 </HStack>

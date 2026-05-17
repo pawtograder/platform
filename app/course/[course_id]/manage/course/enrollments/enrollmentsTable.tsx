@@ -50,7 +50,7 @@ import RemoveStudentModal from "./removeStudentModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
-import GitHubDiagnosticsModal from "./githubDiagnosticsModal";
+import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {

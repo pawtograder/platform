@@ -807,7 +807,9 @@ async function handleStudentGitHubSync(req: Request, scope: Sentry.Scope) {
   }
   const { data: classData, error: classError } = await supabase
     .from("classes")
-    .select("github_org")
+    .select("github_org, user_roles!inner(user_id, disabled)")
+    .eq("user_roles.user_id", user.id)
+    .eq("user_roles.disabled", false)
     .not("github_org", "is", "null")
     .limit(1)
     .single();
