@@ -141,5 +141,13 @@ export function buildCsp(nonce: string, opts: CspOptions = {}): string {
 }
 
 export function cspHeaderName(): "Content-Security-Policy" | "Content-Security-Policy-Report-Only" {
-  return process.env.CSP_REPORT_ONLY === "1" ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy";
+  // `E2E_ENABLE=true` is what the CI workflow writes into .env.local for the
+  // prod-server-under-Playwright job. Auto-flipping to report-only there
+  // lets Playwright's CDP-based `evaluate` / `waitForFunction` (which uses
+  // string-eval and would otherwise hit `script-src` enforcement) work
+  // without weakening prod enforcement.
+  if (process.env.CSP_REPORT_ONLY === "1" || process.env.E2E_ENABLE === "true") {
+    return "Content-Security-Policy-Report-Only";
+  }
+  return "Content-Security-Policy";
 }
