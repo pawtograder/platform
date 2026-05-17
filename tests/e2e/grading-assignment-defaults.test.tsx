@@ -59,10 +59,21 @@ test("instructors can manage grading default profiles and apply them on assignme
 
   await page.getByLabel("Profile name").fill(gradingProfileName);
   await page.getByLabel("Description").fill("Profile used by E2E test coverage.");
-  await page.getByRole("checkbox", { name: "Auto assign at deadline" }).check();
+  // Chakra renders the styled Checkbox.Control above the hidden input, so it intercepts
+  // pointer events from Playwright's .check(). Click the label text instead — that's the
+  // pattern used elsewhere in the suite (see gradebook.test.tsx).
+  const autoAssignProfileCheckbox = page.getByRole("checkbox", { name: "Auto assign at deadline" });
+  if (!(await autoAssignProfileCheckbox.isChecked())) {
+    await page.getByText("Auto assign at deadline", { exact: true }).click();
+  }
+  await expect(autoAssignProfileCheckbox).toBeChecked();
   await page.getByLabel("Assignee pool").selectOption("instructors_and_graders");
   await page.getByLabel("Review due hours after deadline").fill("36");
-  await page.getByRole("checkbox", { name: "Enable late grading reminders" }).check();
+  const remindersProfileCheckbox = page.getByRole("checkbox", { name: "Enable late grading reminders" });
+  if (!(await remindersProfileCheckbox.isChecked())) {
+    await page.getByText("Enable late grading reminders", { exact: true }).click();
+  }
+  await expect(remindersProfileCheckbox).toBeChecked();
   await page.getByLabel("Reminder interval (hours)").fill("12");
   await page.getByLabel("Reply-to email").fill("grading-reply@example.edu");
   await page.getByLabel("CC emails").fill("staff1@example.edu, staff2@example.edu");
@@ -89,20 +100,34 @@ test("instructors can manage grading default profiles and apply them on assignme
 
   const profile = createdProfile as GradingAssignmentDefaultProfile;
 
-  page.once("dialog", async (dialog) => {
+  // Toast notifications from the prior `Create profile` clicks linger at the bottom-right
+  // and overlay the Delete buttons. Use dispatchEvent("click") to bypass DOM-level pointer
+  // interception (force:true only skips Playwright's actionability check, not DOM stacking).
+  // The handler does an async DB lookup before showing window.confirm, so the dialog lags;
+  // a single page-level dialog listener driven by a counter handles both confirms.
+  let dialogIndex = 0;
+  const onDialog = async (dialog: import("@playwright/test").Dialog) => {
     expect(dialog.message()).toContain("Delete this grading default profile?");
-    await dialog.dismiss();
-  });
-  await page.getByRole("button", { name: "Delete" }).first().click();
-  await expect(page.getByText(gradingProfileName)).toBeVisible();
+    dialogIndex += 1;
+    if (dialogIndex === 1) {
+      await dialog.dismiss();
+    } else {
+      await dialog.accept();
+    }
+  };
+  page.on("dialog", onDialog);
+  try {
+    await page.getByRole("button", { name: "Delete" }).first().dispatchEvent("click");
+    await expect.poll(() => dialogIndex, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+    await expect(page.getByText(gradingProfileName)).toBeVisible();
 
-  page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("Delete this grading default profile?");
-    await dialog.accept();
-  });
-  await page.getByRole("button", { name: "Delete" }).nth(1).click();
-  await expect(page.getByText(throwawayProfileName)).not.toBeVisible();
-  await expect(page.getByText(gradingProfileName)).toBeVisible();
+    await page.getByRole("button", { name: "Delete" }).nth(1).dispatchEvent("click");
+    await expect.poll(() => dialogIndex, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText(throwawayProfileName)).not.toBeVisible();
+    await expect(page.getByText(gradingProfileName)).toBeVisible();
+  } finally {
+    page.off("dialog", onDialog);
+  }
 
   await page.goto(`/course/${course.id}/manage/assignments/new`);
   await expect(page.getByRole("heading", { name: "Create New Assignment" })).toBeVisible();
@@ -120,13 +145,20 @@ test("instructors can manage grading default profiles and apply them on assignme
   await expect(page.getByLabel("CC emails")).toHaveValue("staff1@example.edu, staff2@example.edu");
 
   const applyProfileCheckbox = page.getByRole("checkbox", { name: "Apply profile settings on selection" });
-  await applyProfileCheckbox.uncheck();
+  const applyProfileLabel = page.getByText("Apply profile settings on selection", { exact: true });
+  if (await applyProfileCheckbox.isChecked()) {
+    await applyProfileLabel.click();
+  }
+  await expect(applyProfileCheckbox).not.toBeChecked();
   await createDueHoursInput.fill("99");
   await savedProfileSelect.selectOption("");
   await savedProfileSelect.selectOption(String(profile.id));
   await expect(createDueHoursInput).toHaveValue("99");
 
-  await applyProfileCheckbox.check();
+  if (!(await applyProfileCheckbox.isChecked())) {
+    await applyProfileLabel.click();
+  }
+  await expect(applyProfileCheckbox).toBeChecked();
   await savedProfileSelect.selectOption("");
   await savedProfileSelect.selectOption(String(profile.id));
   await expect(createDueHoursInput).toHaveValue("36");
@@ -150,22 +182,31 @@ test("instructors can manage grading default profiles and apply them on assignme
   await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}/edit`);
   await expect(page.getByRole("heading", { name: "Edit Assignment" })).toBeVisible();
 
-  const editProfileSelect = page.getByLabel("Saved profile");
+  // ManageAssignmentNav (the layout for /manage/assignments/[assignment_id]/*) renders its
+  // children twice — once in a desktop Flex (display: { base: 'none', lg: 'flex' }) and once
+  // in a mobile Flex (display: { base: 'flex', lg: 'none' }). Both are in the DOM regardless
+  // of viewport, so every field label resolves to two elements. Scope to a single visible
+  // form to keep strict-mode happy.
+  const editForm = page
+    .locator("form")
+    .filter({ has: page.getByRole("button", { name: "Save" }) })
+    .first();
+  const editProfileSelect = editForm.getByLabel("Saved profile");
   await expect(editProfileSelect).toHaveValue(String(profile.id));
-  const editDueHoursInput = page.getByLabel("Review due hours after assignment deadline");
+  const editDueHoursInput = editForm.getByLabel("Review due hours after assignment deadline");
   await expect(editDueHoursInput).toHaveValue("48");
-  await expect(page.getByLabel("Reminder interval (hours)")).toHaveValue("24");
-  await expect(page.getByLabel("Reply-to email")).toHaveValue("seeded-reply@example.edu");
-  await expect(page.getByLabel("CC emails")).toHaveValue("seeded-cc@example.edu");
+  await expect(editForm.getByLabel("Reminder interval (hours)")).toHaveValue("24");
+  await expect(editForm.getByLabel("Reply-to email")).toHaveValue("seeded-reply@example.edu");
+  await expect(editForm.getByLabel("CC emails")).toHaveValue("seeded-cc@example.edu");
 
   await editDueHoursInput.fill("77");
   await page.waitForTimeout(1500);
   await expect(editDueHoursInput).toHaveValue("77");
 
-  await page.getByLabel("Reminder interval (hours)").fill("6");
-  await page.getByLabel("Reply-to email").fill("updated-reply@example.edu");
-  await page.getByLabel("CC emails").fill("updated-cc@example.edu");
-  await page.getByRole("button", { name: "Save" }).click();
+  await editForm.getByLabel("Reminder interval (hours)").fill("6");
+  await editForm.getByLabel("Reply-to email").fill("updated-reply@example.edu");
+  await editForm.getByLabel("CC emails").fill("updated-cc@example.edu");
+  await editForm.getByRole("button", { name: "Save" }).click();
 
   await expect(page.getByText("Assignment Updated")).toBeVisible({ timeout: 20_000 });
 
@@ -1110,37 +1151,35 @@ test("reminder email queue excludes completed, future-due, disabled, and wrong-r
     class_id: course.id
   });
 
-  // Create a submission_review for the grading rubric so review_assignments inserts can satisfy
-  // their submission_review_id FK without going through bulk_assign_reviews.
-  const { data: gradingReview, error: reviewErr } = await supabase
-    .from("submission_reviews")
-    .insert({
-      submission_id: sub.submission_id,
-      rubric_id: a.grading_rubric_id!,
-      class_id: course.id,
-      name: "Grading review for reminder-filter test",
-      total_score: 0,
-      total_autograde_score: 0,
-      tweak: 0
-    })
-    .select("id")
-    .single();
-  expect(reviewErr).toBeNull();
-  // Also create a submission_review for the SELF rubric so the wrong-rubric scenario is valid.
-  const { data: selfReview, error: selfReviewErr } = await supabase
-    .from("submission_reviews")
-    .insert({
-      submission_id: sub.submission_id,
-      rubric_id: a.self_review_rubric_id!,
-      class_id: course.id,
-      name: "Self review for reminder-filter test",
-      total_score: 0,
-      total_autograde_score: 0,
-      tweak: 0
-    })
-    .select("id")
-    .single();
-  expect(selfReviewErr).toBeNull();
+  // Look up (or create) the submission_review rows that review_assignments FK-reference. Other
+  // triggers in the system may auto-create the grading-rubric submission_review on submission
+  // insert, so use upsert-style logic to be robust to that.
+  const ensureSubmissionReview = async (rubricId: number, name: string): Promise<number> => {
+    const { data: existing } = await supabase
+      .from("submission_reviews")
+      .select("id")
+      .eq("submission_id", sub.submission_id)
+      .eq("rubric_id", rubricId)
+      .maybeSingle();
+    if (existing) return existing.id;
+    const { data: created, error: createErr } = await supabase
+      .from("submission_reviews")
+      .insert({
+        submission_id: sub.submission_id,
+        rubric_id: rubricId,
+        class_id: course.id,
+        name,
+        total_score: 0,
+        total_autograde_score: 0,
+        tweak: 0
+      })
+      .select("id")
+      .single();
+    expect(createErr).toBeNull();
+    return created!.id;
+  };
+  const gradingReviewId = await ensureSubmissionReview(a.grading_rubric_id!, "Grading review for reminder-filter test");
+  const selfReviewId = await ensureSubmissionReview(a.self_review_rubric_id!, "Self review for reminder-filter test");
 
   const overdue = addDays(new Date(), -1).toISOString();
   const future = addDays(new Date(), 3).toISOString();
@@ -1150,7 +1189,7 @@ test("reminder email queue excludes completed, future-due, disabled, and wrong-r
     {
       assignee_profile_id: graderActive.private_profile_id,
       submission_id: sub.submission_id,
-      submission_review_id: gradingReview!.id,
+      submission_review_id: gradingReviewId,
       assignment_id: a.id,
       rubric_id: a.grading_rubric_id!,
       class_id: course.id,
@@ -1160,7 +1199,7 @@ test("reminder email queue excludes completed, future-due, disabled, and wrong-r
     {
       assignee_profile_id: graderCompleted.private_profile_id,
       submission_id: sub.submission_id,
-      submission_review_id: gradingReview!.id,
+      submission_review_id: gradingReviewId,
       assignment_id: a.id,
       rubric_id: a.grading_rubric_id!,
       class_id: course.id,
@@ -1171,7 +1210,7 @@ test("reminder email queue excludes completed, future-due, disabled, and wrong-r
     {
       assignee_profile_id: graderFuture.private_profile_id,
       submission_id: sub.submission_id,
-      submission_review_id: gradingReview!.id,
+      submission_review_id: gradingReviewId,
       assignment_id: a.id,
       rubric_id: a.grading_rubric_id!,
       class_id: course.id,
@@ -1181,7 +1220,7 @@ test("reminder email queue excludes completed, future-due, disabled, and wrong-r
     {
       assignee_profile_id: graderDisabled.private_profile_id,
       submission_id: sub.submission_id,
-      submission_review_id: gradingReview!.id,
+      submission_review_id: gradingReviewId,
       assignment_id: a.id,
       rubric_id: a.grading_rubric_id!,
       class_id: course.id,
@@ -1191,7 +1230,7 @@ test("reminder email queue excludes completed, future-due, disabled, and wrong-r
     {
       assignee_profile_id: graderWrongRubric.private_profile_id,
       submission_id: sub.submission_id,
-      submission_review_id: selfReview!.id,
+      submission_review_id: selfReviewId,
       assignment_id: a.id,
       rubric_id: a.self_review_rubric_id!,
       class_id: course.id,

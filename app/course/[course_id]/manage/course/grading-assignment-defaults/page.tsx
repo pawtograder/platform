@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { toaster } from "@/components/ui/toaster";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -276,7 +276,6 @@ export default function GradingAssignmentDefaultsPage() {
 
   return (
     <Box p={4}>
-      <Toaster />
       <VStack align="stretch" gap={6}>
         <Box>
           <Heading size="lg">Grading Assignment Defaults</Heading>

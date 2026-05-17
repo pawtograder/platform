@@ -289,7 +289,7 @@ BEGIN
   WHERE ur.class_id = v_assignment.class_id
     AND ur.role = 'instructor'
     AND ur.disabled = false
-  ORDER BY ur.created_at
+  ORDER BY ur.id
   LIMIT 1;
 
   IF v_actor_user_id IS NULL THEN
@@ -822,7 +822,7 @@ BEGIN
   WHERE ur.class_id = v_assignment.class_id
     AND ur.role = 'instructor'
     AND ur.disabled = false
-  ORDER BY ur.created_at
+  ORDER BY ur.id
   LIMIT 1;
 
   IF v_actor_user_id IS NULL THEN

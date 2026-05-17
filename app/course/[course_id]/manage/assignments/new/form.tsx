@@ -674,7 +674,6 @@ function GradingAutomationSubform({
   const remindersEnabled = watch("late_grading_reminders_enabled");
   const autoAssignAtDeadline = watch("auto_assign_at_deadline");
   const assigneePool = watch("auto_assign_assignee_pool");
-  const selectedProfile = selectedProfileId ? profileMap[selectedProfileId] : undefined;
 
   useEffect(() => {
     if (assigneePool !== "graders") {
@@ -682,22 +681,22 @@ function GradingAutomationSubform({
     }
   }, [assigneePool, setValue]);
 
-  useEffect(() => {
-    if (!selectedProfile || !applyProfileOnSelect) {
-      return;
-    }
-    setValue("auto_assign_at_deadline", selectedProfile.auto_assign_at_deadline);
-    setValue("auto_assign_assignee_pool", selectedProfile.auto_assign_assignee_pool);
-    setValue("auto_assign_review_due_hours", selectedProfile.auto_assign_review_due_hours);
-    setValue(
-      "auto_assign_grader_subset_private_profile_ids",
-      normalizeProfileIdSubset(selectedProfile.auto_assign_grader_subset_private_profile_ids)
-    );
-    setValue("late_grading_reminders_enabled", selectedProfile.late_grading_reminders_enabled);
-    setValue("late_grading_reminder_interval_hours", selectedProfile.late_grading_reminder_interval_hours);
-    setValue("late_grading_reply_to", selectedProfile.late_grading_reply_to);
-    setValue("late_grading_cc_emails", normalizeCcEmails(selectedProfile.late_grading_cc_emails));
-  }, [selectedProfile, applyProfileOnSelect, setValue]);
+  const applyProfileValuesToForm = useCallback(
+    (profile: GradingAssignmentDefaultProfile) => {
+      setValue("auto_assign_at_deadline", profile.auto_assign_at_deadline);
+      setValue("auto_assign_assignee_pool", profile.auto_assign_assignee_pool);
+      setValue("auto_assign_review_due_hours", profile.auto_assign_review_due_hours);
+      setValue(
+        "auto_assign_grader_subset_private_profile_ids",
+        normalizeProfileIdSubset(profile.auto_assign_grader_subset_private_profile_ids)
+      );
+      setValue("late_grading_reminders_enabled", profile.late_grading_reminders_enabled);
+      setValue("late_grading_reminder_interval_hours", profile.late_grading_reminder_interval_hours);
+      setValue("late_grading_reply_to", profile.late_grading_reply_to);
+      setValue("late_grading_cc_emails", normalizeCcEmails(profile.late_grading_cc_emails));
+    },
+    [setValue]
+  );
 
   return (
     <CardRoot>
@@ -715,7 +714,14 @@ function GradingAutomationSubform({
                 value={String(selectedProfileId ?? "")}
                 onChange={(event) => {
                   const rawValue = event.target.value;
-                  setValue("grading_default_profile_id", rawValue ? Number(rawValue) : null, { shouldDirty: true });
+                  const newId = rawValue ? Number(rawValue) : null;
+                  setValue("grading_default_profile_id", newId, { shouldDirty: true });
+                  // Apply only on user-initiated changes (not on the initial form reset from
+                  // saved DB state, which would clobber per-assignment overrides on edit).
+                  if (newId !== null && applyProfileOnSelect) {
+                    const newProfile = profileMap[newId];
+                    if (newProfile) applyProfileValuesToForm(newProfile);
+                  }
                 }}
               >
                 <option value="">No profile selected</option>
