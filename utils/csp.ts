@@ -8,7 +8,7 @@ export function generateNonce(): string {
   return btoa(bin);
 }
 
-type CspOptions = { dev?: boolean };
+type CspOptions = { dev?: boolean; reportOnly?: boolean };
 
 // Origins explicitly allowed for connect/frame/img beyond the schemes below.
 // We pull `NEXT_PUBLIC_SUPABASE_URL` so that a non-https Supabase (local dev
@@ -94,6 +94,7 @@ const MONACO_CDN = ["https://cdn.jsdelivr.net"] as const;
 // `'unsafe-inline'` is allowed in *script-src* (which we do not).
 export function buildCsp(nonce: string, opts: CspOptions = {}): string {
   const dev = !!opts.dev;
+  const reportOnly = !!opts.reportOnly;
   const supa = extraSupabaseOrigin();
   const posthog = extraPosthogOrigins();
   const directives: Array<[string, string[]]> = [
@@ -132,22 +133,29 @@ export function buildCsp(nonce: string, opts: CspOptions = {}): string {
     ["worker-src", ["'self'", "blob:"]],
     ["object-src", ["'none'"]],
     ["base-uri", ["'self'"]],
-    ["form-action", ["'self'"]],
-    ["frame-ancestors", ["'none'"]]
+    ["form-action", ["'self'"]]
   ];
+  // `frame-ancestors` is ignored in report-only mode per the CSP spec (by the
+  // time the response header is parsed, the embedding decision is already
+  // made). Browsers log a console warning, which Playwright surfaces as a
+  // page.addStyleTag error in webkit. Omit it when report-only so the warning
+  // doesn't fail axe-a11y tests; X-Frame-Options DENY (set in middleware)
+  // gives equivalent clickjacking protection in both modes.
+  if (!reportOnly) directives.push(["frame-ancestors", ["'none'"]]);
   if (!dev) directives.push(["upgrade-insecure-requests", []]);
 
   return directives.map(([k, v]) => (v.length ? `${k} ${v.join(" ")}` : k)).join("; ");
 }
 
+// `E2E_ENABLE=true` is what the CI workflow writes into .env.local for the
+// prod-server-under-Playwright job. Auto-flipping to report-only there
+// lets Playwright's CDP-based `evaluate` / `waitForFunction` (which uses
+// string-eval and would otherwise hit `script-src` enforcement) work
+// without weakening prod enforcement.
+export function isReportOnlyMode(): boolean {
+  return process.env.CSP_REPORT_ONLY === "1" || process.env.E2E_ENABLE === "true";
+}
+
 export function cspHeaderName(): "Content-Security-Policy" | "Content-Security-Policy-Report-Only" {
-  // `E2E_ENABLE=true` is what the CI workflow writes into .env.local for the
-  // prod-server-under-Playwright job. Auto-flipping to report-only there
-  // lets Playwright's CDP-based `evaluate` / `waitForFunction` (which uses
-  // string-eval and would otherwise hit `script-src` enforcement) work
-  // without weakening prod enforcement.
-  if (process.env.CSP_REPORT_ONLY === "1" || process.env.E2E_ENABLE === "true") {
-    return "Content-Security-Policy-Report-Only";
-  }
-  return "Content-Security-Policy";
+  return isReportOnlyMode() ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy";
 }
