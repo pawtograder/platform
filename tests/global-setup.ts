@@ -1,5 +1,8 @@
 import { test as base, Page } from "@playwright/test";
 import { logMagicLink, supabase, TestingUser } from "@/tests/e2e/TestingUtils";
+import { writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
 
 // On failure, dump DB state relevant to the failing test so CI artifacts
 // carry enough context to root-cause data-state flakes that don't reproduce
@@ -211,9 +214,18 @@ export const test = base.extend<E2EFixtures>({
       if (testInfo.status === testInfo.expectedStatus) return;
       try {
         const diag = await collectFailureDiagnostics(page);
+        // Path-based attach: body-based testInfo.attach({ body: Buffer })
+        // is silently dropped by Playwright's HTML reporter in our CI setup
+        // (verified empirically — the fixture ran and the attach call
+        // resolved, but nothing landed in playwright-report/data/). Writing
+        // the file to testInfo.outputPath() first and attaching by `path:`
+        // routes through the reporter's normal file-copy flow.
+        const diagPath = testInfo.outputPath("db-state.json");
+        mkdirSync(path.dirname(diagPath), { recursive: true });
+        writeFileSync(diagPath, JSON.stringify(diag, null, 2));
         await testInfo.attach("db-state.json", {
           contentType: "application/json",
-          body: Buffer.from(JSON.stringify(diag, null, 2))
+          path: diagPath
         });
       } catch (err) {
         // Never let diagnostics swallow the underlying failure. Attach the
