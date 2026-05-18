@@ -1,4 +1,5 @@
 "use client";
+import { RepositoryCommitHistoryDialog } from "@/components/assignments/commit-history-dialog";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
@@ -49,7 +50,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { useParams, useRouter } from "next/navigation";
 import Papa from "papaparse";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { FaCheck, FaGitAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { BsCheck, BsX } from "react-icons/bs";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
@@ -463,6 +464,35 @@ export default function AssignmentsTable({
         id: "groupname",
         accessorKey: "groupname",
         header: "Group"
+      },
+      {
+        id: "commit_history",
+        header: "Commits",
+        enableSorting: false,
+        enableColumnFilter: false,
+        cell: ({ row }) => {
+          const repository = row.original.repository;
+          if (!repository) {
+            return <Text color="fg.muted">—</Text>;
+          }
+          return (
+            <Box onClick={(event) => event.stopPropagation()}>
+              <RepositoryCommitHistoryDialog
+                courseId={Number(course_id)}
+                assignmentId={Number(assignment_id)}
+                repositoryFullName={repository}
+                studentOrGroupLabel={row.original.groupname || row.original.name || undefined}
+                showTriggerAction
+                trigger={
+                  <Button size="xs" variant="ghost" onClick={(event) => event.stopPropagation()}>
+                    <Icon as={FaGitAlt} />
+                    Commits
+                  </Button>
+                }
+              />
+            </Box>
+          );
+        }
       },
       ...(showGroupMentorColumn
         ? ([
