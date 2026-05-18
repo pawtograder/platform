@@ -42,12 +42,22 @@ export function GlobalSearchProvider({ children }: { children: React.ReactNode }
   const open = React.useCallback(() => setIsOpen(true), []);
   const close = React.useCallback(() => setIsOpen(false), []);
 
-  // Mod+K from anywhere.
+  // Mod+K from anywhere — but skip while the user is typing in a form
+  // field or contenteditable region so we don't clobber native editor
+  // shortcuts (e.g. Cmd+K in Monaco, browser address-bar focus).
   React.useEffect(() => {
+    function isEditableTarget(target: EventTarget | null) {
+      if (!(target instanceof HTMLElement)) return false;
+      if (target.isContentEditable) return true;
+      return !!target.closest('input, textarea, select, [role="textbox"], [contenteditable="true"]');
+    }
     function onKey(e: KeyboardEvent) {
+      if (e.defaultPrevented) return;
+      if (e.altKey || e.shiftKey) return;
       const isMod = e.ctrlKey || e.metaKey;
       if (!isMod) return;
       if (e.key.toLowerCase() !== "k") return;
+      if (isEditableTarget(e.target)) return;
       e.preventDefault();
       setIsOpen((v) => !v);
     }

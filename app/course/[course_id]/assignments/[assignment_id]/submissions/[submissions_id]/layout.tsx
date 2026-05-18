@@ -438,7 +438,7 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
             const savedN = perN[studentId];
             const isEditing = editingStudentId === studentId;
             return (
-              <Box key={`441:${studentId}`} borderWidth="1px" borderRadius="md" p={2} borderColor="border.muted">
+              <Box key={studentId} borderWidth="1px" borderRadius="md" p={2} borderColor="border.muted">
                 <HStack justify="space-between" mb={1}>
                   <PersonName uid={studentId} />
                   {!isEditing && (
@@ -1171,10 +1171,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                 ? `/course/${historical_submission.class_id}/grade/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`
                 : `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
               return (
-                <Table.Row
-                  key={`1174:${historical_submission.id}`}
-                  bg={pathname.startsWith(link) ? "bg.emphasized" : undefined}
-                >
+                <Table.Row key={historical_submission.id} bg={pathname.startsWith(link) ? "bg.emphasized" : undefined}>
                   <Table.Cell>
                     <Link href={link}>
                       {historical_submission.is_active && <ActiveSubmissionIcon />}
@@ -1440,15 +1437,7 @@ function TestResults() {
         const showScore = extraData?.hide_score !== "true" && test.max_score !== 0;
         const testMatches = matches.get(test.id) || [];
         return (
-          <Box
-            key={`1440:${test.id}`}
-            border="1px solid"
-            borderColor="border.emphasized"
-            borderRadius="md"
-            p={2}
-            mt={2}
-            w="100%"
-          >
+          <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
             <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
               <Heading size="sm">
@@ -1542,7 +1531,7 @@ function ReviewStats() {
         <DataListItem
           label="Other graders"
           value={Array.from(allGraders).map((grader) => (
-            <PersonName size="2xs" key={`1516:${grader}`} uid={grader} />
+            <PersonName size="2xs" key={grader} uid={grader} />
           ))}
         />
       )}
@@ -1790,7 +1779,7 @@ function PerStudentGradingTotalsDisplay({
 
           return (
             <Box
-              key={`1764:${profileId}`}
+              key={profileId}
               w="100%"
               pb={2}
               borderBottomWidth="1px"
@@ -1850,7 +1839,7 @@ function IndividualScoresDisplay({ individualScores }: { individualScores: Indiv
         {sortedEntries.map(([profileId, score]) => {
           const isMe = profileId === private_profile_id;
           return (
-            <HStack key={`1824:${profileId}`} w="100%" justifyContent="space-between">
+            <HStack key={profileId} w="100%" justifyContent="space-between">
               <HStack>
                 <PersonName uid={profileId} />
                 {isMe && !isGraderOrInstructor && (
@@ -1987,7 +1976,7 @@ function Comments() {
       </Heading>
       <VStack align="start" gap={2}>
         {comments.map((comment) => (
-          <RubricCheckComment key={`1959:${comment.id}`} comment_id={comment.id} comment_type="submission" />
+          <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" />
         ))}
       </VStack>
     </Box>
@@ -2054,7 +2043,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                   <HStack gap={1}>
                     Group {assignmentGroupWithMembers.name} (
                     {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                      <HStack key={`2026:${member.id}`} gap={1}>
+                      <HStack key={member.id} gap={1}>
                         <PersonName uid={member.profile_id} showAvatar={false} />
                         <StudentSummaryTrigger
                           student_id={member.profile_id}

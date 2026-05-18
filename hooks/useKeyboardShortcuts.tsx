@@ -203,7 +203,9 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
         if (e.key === "A") {
           e.preventDefault();
           clearPending();
-          setObfuscatedRef.current(!isObfuscatedRef.current);
+          const next = !isObfuscatedRef.current;
+          isObfuscatedRef.current = next;
+          setObfuscatedRef.current(next);
           window.dispatchEvent(new Event(TOGGLE_ANONYMIZE_GRADES_EVENT));
           return;
         }
