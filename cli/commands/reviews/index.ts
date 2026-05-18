@@ -7,7 +7,7 @@
  */
 
 import type { Argv } from "yargs";
-import { logger } from "../../utils/logger";
+import { logger } from "@/cli/utils/logger";
 
 export const command = "reviews <action>";
 export const describe = "Manage submission reviews and review assignments";

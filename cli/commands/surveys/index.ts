@@ -6,8 +6,8 @@
  */
 
 import type { Argv } from "yargs";
-import { apiCall } from "../../utils/api";
-import { logger, handleError } from "../../utils/logger";
+import { apiCall } from "@/cli/utils/api";
+import { logger, handleError } from "@/cli/utils/logger";
 
 export const command = "surveys <action>";
 export const describe = "Manage surveys";
