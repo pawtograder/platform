@@ -188,8 +188,7 @@ export function MarkDuplicateThreadModal({
 
       toaster.success({
         title: "Merged as duplicate",
-        description:
-          "This thread was moved under the original. Students were notified if they authored the duplicate."
+        description: "This thread was moved under the original. Students were notified if they authored the duplicate."
       });
       onClose();
       onMerged(selectedId);
@@ -220,13 +219,10 @@ export function MarkDuplicateThreadModal({
         <DialogCloseTrigger />
         <DialogBody>
           <Text fontSize="sm" color="fg.muted" mb="3">
-            This post and all of its replies will become replies under the original thread you pick. The author
-            receives a notification and a banner will show the former subject and who merged it.
+            This post and all of its replies will become replies under the original thread you pick. The author receives
+            a notification and a banner will show the former subject and who merged it.
           </Text>
-          <Field
-            label="Find the original thread"
-            helperText="Search by title or post number (e.g. #42 or 42)."
-          >
+          <Field label="Find the original thread" helperText="Search by title or post number (e.g. #42 or 42).">
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}

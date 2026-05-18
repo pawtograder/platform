@@ -211,9 +211,7 @@ function getEmailTemplate(body: NotificationEnvelope, scope: Sentry.Scope): { su
       missing_template_for_action: action ?? null
     });
     Sentry.captureException(error, scope);
-    console.error(
-      `No email template found for type=${body.type} action=${action == null ? "(none)" : String(action)}`
-    );
+    console.error(`No email template found for type=${body.type} action=${action == null ? "(none)" : String(action)}`);
     return null;
   }
 
