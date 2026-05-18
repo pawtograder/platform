@@ -194,11 +194,27 @@ function getEmailTemplate(body: NotificationEnvelope, scope: Sentry.Scope): { su
     return null;
   }
 
-  if ("action" in body && body.action) {
-    emailTemplate = emailTemplate[body.action as keyof typeof emailTemplate];
+  const action = "action" in body ? (body as { action?: unknown }).action : undefined;
+  if (action) {
+    emailTemplate = emailTemplate[action as keyof typeof emailTemplate];
   } else if (body.type === "discussion_thread") {
     // Default to "reply" for backward compatibility with old notifications
     emailTemplate = emailTemplate["reply" as keyof typeof emailTemplate];
+  }
+
+  if (emailTemplate == null || typeof emailTemplate !== "object") {
+    const error = new Error(
+      `No email template found for type=${body.type} action=${action == null ? "(none)" : String(action)}`
+    );
+    scope.setContext("error_details", {
+      missing_template_for_type: body.type,
+      missing_template_for_action: action ?? null
+    });
+    Sentry.captureException(error, scope);
+    console.error(
+      `No email template found for type=${body.type} action=${action == null ? "(none)" : String(action)}`
+    );
+    return null;
   }
 
   if (!("subject" in emailTemplate)) {

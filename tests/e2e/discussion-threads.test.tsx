@@ -474,14 +474,21 @@ test.describe("Discussion duplicate merge (grader)", () => {
 
     await page.getByRole("button", { name: "Mark duplicate" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
-    await page.getByRole("textbox").fill(String(origThread.id));
-    await page.getByRole("button", { name: "Merge into original" }).click();
+    await page.getByTestId("mark-duplicate-search-input").fill("E2E Dup Original");
+    await page.getByTestId(`mark-duplicate-result-${origThread.id}`).click();
+    await expect(page.getByText("Selected original")).toBeVisible();
+    await page.getByTestId("mark-duplicate-confirm").click();
     await page.waitForURL(`**/course/${dupCourse.id}/discussion/${origThread.id}`);
 
     await expect(page.getByRole("heading", { name: "E2E Dup Original Subject" })).toBeVisible();
     await expect(page.getByText("E2E Dup Duplicate Subject").first()).toBeVisible();
     await expect(page.getByText(/E2E Dup Grader.*marked this as a duplicate/)).toBeVisible();
     await expect(page.getByText("A reply under the duplicate root before merge.")).toBeVisible();
+
+    // The duplicate-marked thread must disappear from the discussion feed teasers.
+    await page.goto(`/course/${dupCourse.id}/discussion`);
+    await expect(page.getByText("E2E Dup Original Subject").first()).toBeVisible();
+    await expect(page.getByText("E2E Dup Duplicate Subject")).toHaveCount(0);
 
     await loginAsUser(page, dupStudent, dupCourse);
     await page.goto(`/course/${dupCourse.id}/notifications`);

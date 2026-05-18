@@ -180,7 +180,7 @@ function ThreadActions({
       {canMarkDuplicate && (
         <Tooltip content="Merge this thread into another as a duplicate">
           <Button aria-label="Mark duplicate" onClick={() => setDuplicateModalOpen(true)} variant="ghost" size="sm">
-            Duplicate
+            Mark Duplicate
           </Button>
         </Tooltip>
       )}
