@@ -591,8 +591,12 @@ async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser,
           .getByText(/rate limit|too many requests/i)
           .waitFor({ state: "visible", timeout: 15_000 })
           .then(() => "rate-limited" as const);
+        // All three branches map their rejection to null so a timeout doesn't
+        // get recorded as the literal string "timeout" — instead the
+        // `outcome ?? unknown(<url>)` fallback below captures the actual page
+        // URL, which is far more useful when triaging an unclassified failure.
         const outcome = await Promise.race([
-          success.catch(() => "timeout" as const),
+          success.catch(() => null),
           expired.catch(() => null),
           rateLimited.catch(() => null)
         ]);
