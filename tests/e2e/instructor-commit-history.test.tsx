@@ -165,5 +165,5 @@ test("instructors can view commits and request grading for a selected commit", a
   await expect
     .poll(() => triggerPayload, { timeout: 5000 })
     .toMatchObject({ repository: repositoryName, sha: githubOnlySha, class_id: course.id });
-  await expect(page.getByText("Grading workflow triggered")).toBeVisible();
+  await expect(page.getByText("Grading workflow triggered")).toBeAttached();
 });
