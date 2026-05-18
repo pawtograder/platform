@@ -18,12 +18,11 @@ type ResponsiveTableProps = {
 /**
  * Tables wrapped in this scroll horizontally inside their own viewport at
  * narrow widths / high zoom, instead of pushing the whole page horizontal
- * (WCAG 1.4.10). The outer Box also negates the page's horizontal padding
- * at base so the scrollable area reaches the screen edge on mobile.
+ * (WCAG 1.4.10).
  */
 export function ResponsiveTable({ tableMinW = "auto", rootProps, wrapperProps, children }: ResponsiveTableProps) {
   return (
-    <Box overflowX="auto" w="100%" mx={{ base: 0, md: 0 }} {...wrapperProps}>
+    <Box overflowX="auto" w="100%" mx={0} {...wrapperProps}>
       <Table.Root w="100%" minW={tableMinW} {...rootProps}>
         {children}
       </Table.Root>

@@ -228,24 +228,19 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                 <BsSearch />
               </Box>
               {drilldown && (
-                <HStack
-                  gap={1}
-                  px={2}
-                  py={1}
-                  bg="bg.muted"
-                  borderRadius="md"
-                  fontSize="xs"
-                  fontWeight="medium"
-                  aria-label={`Browsing ${drilldown.title}`}
-                  cursor="pointer"
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  colorPalette="gray"
                   onClick={() => setDrilldown(null)}
+                  aria-label={`Back from ${drilldown.title}`}
                   title="Back (Esc)"
                 >
-                  <BsChevronLeft />
+                  <BsChevronLeft aria-hidden />
                   <Text lineClamp={1} maxW="40">
                     {drilldown.title}
                   </Text>
-                </HStack>
+                </Button>
               )}
               <Input
                 ref={inputRef}
@@ -260,7 +255,7 @@ function GlobalSearchDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
                 aria-controls={listboxId}
                 aria-activedescendant={focusedId ? `gs-option-${focusedId}` : undefined}
                 role="combobox"
-                aria-expanded={flatHits.length > 0}
+                aria-expanded={isOpen}
                 variant="flushed"
                 border="none"
                 _focusVisible={{ boxShadow: "none", borderColor: "transparent" }}
