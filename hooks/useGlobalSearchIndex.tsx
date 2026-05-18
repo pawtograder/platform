@@ -87,6 +87,11 @@ const STAFF_STATIC_PAGES: StaticPage[] = [
     audience: "staff"
   },
   { label: "Manage office hours", href: (c) => `/course/${c}/manage/office-hours`, audience: "staff" },
+  {
+    label: "Manage regrade requests",
+    href: (c) => `/course/${c}/manage/regrade-requests`,
+    audience: "staff"
+  },
   { label: "Course settings", href: (c) => `/course/${c}/manage/course`, audience: "staff" },
   { label: "Enrollments", href: (c) => `/course/${c}/manage/course/enrollments`, audience: "staff" },
   { label: "Feature flags", href: (c) => `/course/${c}/manage/course/feature-flags`, audience: "staff" },

@@ -2,13 +2,15 @@
 
 import {
   AppealGrantedCell,
+  AssignmentTitleCell,
   RegradeRequestContextLink,
   StatusCell,
-  StudentOrGroupLabel
+  StudentOrGroupLabel,
+  statusConfig
 } from "@/components/regrade-requests/InstructorRegradeTableShared";
+import DiscordMessageLink from "@/components/discord/discord-message-link";
 import PersonName from "@/components/ui/person-name";
-import { useAllRubricChecks, useRubricCheck } from "@/hooks/useAssignment";
-import { useCustomTable } from "@/hooks/useCustomTable";
+import { useCustomTable, type ServerFilter } from "@/hooks/useCustomTable";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -18,67 +20,58 @@ import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
-import DiscordMessageLink from "@/components/discord/discord-message-link";
 import { useCourseController } from "@/hooks/useCourseController";
 
-// Type for regrade request with populated relations
-type RegradeRequestRow = GetResult<
+type CourseRegradeRequestRow = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submission_regrade_requests"]["Row"],
   "submission_regrade_requests",
   Database["public"]["Tables"]["submission_regrade_requests"]["Relationships"],
-  "*, submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id), submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id), submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id), submissions!inner(id, profiles(name), assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name))))"
+  "*, submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)), submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)), submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name)), submissions!inner(id, profiles(name), assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name)))), assignments!inner(id, title)"
 >;
 
-/**
- * Displays the name of the rubric check associated with a regrade request row.
- *
- * Determines the rubric check ID from the first available comment in the row and fetches its details to display the rubric check name.
- */
-function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
-  const rubricCheckId =
-    row.submission_file_comments?.[0]?.rubric_check_id ||
-    row.submission_artifact_comments?.[0]?.rubric_check_id ||
-    row.submission_comments?.[0]?.rubric_check_id;
-  const rubricCheck = useRubricCheck(rubricCheckId);
-  return <Text>{rubricCheck?.name}</Text>;
+function RubricCheckNameCell({ row }: { row: CourseRegradeRequestRow }) {
+  const name =
+    row.submission_file_comments?.[0]?.rubric_checks?.name ||
+    row.submission_artifact_comments?.[0]?.rubric_checks?.name ||
+    row.submission_comments?.[0]?.rubric_checks?.name;
+  return <Text>{name ?? "—"}</Text>;
 }
 
+const DEFAULT_STATUS_FILTER: RegradeStatus[] = ["opened", "escalated"];
+
 /**
- * Displays a filterable, sortable, and paginated table of regrade requests for a specific assignment.
- *
- * Provides interactive controls to filter by status, student/group, appeal granted, and rubric check. Integrates with Supabase to fetch regrade request data and related entities, and renders detailed information for each request including status, student/group, rubric check, points, and appeal outcome.
- *
- * The table supports sorting, multi-column filtering, and navigation through large result sets with pagination controls.
+ * All regrade requests in the course (staff view). The status filter defaults to showing only
+ * active requests ("opened" and "escalated") and is enforced server-side, so draft, resolved,
+ * and closed requests are not loaded unless the user explicitly selects those statuses.
  */
-export default function RegradeRequestsTable() {
-  const { assignment_id, course_id } = useParams();
-  const courseIdParam = Array.isArray(course_id) ? course_id[0] : course_id;
-  const assignmentIdParam = Array.isArray(assignment_id) ? assignment_id[0] : assignment_id;
-  const courseIdNum = Number.parseInt(courseIdParam ?? "", 10);
-  const assignmentIdNum = Number.parseInt(assignmentIdParam ?? "", 10);
-  const hasValidRouteIds = Number.isFinite(courseIdNum) && Number.isFinite(assignmentIdNum);
+export default function CourseRegradeRequestsTable() {
+  const { course_id } = useParams();
+  const courseIdNum = Number(course_id);
   const courseController = useCourseController();
   const profiles = useTableControllerTableValues(courseController.profiles);
 
-  // Get all rubric checks for the assignment
-  const allRubricChecks = useAllRubricChecks();
+  const [statusFilter, setStatusFilter] = useState<RegradeStatus[]>(DEFAULT_STATUS_FILTER);
 
-  // Create options for status filter
+  const serverFilters = useMemo((): ServerFilter[] => {
+    const filters: ServerFilter[] = [{ field: "class_id", operator: "eq", value: course_id as string }];
+    if (statusFilter.length > 0) {
+      filters.push({ field: "status", operator: "in", value: statusFilter });
+    }
+    return filters;
+  }, [course_id, statusFilter]);
+
   const statusOptions = useMemo(
-    () => [
-      { label: "Draft", value: "draft" },
-      { label: "Pending", value: "opened" },
-      { label: "Resolved", value: "resolved" },
-      { label: "Escalated", value: "escalated" },
-      { label: "Closed", value: "closed" }
-    ],
+    () =>
+      (Object.keys(statusConfig) as RegradeStatus[]).map((value) => ({
+        label: statusConfig[value].label,
+        value
+      })),
     []
   );
 
-  // Create options for appeal granted filter
   const appealGrantedOptions = useMemo(
     () => [
       { label: "Yes", value: "yes" },
@@ -87,57 +80,52 @@ export default function RegradeRequestsTable() {
     []
   );
 
-  // Create options for rubric check filter
-  const rubricCheckOptions = useMemo(
-    () =>
-      allRubricChecks.map((check) => ({
-        label: check.name,
-        value: check.id.toString()
-      })),
-    [allRubricChecks]
-  );
-
-  // Server filters for initial data fetching
-  const serverFilters = useMemo(
-    () => [{ field: "assignment_id", operator: "eq" as const, value: assignment_id as string }],
-    [assignment_id]
-  );
-
-  const columns = useMemo<ColumnDef<RegradeRequestRow>[]>(
+  const columns = useMemo<ColumnDef<CourseRegradeRequestRow>[]>(
     () => [
       {
         id: "status",
         accessorKey: "status",
         header: "Status",
         cell: ({ getValue }) => <StatusCell status={getValue() as RegradeStatus} />,
+        enableColumnFilter: false
+      },
+      {
+        id: "assignment",
+        header: "Assignment",
+        accessorFn: (row) => row.assignments?.title ?? "",
+        cell: ({ row }) => (
+          <AssignmentTitleCell
+            title={row.original.assignments?.title ?? "—"}
+            href={`/course/${courseIdNum}/manage/assignments/${row.original.assignment_id}/regrade-requests`}
+          />
+        ),
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, _id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
-          return filterValues.includes(row.original.status);
+          const title = row.original.assignments?.title ?? "";
+          return filterValues.includes(title);
         }
       },
       {
         id: "rubric_check",
         header: "Rubric Check",
-        accessorFn: (row) => {
-          const rubricCheckId =
-            row.submission_file_comments?.[0]?.rubric_check_id ||
-            row.submission_artifact_comments?.[0]?.rubric_check_id ||
-            row.submission_comments?.[0]?.rubric_check_id;
-          const rubricCheck = allRubricChecks.find((c) => c.id === rubricCheckId);
-          return rubricCheck?.name || "";
-        },
-        cell: ({ row }) => <RubricCheckCell row={row.original} />,
+        accessorFn: (row) =>
+          row.submission_file_comments?.[0]?.rubric_checks?.name ||
+          row.submission_artifact_comments?.[0]?.rubric_checks?.name ||
+          row.submission_comments?.[0]?.rubric_checks?.name ||
+          "",
+        cell: ({ row }) => <RubricCheckNameCell row={row.original} />,
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, _id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
-          const rubricCheckId =
-            row.original.submission_file_comments?.[0]?.rubric_check_id ||
-            row.original.submission_artifact_comments?.[0]?.rubric_check_id ||
-            row.original.submission_comments?.[0]?.rubric_check_id;
-          return filterValues.includes(rubricCheckId?.toString());
+          const name =
+            row.original.submission_file_comments?.[0]?.rubric_checks?.name ||
+            row.original.submission_artifact_comments?.[0]?.rubric_checks?.name ||
+            row.original.submission_comments?.[0]?.rubric_checks?.name ||
+            "";
+          return filterValues.includes(name);
         }
       },
       {
@@ -145,7 +133,10 @@ export default function RegradeRequestsTable() {
         header: "Student/Group",
         accessorFn: (row) => {
           if (row.submissions?.assignment_groups?.assignment_groups_members?.length) {
-            return `Group: ${row.submissions.assignment_groups.assignment_groups_members.map((member) => member.profiles.name).join(", ")}`;
+            return `Group: ${row.submissions.assignment_groups.assignment_groups_members
+              .map((m) => m.profiles?.name)
+              .filter(Boolean)
+              .join(", ")}`;
           }
           return row.submissions?.profiles?.name || "Unknown";
         },
@@ -157,30 +148,28 @@ export default function RegradeRequestsTable() {
                 assignmentGroupsMembers={submission?.assignment_groups?.assignment_groups_members}
                 profileName={submission?.profiles?.name}
               />
-              {hasValidRouteIds && (
-                <RegradeRequestContextLink
-                  courseId={courseIdNum}
-                  assignmentId={assignmentIdNum}
-                  submissionId={row.original.submission_id}
-                  regradeRequestId={row.original.id}
-                />
-              )}
+              <RegradeRequestContextLink
+                courseId={courseIdNum}
+                assignmentId={row.original.assignment_id}
+                submissionId={row.original.submission_id}
+                regradeRequestId={row.original.id}
+              />
             </HStack>
           );
         },
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, _id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
-
-          // Get the display name for this row
-          let displayName;
+          let displayName: string;
           if (row.original.submissions?.assignment_groups?.assignment_groups_members?.length) {
-            displayName = `Group: ${row.original.submissions.assignment_groups.assignment_groups_members.map((member) => member.profiles.name).join(", ")}`;
+            displayName = `Group: ${row.original.submissions.assignment_groups.assignment_groups_members
+              .map((m) => m.profiles?.name)
+              .filter(Boolean)
+              .join(", ")}`;
           } else {
             displayName = row.original.submissions?.profiles?.name || "Unknown";
           }
-
           return filterValues.includes(displayName);
         }
       },
@@ -190,7 +179,7 @@ export default function RegradeRequestsTable() {
         header: "Assignee",
         cell: ({ getValue }) => <PersonName showAvatar={false} uid={getValue() as string} />,
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, _id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
           const assignee = row.original.assignee;
@@ -221,10 +210,7 @@ export default function RegradeRequestsTable() {
         accessorFn: (row) => {
           if (row.status !== "closed") return "N/A";
           return (
-            row.status === "closed" &&
-            row.closed_points !== null &&
-            row.resolved_points !== null &&
-            row.closed_points !== row.resolved_points
+            row.closed_points !== null && row.resolved_points !== null && row.closed_points !== row.resolved_points
           );
         },
         cell: ({ row }) => (
@@ -236,7 +222,7 @@ export default function RegradeRequestsTable() {
         ),
         enableColumnFilter: true,
         enableSorting: false,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, _id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
           const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
 
@@ -264,12 +250,9 @@ export default function RegradeRequestsTable() {
       {
         id: "discord",
         header: "Discord",
-        cell: ({ row }) => {
-          if (!course_id) return null;
-          return (
-            <DiscordMessageLink resourceType="regrade_request" resourceId={row.original.id} size="sm" variant="ghost" />
-          );
-        },
+        cell: ({ row }) => (
+          <DiscordMessageLink resourceType="regrade_request" resourceId={row.original.id} size="sm" variant="ghost" />
+        ),
         enableColumnFilter: false,
         enableSorting: false
       },
@@ -283,17 +266,29 @@ export default function RegradeRequestsTable() {
         id: "last_updated_at",
         accessorKey: "last_updated_at",
         header: "Last Updated",
-        cell: ({ getValue }) => {
-          return formatRelative(new Date(getValue() as string), new Date());
-        }
+        cell: ({ getValue }) => formatRelative(new Date(getValue() as string), new Date())
       }
     ],
-    [allRubricChecks, course_id, courseIdNum, assignmentIdNum, hasValidRouteIds]
+    [courseIdNum]
   );
+
+  const selectClause = `
+      *,
+      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_file_comments_rubric_check_id_fkey(name)),
+      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_artifact_comments_rubric_check_id_fkey(name)),
+      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name)),
+      submissions!inner(
+          id,
+          profiles(name),
+          assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name)))
+      ),
+      assignments!inner(id, title)
+    `;
 
   const {
     getHeaderGroups,
     getRowModel,
+    getPrePaginationRowModel,
     data,
     isLoading,
     error,
@@ -305,104 +300,129 @@ export default function RegradeRequestsTable() {
     getPageCount,
     getState,
     setPageIndex
-  } = useCustomTable<RegradeRequestRow>({
+  } = useCustomTable<CourseRegradeRequestRow>({
     columns,
     resource: "submission_regrade_requests",
     serverFilters,
-    select: `
-      *,
-      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id),
-      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id),
-      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id),
-      submissions!inner(
-          id,
-          profiles(name),
-          assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name)))
-      )
-    `,
+    select: selectClause,
     initialState: {
       pagination: {
         pageIndex: 0,
         pageSize: 1000
       },
-      sorting: [{ id: "created_at", desc: false }]
+      sorting: [{ id: "created_at", desc: true }]
     }
   });
 
-  // Create options for assignee filter
   const assigneeOptions = useMemo(() => {
     if (!data) return [];
-
     const assignees = new Set<string>();
     data.forEach((row) => {
-      if (row.assignee) {
-        assignees.add(row.assignee);
-      }
+      if (row.assignee) assignees.add(row.assignee);
     });
-
     return Array.from(assignees)
       .sort()
       .map((assigneeUid) => {
-        const profile = profiles.find((profile) => profile.id === assigneeUid);
-        return {
-          label: profile?.name || assigneeUid,
-          value: assigneeUid
-        };
+        const profile = profiles.find((p) => p.id === assigneeUid);
+        return { label: profile?.name || assigneeUid, value: assigneeUid };
       });
   }, [data, profiles]);
 
-  // Create options for student filter
   const studentOptions = useMemo(() => {
     if (!data) return [];
-
     const students = new Set<string>();
     data.forEach((row) => {
-      let displayName;
+      let displayName: string;
       if (row.submissions?.assignment_groups?.assignment_groups_members?.length) {
-        displayName = `Group: ${row.submissions.assignment_groups.assignment_groups_members.map((member) => member.profiles.name).join(", ")}`;
+        displayName = `Group: ${row.submissions.assignment_groups.assignment_groups_members
+          .map((m) => m.profiles?.name)
+          .filter(Boolean)
+          .join(", ")}`;
       } else {
         displayName = row.submissions?.profiles?.name || "Unknown";
       }
       students.add(displayName);
     });
-
     return Array.from(students)
       .sort()
-      .map((student) => ({
-        label: student,
-        value: student
-      }));
+      .map((student) => ({ label: student, value: student }));
   }, [data]);
 
-  // Get pagination state
+  const assignmentTitleOptions = useMemo(() => {
+    if (!data) return [];
+    const titles = new Set<string>();
+    data.forEach((row) => {
+      const t = row.assignments?.title;
+      if (t) titles.add(t);
+    });
+    return Array.from(titles)
+      .sort()
+      .map((title) => ({ label: title, value: title }));
+  }, [data]);
+
+  const rubricCheckNameOptions = useMemo(() => {
+    if (!data) return [];
+    const names = new Set<string>();
+    data.forEach((row) => {
+      const n =
+        row.submission_file_comments?.[0]?.rubric_checks?.name ||
+        row.submission_artifact_comments?.[0]?.rubric_checks?.name ||
+        row.submission_comments?.[0]?.rubric_checks?.name;
+      if (n) names.add(n);
+    });
+    return Array.from(names)
+      .sort()
+      .map((name) => ({ label: name, value: name }));
+  }, [data]);
+
   const { pagination } = getState();
   const { pageIndex, pageSize } = pagination;
-  const totalCount = data?.length || 0;
+  const filteredCount = getPrePaginationRowModel().rows.length;
+  const visibleRows = getRowModel().rows;
 
   return (
     <VStack align="stretch" gap={4}>
-      {/* Filters */}
-      <HStack wrap="wrap" gap={4}>
+      <HStack wrap="wrap" gap={4} align="flex-end">
         <Box>
           <Text fontSize="sm" fontWeight="medium" mb={1}>
             Filter by Status:
           </Text>
-          <Box width="150px">
+          <Box width="220px">
             <Select
               size="sm"
               placeholder="All statuses"
+              value={statusOptions.filter((opt) => statusFilter.includes(opt.value))}
+              onChange={(options) => {
+                const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
+                setStatusFilter(values);
+              }}
+              options={statusOptions}
+              isClearable
+              isMulti
+            />
+          </Box>
+        </Box>
+
+        <Box>
+          <Text fontSize="sm" fontWeight="medium" mb={1}>
+            Assignment:
+          </Text>
+          <Box width="220px">
+            <Select
+              size="sm"
+              placeholder="All assignments"
               value={
-                (getColumn("status")?.getFilterValue() as string[])
-                  ? statusOptions.filter((opt) =>
-                      ((getColumn("status")?.getFilterValue() as string[]) || []).includes(opt.value)
+                (getColumn("assignment")?.getFilterValue() as string[])
+                  ? assignmentTitleOptions.filter((opt) =>
+                      ((getColumn("assignment")?.getFilterValue() as string[]) || []).includes(opt.value)
                     )
                   : []
               }
               onChange={(options) => {
                 const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
-                getColumn("status")?.setFilterValue(values.length > 0 ? values : undefined);
+                getColumn("assignment")?.setFilterValue(values.length > 0 ? values : undefined);
               }}
-              options={statusOptions}
+              options={assignmentTitleOptions}
               isClearable
               isMulti
             />
@@ -471,7 +491,7 @@ export default function RegradeRequestsTable() {
               placeholder="All rubric checks"
               value={
                 (getColumn("rubric_check")?.getFilterValue() as string[])
-                  ? rubricCheckOptions.filter((opt) =>
+                  ? rubricCheckNameOptions.filter((opt) =>
                       ((getColumn("rubric_check")?.getFilterValue() as string[]) || []).includes(opt.value)
                     )
                   : []
@@ -480,7 +500,7 @@ export default function RegradeRequestsTable() {
                 const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
                 getColumn("rubric_check")?.setFilterValue(values.length > 0 ? values : undefined);
               }}
-              options={rubricCheckOptions}
+              options={rubricCheckNameOptions}
               isClearable
               isMulti
             />
@@ -520,6 +540,7 @@ export default function RegradeRequestsTable() {
             onClick={() => {
               resetColumnFilters();
               resetSorting();
+              setStatusFilter(DEFAULT_STATUS_FILTER);
             }}
           >
             Clear Filters
@@ -527,21 +548,18 @@ export default function RegradeRequestsTable() {
         </Box>
       </HStack>
 
-      {/* Loading state */}
       {isLoading && (
         <Text textAlign="center" color="fg.muted">
           Loading regrade requests...
         </Text>
       )}
 
-      {/* Error state */}
       {error && (
         <Text textAlign="center" color="red.500">
           Error loading data: {error.message}
         </Text>
       )}
 
-      {/* Table */}
       <Box overflowX="auto">
         <Table.Root size="sm">
           <Table.Header>
@@ -576,22 +594,31 @@ export default function RegradeRequestsTable() {
             ))}
           </Table.Header>
           <Table.Body>
-            {getRowModel().rows.map((row) => (
-              <Table.Row key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                ))}
+            {visibleRows.length === 0 ? (
+              <Table.Row>
+                <Table.Cell colSpan={columns.length}>
+                  <Text textAlign="center" color="fg.muted">
+                    No regrade requests match the current filters.
+                  </Text>
+                </Table.Cell>
               </Table.Row>
-            ))}
+            ) : (
+              visibleRows.map((row) => (
+                <Table.Row key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
+                  ))}
+                </Table.Row>
+              ))
+            )}
           </Table.Body>
         </Table.Root>
       </Box>
 
-      {/* Pagination */}
       <HStack justifyContent="space-between" alignItems="center">
         <Text fontSize="sm" color="fg.muted">
-          Showing {Math.min(pageIndex * pageSize + 1, totalCount)} to {Math.min((pageIndex + 1) * pageSize, totalCount)}{" "}
-          of {totalCount} results
+          Showing {filteredCount === 0 ? 0 : pageIndex * pageSize + 1} to{" "}
+          {filteredCount === 0 ? 0 : pageIndex * pageSize + visibleRows.length} of {filteredCount} results
         </Text>
 
         <HStack>
