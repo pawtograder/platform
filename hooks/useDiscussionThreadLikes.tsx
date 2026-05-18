@@ -1,17 +1,18 @@
-import { useFindTableControllerValue } from "@/lib/TableController";
-import { DiscussionThreadLike } from "@/utils/supabase/DatabaseTypes";
+import { useIndexedTableControllerValue } from "@/lib/TableController";
 import { useCourseController } from "./useCourseController";
-import { useMemo } from "react";
 
 /**
- * Hook to get the like status for a discussion thread by the current user
+ * Hook to get the like status for a discussion thread by the current user.
+ *
+ * Uses the indexed-by-`discussion_thread` subscription path. The likes
+ * controller is already filtered to the current user (`.eq("creator",
+ * profileId)` in the lazy getter), so indexing on the thread foreign key
+ * alone uniquely identifies "this user's like for this thread". Indexed
+ * subscription means a row mutation only notifies the listener whose
+ * `discussion_thread` actually matches — same scaling motivation as the
+ * read-status / watcher hooks.
  */
 export function useDiscussionThreadLikes(thread_id: number) {
   const controller = useCourseController();
-
-  const predicate = useMemo(() => (like: DiscussionThreadLike) => like.discussion_thread === thread_id, [thread_id]);
-
-  const like = useFindTableControllerValue(controller.discussionThreadLikes, predicate);
-
-  return like;
+  return useIndexedTableControllerValue(controller.discussionThreadLikes, "discussion_thread", thread_id);
 }

@@ -35,8 +35,12 @@ import {
 
 import { Alert } from "@/components/ui/alert";
 import pluralize from "pluralize";
-import type { MouseEvent } from "react";
+import type { CSSProperties, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// Module-stable style — `<Markdown>` is `memo`-wrapped (see
+// `components/ui/markdown.tsx`); inline literals defeat it.
+const COLUMN_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 import { FaExclamationTriangle, FaMagic } from "react-icons/fa";
 import { FaPencil } from "react-icons/fa6";
 import { LuChevronDown, LuChevronRight, LuExternalLink } from "react-icons/lu";
@@ -400,7 +404,7 @@ function GradebookCard({
         </Card.Body>
       </HStack>
       <Box id={`grade-description-${column.id}`}>
-        <Markdown style={{ fontSize: "0.8rem" }}>{column.description}</Markdown>
+        <Markdown style={COLUMN_DESCRIPTION_STYLE}>{column.description}</Markdown>
       </Box>
       {hasIncompleteValues && (
         <IncompleteValuesAlert incompleteValues={incompleteValues as IncompleteValuesAdvice} column_id={column.id} />

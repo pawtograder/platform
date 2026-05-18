@@ -10,10 +10,12 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
@@ -105,6 +107,44 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
+    // The "Submission finalized" toast is the application's explicit signal
+    // that finalize_submission_early completed and reviewAssignments has
+    // refetched (see finalizeSubmissionEarly.tsx). Without it the next
+    // assertion races the "Complete Self Review" button into existence.
+    // Chakra renders the toast title twice (visible toast + portal duplicate
+    // both with the same id), so .first() is required to satisfy strict mode.
+    await expect(page.getByText("Submission finalized").first()).toBeVisible();
+    // Even after the toast appears, the "Complete Self Review" button only
+    // renders once useMyReviewAssignments() observes the new row AND
+    // useRubric("self-review") returns the matching rubric (see
+    // components/ui/self-review-notice.tsx). Under webkit CI load we have
+    // observed both inputs lag behind the toast: the toast's setState
+    // commits in the same React batch as refetchAll's listener-fired
+    // setStates, but the realtime UPDATE that delivers the new
+    // review_assignment row to *other* tabs/clients can race the
+    // server-direct refetch — and webkit's microtask scheduling for
+    // multiple-controller cascades sometimes leaves myReviewAssignments
+    // empty in DOM for several frames after the toast is visible. Gate the
+    // click on the DB truth: poll review_assignments with the service-role
+    // supabase client until the new self-review row exists for THIS
+    // student + submission. This is a tight signal (DB == truth) that
+    // doesn't depend on React rendering ordering.
+    await expect(async () => {
+      const { data: selfReviewRubric } = await supabase
+        .from("rubrics")
+        .select("id")
+        .eq("assignment_id", assignment!.id)
+        .eq("review_round", "self-review")
+        .single();
+      expect(selfReviewRubric?.id).toBeTruthy();
+      const { data: ra } = await supabase
+        .from("review_assignments")
+        .select("id, rubric_id, assignee_profile_id, submission_id")
+        .eq("submission_id", submission_id!)
+        .eq("assignee_profile_id", student!.private_profile_id)
+        .eq("rubric_id", selfReviewRubric!.id);
+      expect(ra?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
@@ -145,6 +185,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Complete Review" }).click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
+    await assertStudentPageAccessible(page, "pseudonymous self-review completed");
   });
 
   test("Instructors can grade the submission with pseudonymous mode enabled", async ({ page }) => {
@@ -204,8 +245,20 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Wait for the release to land in the DB before navigating to the
+    // submission page. On webkit the SSR'd submission page sometimes paints
+    // before the released flag has propagated, leading to the badge showing
+    // "No" indefinitely (mirrors grading.test.tsx's release polling).
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("released")
+        .eq("submission_id", submission_id!)
+        .eq("released", true);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
-    await expect(page.getByText("Released to studentYes")).toBeVisible();
+    await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
 
   test("Instructors see their real name in parentheses on grading comments", async ({ page }) => {
@@ -259,6 +312,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     });
     await page.waitForTimeout(100);
     await argosScreenshot(page, "Pseudonymous grading - Student sees only pseudonym");
+    await assertStudentPageAccessible(page, "pseudonymous student grading view");
   });
 
   test("Student can request a regrade and sees grader's pseudonym in responses", async ({ page }) => {
@@ -281,6 +335,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(region.getByText(REGRADE_REQUEST_COMMENT).first()).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await argosScreenshot(page, "Pseudonymous grading - Student opens regrade request");
+    await assertStudentPageAccessible(page, "pseudonymous regrade request opened");
   });
 
   test("Instructor resolves regrade with pseudonymous profile and adds comment", async ({ page }) => {
@@ -396,5 +451,6 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
 
     await argosScreenshot(page, "Pseudonymous grading - Student sees instructor real name for final decision");
+    await assertStudentPageAccessible(page, "pseudonymous regrade closed student view");
   });
 });

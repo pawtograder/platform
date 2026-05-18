@@ -1139,7 +1139,7 @@ export default function RegradeRequestWrapper({
                       const isPositiveChange = (rubricCriteria?.is_additive ?? true) ? change > 0 : change < 0;
                       if (change === 0) return " (no change)";
                       return (
-                        <Text as="span" fontWeight="semibold" color={isPositiveChange ? "green.600" : "red.600"}>
+                        <Text as="span" fontWeight="semibold" color={isPositiveChange ? "green.800" : "red.800"}>
                           {" "}
                           ({isPositiveChange ? "+" : "-"}
                           {Math.abs(change)})

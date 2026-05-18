@@ -24,6 +24,50 @@ export function useGradebookPopover() {
   return ctx;
 }
 
+/**
+ * Renders the popover content for the currently-selected gradebook cell.
+ *
+ * IMPORTANT: This MUST be defined at module scope (not inside
+ * `GradebookPopoverProvider`). When this function is declared inside the
+ * provider, every parent render produces a brand-new component identity, and
+ * React unmounts/remounts the entire subtree — including `OverrideScoreForm`
+ * and its `useForm` state. That causes a real production bug: a grader opens
+ * the editor, types a new score (e.g. 84.5), a realtime broadcast arrives
+ * (another grader edits, a recalc fires, repositioning rAF, etc.), the
+ * provider re-renders, the form remounts with `defaultValues` reset from the
+ * controller's now-updated `studentGradebookColumn`, the user's typed value is
+ * silently dropped, and Update fires with the stale score.
+ */
+function SelectedPopoverContent({
+  columnId,
+  studentId,
+  onSuccess
+}: {
+  columnId: number;
+  studentId: string;
+  onSuccess: () => void;
+}) {
+  const column = useGradebookColumn(columnId);
+  const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
+  return (
+    <Popover.Content w="lg" maxH="80vh" bg={column?.score_expression ? "bg.warning" : "bg.panel"}>
+      <Popover.Arrow />
+      <Popover.Body p={1} m={2}>
+        {studentGradebookColumn && (
+          <OverrideScoreForm
+            studentGradebookColumn={studentGradebookColumn}
+            onSuccess={onSuccess}
+            // `!= null` (not `!== null`) so loading-state `undefined` does not
+            // mis-flag an in-flight column as auto-calculated.
+            isAutoCalculated={Boolean(column?.score_expression != null || column?.external_data != null)}
+            showWarning={Boolean(column?.score_expression != null)}
+          />
+        )}
+      </Popover.Body>
+    </Popover.Content>
+  );
+}
+
 export function GradebookPopoverProvider({ children }: { children: React.ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [selected, setSelected] = useState<{ columnId: number; studentId: string } | null>(null);
@@ -116,26 +160,6 @@ export function GradebookPopoverProvider({ children }: { children: React.ReactNo
 
   const contextValue = useMemo<GradebookPopoverContextType>(() => ({ openAt, close }), [openAt, close]);
 
-  function SelectedPopoverContent({ columnId, studentId }: { columnId: number; studentId: string }) {
-    const column = useGradebookColumn(columnId);
-    const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
-    return (
-      <Popover.Content w="lg" maxH="80vh" bg={column?.score_expression ? "bg.warning" : "bg.panel"}>
-        <Popover.Arrow />
-        <Popover.Body p={1} m={2}>
-          {studentGradebookColumn && (
-            <OverrideScoreForm
-              studentGradebookColumn={studentGradebookColumn}
-              onSuccess={() => setIsOpen(false)}
-              isAutoCalculated={Boolean(column?.score_expression !== null || column?.external_data !== null)}
-              showWarning={Boolean(column?.score_expression !== null)}
-            />
-          )}
-        </Popover.Body>
-      </Popover.Content>
-    );
-  }
-
   return (
     <GradebookPopoverContext.Provider value={contextValue}>
       {children}
@@ -161,7 +185,13 @@ export function GradebookPopoverProvider({ children }: { children: React.ReactNo
         {isOpen && selected ? (
           <Popover.Positioner>
             <Box ref={contentRef} zIndex={90000}>
-              <SelectedPopoverContent columnId={selected.columnId} studentId={selected.studentId} />
+              <SelectedPopoverContent
+                columnId={selected.columnId}
+                studentId={selected.studentId}
+                // Reuse close() directly so success teardown matches every
+                // other dismiss path — clears `selected`/`anchorRect`/etc.
+                onSuccess={close}
+              />
             </Box>
           </Popover.Positioner>
         ) : null}

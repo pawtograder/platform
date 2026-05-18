@@ -3,7 +3,8 @@ import { test, expect } from "../global-setup";
 import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
-dotenv.config({ path: ".env.local" });
+import { assertStudentPageAccessible } from "./axeStudentA11y";
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student1: TestingUser | undefined;
@@ -54,6 +55,7 @@ test.describe("Discussion Thread Page", () => {
       page.getByText("Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here.")
     ).toBeVisible();
     await argosScreenshot(page, "Discussion Thread Page");
+    await assertStudentPageAccessible(page, "discussion feed empty");
   });
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
     await loginAsUser(page, student1!, course);
@@ -111,10 +113,15 @@ test.describe("Discussion Thread Page", () => {
       .locator('textarea.w-md-editor-text-input[spellcheck="false"]')
       .fill("01001000 01100101 01101100 01101100 01101111 00100000 01010111 01101111 01110010 01101100 01100100");
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
+    // The Submit handler router.push()es to /discussion/<id>; wait for the
+    // navigation to commit before asserting on the thread page contents,
+    // otherwise the locators race the form unmount on chromium under load.
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "Is my answer for HW1 Q1 correct?" })).toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).toBeVisible();
+    await assertStudentPageAccessible(page, "discussion private thread created");
   });
 
   test("Another student cannot view a private thread", async ({ page }) => {
@@ -126,6 +133,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Viewable by poster and staff only")).not.toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).not.toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).not.toBeVisible();
+    await assertStudentPageAccessible(page, "discussion private thread hidden");
   });
 
   test("Another student creates a public thread", async ({ page }) => {
@@ -149,9 +157,12 @@ test.describe("Discussion Thread Page", () => {
         "IT'S PREHISTORIC TRASH. KOTLIN IS LITERALLY SO MUCH BETTER SMH. NULL SAFETY, TYPE INFERENCE, AND FIRST-CLASS FUNCTIONS. THE SYLLABUS IS A JOKE AND I REGRET TAKING THIS CLASS. I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE."
       );
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
+    // Same navigation-race concern as the private-thread test above.
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student2?.public_profile_name })).toBeVisible();
+    await assertStudentPageAccessible(page, "discussion public thread");
   });
 
   test("An instructor can view all threads and reply to them", async ({ page }) => {
@@ -160,10 +171,14 @@ test.describe("Discussion Thread Page", () => {
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     // Check that the threads are visible
     await page.waitForURL("**/discussion");
+    // Wait for the discussion shell to render before asserting on a specific
+    // thread — webkit otherwise races the thread list's first paint.
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await expect(page.getByText("Is my answer for HW1 Q1 correct?")).toBeVisible();
 
     // Check that the instructor can reply to the private thread
     await page.getByText("Is my answer for HW1 Q1 correct?").click();
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page.getByPlaceholder("Reply...").fill("Yes.");
@@ -182,9 +197,21 @@ test.describe("Discussion Thread Page", () => {
     await page.getByRole("button", { name: "Logistics Follow topic" }).click();
     await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
 
-    // Check that the instructor can reply to the public thread
+    // Check that the instructor can reply to the public thread.
+    // The link click + thread-detail data fetch is the slowest path in the
+    // suite on webkit. Poll with reload because the controller occasionally
+    // races initial navigation and never paints the heading.
     await page.getByRole("link", { name: "JAVA SUCKS" }).click();
-    await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible(); //Wait for the page to change
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
+    let attempts = 0;
+    await expect(async () => {
+      attempts += 1;
+      if (attempts > 1) {
+        await page.reload();
+      }
+      await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible({ timeout: 15_000 });
+    }).toPass({ timeout: 90_000, intervals: [3000, 5000, 10000] });
+    await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page

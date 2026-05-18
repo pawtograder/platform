@@ -68,7 +68,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentType
+  type ComponentType,
+  type CSSProperties
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -82,6 +83,10 @@ import RequestRegradeDialog from "./request-regrade-dialog";
 import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+
+// Module-stable style — see `components/ui/markdown.tsx`. Inline
+// `style={{...}}` literals defeat `<Markdown>`'s `memo` wrapper.
+const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
 export type RubricCheckSubOption = {
   label: string;
@@ -287,6 +292,7 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
                   content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                 >
                   <Button
+                    aria-label={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                     variant={expanded.length > 0 ? "solid" : "outline"}
                     size="xs"
                     p={0}
@@ -575,7 +581,7 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                 </Flex>
               </Box>
               <Box pl={2}>
-                <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
+                <Markdown style={RUBRIC_CHECK_DESCRIPTION_STYLE}>{rubricCheck.description}</Markdown>
               </Box>
               <Box pl={2} w="100%">
                 {isEditing ? (
@@ -1140,7 +1146,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                     ? "Add a comment about this check and press enter to submit..."
                     : "Optionally add a comment, or just press enter to submit..."
               }
-              allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
+              allowEmptyMessage={selectedCheckOption.check ? !selectedCheckOption.check.is_comment_required : true}
               defaultSingleLine={true}
               sendMessage={async (message) => {
                 let points = selectedCheckOption.check?.points;
@@ -1185,9 +1191,18 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
                   regrade_request_id: null,
                   target_student_profile_id: targetEff.targetId
                 };
+                // Close the popover synchronously as soon as the user submits.
+                // submission_file_comments.create() optimistically inserts a
+                // tentative row (TableController._addRow), so the new annotation
+                // is visible to the user immediately even before the network
+                // round-trip resolves. Awaiting create() before close() means
+                // the popover stays open for the full INSERT latency, and any
+                // PostgREST/realtime hiccup under CI load (chromium has been
+                // observed to take >60s for this insert) leaves the popover
+                // hanging — see the "Annotate line 15 with a check:" CI flake.
+                close();
                 try {
                   await submissionController.submission_file_comments.create(values);
-                  close();
                 } catch (e) {
                   toaster.error({
                     title: "Error saving annotation",

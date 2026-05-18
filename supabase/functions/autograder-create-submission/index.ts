@@ -616,7 +616,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
     .select(
-      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*), classes(time_zone))"
+      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
     )
     .eq("repository", repository)
     .maybeSingle();
@@ -913,9 +913,46 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               if (hasNegativeException) {
                 errorMessage =
                   "You have already finalized your submission for this assignment. You cannot submit additional code after finalization.";
+                throw new UserVisibleError(errorMessage, 400);
               }
             }
-            throw new UserVisibleError(errorMessage, 400);
+
+            // Auto-apply a late token if the assignment allows it
+            if (
+              !repoData.assignments.require_tokens_before_due_date &&
+              (repoData.assignments.max_late_tokens ?? 0) > 0
+            ) {
+              const minutesLate = Math.ceil((pushTime.getTime() - finalDueDate.getTime()) / 60000);
+              const hoursLate = Math.max(1, Math.ceil(minutesLate / 60));
+              const tokensNeeded = Math.ceil(hoursLate / 24);
+              const hoursToGrant = tokensNeeded * 24;
+
+              // Atomically check token balance and insert extension in one DB transaction.
+              const { data: result, error: rpcError } = await adminSupabase.rpc("apply_late_token_extension", {
+                p_assignment_id: repoData.assignment_id,
+                p_student_id: repoData.assignment_group_id ? null : profileId,
+                p_assignment_group_id: repoData.assignment_group_id ?? null,
+                p_class_id: repoData.assignments.class_id!,
+                p_creator_id: profileId!,
+                p_hours_late: hoursToGrant,
+                p_tokens_needed: tokensNeeded
+              });
+
+              if (rpcError) {
+                Sentry.captureException(rpcError, scope);
+                throw new UserVisibleError(`Failed to auto-apply late token: ${rpcError.message}`);
+              }
+
+              if (!result.success) {
+                throw new UserVisibleError(
+                  `You don't have enough late tokens to submit. You need ${result.tokens_needed} token(s) but only have ${result.tokens_remaining} remaining.`,
+                  400
+                );
+              }
+              // Fall through — submission will proceed normally
+            } else {
+              throw new UserVisibleError(errorMessage, 400);
+            }
           }
         }
         // Check the max submissions per-time
@@ -963,6 +1000,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       if (!isRegressionRerun) {
+        // Group assignment: once a student is on a team, personal-repo pushes must not create submissions.
+        if (
+          repoData.profile_id &&
+          (repoData.assignment_group_id === null || repoData.assignment_group_id === undefined)
+        ) {
+          const { data: teamMembership, error: teamMembershipError } = await adminSupabase
+            .from("assignment_groups_members")
+            .select("assignment_group_id, assignment_groups(name)")
+            .eq("assignment_id", assignment_id)
+            .eq("profile_id", repoData.profile_id)
+            .maybeSingle();
+          if (teamMembershipError) {
+            Sentry.captureException(teamMembershipError, scope);
+            throw new UserVisibleError(`Internal error: ${teamMembershipError.message}`);
+          }
+          if (teamMembership) {
+            const groupName = teamMembership.assignment_groups?.name ?? `group ${teamMembership.assignment_group_id}`;
+            throw new UserVisibleError(
+              `Your assignment is now being submitted as a group. Please push to your group repository instead of your personal repository. (assignment: ${assignment_id}, group: ${groupName}) If the group repository is not ready yet, wait for it to be provisioned or ask your instructor or TA.`
+            );
+          }
+        }
         // First check if there's an existing submission with this unique key
         const { data: existingSubmission } = await adminSupabase
           .from("submissions")
@@ -1238,6 +1297,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               file.type === "File" && // Do not submit directories
               expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
           );
+          if (submittedFiles.length === 0) {
+            if (submission_id !== undefined) {
+              try {
+                await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+                submission_id = undefined;
+              } catch (cleanupErr) {
+                Sentry.captureException(cleanupErr, scope);
+              }
+            }
+            throw new UserVisibleError(
+              `No files in the repository matched the assignment's submissionFiles patterns (${expectedFiles.join(", ")}). ` +
+                `Instructor: check pawtograder.yml in grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha} — the patterns appear not to match any file in the student repository.`,
+              400
+            );
+          }
           // Make sure that all files that are NOT glob patterns are present
           const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
           const allNonGlobFilesPresent = nonGlobFiles.every((file) =>

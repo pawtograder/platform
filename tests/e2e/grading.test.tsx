@@ -13,8 +13,9 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
@@ -162,6 +163,39 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await argosScreenshot(page, "Student can submit self-review early");
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
+    // The "Submission finalized" success toast is the explicit signal that
+    // finalize_submission_early completed and reviewAssignments has been
+    // refetched (see finalizeSubmissionEarly.tsx). Without this, the test
+    // races the "Complete Self Review" button into existence.
+    // Chakra renders the toast title twice (visible toast + portal duplicate
+    // both with the same id), so .first() is required to satisfy strict mode.
+    await expect(page.getByText("Submission finalized").first()).toBeVisible();
+    // Even after the toast appears, the "Complete Self Review" button only
+    // renders once useMyReviewAssignments() observes the new row AND
+    // useRubric("self-review") returns the matching rubric (see
+    // components/ui/self-review-notice.tsx). Under webkit CI load both
+    // inputs can lag behind the toast: the realtime UPDATE delivering the
+    // new review_assignment row to other clients can race the server-direct
+    // refetch. Gate the click on the DB truth — poll review_assignments
+    // with the service-role supabase client until the new self-review row
+    // exists for this student + submission. (Same pattern as
+    // pseudonymous-grading.test.tsx.)
+    await expect(async () => {
+      const { data: selfReviewRubric } = await supabase
+        .from("rubrics")
+        .select("id")
+        .eq("assignment_id", assignment!.id)
+        .eq("review_round", "self-review")
+        .single();
+      expect(selfReviewRubric?.id).toBeTruthy();
+      const { data: ra } = await supabase
+        .from("review_assignments")
+        .select("id, rubric_id, assignee_profile_id, submission_id")
+        .eq("submission_id", submission_id!)
+        .eq("assignee_profile_id", student!.private_profile_id)
+        .eq("rubric_id", selfReviewRubric!.id);
+      expect(ra?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
@@ -212,6 +246,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await argosScreenshot(page, "Self-Review Rubric completed");
+    await assertStudentPageAccessible(page, "grading self-review completed");
   });
 
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
@@ -227,6 +262,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
+    // Wait for the applied "Self Review Check 2" comment region to render.
+    // The rubric-sidebar emits a `<Box role="region"
+    // aria-label="Grading check {check.name}">` per applied check (see
+    // components/ui/rubric-sidebar.tsx), and that region only mounts once
+    // the SubmissionFileComment row has hydrated into the controller —
+    // unlike the rubric-definition labels which are present from page load.
+    // This is the real "comment hydrated" signal; without it the next
+    // assertion races the rubric sidebar's progressive comment hydration.
+    await expect(page.getByRole("region", { name: "Grading check Self Review Check 2" }).first()).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     //Scroll self-review rubric to top of its container
     await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
@@ -290,8 +334,20 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
     await expect(releaseBtn).toBeEnabled();
     await releaseBtn.click();
+    // Wait for the release to land in the DB before navigating to the
+    // submission page. On webkit the SSR'd submission page sometimes paints
+    // before the released flag has propagated, leading to the badge showing
+    // "No" indefinitely.
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("released")
+        .eq("submission_id", submission_id!)
+        .eq("released", true);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
-    await expect(page.getByText("Released to studentYes")).toBeVisible();
+    await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
     await loginAsUser(page, student!, course);
@@ -316,6 +372,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     });
     await page.waitForTimeout(100); // Ensure scroll completes before screenshot
     await argosScreenshot(page, "Student can view their grading results");
+    await assertStudentPageAccessible(page, "grading results submission files");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
     // Find the region with aria-label 'Grading checks on line 4'
@@ -403,6 +460,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Escalate to Instructor" }).click();
     await argosScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
+    // Wait for the escalation to settle before axe runs — otherwise axe races
+    // the closing popover / toast and reports transient focus-trap / labeling violations.
+    await expect(
+      page.getByRole("button", { name: "Escalate Request" }),
+      "Escalate Request button is removed after escalation"
+    ).toHaveCount(0);
+    await assertStudentPageAccessible(page, "grading regrade appeal escalated");
   });
   test("Instructors can view the student's regrade appeal and resolve it", async ({ page }) => {
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });

@@ -10,8 +10,9 @@ import {
   loginAsUser,
   supabase
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 test.describe("Student assignments dashboard score display", () => {
   test("Latest Submission shows autograder while pending, then total after grading completes", async ({ page }) => {
@@ -60,5 +61,6 @@ test.describe("Student assignments dashboard score display", () => {
 
     await expect(page.getByRole("link", { name: new RegExp(`#\\d+ \\(${finalTotal}/100\\)`) })).toBeVisible();
     await expect(page.getByRole("link", { name: "#1 (5/10)" })).not.toBeVisible();
+    await assertStudentPageAccessible(page, "student assignments dashboard after grading");
   });
 });
