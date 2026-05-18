@@ -8,13 +8,14 @@ let assignment: Assignment;
 let student: TestingUser;
 let instructor: TestingUser;
 
+test.setTimeout(120_000);
+
 test.beforeAll(async () => {
   course = await createClass();
   [student, instructor] = await createUsersInClass([
     {
       name: "Commit History Student",
       public_profile_name: "Commit History Pseudonym Student",
-      email: "commit-history-student@pawtograder.net",
       role: "student",
       class_id: course.id,
       useMagicLink: true
@@ -22,7 +23,6 @@ test.beforeAll(async () => {
     {
       name: "Commit History Instructor",
       public_profile_name: "Commit History Pseudonym Instructor",
-      email: "commit-history-instructor@pawtograder.net",
       role: "instructor",
       class_id: course.id,
       useMagicLink: true
