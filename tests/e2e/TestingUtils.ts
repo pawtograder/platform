@@ -1687,6 +1687,7 @@ export async function insertSubmissionViaAPI({
   assignment_group_id,
   sha,
   commit_message,
+  triggered_by,
   assignment_id = 1,
   class_id,
   repositorySuffix,
@@ -1697,6 +1698,7 @@ export async function insertSubmissionViaAPI({
   assignment_group_id?: number;
   sha?: string;
   commit_message?: string;
+  triggered_by?: string;
   assignment_id?: number;
   class_id: number;
   repositorySuffix?: string;
@@ -1744,7 +1746,8 @@ export async function insertSubmissionViaAPI({
         check_run_id: 1,
         status: "{}",
         sha: sha || "HEAD",
-        commit_message: commit_message || "none"
+        commit_message: commit_message || "none",
+        triggered_by
       })
       .select("id")
   );

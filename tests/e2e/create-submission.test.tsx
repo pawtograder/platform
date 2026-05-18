@@ -18,6 +18,7 @@ import { visualScreenshot } from "./VisualTestUtils";
 
 let course: Course;
 let student: TestingUser | undefined;
+let instructor: TestingUser | undefined;
 
 let assignmentInFuture: Assignment | undefined;
 let assignmentInPast: Assignment | undefined;
@@ -54,11 +55,18 @@ function computeCombinedHashFromSubmissionFiles(files: { name: string; contents:
 
 test.beforeAll(async () => {
   course = await createClass();
-  [student] = await createUsersInClass([
+  [student, instructor] = await createUsersInClass([
     {
       name: "Create Submission Student",
       public_profile_name: "Create Submission Pseudonym Student",
       role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Create Submission Instructor",
+      public_profile_name: "Create Submission Pseudonym Instructor",
+      role: "instructor",
       class_id: course.id,
       useMagicLink: true
     }
@@ -123,7 +131,7 @@ test.beforeAll(async () => {
   });
 });
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
-  await logMagicLinksOnFailure([student]);
+  await logMagicLinksOnFailure([student, instructor]);
 });
 test.describe("Create submission", () => {
   test("If the deadline is in the future, the student can create a submission", async ({ page }) => {
@@ -148,6 +156,24 @@ test.describe("Create submission", () => {
       class_id: course.id
     });
     await expect(submission).rejects.toThrow("You cannot submit after the due date");
+  });
+  test("If staff manually triggered grading, the deadline is overridden and a submission is created", async () => {
+    const submission = await insertSubmissionViaAPI({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignmentInPast!.id,
+      class_id: course.id,
+      sha: "staff-triggered-deadline-override",
+      triggered_by: instructor!.private_profile_id
+    });
+    expect(submission).toBeDefined();
+
+    const { data: submissionRow, error } = await supabase
+      .from("submissions")
+      .select("id, sha")
+      .eq("id", submission.submission_id)
+      .single();
+    expect(error).toBeNull();
+    expect(submissionRow?.sha).toBe("staff-triggered-deadline-override");
   });
   test("If the student has extended their due date, they can create a submission", async ({ page }) => {
     const submission = await insertSubmissionViaAPI({
