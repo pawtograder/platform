@@ -117,6 +117,7 @@ export async function fetchInstructorDashboardBundle(
 
 export type StudentDashboardBundle = {
   course: {
+    name: string | null;
     time_zone: string | null;
     office_hours_ics_url: string | null;
     events_ics_url: string | null;
@@ -153,7 +154,11 @@ export async function fetchStudentDashboardBundle(
     { data: regradeRequests, error: regradeError },
     { data: userRole, error: userRoleError }
   ] = await Promise.all([
-    supabase.from("classes").select("time_zone, office_hours_ics_url, events_ics_url").eq("id", courseId).single(),
+    supabase
+      .from("classes")
+      .select("time_zone, office_hours_ics_url, events_ics_url, name")
+      .eq("id", courseId)
+      .single(),
     supabase
       .from("assignments_with_effective_due_dates")
       .select(

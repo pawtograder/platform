@@ -2,7 +2,9 @@
 
 import SurveyFilterButtons from "@/components/survey/SurveyFilterButtons";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
+import { InputGroup } from "@/components/ui/input-group";
 import Link from "@/components/ui/link";
+import { PageContainer } from "@/components/ui/page-container";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsStudent } from "@/hooks/useClassProfiles";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
@@ -10,9 +12,10 @@ import { usePublishedSurveys } from "@/hooks/useCourseController";
 import { SurveyWithResponse } from "@/types/survey";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
+import { Badge, Box, Button, Heading, HStack, Input, Stack, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BsSearch } from "react-icons/bs";
 
 type FilterType = "all" | "not_started" | "completed";
 type SurveyResponse = Database["public"]["Tables"]["survey_responses"]["Row"];
@@ -22,6 +25,7 @@ export default function StudentSurveysPage() {
   const [responses, setResponses] = useState<SurveyResponse[]>([]);
   const [responsesLoading, setResponsesLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
+  const [query, setQuery] = useState("");
 
   // Get private_profile_id from ClassProfileProvider (already available via course layout)
   const { private_profile_id } = useClassProfiles();
@@ -170,41 +174,51 @@ export default function StudentSurveysPage() {
   );
 
   const filteredSurveys = useMemo(() => {
+    let base: SurveyWithResponse[];
     switch (activeFilter) {
       case "all":
-        return surveysWithResponse;
+        base = surveysWithResponse;
+        break;
       case "not_started":
         // Show surveys that are not started or in progress (still available to take)
-        return surveysWithResponse.filter(
+        base = surveysWithResponse.filter(
           (survey) => survey.response_status === "not_started" || survey.response_status === "in_progress"
         );
+        break;
       case "completed":
         // Show completed surveys
-        return surveysWithResponse.filter((survey) => survey.response_status === "completed");
+        base = surveysWithResponse.filter((survey) => survey.response_status === "completed");
+        break;
       default:
-        return surveysWithResponse;
+        base = surveysWithResponse;
     }
-  }, [surveysWithResponse, activeFilter]);
+    const q = query.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter((s) => {
+      const haystacks = [s.title, s.description];
+      return haystacks.some((v) => (v ?? "").toLowerCase().includes(q));
+    });
+  }, [surveysWithResponse, activeFilter, query]);
 
   const isLoading = surveysLoading || responsesLoading;
 
   if (isLoading) {
     return (
-      <Box py={8} maxW="1200px" my={2} mx="auto">
+      <PageContainer py={8}>
         <Box display="flex" alignItems="center" justifyContent="center" p={8}>
           <Text>Loading surveys...</Text>
         </Box>
-      </Box>
+      </PageContainer>
     );
   }
 
   if (surveysWithResponse.length === 0) {
     return (
-      <Box py={8} maxW="1200px" my={2} mx="auto">
-        <VStack align="center" gap={6} w="100%" minH="100vh" p={8}>
+      <PageContainer py={8}>
+        <VStack align="center" gap={6} w="100%" minH="60vh" p={8}>
           <Box w="100%" maxW="800px" bg="bg.muted" border="1px solid" borderColor="border" borderRadius="lg" p={8}>
             <VStack align="center" gap={4}>
-              <Heading size="xl" color="fg" textAlign="center">
+              <Heading as="h1" size="xl" color="fg" textAlign="center">
                 No Surveys Available
               </Heading>
               <Text color="fg" textAlign="center">
@@ -213,22 +227,37 @@ export default function StudentSurveysPage() {
             </VStack>
           </Box>
         </VStack>
-      </Box>
+      </PageContainer>
     );
   }
 
   return (
-    <Box py={8} maxW="1200px" my={2} mx="auto">
+    <PageContainer py={8}>
       <VStack align="stretch" gap={6} w="100%">
         {/* Header */}
         <VStack align="stretch" gap={4}>
-          <Heading size="xl" color="fg" textAlign="left">
+          <Heading as="h1" size="xl" color="fg" textAlign="left">
             Course Surveys
           </Heading>
           <Text color="fg" fontSize="md" opacity={0.8}>
             Complete the surveys assigned to this course. Your responses help improve the learning experience.
           </Text>
         </VStack>
+
+        <Stack direction={{ base: "column", md: "row" }} gap={2} align={{ base: "stretch", md: "center" }}>
+          <Box flex="1" maxW={{ base: "100%", md: "360px" }}>
+            <InputGroup startElement={<BsSearch aria-hidden />}>
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search by title or description"
+                aria-label="Search surveys"
+                data-shortcut="search"
+                size="sm"
+              />
+            </InputGroup>
+          </Box>
+        </Stack>
 
         {/* Filter Buttons */}
         <SurveyFilterButtons
@@ -281,8 +310,8 @@ export default function StudentSurveysPage() {
                     </VStack>
                   </HStack>
 
-                  <HStack justify="space-between" align="center">
-                    <HStack gap={4} align="center">
+                  <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
+                    <HStack gap={4} align="center" flexWrap="wrap">
                       {getStatusBadge(survey)}
                       <VStack align="start" gap={1}>
                         {survey.due_date && (
@@ -321,6 +350,6 @@ export default function StudentSurveysPage() {
           )}
         </VStack>
       </VStack>
-    </Box>
+    </PageContainer>
   );
 }

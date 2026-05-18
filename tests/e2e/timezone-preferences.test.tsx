@@ -44,6 +44,11 @@ test.describe("Time zone dialog and indicator", () => {
     let pref = await page.evaluate(() => localStorage.getItem("pawtograder-timezone-pref"));
     expect(pref).toBeNull();
 
+    // Scan the open dialog itself — its focus trap, button labels, and
+    // heading hierarchy are only inspectable while it's mounted. The existing
+    // post-dismiss scan below covers the page chrome but not the dialog UI.
+    await assertStudentPageAccessible(page, "timezone preference dialog open");
+
     // Click the visible text
     await page.getByText("Use your local time zone", { exact: true }).click();
 

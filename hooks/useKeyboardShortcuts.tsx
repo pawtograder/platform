@@ -1,9 +1,12 @@
 "use client";
 
+import { useGlobalSearch } from "@/components/ui/global-search";
 import ShortcutsHelpDialog from "@/components/ui/shortcuts-help-dialog";
 import { focusLandmark } from "@/components/ui/skip-nav";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, type CourseFeatureName } from "@/lib/courseFeatures";
+import { OPEN_NOTIFICATIONS_EVENT, OPEN_SHORTCUTS_HELP_EVENT, TOGGLE_ANONYMIZE_GRADES_EVENT } from "@/lib/clientEvents";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { useRouter } from "next/navigation";
 import * as React from "react";
@@ -51,12 +54,25 @@ function isEditableTarget(t: EventTarget | null): boolean {
 
 type ResolvedGoEntry = { key: string; label: string; path: string; feature?: CourseFeatureName };
 
+export type ToggleShortcutEntry = { keys: string[]; label: string };
+
+/**
+ * Top-level (no-chord) shift-letter toggles. Shift is required so a stray
+ * `a`/`n` keypress while skimming a page doesn't unexpectedly hide grades or
+ * pop the inbox open. Mirrors how `?` opens help.
+ */
+const TOGGLE_SHORTCUTS: ToggleShortcutEntry[] = [
+  { keys: ["Shift", "A"], label: "Toggle anonymize / obfuscate grades" },
+  { keys: ["Shift", "N"], label: "Open notifications popover" }
+];
+
 type ShortcutsContextValue = {
   helpOpen: boolean;
   openHelp: () => void;
   closeHelp: () => void;
   goShortcuts: ResolvedGoEntry[];
   landmarkShortcuts: LandmarkEntry[];
+  toggleShortcuts: ToggleShortcutEntry[];
 };
 
 const ShortcutsContext = React.createContext<ShortcutsContextValue | null>(null);
@@ -69,7 +85,21 @@ export function useKeyboardShortcuts() {
 
 export function KeyboardShortcutsProvider({ children, courseId }: { children: React.ReactNode; courseId: number }) {
   const router = useRouter();
+  const globalSearch = useGlobalSearch();
   const { role } = useClassProfiles();
+  const isObfuscated = useObfuscatedGradesMode();
+  const setObfuscated = useSetObfuscatedGradesMode();
+  // Keep handlers in refs so we can register a single keydown listener that
+  // always sees the latest toggle state without retearing the listener on
+  // every render.
+  const isObfuscatedRef = React.useRef(isObfuscated);
+  React.useEffect(() => {
+    isObfuscatedRef.current = isObfuscated;
+  }, [isObfuscated]);
+  const setObfuscatedRef = React.useRef(setObfuscated);
+  React.useEffect(() => {
+    setObfuscatedRef.current = setObfuscated;
+  }, [setObfuscated]);
   // The shape from useClassProfiles isn't guaranteed at the type level to include the
   // features join, so narrow via a runtime guard rather than an unchecked cast.
   const rawFeatures = (role?.classes as Partial<CourseWithFeatures> | undefined)?.features;
@@ -167,13 +197,40 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
         return;
       }
 
-      // s or / focuses search if present.
+      // Shift-letter toggles. Require Shift (and disallow Ctrl/Meta/Alt — already
+      // filtered above) so a bare `a` or `n` while reading a page never fires.
+      if (e.shiftKey) {
+        if (e.key === "A") {
+          e.preventDefault();
+          clearPending();
+          const next = !isObfuscatedRef.current;
+          isObfuscatedRef.current = next;
+          setObfuscatedRef.current(next);
+          window.dispatchEvent(new Event(TOGGLE_ANONYMIZE_GRADES_EVENT));
+          return;
+        }
+        if (e.key === "N") {
+          e.preventDefault();
+          clearPending();
+          window.dispatchEvent(new Event(OPEN_NOTIFICATIONS_EVENT));
+          return;
+        }
+      }
+
+      // s or / focuses search if present, else opens the global palette.
       if (!e.shiftKey && (e.key === "s" || e.key === "/")) {
         // s also starts the chord for surveys, but the chord requires a prior `g`.
         // Without a pending chord, treat s as search-focus.
         const pending = pendingChordRef.current;
-        if (!pending && focusSearch()) {
+        if (!pending) {
+          if (focusSearch()) {
+            e.preventDefault();
+            return;
+          }
+          // No per-page search input on this route — open the global palette
+          // instead so `/` and `s` always do something useful.
           e.preventDefault();
+          globalSearch.open();
           return;
         }
       }
@@ -207,7 +264,18 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [goMap, router, openHelp]);
+  }, [goMap, router, openHelp, globalSearch]);
+
+  // Allow other parts of the UI (e.g. the global search palette's footer) to
+  // open the help dialog without needing direct access to this context, since
+  // they may render outside of KeyboardShortcutsProvider.
+  React.useEffect(() => {
+    function onOpen() {
+      openHelp();
+    }
+    window.addEventListener(OPEN_SHORTCUTS_HELP_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SHORTCUTS_HELP_EVENT, onOpen);
+  }, [openHelp]);
 
   const value = React.useMemo<ShortcutsContextValue>(
     () => ({
@@ -215,7 +283,8 @@ export function KeyboardShortcutsProvider({ children, courseId }: { children: Re
       openHelp,
       closeHelp,
       goShortcuts: enabledGoShortcuts,
-      landmarkShortcuts: LANDMARK_TABLE
+      landmarkShortcuts: LANDMARK_TABLE,
+      toggleShortcuts: TOGGLE_SHORTCUTS
     }),
     [helpOpen, openHelp, closeHelp, enabledGoShortcuts]
   );

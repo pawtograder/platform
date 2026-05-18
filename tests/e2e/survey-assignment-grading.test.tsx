@@ -167,6 +167,11 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     // SurveyJS renders question titles in multiple places (span + hidden legend), so use .first()
     await expect(page.getByText("This week I have...").first()).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 1 Checkboxes");
+    // Scan every page of the SurveyJS-driven survey. SurveyJS is excluded
+    // from axe in axeStudentA11y.ts (`.sd-root-modern`, `.sv-action`, etc.),
+    // so these scans cover everything *around* the survey shell: page
+    // chrome, headings, the Pawtograder layout, and the navigation buttons.
+    await assertStudentPageAccessible(page, "team collaboration survey page 1 (empty)");
 
     // Fill page 1 - click on the label text for SurveyJS checkboxes
     await page.locator("label").filter({ hasText: "Completed all my assigned tasks" }).click();
@@ -187,6 +192,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await page.getByRole("button", { name: /Next/i }).click();
     await expect(page.getByText("This week, I knew what I needed to get done").first()).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 2 Likert Questions");
+    await assertStudentPageAccessible(page, "team collaboration survey page 2 (likert)");
 
     // Fill page 2 - click on the label text for SurveyJS radio buttons
     await page
@@ -200,6 +206,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await page.getByRole("button", { name: /Next/i }).click();
     await expect(page.getByText("In our team we relied on each other to get the job done.").first()).toBeVisible();
     await visualScreenshot(page, "Student Survey - Page 3 Team Dynamics");
+    await assertStudentPageAccessible(page, "team collaboration survey page 3 (team dynamics)");
 
     // Navigate to page 4
     await page.getByRole("button", { name: /Next/i }).click();

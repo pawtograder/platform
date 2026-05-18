@@ -102,7 +102,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Students can submit self-review", async ({ page }) => {
     await loginAsUser(page, student!, course);
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title }).click();
 
@@ -289,7 +289,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
@@ -394,6 +394,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await visualScreenshot(page, "Pseudonymous grading - Student sees only pseudonym in regrade", {
       stabilizeRubric: "Grading Rubric"
     });
+    await assertStudentPageAccessible(page, "pseudonymous grading - student regrade response /files");
   });
 
   test("Student escalates the regrade request", async ({ page }) => {
@@ -413,9 +414,17 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByRole("button", { name: "Escalate to Instructor" }).click();
     await page.getByRole("button", { name: "Escalate Request" }).click();
 
+    // Wait for the escalation popover/button to close before axe so the scan
+    // doesn't race the in-flight focus-trap teardown (same pattern as the
+    // grading.test.tsx escalation scan).
+    await expect(
+      page.getByRole("button", { name: "Escalate Request" }),
+      "Escalate Request button is removed after escalation"
+    ).toHaveCount(0);
     await visualScreenshot(page, "Pseudonymous grading - Student escalates regrade", {
       stabilizeRubric: "Grading Rubric"
     });
+    await assertStudentPageAccessible(page, "pseudonymous grading - student escalation /files");
   });
 
   test("Instructor closes escalated regrade with their REAL identity (not pseudonym)", async ({ page }) => {

@@ -112,7 +112,11 @@ test.describe("Office Hours", () => {
     //Make a private request first
     await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
+    // Scan the "New Help Request" form once it has rendered with its
+    // description field. Catches form-control labeling regressions on the
+    // help-request submit screen before we navigate to the queue chat.
     await page.getByRole("textbox", { name: "Help Request Description" }).click();
+    await assertStudentPageAccessible(page, "office hours - new help request form");
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
     await visualScreenshot(page, "Office Hours - Submit a Private Request");

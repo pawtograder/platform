@@ -21,6 +21,7 @@ import {
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { ResponsiveTable } from "@/components/ui/responsive-table";
 import { Alert, Box, Flex, Grid, GridItem, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
@@ -121,7 +122,9 @@ export default function AssignmentPage() {
         <GridItem>
           <Flex width="100%" alignItems={"center"}>
             <Box>
-              <Heading size="lg">{assignment.title}</Heading>
+              <Heading as="h1" size="lg">
+                {assignment.title}
+              </Heading>
               <HStack>
                 <AssignmentDueDate
                   assignment={assignment}
@@ -162,7 +165,7 @@ export default function AssignmentPage() {
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
           )}
           {submissionsPeriod && maxSubmissions ? (
-            <Box w="925px">
+            <Box w="100%" maxW="4xl">
               <Alert.Root
                 status={submissionsRemaining === 0 ? "warning" : submissionsRemaining <= 1 ? "warning" : "info"}
                 flexDirection="column"
@@ -199,7 +202,7 @@ export default function AssignmentPage() {
             assignment_group_id={assignmentGroup?.id}
             profile_id={enrollment?.private_profile_id}
           />
-          <Table.Root maxW="2xl">
+          <ResponsiveTable wrapperProps={{ maxW: "4xl" }}>
             <Table.Header>
               <Table.Row>
                 <Table.ColumnHeader>Submission #</Table.ColumnHeader>
@@ -267,7 +270,7 @@ export default function AssignmentPage() {
                 </Table.Row>
               ))}
             </Table.Body>
-          </Table.Root>
+          </ResponsiveTable>
         </GridItem>
 
         {assignment.show_leaderboard && (

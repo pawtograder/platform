@@ -116,7 +116,7 @@ test.describe("Assignment Leaderboard", () => {
     ).toBeVisible({ timeout: 10000 });
 
     // Navigate to assignment page
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title }).click();
 

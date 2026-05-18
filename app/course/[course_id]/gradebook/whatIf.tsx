@@ -141,7 +141,7 @@ function WhatIfScoreCell({
     }
   }
   return (
-    <HStack flexShrink={0} minW="fit-content" gap={0} pr={2}>
+    <HStack gap={0} pr={2} flexWrap="wrap" justifyContent="flex-end">
       {studentGrade?.score_override != null && studentGrade?.released && (
         <Tooltip
           content={`This value is overridden by an instructor, and does not reflect the calculated value. If you have a concern, please contact the instructor.${studentGrade?.score_override_note ? ` Note from instructor: ${studentGrade.score_override_note}` : ""}`}
@@ -152,8 +152,8 @@ function WhatIfScoreCell({
         </Tooltip>
       )}
       {column.render_expression && (
-        <Box pr={1} minW="fit-content">
-          <Text minW="fit-content" fontSize="sm">
+        <Box pr={1}>
+          <Text fontSize="sm">
             {" "}
             {renderer(
               isShowingWhatIf
@@ -182,7 +182,7 @@ function WhatIfScoreCell({
         </Box>
       )}
       {column.render_expression && "("}
-      <Text minW="fit-content" fontSize="sm">
+      <Text fontSize="sm" whiteSpace="nowrap">
         {scoreToShow}
         {column.max_score && `/${column.max_score}`}
       </Text>
@@ -374,9 +374,9 @@ function GradebookCard({
           </Float>
         </Tooltip>
       )}
-      <HStack align="top">
-        <Card.Header flexGrow={10} p={0}>
-          <VStack align="left" maxW="md">
+      <HStack align="start" flexWrap="wrap" gap={2} w="100%">
+        <Card.Header flexGrow={10} minW={0} p={0}>
+          <VStack align="start" w="100%">
             <Heading size="sm" id={`grade-title-${column.id}`}>
               {column.name}
             </Heading>
@@ -393,7 +393,7 @@ function GradebookCard({
             )}
           </VStack>
         </Card.Header>
-        <Card.Body p={0} minW="fit-content">
+        <Card.Body p={0}>
           <WhatIfScoreCell
             column={column}
             private_profile_id={private_profile_id}
@@ -403,7 +403,7 @@ function GradebookCard({
           />
         </Card.Body>
       </HStack>
-      <Box id={`grade-description-${column.id}`}>
+      <Box id={`grade-description-${column.id}`} overflowWrap="anywhere" w="100%">
         <Markdown style={COLUMN_DESCRIPTION_STYLE}>{column.description}</Markdown>
       </Box>
       {hasIncompleteValues && (
@@ -676,7 +676,7 @@ export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_
   }, [groupedColumns, collapsedGroups, toggleGroup, private_profile_id, whatIfEnabled]);
 
   return (
-    <VStack minW="md" maxW="xl" align="flex-start" role="region" aria-label="Student Gradebook" gap={0}>
+    <VStack w="100%" maxW="3xl" align="flex-start" role="region" aria-label="Student Gradebook" gap={0}>
       {!whatIfEnabled && (
         <Text fontSize="sm" color="fg.muted" px={2} py={2} w="100%">
           Grade simulations (What If) are not enabled for this course. You can still view released grades below.
