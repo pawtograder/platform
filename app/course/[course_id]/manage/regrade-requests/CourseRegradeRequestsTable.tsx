@@ -291,6 +291,7 @@ export default function CourseRegradeRequestsTable() {
   const {
     getHeaderGroups,
     getRowModel,
+    getPrePaginationRowModel,
     data,
     isLoading,
     error,
@@ -380,7 +381,8 @@ export default function CourseRegradeRequestsTable() {
 
   const { pagination } = getState();
   const { pageIndex, pageSize } = pagination;
-  const totalCount = data?.length || 0;
+  const filteredCount = getPrePaginationRowModel().rows.length;
+  const visibleRows = getRowModel().rows;
 
   return (
     <VStack align="stretch" gap={4}>
@@ -610,21 +612,31 @@ export default function CourseRegradeRequestsTable() {
             ))}
           </Table.Header>
           <Table.Body>
-            {getRowModel().rows.map((row) => (
-              <Table.Row key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                ))}
+            {visibleRows.length === 0 ? (
+              <Table.Row>
+                <Table.Cell colSpan={columns.length}>
+                  <Text textAlign="center" color="fg.muted">
+                    No regrade requests match the current filters.
+                  </Text>
+                </Table.Cell>
               </Table.Row>
-            ))}
+            ) : (
+              visibleRows.map((row) => (
+                <Table.Row key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
+                  ))}
+                </Table.Row>
+              ))
+            )}
           </Table.Body>
         </Table.Root>
       </Box>
 
       <HStack justifyContent="space-between" alignItems="center">
         <Text fontSize="sm" color="fg.muted">
-          Showing {Math.min(pageIndex * pageSize + 1, totalCount)} to {Math.min((pageIndex + 1) * pageSize, totalCount)}{" "}
-          of {totalCount} results
+          Showing {filteredCount === 0 ? 0 : pageIndex * pageSize + 1} to{" "}
+          {filteredCount === 0 ? 0 : pageIndex * pageSize + visibleRows.length} of {filteredCount} results
         </Text>
 
         <HStack>

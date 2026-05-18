@@ -118,57 +118,76 @@ export function useCustomTable<TData>({
       setError(null);
 
       const supabase = createClient();
-      let query = supabase.from(resource).select(select);
+      const PAGE_SIZE = 1000;
 
-      // Apply server filters
-      serverFilters.forEach((filter) => {
-        switch (filter.operator) {
-          case "eq":
-            query = query.eq(filter.field, filter.value);
-            break;
-          case "neq":
-            query = query.neq(filter.field, filter.value);
-            break;
-          case "gt":
-            query = query.gt(filter.field, filter.value);
-            break;
-          case "gte":
-            query = query.gte(filter.field, filter.value);
-            break;
-          case "lt":
-            query = query.lt(filter.field, filter.value);
-            break;
-          case "lte":
-            query = query.lte(filter.field, filter.value);
-            break;
-          case "like":
-            query = query.like(filter.field, String(filter.value));
-            break;
-          case "ilike":
-            query = query.ilike(filter.field, String(filter.value));
-            break;
-          case "in":
-            query = query.in(filter.field, Array.isArray(filter.value) ? filter.value : [filter.value]);
-            break;
+      const buildQuery = () => {
+        let query = supabase.from(resource).select(select);
+
+        serverFilters.forEach((filter) => {
+          switch (filter.operator) {
+            case "eq":
+              query = query.eq(filter.field, filter.value);
+              break;
+            case "neq":
+              query = query.neq(filter.field, filter.value);
+              break;
+            case "gt":
+              query = query.gt(filter.field, filter.value);
+              break;
+            case "gte":
+              query = query.gte(filter.field, filter.value);
+              break;
+            case "lt":
+              query = query.lt(filter.field, filter.value);
+              break;
+            case "lte":
+              query = query.lte(filter.field, filter.value);
+              break;
+            case "like":
+              query = query.like(filter.field, String(filter.value));
+              break;
+            case "ilike":
+              query = query.ilike(filter.field, String(filter.value));
+              break;
+            case "in":
+              query = query.in(filter.field, Array.isArray(filter.value) ? filter.value : [filter.value]);
+              break;
+          }
+        });
+
+        serverNotFilters.forEach((filter) => {
+          query = query.not(filter.field, filter.operator, filter.value);
+        });
+
+        if (serverOrderBys.length > 0) {
+          serverOrderBys.forEach((orderBy) => {
+            query = query.order(orderBy.field, { ascending: orderBy.direction === "asc" });
+          });
+        } else {
+          // Deterministic order is required for stable pagination across pages
+          query = query.order("id", { ascending: true });
         }
-      });
 
-      serverNotFilters.forEach((filter) => {
-        query = query.not(filter.field, filter.operator, filter.value);
-      });
+        return query;
+      };
 
-      // Apply server order bys
-      serverOrderBys.forEach((orderBy) => {
-        query = query.order(orderBy.field, orderBy.direction === "asc" ? { ascending: true } : { ascending: false });
-      });
+      const allRows: TData[] = [];
+      for (let page = 0; ; page++) {
+        const from = page * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        const { data: pageRows, error: queryError } = await buildQuery().range(from, to);
 
-      const { data: result, error: queryError } = await query.limit(1000);
+        if (queryError) {
+          throw queryError;
+        }
 
-      if (queryError) {
-        throw queryError;
+        const rows = (pageRows || []) as TData[];
+        allRows.push(...rows);
+
+        if (rows.length < PAGE_SIZE) break;
       }
 
-      setData((result || []) as TData[]);
+      setData(allRows);
     } catch (err) {
       setError(err instanceof Error ? err : new Error("An unknown error occurred"));
     } finally {

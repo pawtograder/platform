@@ -55,8 +55,11 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
  */
 export default function RegradeRequestsTable() {
   const { assignment_id, course_id } = useParams();
-  const courseIdNum = Number(course_id);
-  const assignmentIdNum = Number(assignment_id);
+  const courseIdParam = Array.isArray(course_id) ? course_id[0] : course_id;
+  const assignmentIdParam = Array.isArray(assignment_id) ? assignment_id[0] : assignment_id;
+  const courseIdNum = Number.parseInt(courseIdParam ?? "", 10);
+  const assignmentIdNum = Number.parseInt(assignmentIdParam ?? "", 10);
+  const hasValidRouteIds = Number.isFinite(courseIdNum) && Number.isFinite(assignmentIdNum);
   const courseController = useCourseController();
   const profiles = useTableControllerTableValues(courseController.profiles);
 
@@ -154,12 +157,14 @@ export default function RegradeRequestsTable() {
                 assignmentGroupsMembers={submission?.assignment_groups?.assignment_groups_members}
                 profileName={submission?.profiles?.name}
               />
-              <RegradeRequestContextLink
-                courseId={courseIdNum}
-                assignmentId={assignmentIdNum}
-                submissionId={row.original.submission_id}
-                regradeRequestId={row.original.id}
-              />
+              {hasValidRouteIds && (
+                <RegradeRequestContextLink
+                  courseId={courseIdNum}
+                  assignmentId={assignmentIdNum}
+                  submissionId={row.original.submission_id}
+                  regradeRequestId={row.original.id}
+                />
+              )}
             </HStack>
           );
         },
@@ -283,7 +288,7 @@ export default function RegradeRequestsTable() {
         }
       }
     ],
-    [allRubricChecks, course_id, courseIdNum, assignmentIdNum]
+    [allRubricChecks, course_id, courseIdNum, assignmentIdNum, hasValidRouteIds]
   );
 
   const {
