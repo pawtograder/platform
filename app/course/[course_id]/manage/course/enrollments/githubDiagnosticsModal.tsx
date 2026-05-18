@@ -1,6 +1,7 @@
 "use client";
 
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toaster } from "@/components/ui/toaster";
 import {
   diagnoseInstructorGitHubAccount,
@@ -9,7 +10,7 @@ import {
 } from "@/lib/edgeFunctions";
 import type { GitHubLinkStatus, GitHubMembershipStatus } from "@/supabase/functions/_shared/FunctionTypes";
 import { createClient } from "@/utils/supabase/client";
-import { Badge, Box, Button, Dialog, HStack, Portal, Spinner, Text, VStack } from "@chakra-ui/react";
+import { Badge, Button, Dialog, HStack, Portal, Spinner, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -80,7 +81,6 @@ export default function GitHubDiagnosticsModal({
 
   const fetchStatus = useCallback(async () => {
     setIsLoading(true);
-    setStatus(null);
     try {
       const response = await diagnoseInstructorGitHubAccount({ courseId, userRoleId }, supabase);
       setStatus(response.status);
@@ -98,12 +98,13 @@ export default function GitHubDiagnosticsModal({
   useEffect(() => {
     if (isOpen) {
       void fetchStatus();
+    } else {
+      setStatus(null);
     }
   }, [fetchStatus, isOpen]);
 
   const handleSync = useCallback(async () => {
     setIsSyncing(true);
-    setStatus(null);
     try {
       const response = await syncInstructorGitHubAccount({ courseId, userRoleId }, supabase);
       setStatus(response.status);
@@ -124,7 +125,6 @@ export default function GitHubDiagnosticsModal({
 
   const handleUnlink = useCallback(async () => {
     setIsUnlinking(true);
-    setStatus(null);
     try {
       const response = await unlinkInstructorGitHubAccount({ courseId, userRoleId }, supabase);
       setStatus(response.status);
@@ -144,7 +144,14 @@ export default function GitHubDiagnosticsModal({
   }, [courseId, supabase, userRoleId]);
 
   const linkedUsername = status?.currentGithubUsername ?? status?.githubUsername ?? null;
-  const isActionDisabled = isLoading || isSyncing || isUnlinking || !status;
+  const isBusy = isLoading || isSyncing || isUnlinking;
+  const isActionDisabled = isBusy || !status;
+  const busyMessage = isSyncing
+    ? "Resyncing GitHub status..."
+    : isUnlinking
+      ? "Unlinking GitHub identity..."
+      : "Fetching GitHub status...";
+  const skeletonBadge = <Skeleton height="6" width="24" />;
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(details) => !details.open && onClose()}>
@@ -161,75 +168,88 @@ export default function GitHubDiagnosticsModal({
                 <Text color="fg.muted">
                   Checking GitHub link status for {studentName || "this student"} in this course.
                 </Text>
-                {isLoading && (
+                {isBusy && (
                   <HStack>
                     <Spinner size="sm" />
-                    <Text>Fetching GitHub status...</Text>
+                    <Text>{busyMessage}</Text>
                   </HStack>
                 )}
-                {!isLoading && status && (
-                  <VStack align="stretch" gap={3}>
-                    <StatusRow
-                      label="Linked account"
-                      value={
-                        linkedUsername ? (
-                          <Badge colorPalette="blue">
-                            <BsGithub /> {linkedUsername}
-                          </Badge>
-                        ) : (
-                          <Badge colorPalette="red">No GitHub account linked</Badge>
-                        )
-                      }
-                      detail={status.githubUserId ? `GitHub ID: ${status.githubUserId}` : null}
-                    />
-                    <StatusRow
-                      label="Username changed"
-                      value={
-                        status.usernameChanged ? (
-                          <Badge colorPalette="yellow">Yes</Badge>
-                        ) : (
-                          <Badge colorPalette="green">No</Badge>
-                        )
-                      }
-                      detail={
-                        status.usernameChanged
-                          ? `Stored as ${status.githubUsername}, now ${status.currentGithubUsername}`
-                          : null
-                      }
-                    />
-                    <StatusRow
-                      label="Organization"
-                      value={
+                <VStack align="stretch" gap={3}>
+                  <StatusRow
+                    label="Linked account"
+                    value={
+                      isBusy ? (
+                        skeletonBadge
+                      ) : linkedUsername ? (
+                        <Badge colorPalette="blue">
+                          <BsGithub /> {linkedUsername}
+                        </Badge>
+                      ) : (
+                        <Badge colorPalette="red">No GitHub account linked</Badge>
+                      )
+                    }
+                    detail={!isBusy && status?.githubUserId ? `GitHub ID: ${status.githubUserId}` : null}
+                  />
+                  <StatusRow
+                    label="Username changed"
+                    value={
+                      isBusy ? (
+                        skeletonBadge
+                      ) : status?.usernameChanged ? (
+                        <Badge colorPalette="yellow">Yes</Badge>
+                      ) : (
+                        <Badge colorPalette="green">No</Badge>
+                      )
+                    }
+                    detail={
+                      !isBusy && status?.usernameChanged
+                        ? `Stored as ${status.githubUsername}, now ${status.currentGithubUsername}`
+                        : null
+                    }
+                  />
+                  <StatusRow
+                    label="Organization"
+                    value={
+                      isBusy ? (
+                        skeletonBadge
+                      ) : status ? (
                         <Badge colorPalette={membershipColor(status.orgMembership)}>
                           {membershipLabel(status.orgMembership)}
                         </Badge>
-                      }
-                      detail={status.orgMembership.error ?? status.classOrg}
-                    />
-                    <StatusRow
-                      label="Student team"
-                      value={
+                      ) : (
+                        skeletonBadge
+                      )
+                    }
+                    detail={!isBusy && status ? (status.orgMembership.error ?? status.classOrg) : null}
+                  />
+                  <StatusRow
+                    label="Student team"
+                    value={
+                      isBusy ? (
+                        skeletonBadge
+                      ) : status ? (
                         <Badge colorPalette={membershipColor(status.teamMembership)}>
                           {membershipLabel(status.teamMembership)}
                         </Badge>
-                      }
-                      detail={status.teamMembership.error ?? status.studentTeamSlug}
-                    />
-                    <StatusRow
-                      label="Database org status"
-                      value={
-                        status.githubOrgConfirmed ? (
-                          <Badge colorPalette="green">Confirmed</Badge>
-                        ) : (
-                          <Badge colorPalette="red">Not confirmed</Badge>
-                        )
-                      }
-                    />
-                  </VStack>
-                )}
-                {!isLoading && !status && (
-                  <Box color="fg.muted">No GitHub status has been fetched for this student yet.</Box>
-                )}
+                      ) : (
+                        skeletonBadge
+                      )
+                    }
+                    detail={!isBusy && status ? (status.teamMembership.error ?? status.studentTeamSlug) : null}
+                  />
+                  <StatusRow
+                    label="Database org status"
+                    value={
+                      isBusy ? (
+                        skeletonBadge
+                      ) : status?.githubOrgConfirmed ? (
+                        <Badge colorPalette="green">Confirmed</Badge>
+                      ) : (
+                        <Badge colorPalette="red">Not confirmed</Badge>
+                      )
+                    }
+                  />
+                </VStack>
               </VStack>
             </Dialog.Body>
             <Dialog.Footer>
