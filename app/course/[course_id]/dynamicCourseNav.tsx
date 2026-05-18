@@ -423,26 +423,32 @@ export default function DynamicCourseNav() {
 
       {/* Desktop Layout */}
       <Box display={{ base: "none", md: "block" }} aria-hidden={!isMdUp ? true : undefined}>
-        <VStack gap={2} align="stretch" width="100%" pt="2">
-          <Box id={isMdUp ? "user-menu" : undefined} alignSelf="flex-end" maxWidth="100%">
-            <UserMenu />
-          </Box>
-          <HStack>
-            <CoursePicker currentCourse={enrollment.classes} />
-            <NextLink href="/course" aria-label="Pawtograder home">
-              {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
-              ) : (
-                <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
-              )}
-            </NextLink>
-            <Text fontSize="xl" fontWeight="medium">
-              <Link variant="plain" href={`/course/${enrollment.class_id}`}>
-                {enrollment.classes.course_title ?? enrollment.classes.name}
-              </Link>
-            </Text>
-          </HStack>
-          <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%">
+        <Box width="100%" pt="2">
+          {/* Title row: course identity on the left, user-menu chips on the right.
+              The chips wrap into stacked lines inside their right-hand block
+              (UserMenu uses flexWrap + justifyContent="flex-end") instead of
+              forcing the title onto a separate row. */}
+          <Flex width="100%" alignItems="flex-start" gap={2}>
+            <HStack flexShrink={0}>
+              <CoursePicker currentCourse={enrollment.classes} />
+              <NextLink href="/course" aria-label="Pawtograder home">
+                {colorMode === "dark" ? (
+                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
+                ) : (
+                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
+                )}
+              </NextLink>
+              <Text fontSize="xl" fontWeight="medium">
+                <Link variant="plain" href={`/course/${enrollment.class_id}`}>
+                  {enrollment.classes.course_title ?? enrollment.classes.name}
+                </Link>
+              </Text>
+            </HStack>
+            <Box id={isMdUp ? "user-menu" : undefined} flex="1" minWidth={0}>
+              <UserMenu />
+            </Box>
+          </Flex>
+          <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
             {filteredLinks.map((link) => {
               if (link.submenu) {
                 return (
@@ -523,7 +529,7 @@ export default function DynamicCourseNav() {
               }
             })}
           </HStack>
-        </VStack>
+        </Box>
       </Box>
     </Box>
   );
