@@ -107,6 +107,11 @@ const getMessageId = (message: UnifiedMessage): number | null => {
   return null; // Broadcast message (no database ID yet)
 };
 
+// Attachment URLs render as raw <a href> outside the rehype-sanitize pipeline,
+// so the scheme must be allowlisted here to keep `javascript:` / `data:` / etc.
+// out of the DOM.
+const SAFE_ATTACHMENT_URL = /^\s*(https?:\/\/|mailto:|\/|\.\.?\/|#)/i;
+
 /**
  * Helper to extract file attachments from markdown content
  */
@@ -123,13 +128,15 @@ const extractFileAttachments = (content: string): Array<{ name: string; url: str
   // Find image attachments
   while ((match = imageRegex.exec(content)) !== null) {
     const [, name, url] = match;
-    attachments.push({ name, url, isImage: true });
+    if (!SAFE_ATTACHMENT_URL.test(url)) continue;
+    attachments.push({ name, url: url.trim(), isImage: true });
   }
 
   // Find regular file attachments
   while ((match = linkRegex.exec(content)) !== null) {
     const [, name, url] = match;
-    attachments.push({ name, url, isImage: false });
+    if (!SAFE_ATTACHMENT_URL.test(url)) continue;
+    attachments.push({ name, url: url.trim(), isImage: false });
   }
 
   return attachments;

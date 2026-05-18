@@ -2,7 +2,6 @@ import { resolveTargetStudentProfileIdForRubricComment } from "@/lib/rubricComme
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import type { Page, Locator } from "@playwright/test";
-import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { promises as fs } from "node:fs";
 import Papa from "papaparse";
@@ -17,6 +16,7 @@ import {
   createAuthenticatedClient
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { visualScreenshot } from "./VisualTestUtils";
 // removed unused import
 
 dotenv.config({ path: ".env.local", quiet: true });
@@ -213,6 +213,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const users = await createUsersInClass([
       {
         name: "Alice Anderson",
+        public_profile_name: "Gradebook Pseudonym Alice",
         email: "alice-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -220,6 +221,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Bob Brown",
+        public_profile_name: "Gradebook Pseudonym Bob",
         email: "bob-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -227,6 +229,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Charlie Chen",
+        public_profile_name: "Gradebook Pseudonym Charlie",
         email: "charlie-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -234,6 +237,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Professor Smith",
+        public_profile_name: "Gradebook Pseudonym Instructor",
         email: "prof-smith-gradebook@pawtograder.net",
         role: "instructor",
         class_id: course.id,
@@ -873,7 +877,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     }).toPass({ timeout: 60_000 });
 
     // Take screenshot for visual regression testing
-    await argosScreenshot(page, "Gradebook Page - Full Data");
+    await visualScreenshot(page, "Gradebook Page - Full Data");
   });
 
   test("Editing a manual column updates the Participation cell value", async ({ page }) => {
@@ -1598,7 +1602,7 @@ test.describe("Gradebook column reorder (issue #531)", () => {
       .filter({ hasText: colName });
     await headerCell.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Left", exact: true }).click();
-    await expect(page.getByText("Column moved left").first()).toBeVisible();
+    await expect(page.getByText("Column moved left").first()).toBeAttached();
 
     // Verify sort_order decreased by 1 in the database
     await expect(async () => {
@@ -1629,10 +1633,8 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     // chakra menu it controls. Retry the entire open+click sequence as a
     // single unit so a transient detach doesn't fail the test. Each attempt
     // re-resolves the locator (so the new mount is targeted), waits for
-    // virtualizer idle, opens the menu, and clicks Move Right. Any
-    // intermediate detach throws and we try again. The ultimate signal that
-    // the click succeeded is the "Column moved right" toast (matching how
-    // Move Left works above), and the DB sort_order assertion that follows.
+    // virtualizer idle, opens the menu, clicks Move Right, then verifies the
+    // DB sort_order. Any intermediate detach throws and we try again.
     await expect(async () => {
       // If a previous attempt's Move Right click already landed in the DB
       // (sort_order back to original) but the toast assertion timed out
@@ -1651,11 +1653,27 @@ test.describe("Gradebook column reorder (issue #531)", () => {
         return;
       }
       await waitForVirtualizerIdle(page);
-      const buttonNow = headerCellAfterMove.getByRole("button", { name: "Column options" });
+      const freshHeaderCellAfterMove = region
+        .locator("thead tr")
+        .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+        .locator("[data-col-id]")
+        .filter({ hasText: colName });
+      await freshHeaderCellAfterMove.scrollIntoViewIfNeeded();
+      await waitForVirtualizerIdle(page);
+      const buttonNow = freshHeaderCellAfterMove.getByRole("button", { name: "Column options" });
       await buttonNow.scrollIntoViewIfNeeded();
       await buttonNow.click();
-      await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
-      await expect(page.getByText("Column moved right").first()).toBeVisible({ timeout: 5000 });
+      const moveRightItem = page.getByRole("menuitem", { name: "Move Right", exact: true });
+      await expect(moveRightItem).toBeVisible({ timeout: 5_000 });
+      await moveRightItem.click({ force: true });
+      await expect(async () => {
+        const { data: colAfterClick } = await supabase
+          .from("gradebook_columns")
+          .select("sort_order")
+          .eq("id", colBefore!.id)
+          .single();
+        expect(colAfterClick?.sort_order).toBe(sortOrderBefore);
+      }).toPass({ timeout: 5_000, intervals: [250, 500] });
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
 
     // Verify sort_order restored to original

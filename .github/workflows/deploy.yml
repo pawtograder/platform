@@ -202,18 +202,26 @@ jobs:
 
           # Ephemeral CI Postgres — trade durability for speed. The volume is
           # destroyed at job end, so fsync/full_page_writes give us nothing.
-          # synchronous_commit is SIGHUP-reloadable; fsync and full_page_writes
-          # require a restart.
+          # synchronous_commit is SIGHUP-reloadable; fsync, full_page_writes,
+          # and shared_buffers require a restart (done below).
+          # Notes on the psql invocation:
+          #   * Each ALTER SYSTEM must run outside a transaction block, so use
+          #     one -c flag per statement — `psql -c "a;b;c"` wraps multi-
+          #     statement input in an implicit transaction and would fail.
+          #   * Connect as supabase_admin (the actual superuser) — the
+          #     `postgres` role on supabase-local is not superuser and gets
+          #     `permission denied to set parameter` on ALTER SYSTEM.
+          #   * Use -h 127.0.0.1 so pg_hba.conf's `host ... 127.0.0.1 trust`
+          #     rule applies; the unix-socket rule requires scram-sha-256.
           docker exec -i "supabase_db_${SUPABASE_PROJECT}" \
-            psql -v ON_ERROR_STOP=1 -U postgres -d postgres -c "
-            ALTER SYSTEM SET synchronous_commit = off;
-            ALTER SYSTEM SET fsync = off;
-            ALTER SYSTEM SET full_page_writes = off;
-            ALTER SYSTEM SET shared_buffers = '512MB';
-            ALTER SYSTEM SET work_mem = '32MB';
-            ALTER SYSTEM SET maintenance_work_mem = '256MB';
-            ALTER SYSTEM SET autovacuum = off;
-          "
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U supabase_admin -d postgres \
+              -c "ALTER SYSTEM SET synchronous_commit = off" \
+              -c "ALTER SYSTEM SET fsync = off" \
+              -c "ALTER SYSTEM SET full_page_writes = off" \
+              -c "ALTER SYSTEM SET shared_buffers = '512MB'" \
+              -c "ALTER SYSTEM SET work_mem = '32MB'" \
+              -c "ALTER SYSTEM SET maintenance_work_mem = '256MB'" \
+              -c "ALTER SYSTEM SET autovacuum = off"
           docker restart "supabase_db_${SUPABASE_PROJECT}"
 
           # Re-wait for REST after the db bounce — PostgREST reconnects lazily
@@ -258,7 +266,12 @@ jobs:
       - name: Start Next.js prod server
         run: |
           set -euo pipefail
-          nohup env PORT=3001 npm run start > $RUN_TMP/next-server.log 2>&1 &
+          # CSP is served in report-only mode for E2E so Playwright's
+          # page.evaluate / waitForFunction (string-eval via CDP) is not
+          # blocked by `script-src` strict-dynamic. The header is still
+          # emitted, so tests can still assert its shape; enforcement
+          # ships in prod via the default `Content-Security-Policy`.
+          nohup env PORT=3001 CSP_REPORT_ONLY=1 npm run start > $RUN_TMP/next-server.log 2>&1 &
           echo $! > $RUN_TMP/next-server.pid
           ready=0
           for i in $(seq 1 60); do
