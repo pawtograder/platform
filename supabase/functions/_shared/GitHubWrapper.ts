@@ -221,6 +221,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
 }
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
+export type GetCommitResponse = Endpoints["GET /repos/{owner}/{repo}/commits/{ref}"]["response"];
 export type GitHubOIDCToken = {
   jti: string;
   sub: string;
@@ -1870,6 +1871,28 @@ export async function listCommits(
     commits: commits.data,
     has_more: next_page !== null
   };
+}
+
+export async function getCommit(
+  repo_full_name: string,
+  ref: string,
+  scope?: Sentry.Scope
+): Promise<GetCommitResponse["data"]> {
+  scope?.setTag("github_operation", "get_commit");
+  scope?.setTag("repository", repo_full_name);
+  scope?.setTag("ref", ref);
+
+  const [org, repo] = repo_full_name.split("/");
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+  const commit = await octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+    owner: org,
+    repo,
+    ref
+  });
+  return commit.data;
 }
 
 export async function triggerWorkflow(

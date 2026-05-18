@@ -189,9 +189,13 @@ export async function triggerWorkflow(
   params: FunctionTypes.AutograderTriggerGradingWorkflowRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<{ message: string }>(supabase, "autograder-trigger-grading-workflow", {
-    body: params
-  });
+  return await invokeEdgeFunction<FunctionTypes.AutograderTriggerGradingWorkflowResponse>(
+    supabase,
+    "autograder-trigger-grading-workflow",
+    {
+      body: params
+    }
+  );
 }
 export async function assignmentGroupInstructorCreateGroup(
   params: FunctionTypes.AssignmentGroupInstructorCreateRequest,
