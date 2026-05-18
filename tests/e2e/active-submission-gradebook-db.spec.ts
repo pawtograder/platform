@@ -131,7 +131,11 @@ test.describe("active submission gradebook recalculation", () => {
   }
 
   async function kickGradebookWorker() {
-    await supabase.rpc("invoke_gradebook_recalculation_background_task").catch(() => {});
+    try {
+      await supabase.rpc("invoke_gradebook_recalculation_background_task");
+    } catch {
+      // The direct edge-function kick below is the reliable local fallback.
+    }
 
     const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
     if (edgeSecret) {
