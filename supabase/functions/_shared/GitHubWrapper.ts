@@ -1054,6 +1054,13 @@ export async function listFilesInRepo(org: string, repo: string, scope?: Sentry.
   return await listFilesInRepoDirectory(octokit, org, repo, "");
 }
 
+function isGitHubNotFoundError(error: unknown): boolean {
+  return (
+    (error instanceof RequestError && error.status === 404) ||
+    (error instanceof Error && error.message.includes("Not Found"))
+  );
+}
+
 export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "archive_repo");
   scope?.setTag("org", org);
@@ -1070,28 +1077,54 @@ export async function archiveRepoAndLock(org: string, repo: string, scope?: Sent
   }
   console.log(`archiving repo ${org}/${repo}`);
   //Remove all direct access to the repo
-  const collaborators = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
-    owner: org,
-    repo,
-    per_page: 100
-  });
-  for (const collaborator of collaborators.data) {
-    console.log("removing collaborator", collaborator.login);
-    await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
+  let collaborators: Endpoints["GET /repos/{owner}/{repo}/collaborators"]["response"];
+  try {
+    collaborators = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
       owner: org,
       repo,
-      username: collaborator.login
+      per_page: 100
     });
+  } catch (error) {
+    if (isGitHubNotFoundError(error)) {
+      console.log(`repo ${org}/${repo} not found while archiving; treating as already archived`);
+      return;
+    }
+    throw error;
+  }
+  for (const collaborator of collaborators.data) {
+    console.log("removing collaborator", collaborator.login);
+    try {
+      await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
+        owner: org,
+        repo,
+        username: collaborator.login
+      });
+    } catch (error) {
+      if (isGitHubNotFoundError(error)) {
+        console.log(`repo ${org}/${repo} or collaborator ${collaborator.login} not found while archiving; continuing`);
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const newName = `archived-${new Date().toISOString()}-${repo}`;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const newName = `archived-${timestamp}-${repo}`;
   console.log("renaming repo to", newName);
   //Rename the repo
-  await octokit.request("PATCH /repos/{owner}/{repo}", {
-    owner: org,
-    repo,
-    name: newName
-  });
+  try {
+    await octokit.request("PATCH /repos/{owner}/{repo}", {
+      owner: org,
+      repo,
+      name: newName
+    });
+  } catch (error) {
+    if (isGitHubNotFoundError(error)) {
+      console.log(`repo ${org}/${repo} not found while renaming; treating as already archived`);
+      return;
+    }
+    throw error;
+  }
 }
 /**
  * Syncs the staff team for a course.
@@ -2042,7 +2075,7 @@ export async function enqueueSyncRepoPermissions({
   }
   return data;
 }
-export async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string) {
+export async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string, debug_id?: string) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -2050,7 +2083,8 @@ export async function enqueueGithubArchiveRepo(class_id: number, org: string, re
   const { data, error } = await adminSupabase.rpc("enqueue_github_archive_repo", {
     p_class_id: class_id,
     p_org: org,
-    p_repo: repo
+    p_repo: repo,
+    p_debug_id: debug_id
   });
   if (error) {
     Sentry.captureException(error);
