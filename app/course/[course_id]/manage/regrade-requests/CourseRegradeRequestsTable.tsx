@@ -10,11 +10,11 @@ import {
 } from "@/components/regrade-requests/InstructorRegradeTableShared";
 import DiscordMessageLink from "@/components/discord/discord-message-link";
 import PersonName from "@/components/ui/person-name";
-import { useCustomTable, type ServerNotFilter } from "@/hooks/useCustomTable";
+import { useCustomTable, type ServerFilter } from "@/hooks/useCustomTable";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, Checkbox, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
@@ -40,8 +40,12 @@ function RubricCheckNameCell({ row }: { row: CourseRegradeRequestRow }) {
   return <Text>{name ?? "—"}</Text>;
 }
 
+const DEFAULT_STATUS_FILTER: RegradeStatus[] = ["opened", "escalated"];
+
 /**
- * All regrade requests in the course (staff view). Defaults to hiding draft and resolved; optional server filters for those statuses.
+ * All regrade requests in the course (staff view). The status filter defaults to showing only
+ * active requests ("opened" and "escalated") and is enforced server-side, so draft, resolved,
+ * and closed requests are not loaded unless the user explicitly selects those statuses.
  */
 export default function CourseRegradeRequestsTable() {
   const { course_id } = useParams();
@@ -49,17 +53,15 @@ export default function CourseRegradeRequestsTable() {
   const courseController = useCourseController();
   const profiles = useTableControllerTableValues(courseController.profiles);
 
-  const [hideResolvedAndDraft, setHideResolvedAndDraft] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<RegradeStatus[]>(DEFAULT_STATUS_FILTER);
 
-  const serverFilters = useMemo(
-    () => [{ field: "class_id", operator: "eq" as const, value: course_id as string }],
-    [course_id]
-  );
-
-  const serverNotFilters = useMemo((): ServerNotFilter[] => {
-    if (!hideResolvedAndDraft) return [];
-    return [{ field: "status", operator: "in" as const, value: "(draft,resolved)" }];
-  }, [hideResolvedAndDraft]);
+  const serverFilters = useMemo((): ServerFilter[] => {
+    const filters: ServerFilter[] = [{ field: "class_id", operator: "eq", value: course_id as string }];
+    if (statusFilter.length > 0) {
+      filters.push({ field: "status", operator: "in", value: statusFilter });
+    }
+    return filters;
+  }, [course_id, statusFilter]);
 
   const statusOptions = useMemo(
     () =>
@@ -85,12 +87,7 @@ export default function CourseRegradeRequestsTable() {
         accessorKey: "status",
         header: "Status",
         cell: ({ getValue }) => <StatusCell status={getValue() as RegradeStatus} />,
-        enableColumnFilter: true,
-        filterFn: (row, _id, filterValue) => {
-          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
-          const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
-          return filterValues.includes(row.original.status);
-        }
+        enableColumnFilter: false
       },
       {
         id: "assignment",
@@ -307,7 +304,6 @@ export default function CourseRegradeRequestsTable() {
     columns,
     resource: "submission_regrade_requests",
     serverFilters,
-    serverNotFilters,
     select: selectClause,
     initialState: {
       pagination: {
@@ -387,33 +383,18 @@ export default function CourseRegradeRequestsTable() {
   return (
     <VStack align="stretch" gap={4}>
       <HStack wrap="wrap" gap={4} align="flex-end">
-        <Checkbox.Root
-          checked={hideResolvedAndDraft}
-          onCheckedChange={(details) => setHideResolvedAndDraft(details.checked === true)}
-        >
-          <Checkbox.HiddenInput />
-          <Checkbox.Control />
-          <Checkbox.Label>Hide draft and resolved</Checkbox.Label>
-        </Checkbox.Root>
-
         <Box>
           <Text fontSize="sm" fontWeight="medium" mb={1}>
             Filter by Status:
           </Text>
-          <Box width="150px">
+          <Box width="220px">
             <Select
               size="sm"
               placeholder="All statuses"
-              value={
-                (getColumn("status")?.getFilterValue() as string[])
-                  ? statusOptions.filter((opt) =>
-                      ((getColumn("status")?.getFilterValue() as string[]) || []).includes(opt.value)
-                    )
-                  : []
-              }
+              value={statusOptions.filter((opt) => statusFilter.includes(opt.value))}
               onChange={(options) => {
                 const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
-                getColumn("status")?.setFilterValue(values.length > 0 ? values : undefined);
+                setStatusFilter(values);
               }}
               options={statusOptions}
               isClearable
@@ -559,6 +540,7 @@ export default function CourseRegradeRequestsTable() {
             onClick={() => {
               resetColumnFilters();
               resetSorting();
+              setStatusFilter(DEFAULT_STATUS_FILTER);
             }}
           >
             Clear Filters
