@@ -179,11 +179,16 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
 /**
  * Type-safe filter for real-time event filtering.
- * Supports basic equality filters that match PostgrestFilterBuilder patterns.
+ * Supports basic equality filters that match PostgrestFilterBuilder patterns, or
+ * a predicate function for cases where the row's match condition isn't a simple
+ * AND over column equalities (e.g. "root threads OR duplicate-marked threads").
  */
-export type RealtimeFilter<T extends TablesThatHaveAnIDField> = {
+export type RealtimeFilterRecord<T extends TablesThatHaveAnIDField> = {
   [K in keyof DatabaseTableTypes[T]["Row"]]?: DatabaseTableTypes[T]["Row"][K] | DatabaseTableTypes[T]["Row"][K][];
 };
+export type RealtimeFilter<T extends TablesThatHaveAnIDField> =
+  | RealtimeFilterRecord<T>
+  | ((row: DatabaseTableTypes[T]["Row"]) => boolean);
 
 /**
  * Hook that returns all values from a TableController that match a predicate.
@@ -1267,13 +1272,6 @@ export default class TableController<
    * Refetch all data and notify subscribers of changes (full refresh)
    */
   private async _refetchAllDataFull(): Promise<void> {
-    // Guard against overlapping refetches — callers (e.g. the post-SSR
-    // catch-up path) invoke this directly, bypassing the guard in
-    // `_refetchAllData`.
-    if (this._isRefetching) {
-      return;
-    }
-    this._lastFetchTimestamp = Date.now();
     // Set refetch state to true and notify listeners
     this._isRefetching = true;
     this._refetchListeners.forEach((listener) => listener(true));
@@ -1612,15 +1610,9 @@ export default class TableController<
     ) {
       this._needsCatchUpAfterInitialDataHydration = false;
       this._postSsrCatchUpDone = true;
-      // Use full refresh (not the incremental-by-updated_at path) so we also
-      // evict rows that were in the stale SSR snapshot but have since
-      // transitioned out of the filter (e.g. a discussion thread whose
-      // root_class_id was nulled by a duplicate-merge while the SSR cache was
-      // still warm). Incremental refetch inherits the controller's filter and
-      // can't see those rows; full refresh diffs old vs. new id sets and
-      // removes them. Fire-and-forget — _refetchAllDataFull guards against
-      // overlapping refetches via _isRefetching.
-      void this._refetchAllDataFull();
+      // Fire and forget — _refetchAllData internally guards against
+      // overlapping refetches.
+      void this._refetchAllData();
     }
 
     // Only refetch if a relevant channel has reconnected (not initial connection)
@@ -1918,10 +1910,7 @@ export default class TableController<
               this._channelsCompletedInitialConnection.add(name);
             }
           }
-          // Full refresh (not incremental) so rows that transitioned OUT of
-          // this controller's filter while the SSR cache was stale get
-          // evicted — see the matching comment in _handleConnectionStatusChange.
-          void this._refetchAllDataFull();
+          void this._refetchAllData();
         }
         resolve();
       } catch (error) {
@@ -2416,6 +2405,10 @@ export default class TableController<
   private _matchesRealtimeFilter(rowData: Record<string, unknown>): boolean {
     if (!this._realtimeFilter) {
       return true; // No filter means all rows match
+    }
+
+    if (typeof this._realtimeFilter === "function") {
+      return this._realtimeFilter(rowData as DatabaseTableTypes[RelationName]["Row"]);
     }
 
     for (const [key, filterValue] of Object.entries(this._realtimeFilter)) {

@@ -297,18 +297,24 @@ type DiscussionThreadTeaser = Pick<
   | "ordinal"
   | "answer"
   | "pinned"
+  | "duplicate_marked_at"
 >;
+
+// Duplicate-marked threads are kept in the controller so a stale SSR teaser is
+// updated in place by the cheap incremental catch-up after a duplicate-merge;
+// they must not appear in the visible feed.
+const isVisibleTeaser = (row: DiscussionThreadTeaser) => row.duplicate_marked_at == null;
 
 export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
-  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>(
-    () => controller.discussionThreadTeasers.list().data as DiscussionThreadTeaser[]
+  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>(() =>
+    (controller.discussionThreadTeasers.list().data as DiscussionThreadTeaser[]).filter(isVisibleTeaser)
   );
   useEffect(() => {
     const { data, unsubscribe } = controller.discussionThreadTeasers.list((data) => {
-      setTeasers(data as DiscussionThreadTeaser[]);
+      setTeasers((data as DiscussionThreadTeaser[]).filter(isVisibleTeaser));
     });
-    setTeasers(data as DiscussionThreadTeaser[]);
+    setTeasers((data as DiscussionThreadTeaser[]).filter(isVisibleTeaser));
     return unsubscribe;
   }, [controller]);
   return teasers;
@@ -716,12 +722,24 @@ export class CourseController {
 
   get discussionThreadTeasers(): TableController<"discussion_threads"> {
     if (!this._discussionThreadTeasers) {
+      const courseId = this.courseId;
+      // Include current root threads AND threads that *used* to be roots but were
+      // marked as a duplicate (root_class_id is nulled on merge, duplicate_marked_at
+      // is set). Keeping duplicate-marked rows in the controller means the cheap
+      // since-watermark catch-up will see the merge UPDATE — without this we'd
+      // need a full refetch to evict stale SSR teasers after a duplicate-merge.
+      // The display layer filters duplicate_marked_at != null out of the feed.
       this._discussionThreadTeasers = new TableController({
         client: this.client,
         table: "discussion_threads",
-        query: this.client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
+        query: this.client
+          .from("discussion_threads")
+          .select("*")
+          .eq("class_id", courseId)
+          .or(`root_class_id.eq.${courseId},duplicate_marked_at.not.is.null`),
         classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { root_class_id: this.courseId },
+        realtimeFilter: (row) =>
+          row.class_id === courseId && (row.root_class_id === courseId || row.duplicate_marked_at != null),
         initialData: this._initialData?.discussionThreadTeasers
       });
     }

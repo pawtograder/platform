@@ -300,10 +300,17 @@ export async function fetchCourseControllerData(
         )
       : Promise.resolve(undefined),
 
-    // Discussion thread teasers (only root-level threads, right now only for staff b/c permissions)
+    // Discussion thread teasers (root threads + previously-root duplicate-marked
+    // threads; the latter are kept so the client-side controller can observe the
+    // root→reply transition and the display layer can hide them — see
+    // discussionThreadTeasers in useCourseController for details).
     isStaff
       ? fetchAllPages<DiscussionThread>(
-          discussionThreadsClient.from("discussion_threads").select("*").eq("root_class_id", course_id)
+          discussionThreadsClient
+            .from("discussion_threads")
+            .select("*")
+            .eq("class_id", course_id)
+            .or(`root_class_id.eq.${course_id},duplicate_marked_at.not.is.null`)
         )
       : Promise.resolve(undefined),
 
