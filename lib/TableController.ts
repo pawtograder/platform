@@ -1267,6 +1267,13 @@ export default class TableController<
    * Refetch all data and notify subscribers of changes (full refresh)
    */
   private async _refetchAllDataFull(): Promise<void> {
+    // Guard against overlapping refetches — callers (e.g. the post-SSR
+    // catch-up path) invoke this directly, bypassing the guard in
+    // `_refetchAllData`.
+    if (this._isRefetching) {
+      return;
+    }
+    this._lastFetchTimestamp = Date.now();
     // Set refetch state to true and notify listeners
     this._isRefetching = true;
     this._refetchListeners.forEach((listener) => listener(true));
@@ -1605,9 +1612,15 @@ export default class TableController<
     ) {
       this._needsCatchUpAfterInitialDataHydration = false;
       this._postSsrCatchUpDone = true;
-      // Fire and forget — _refetchAllData internally guards against
-      // overlapping refetches.
-      void this._refetchAllData();
+      // Use full refresh (not the incremental-by-updated_at path) so we also
+      // evict rows that were in the stale SSR snapshot but have since
+      // transitioned out of the filter (e.g. a discussion thread whose
+      // root_class_id was nulled by a duplicate-merge while the SSR cache was
+      // still warm). Incremental refetch inherits the controller's filter and
+      // can't see those rows; full refresh diffs old vs. new id sets and
+      // removes them. Fire-and-forget — _refetchAllDataFull guards against
+      // overlapping refetches via _isRefetching.
+      void this._refetchAllDataFull();
     }
 
     // Only refetch if a relevant channel has reconnected (not initial connection)
@@ -1905,7 +1918,10 @@ export default class TableController<
               this._channelsCompletedInitialConnection.add(name);
             }
           }
-          void this._refetchAllData();
+          // Full refresh (not incremental) so rows that transitioned OUT of
+          // this controller's filter while the SSR cache was stale get
+          // evicted — see the matching comment in _handleConnectionStatusChange.
+          void this._refetchAllDataFull();
         }
         resolve();
       } catch (error) {
