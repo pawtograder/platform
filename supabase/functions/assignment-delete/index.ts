@@ -44,7 +44,7 @@ function isGitHubNotFoundError(error: unknown) {
 async function assertNoReleasedSubmissionReviews(adminSupabase: SupabaseClient<Database>, assignmentId: number) {
   const { data, error } = await adminSupabase
     .from("submission_reviews")
-    .select("id, submissions!inner(assignment_id)")
+    .select("id, submissions!submission_reviews_submission_id_fkey!inner(assignment_id)")
     .eq("released", true)
     .eq("submissions.assignment_id", assignmentId)
     .limit(1);
