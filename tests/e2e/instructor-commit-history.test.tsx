@@ -160,7 +160,7 @@ test("instructors can view commits and request grading for a selected commit", a
 
   const githubOnlyRow = dialog.getByRole("row").filter({ hasText: "GitHub-only late work" });
   await githubOnlyRow.getByRole("button", { name: "Trigger grading" }).click();
-  await page.getByLabel("Confirm action").click();
+  await page.getByRole("button", { name: "Confirm action" }).last().click();
 
   await expect
     .poll(() => triggerPayload, { timeout: 5000 })
