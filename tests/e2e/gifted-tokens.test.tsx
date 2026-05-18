@@ -108,8 +108,8 @@ test.describe("Gifted tokens bug (#648)", () => {
     const lastAssignment = assignments[NUM_ASSIGNMENTS_TO_USE_TOKENS];
 
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await expect(page).toHaveURL(/\/assignments\b/);
 
     await page.getByRole("link", { name: lastAssignment.title }).click();

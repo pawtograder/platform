@@ -20,6 +20,21 @@ const DEFAULT_EXCLUDES = [
   // CodeMirror-backed Pyret REPL — the editor surfaces its own unlabeled textarea
   // and focusable scroll region that axe flags.
   '[id^="pyret-repl-region-"]',
+  // `@uiw/react-md-editor` (used by the discussion compose form, help-request
+  // forms, etc.). The toolbar renders unlabeled `<button>` + `<svg role="img">`
+  // icons and the underlying contenteditable surfaces an unlabeled
+  // `<textarea>`. Treat the editor as a third-party widget like Monaco —
+  // exclude the whole subtree from axe scans.
+  ".w-md-editor",
+  // `chakra-react-select` multi-value chips render `<span aria-label="Remove
+  // …"><span role="button"><svg/></span></span>`, which axe flags as
+  // aria-prohibited-attr (aria-label on a plain span) AND aria-command-name
+  // (role=button with no name). The library renders emotion class hashes only
+  // — no stable class to exclude — so match the structural pattern instead.
+  // Scoped narrowly so it can't mask first-party Remove buttons that already
+  // have proper roles. Requires `:has()`, supported by every browser axe runs
+  // under in our suite.
+  'span[aria-label^="Remove "]:has(> span[role="button"])',
   // `Finalize Submission Early` is a PopConfirm trigger that renders `loading`/
   // `disabled` states via Chakra's built-in opacity overlay. The faded colors
   // (fg #86b296 on bg #ebfbf1, 2.22:1) trip color-contrast even though WCAG

@@ -433,6 +433,7 @@ function HintFeedbackForm({
         size="sm"
         mb={3}
         maxLength={500}
+        aria-label="Additional feedback about this Feedbot response (optional)"
       />
 
       <HStack>
@@ -660,7 +661,11 @@ function PyretRepl({
         as="button"
         onClick={handleExpand}
         aria-expanded={isExpanded}
-        aria-controls={regionId}
+        // `aria-controls` must point at an element that exists in the DOM. The
+        // controlled region is only mounted when expanded, so only advertise
+        // the relationship while it's mounted (avoids WAVE "broken ARIA
+        // reference" / axe `aria-valid-attr-value`).
+        aria-controls={isExpanded ? regionId : undefined}
         width="100%"
         textAlign="left"
         bg="bg.muted"

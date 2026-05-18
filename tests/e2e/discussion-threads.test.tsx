@@ -106,6 +106,11 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("A detailed description of your post. Be specific.")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Submit" })).toBeVisible();
 
+    // Scan the "New Discussion Thread" form before filling/submitting — it has
+    // a markdown editor, several Chakra Radio groups, and a Select, none of
+    // which axe ever exercised on this route until now.
+    await assertStudentPageAccessible(page, "discussion - new thread form");
+
     // Test the form with a private thread
     await page.getByText("Question", { exact: true }).click();
     await page.getByText("Follow-ups and discussion of assigned and optional readings").click();

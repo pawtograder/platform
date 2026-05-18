@@ -299,11 +299,13 @@ export default function DynamicCourseNav() {
           <HStack justifyContent="space-between" alignItems="center">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
-              {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
-              ) : (
-                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
-              )}
+              <NextLink href="/course" aria-label="Pawtograder home">
+                {colorMode === "dark" ? (
+                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
+                ) : (
+                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
+                )}
+              </NextLink>
               <Text fontSize="md" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
                   {enrollment.classes.course_title ?? enrollment.classes.name}
@@ -419,90 +421,52 @@ export default function DynamicCourseNav() {
         </VStack>
       </Box>
 
-      {/* Desktop Layout - unchanged */}
+      {/* Desktop Layout */}
       <Box display={{ base: "none", md: "block" }} aria-hidden={!isMdUp ? true : undefined}>
-        <Flex width="100%" pt="2" alignItems="center" justifyContent="space-between">
-          <VStack gap="0" align="start">
-            <HStack>
+        <Box width="100%" pt="2">
+          {/* Title row: course identity on the left, user-menu chips on the right.
+              The chips wrap into stacked lines inside their right-hand block
+              (UserMenu uses flexWrap + justifyContent="flex-end") instead of
+              forcing the title onto a separate row. */}
+          <Flex width="100%" alignItems="flex-start" gap={2}>
+            <HStack flexShrink={0}>
               <CoursePicker currentCourse={enrollment.classes} />
-              {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
-              ) : (
-                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
-              )}
+              <NextLink href="/course" aria-label="Pawtograder home">
+                {colorMode === "dark" ? (
+                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
+                ) : (
+                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
+                )}
+              </NextLink>
               <Text fontSize="xl" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
                   {enrollment.classes.course_title ?? enrollment.classes.name}
                 </Link>
               </Text>
             </HStack>
-            <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
-              {filteredLinks.map((link) => {
-                if (link.submenu) {
-                  return (
-                    <Box
-                      key={link.name}
-                      borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
-                      borderColor="orange.600"
-                    >
-                      <Menu.Root>
-                        <Menu.Trigger asChild>
-                          <Button
-                            aria-label={`${link.name} menu`}
-                            colorPalette="gray"
-                            size="xs"
-                            fontSize="sm"
-                            pt="0"
-                            variant="ghost"
-                            asChild
-                          >
-                            <Flex align="center" role="group">
-                              <HStack>
-                                {React.createElement(link.icon)}
-                                {link.name}
-                              </HStack>
-                            </Flex>
-                          </Button>
-                        </Menu.Trigger>
-                        <Portal>
-                          <Menu.Positioner>
-                            <Menu.Content>
-                              {link.submenu
-                                .filter(
-                                  (submenu) =>
-                                    (!submenu.instructors_only || isInstructor) &&
-                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader)
-                                )
-                                .filter((submenu) => {
-                                  if (!("feature_flag" in submenu)) return true;
-                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
-                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
-                                })
-                                .map((submenu) => (
-                                  <Menu.Item key={submenu.name} value={submenu.name} asChild>
-                                    <NextLink href={submenu.target || "#"}>
-                                      {React.createElement(submenu.icon)}
-                                      {submenu.name}
-                                    </NextLink>
-                                  </Menu.Item>
-                                ))}
-                            </Menu.Content>
-                          </Menu.Positioner>
-                        </Portal>
-                      </Menu.Root>
-                    </Box>
-                  );
-                } else {
-                  return (
-                    <Box
-                      key={link.name}
-                      borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
-                      borderColor="orange.600"
-                    >
-                      <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
-                        <NextLink
-                          href={link.target || "#"}
-                          aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+            <Box id={isMdUp ? "user-menu" : undefined} flex="1" minWidth={0}>
+              <UserMenu />
+            </Box>
+          </Flex>
+          <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
+            {filteredLinks.map((link) => {
+              if (link.submenu) {
+                return (
+                  <Box
+                    key={link.name}
+                    borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
+                    borderColor="orange.600"
+                  >
+                    <Menu.Root>
+                      <Menu.Trigger asChild>
+                        <Button
+                          aria-label={`${link.name} menu`}
+                          colorPalette="gray"
+                          size="xs"
+                          fontSize="sm"
+                          pt="0"
+                          variant="ghost"
+                          asChild
                         >
                           <Flex align="center" role="group">
                             <HStack>
@@ -510,18 +474,62 @@ export default function DynamicCourseNav() {
                               {link.name}
                             </HStack>
                           </Flex>
-                        </NextLink>
-                      </Button>
-                    </Box>
-                  );
-                }
-              })}
-            </HStack>
-          </VStack>
-          <Box id={isMdUp ? "user-menu" : undefined}>
-            <UserMenu />
-          </Box>
-        </Flex>
+                        </Button>
+                      </Menu.Trigger>
+                      <Portal>
+                        <Menu.Positioner>
+                          <Menu.Content>
+                            {link.submenu
+                              .filter(
+                                (submenu) =>
+                                  (!submenu.instructors_only || isInstructor) &&
+                                  (!submenu.instructors_or_graders_only || isInstructorOrGrader)
+                              )
+                              .filter((submenu) => {
+                                if (!("feature_flag" in submenu)) return true;
+                                const feature = course.features?.find((f) => f.name === submenu.feature_flag);
+                                return feature ? feature.enabled : true; // Default to enabled if feature not found
+                              })
+                              .map((submenu) => (
+                                <Menu.Item key={submenu.name} value={submenu.name} asChild>
+                                  <NextLink href={submenu.target || "#"}>
+                                    {React.createElement(submenu.icon)}
+                                    {submenu.name}
+                                  </NextLink>
+                                </Menu.Item>
+                              ))}
+                          </Menu.Content>
+                        </Menu.Positioner>
+                      </Portal>
+                    </Menu.Root>
+                  </Box>
+                );
+              } else {
+                return (
+                  <Box
+                    key={link.name}
+                    borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
+                    borderColor="orange.600"
+                  >
+                    <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
+                      <NextLink
+                        href={link.target || "#"}
+                        aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+                      >
+                        <Flex align="center" role="group">
+                          <HStack>
+                            {React.createElement(link.icon)}
+                            {link.name}
+                          </HStack>
+                        </Flex>
+                      </NextLink>
+                    </Button>
+                  </Box>
+                );
+              }
+            })}
+          </HStack>
+        </Box>
       </Box>
     </Box>
   );

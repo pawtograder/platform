@@ -54,7 +54,7 @@ function Row({ keys, label }: { keys: React.ReactNode; label: string }) {
 }
 
 export default function ShortcutsHelpDialog() {
-  const { helpOpen, closeHelp, goShortcuts, landmarkShortcuts } = useKeyboardShortcuts();
+  const { helpOpen, closeHelp, goShortcuts, landmarkShortcuts, toggleShortcuts } = useKeyboardShortcuts();
 
   return (
     <DialogRoot open={helpOpen} onOpenChange={({ open }) => (open ? null : closeHelp())} size="md">
@@ -101,8 +101,52 @@ export default function ShortcutsHelpDialog() {
                     }
                   />
                 ))}
-                <Row label="Focus search (when present)" keys={<Kbd>s</Kbd>} />
-                <Row label="Focus search (alternate)" keys={<Kbd>/</Kbd>} />
+                <Row label="Focus per-page search (when present)" keys={<Kbd>s</Kbd>} />
+                <Row label="Focus per-page search (alternate)" keys={<Kbd>/</Kbd>} />
+              </Box>
+            </Box>
+
+            <Box>
+              <Heading size="sm" mb="2">
+                Toggles
+              </Heading>
+              <Box as="ul" listStyleType="none" m="0" p="0">
+                {toggleShortcuts.map((t) => (
+                  <Row
+                    key={t.label}
+                    label={t.label}
+                    keys={t.keys.map((k, i) => (
+                      <React.Fragment key={i}>
+                        {i > 0 && "+"}
+                        <Kbd>{k}</Kbd>
+                      </React.Fragment>
+                    ))}
+                  />
+                ))}
+              </Box>
+            </Box>
+
+            <Box>
+              <Heading size="sm" mb="2">
+                Search
+              </Heading>
+              <Box as="ul" listStyleType="none" m="0" p="0">
+                <Row
+                  label="Open global search"
+                  keys={
+                    <>
+                      <Kbd>{MOD}</Kbd>+<Kbd>K</Kbd>
+                    </>
+                  }
+                />
+                <Row
+                  label="Open global search (when no inline search)"
+                  keys={
+                    <>
+                      <Kbd>s</Kbd> or <Kbd>/</Kbd>
+                    </>
+                  }
+                />
               </Box>
             </Box>
 

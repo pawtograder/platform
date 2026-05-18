@@ -192,8 +192,8 @@ test.describe("Assignment due dates", () => {
     await expect(page.locator("body")).toContainText(
       `${testGroupAssignment!.title}Due${getDueDateShortString(new TZDate(testGroupAssignment!.due_date, "America/New_York"))}Most recent submissionNo submissions`
     );
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    const link = page.getByRole("link").filter({ hasText: "Assignments" });
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    const link = page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
     //Wait for the page to load to avoid race condition
     await expect(page).toHaveURL(/\/assignments\b/);
@@ -220,8 +220,8 @@ test.describe("Assignment due dates", () => {
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
     //Test with the lab section assignment
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    const link = page.getByRole("link").filter({ hasText: "Assignments" });
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    const link = page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
     //Wait for the page to load to avoid race condition
     await expect(page).toHaveURL(/\/assignments\b/);

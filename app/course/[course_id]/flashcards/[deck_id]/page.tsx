@@ -641,7 +641,16 @@ export default function FlashcardsDeckPage() {
         </HStack>
 
         {/* Progress bar */}
-        <VStack align="stretch" gap={2} height="100vh">
+        {/*
+          The flashcard itself uses `height="100%"` on its outer Box and its
+          two faces are `position: absolute`, so this wrapper needs an
+          explicit non-`auto` height for the card to render at all. Use
+          viewport-relative `minH` (not fixed `height`) so the page still
+          reflows on user zoom (WCAG 1.4.10) — content can extend below the
+          fold if needed — and keep the practice view roughly card-sized at
+          every breakpoint instead of collapsing to one line below `lg`.
+        */}
+        <VStack align="stretch" gap={2} minH={{ base: "70vh", md: "80vh", lg: "100vh" }}>
           <Box>
             <HStack justifyContent="space-between">
               <Text fontSize="sm">

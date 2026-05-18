@@ -1625,7 +1625,9 @@ function ReviewActions() {
       <ReviewStats />
       {showCompleteReviewButton && !review.completed_at && (
         <VStack>
-          <Heading size="md">Submission Review Actions</Heading>
+          <Heading as="h2" size="md">
+            Submission Review Actions
+          </Heading>
           <HStack w="100%" justify="space-between">
             {!review.completed_at && <CompleteReviewButton />}
             {/* {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
@@ -1664,7 +1666,9 @@ function UnGradedGradingSummary() {
 
   return (
     <Box>
-      <Heading size="xl">Grading Summary</Heading>
+      <Heading as="h2" size="xl">
+        Grading Summary
+      </Heading>
       <Text color="text.muted" fontSize="sm">
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
@@ -1882,16 +1886,18 @@ function RubricView() {
 
   return (
     <Box
-      position="sticky"
-      top="0"
+      as="aside"
+      aria-label="Grading summary"
+      position={{ base: "static", lg: "sticky" }}
+      top={{ base: "auto", lg: "0" }}
       borderTopWidth={{ base: "1px", lg: "0" }}
       borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
-      pb="80px"
-      height="100vh"
+      pb={{ base: "4", lg: "80px" }}
+      height={{ base: "auto", lg: "100vh" }}
       overflowX="hidden"
-      overflowY="auto"
+      overflowY={{ base: "visible", lg: "auto" }}
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
@@ -1926,7 +1932,7 @@ function RubricView() {
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
-            <Heading size="xl">
+            <Heading as="h2" size="xl">
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
@@ -1965,7 +1971,9 @@ function Comments() {
   }
   return (
     <Box>
-      <Heading size="md">Comments</Heading>
+      <Heading as="h2" size="md">
+        Comments
+      </Heading>
       <VStack align="start" gap={2}>
         {comments.map((comment) => (
           <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" />
@@ -2035,10 +2043,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                   <HStack gap={1}>
                     Group {assignmentGroupWithMembers.name} (
                     {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                      <HStack key={member.profile_id} gap={1}>
-                        <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
+                      <HStack key={member.id} gap={1}>
+                        <PersonName uid={member.profile_id} showAvatar={false} />
                         <StudentSummaryTrigger
-                          key={member.profile_id}
                           student_id={member.profile_id}
                           course_id={parseInt(course_id as string, 10)}
                         />
@@ -2125,7 +2132,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </HStack>
       </Flex>
 
-      <Box p={0} m={0} borderBottomColor="border.emphasized" borderBottomWidth="2px" bg="bg.muted">
+      <Box
+        as="nav"
+        aria-label="Submission tabs"
+        p={0}
+        m={0}
+        borderBottomColor="border.emphasized"
+        borderBottomWidth="2px"
+        bg="bg.muted"
+        display="flex"
+        flexWrap="wrap"
+      >
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
@@ -2147,11 +2164,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </NextLink>
         )}
       </Box>
-      <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>
+      <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
           {children}
         </Box>
-        <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>
+        <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
           <RubricView />
         </Box>
       </Flex>

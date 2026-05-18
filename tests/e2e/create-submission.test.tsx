@@ -134,7 +134,7 @@ test.describe("Create submission", () => {
     });
     expect(submission).toBeDefined();
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
@@ -157,7 +157,7 @@ test.describe("Create submission", () => {
     });
     expect(submission).toBeDefined();
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
@@ -175,7 +175,7 @@ test.describe("Create submission", () => {
     expect(submission).toBeDefined();
 
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentWithNotGraded!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
@@ -201,7 +201,7 @@ test.describe("Create submission", () => {
       class_id: course.id
     });
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const assignmentPage = `/course/${course.id}/assignments/${assignmentWithGradedAndNotGraded!.id}`;
     await page.goto(assignmentPage);
 

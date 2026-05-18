@@ -5,7 +5,7 @@ import { toaster } from "@/components/ui/toaster";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useNotifications } from "@/hooks/useNotifications";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
-import { Badge, Box, Button, HStack, IconButton, Spinner, Table, Text, VStack } from "@chakra-ui/react";
+import { Badge, Box, Button, Heading, HStack, IconButton, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import * as Sentry from "@sentry/nextjs";
 import { useParams, useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
@@ -149,10 +149,10 @@ export default function NotificationsTable() {
 
   return (
     <VStack w="100%" align="stretch" gap={6} p={4}>
-      <HStack justify="space-between" w="100%">
-        <Text fontSize="lg" fontWeight="semibold">
+      <HStack justify="space-between" w="100%" flexWrap="wrap" gap={2}>
+        <Heading as="h1" size="lg" fontWeight="semibold">
           Notifications
-        </Text>
+        </Heading>
         <HStack gap={2}>
           <Button
             size="sm"
