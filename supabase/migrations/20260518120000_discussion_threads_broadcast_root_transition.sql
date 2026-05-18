@@ -15,6 +15,7 @@ DECLARE
     thread_root_id bigint;
     is_root_thread boolean;
     was_root_thread boolean;
+    visible_to_students boolean;
     staff_payload jsonb;
     student_payload jsonb;
     thread_payload jsonb;
@@ -24,16 +25,19 @@ BEGIN
         thread_root_id := COALESCE(NEW.root, NEW.id);
         is_root_thread := NEW.root IS NULL OR NEW.root = NEW.id;
         was_root_thread := false;
+        visible_to_students := NOT COALESCE(NEW.instructors_only, false);
     ELSIF TG_OP = 'UPDATE' THEN
         target_class_id := COALESCE(NEW.class_id, OLD.class_id);
         thread_root_id := COALESCE(NEW.root, OLD.root, NEW.id, OLD.id);
         is_root_thread := (NEW.root IS NULL OR NEW.root = NEW.id);
         was_root_thread := (OLD.root IS NULL OR OLD.root = OLD.id);
+        visible_to_students := NOT COALESCE(NEW.instructors_only, false);
     ELSIF TG_OP = 'DELETE' THEN
         target_class_id := OLD.class_id;
         thread_root_id := COALESCE(OLD.root, OLD.id);
         is_root_thread := OLD.root IS NULL OR OLD.root = OLD.id;
         was_root_thread := is_root_thread;
+        visible_to_students := NOT COALESCE(OLD.instructors_only, false);
     END IF;
 
     IF target_class_id IS NOT NULL THEN
@@ -57,8 +61,9 @@ BEGIN
 
         -- Broadcast to the students channel for the discussion feed when the row is
         -- currently a root OR was previously a root (so a duplicate-merge transition
-        -- properly evicts the stale teaser from student caches).
-        IF is_root_thread OR was_root_thread THEN
+        -- properly evicts the stale teaser from student caches). Skip for
+        -- instructors_only threads to avoid leaking staff-only content to students.
+        IF (is_root_thread OR was_root_thread) AND visible_to_students THEN
             student_payload := jsonb_build_object(
                 'type', 'table_change',
                 'operation', TG_OP,

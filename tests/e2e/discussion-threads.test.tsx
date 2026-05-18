@@ -404,7 +404,13 @@ test.describe("Discussion duplicate merge (grader)", () => {
         randomSuffix: `dup-grd-${runId}`
       }
     ]);
-    await supabase.from("users").update({ name: "E2E Dup Grader" }).eq("user_id", dupGrader.user_id);
+    const { error: renameErr } = await supabase
+      .from("users")
+      .update({ name: "E2E Dup Grader" })
+      .eq("user_id", dupGrader.user_id);
+    if (renameErr) {
+      throw new Error(`Failed to rename grader ${dupGrader.user_id}: ${renameErr.message}`);
+    }
     const { data: topicRow, error: topicErr } = await supabase
       .from("discussion_topics")
       .select("id")

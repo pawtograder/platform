@@ -2,7 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
-import type { Notification } from "../_shared/FunctionTypes.d.ts";
+import type {
+  DiscussionThreadNotification,
+  Notification,
+  NotificationEnvelope
+} from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -31,30 +35,6 @@ export type QueueMessage<T> = {
   enqueued_at: string;
   message: T;
 };
-export type NotificationEnvelope = {
-  type: string;
-};
-export type DiscussionThreadNotification = NotificationEnvelope & {
-  type: "discussion_thread";
-  action: "new_post" | "reply" | "marked_duplicate";
-  new_comment_number?: number;
-  new_comment_id?: number;
-  root_thread_id: number;
-  reply_author_profile_id?: string;
-  teaser?: string;
-  message_body?: string;
-  thread_name?: string;
-  reply_author_name?: string;
-  topic_id?: number;
-  notification_reason?: "topic_follow" | "thread_watch";
-  duplicate_thread_id?: number;
-  original_thread_subject?: string;
-  duplicate_original_subject?: string;
-  marked_by_user_id?: string;
-  marked_by_name?: string;
-  duplicate_thread_ordinal?: number;
-};
-
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {
   type: "assignment_group_member";
   action: "join" | "leave";

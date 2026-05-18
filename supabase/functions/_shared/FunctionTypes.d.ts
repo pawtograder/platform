@@ -27,6 +27,31 @@ export type OutputFormat = "text" | "markdown" | "ansi";
 
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
 export type Notification = Database["public"]["Tables"]["notifications"]["Row"];
+
+export type NotificationEnvelope = {
+  type: string;
+};
+
+export type DiscussionThreadNotification = NotificationEnvelope & {
+  type: "discussion_thread";
+  action: "new_post" | "reply" | "marked_duplicate";
+  new_comment_number?: number;
+  new_comment_id?: number;
+  root_thread_id: number;
+  reply_author_profile_id?: string;
+  teaser?: string;
+  message_body?: string;
+  thread_name?: string;
+  reply_author_name?: string;
+  topic_id?: number;
+  notification_reason?: "topic_follow" | "thread_watch";
+  duplicate_thread_id?: number;
+  original_thread_subject?: string;
+  duplicate_original_subject?: string;
+  marked_by_user_id?: string;
+  marked_by_name?: string;
+  duplicate_thread_ordinal?: number;
+};
 export type OutputVisibility =
   | "hidden" // Never shown to students
   | "visible" // Always shown to students
