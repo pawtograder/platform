@@ -531,50 +531,95 @@ export async function gotoCourseUrlWhenHeadingVisible(
   }).toPass({ timeout: assertTimeout });
 }
 
-async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
-  try {
-    // Generate magic link on-demand for authentication
-    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-    if (magicLinkError) {
-      throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
-    }
+async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 4) {
+  // Track outcomes across retries so the final error message names every distinct
+  // failure mode the loop encountered, instead of just the last one.
+  const attemptOutcomes: string[] = [];
+  let attempt = 0;
+  const maxAttempts = retriesRemaining + 1;
 
-    const magicLink = `/auth/magic-link?token_hash=${encodeURIComponent(magicLinkData.properties?.hashed_token ?? "")}`;
+  while (attempt < maxAttempts) {
+    attempt++;
 
-    // Use magic link for login
-    await page.goto(magicLink);
-    await page.getByRole("button", { name: "Sign in with magic link" }).click();
-
-    // On slower machines (especially in dev mode), redirect can lag after submit.
-    // Wait for either successful course navigation or explicit expired-link message.
-    let outcome: "success" | "expired" | "unknown" = "unknown";
-    try {
-      await page.waitForURL(/\/course(\/|$)/, { timeout: 30_000 });
-      outcome = "success";
-    } catch {
-      const expiredMessage = page.getByText(/Email link is invalid or has expired/i);
+    // Reset browser auth state before each attempt. The verifyOtp action drops
+    // partial Supabase cookies on failure; carrying those into the next attempt
+    // can make GoTrue reject the next token with the same "invalid" error
+    // because the cookie-bound session is in a half-set state. Cleared cookies
+    // give each attempt a clean slate. Clearing requires being on an actual
+    // origin (page.context can't clear before any navigation has happened), so
+    // do a no-cost goto first on retries — initial attempts come in from a
+    // page.goto("/") above us.
+    if (attempt > 1) {
       try {
-        await expiredMessage.waitFor({ state: "visible", timeout: 2_000 });
-        outcome = "expired";
+        await page.context().clearCookies();
+        await page.evaluate(() => {
+          try {
+            window.localStorage.clear();
+            window.sessionStorage.clear();
+          } catch {
+            // Some pages (e.g. error pages) restrict storage access; ignore.
+          }
+        });
       } catch {
-        outcome = "unknown";
+        // Best-effort — if the page is in a weird state, just continue.
       }
     }
 
-    if (outcome === "success") {
-      return;
+    try {
+      const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+      if (magicLinkError) {
+        attemptOutcomes.push(`gen-error:${magicLinkError.message}`);
+      } else {
+        const tokenHash = magicLinkData.properties?.hashed_token ?? "";
+        const magicLink = `/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
+        await page.goto(magicLink);
+        await page.getByRole("button", { name: "Sign in with magic link" }).click();
+
+        // Race success against known failure surfaces. The verifyOtp action
+        // either redirects to /course (success) or back to /auth/magic-link
+        // with an `error_description` query (failure). Sequencing waitForURL
+        // ahead of error detection used to burn the full 30s timeout on every
+        // failed attempt — which made the per-test budget run out before we
+        // could try more than once. Racing turns a failure into a sub-second
+        // signal so the retries actually get a chance to fire.
+        const success = page.waitForURL(/\/course(\/|$)/, { timeout: 15_000 }).then(() => "success" as const);
+        const expired = page
+          .getByText(/Email link is invalid or has expired/i)
+          .waitFor({ state: "visible", timeout: 15_000 })
+          .then(() => "expired" as const);
+        const rateLimited = page
+          .getByText(/rate limit|too many requests/i)
+          .waitFor({ state: "visible", timeout: 15_000 })
+          .then(() => "rate-limited" as const);
+        const outcome = await Promise.race([
+          success.catch(() => "timeout" as const),
+          expired.catch(() => null),
+          rateLimited.catch(() => null)
+        ]);
+        if (outcome === "success") {
+          return;
+        }
+        attemptOutcomes.push(outcome ?? `unknown(${page.url()})`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      attemptOutcomes.push(`exception:${message}`);
     }
-    if (retriesRemaining > 0) {
-      return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
+
+    if (attempt < maxAttempts) {
+      // Jittered backoff: most magic-link failures we see are transient GoTrue
+      // races under CI parallelism. A small wait between attempts lets the
+      // contention clear without meaningfully extending the happy path
+      // (which returns before ever reaching this branch).
+      const baseDelayMs = 250 * attempt;
+      const jitter = Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs + jitter));
     }
-    if (outcome === "expired") {
-      throw new Error("Magic link expired and no retries remaining");
-    }
-    throw new Error(`Magic link sign-in did not complete (final URL: ${page.url()})`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to sign in with magic link: ${message}`);
   }
+
+  throw new Error(
+    `Failed to sign in with magic link after ${maxAttempts} attempts. Outcomes: ${attemptOutcomes.join("; ")}`
+  );
 }
 export async function generateMagicLink(user: TestingUser): Promise<string> {
   const { data, error } = await generateMagicLinkWithRetry(user.email);
