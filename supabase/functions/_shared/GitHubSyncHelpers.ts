@@ -300,6 +300,20 @@ export async function getTreeBlobSizes(
     recursive: "true"
   });
 
+  // GitHub truncates the tree response for very large repos (~100k entries / 7MB).
+  // When that happens we silently miss sizes for entries past the cutoff, which means
+  // the per-file size guard in syncRepositoryToHandout can be bypassed. The runtime
+  // guard in copyBlobBetweenRepos (Content-Length check) catches the worst case, but
+  // we still want operators to know that size metadata is incomplete.
+  if (tree.truncated) {
+    console.warn(`Tree for ${templateRepo}@${sha} is truncated — size metadata incomplete`);
+    scope?.addBreadcrumb({
+      message: `Tree truncated for ${templateRepo}@${sha}; per-file size guard may not apply to all files`,
+      category: "sync",
+      level: "warning"
+    });
+  }
+
   const sizes = new Map<string, number>();
   for (const item of tree.tree) {
     if (item.type === "blob" && item.path && typeof item.size === "number") {
@@ -549,6 +563,23 @@ async function copyBlobBetweenRepos(
     throw new Error(
       `Failed to fetch raw blob ${templateBlobSha} for ${filePath} from ${templateRepo}: ` +
         `${getResponse.status} ${getResponse.statusText}: ${body.slice(0, 200)}`
+    );
+  }
+
+  // Defense-in-depth: enforce the per-file cap here using Content-Length, in case the
+  // pre-flight in syncRepositoryToHandout missed this file (truncated tree, direct
+  // caller bypassing the entry point, etc.). Failing here before reading the body
+  // avoids materializing a too-large buffer into memory.
+  const contentLengthHeader = getResponse.headers.get("content-length");
+  const contentLength = contentLengthHeader ? Number(contentLengthHeader) : NaN;
+  if (Number.isFinite(contentLength) && contentLength > MAX_SYNC_FILE_BYTES) {
+    // Drain the body so the connection can be reused / released.
+    await getResponse.body?.cancel().catch(() => undefined);
+    const mb = (contentLength / (1024 * 1024)).toFixed(1);
+    const limitMb = (MAX_SYNC_FILE_BYTES / (1024 * 1024)).toFixed(0);
+    throw new Error(
+      `File '${filePath}' raw blob is ${mb}MB which exceeds the per-file sync limit of ${limitMb}MB. ` +
+        `Use Git LFS, host the data out-of-band, or remove it from the handout repository.`
     );
   }
 
@@ -846,7 +877,13 @@ export async function createBranchAndCommit(
       }
 
       // Account for transient memory: base content + patched content concurrently in scope.
-      enforceSizeBudget(baseContent.length + patchedContent.length, file.path);
+      // Subtract the pre-charged file.size so we don't double-count it (the pre-flight charge
+      // above already accounted for one copy of the file's bytes). Only charge the *delta*
+      // — i.e. the extra transient memory above the pre-flight estimate.
+      const preCharged = typeof file.size === "number" ? file.size : 0;
+      const transientPeak = baseContent.length + patchedContent.length;
+      const incrementalBytes = Math.max(0, transientPeak - preCharged);
+      enforceSizeBudget(incrementalBytes, file.path);
 
       const encodedPatched = btoa(patchedContent);
       const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
@@ -1090,6 +1127,7 @@ export async function isRepoAlreadyInSync(
 
       // For text files with patches we need student content to apply the patch.
       let studentContent: string;
+      let studentBlobSha: string | undefined;
       try {
         const { data: studentFile } = await studentOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
           owner: studentOwner,
@@ -1097,6 +1135,9 @@ export async function isRepoAlreadyInSync(
           path: file.path,
           ref: "main"
         });
+        if (!Array.isArray(studentFile) && "sha" in studentFile && typeof studentFile.sha === "string") {
+          studentBlobSha = studentFile.sha;
+        }
         if ("content" in studentFile && studentFile.content) {
           studentContent = atob(studentFile.content);
         } else {
@@ -1173,10 +1214,16 @@ export async function isRepoAlreadyInSync(
       }
 
       // For added text files (no patch): compare student blob SHA to template blob SHA.
+      // GitHub blob SHAs are content-addressable, so equal SHAs means equal content.
       if (file.status === "added" && file.sha) {
-        // We already fetched studentFile above; recompare using its blob SHA if we have it.
-        // (We don't have studentFile.sha in this scope; fall through to a content-includes check
-        // using a fresh fetch is unnecessary — fall back to "not in sync" to be safe.)
+        if (studentBlobSha && studentBlobSha === file.sha) {
+          continue;
+        }
+        scope?.addBreadcrumb({
+          message: `Added text file ${file.path} blob SHA differs from template (student=${studentBlobSha ?? "n/a"}, template=${file.sha})`,
+          category: "sync",
+          level: "debug"
+        });
         return false;
       }
     }
