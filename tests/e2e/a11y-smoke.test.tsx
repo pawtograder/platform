@@ -62,6 +62,15 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     // races Chakra's exit animation; sending it on the focused dialog reliably closes it.
     await dialog.press("Escape");
     await expect(dialog).toBeHidden();
+
+    await page.getByRole("button", { name: /open keyboard shortcuts/i }).click();
+    await expect(dialog).toBeVisible();
+    await dialog.press("Escape");
+    await expect(dialog).toBeHidden();
+
+    await page.getByRole("button", { name: /support & documentation/i }).click();
+    await page.getByRole("menuitem", { name: /keyboard shortcuts/i }).click();
+    await expect(dialog).toBeVisible();
   });
 
   test("student `g a` chord navigates to assignments and updates the title", async ({ page }) => {
