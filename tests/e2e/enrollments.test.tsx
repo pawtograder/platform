@@ -1,27 +1,46 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
-import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
-import { random } from "mathjs";
+import { visualScreenshot } from "./VisualTestUtils";
 dotenv.config({ path: ".env.local", quiet: true });
+
+test.setTimeout(120_000);
 
 let course: Course;
 let student1: TestingUser | undefined;
 let instructor1: TestingUser | undefined;
 
-const student2Name = `${"Student".charAt(0).toUpperCase()}${"student".slice(1)} #${random()}studentTest`;
-const student2Email = `$student-${random()}-${random()}student@pawtograder.net`;
-const graderName = `${"Grader".charAt(0).toUpperCase()}${"grader".slice(1)} #${random()}graderTest`;
-const graderEmail = `$grader-${random()}-${random()}grader@pawtograder.net`;
-const instructor2Name = `${"Instructor".charAt(0).toUpperCase()}${"instructor".slice(1)} #${random()}instructorTest`;
-const instructor2Email = `$instructor-${random()}-${random()}instructor@pawtograder.net`;
+const student2Name = "Enrollments Added Student";
+const student2Email = "enrollments-added-student@pawtograder.net";
+const graderName = "Enrollments Added Grader";
+const graderEmail = "enrollments-added-grader@pawtograder.net";
+const instructor2Name = "Enrollments Added Instructor";
+const instructor2Email = "enrollments-added-instructor@pawtograder.net";
 
-test.beforeAll(async () => {
+async function stabilizeImportPreviewDialog(page: import("@playwright/test").Page) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const dialog = page.getByLabel("Import Roster from CSV");
+  await expect(dialog).toBeVisible();
+  await dialog.evaluate((element) => {
+    element.scrollTop = 0;
+    for (const child of Array.from(element.querySelectorAll("*"))) {
+      if (child instanceof HTMLElement) {
+        child.scrollTop = 0;
+        child.scrollLeft = 0;
+      }
+    }
+  });
+  return dialog;
+}
+
+test.beforeAll(async ({}, testInfo) => {
+  testInfo.setTimeout(120_000);
   course = await createClass();
   [student1, instructor1] = await createUsersInClass([
     {
       name: "Enrollments Student 1",
+      public_profile_name: "Enrollments Pseudonym Student 1",
       email: "enrollments-student1@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -29,6 +48,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Enrollments Instructor 1",
+      public_profile_name: "Enrollments Pseudonym Instructor 1",
       email: "enrollments-instructor1@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -64,7 +84,7 @@ test.describe("Enrollments Page", () => {
     await expect(page.getByText(student1?.private_profile_name ?? "")).toBeVisible();
     await expect(page.getByText(instructor1?.email ?? "")).toBeVisible();
     await expect(page.getByText(instructor1?.private_profile_name ?? "")).toBeVisible();
-    await argosScreenshot(page, "Enrollments Page");
+    await visualScreenshot(page, "Enrollments Page");
   });
 
   // Note: Creating users is expensive and can overwhelm supabase auth connections.
@@ -113,8 +133,15 @@ test.describe("Enrollments Page", () => {
     // Upload the test CSV file
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles("tests/e2e/test.csv");
-    await page.getByLabel("Import Roster from CSV").getByRole("button", { name: "Import" }).click();
-    await argosScreenshot(page, "Importing CSV of 2 users");
+    await page.getByLabel("Import Roster from CSV").getByRole("button", { name: "Show Import Preview" }).click();
+    const importDialog = await stabilizeImportPreviewDialog(page);
+    await expect(importDialog.getByText("Will be enrolled directly (2)")).toBeVisible();
+    await expect(
+      importDialog.getByText("Test Student (test-student-import-csv@pawtograder.net) - student")
+    ).toBeVisible();
+    await expect(importDialog.getByText("Test Grader (test-grader-import-csv@pawtograder.net) - grader")).toBeVisible();
+    await expect(importDialog.getByRole("button", { name: "Confirm Import (2)" })).toBeVisible();
+    await visualScreenshot(page, "Importing CSV of 2 users", { element: importDialog });
     await page.getByRole("button", { name: "Confirm Import (2)" }).click();
     await expect(page.getByText("test-student-import-csv@pawtograder.net")).toBeVisible();
     await expect(page.getByText("test-grader-import-csv@pawtograder.net")).toBeVisible();

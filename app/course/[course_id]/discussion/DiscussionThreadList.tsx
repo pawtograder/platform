@@ -152,7 +152,12 @@ export const DiscussionThreadTeaser = memo((props: Props) => {
                   </Badge>
                 )}
                 <Spacer />
-                <Text fontSize="xs" color="text.muted" data-visual-test="blackout">
+                <Text
+                  fontSize="xs"
+                  color="text.muted"
+                  data-visual-test="transparent"
+                  data-visual-placeholder="relative-time"
+                >
                   {thread?.created_at ? formatRelative(new Date(thread?.created_at), new Date()) : ""}
                 </Text>
               </HStack>

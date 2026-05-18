@@ -214,8 +214,8 @@ export function AssignmentDueDate({
     <Flex gap={1} wrap="wrap" maxWidth="100%">
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
-        <Text minWidth={0} data-visual-test="blackout">
-          <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" />
+        <Text minWidth={0} data-visual-test="transparent" data-visual-placeholder="date">
+          <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" visualPlaceholder="date" />
         </Text>
         {hoursExtended > 0 && (
           <Text>

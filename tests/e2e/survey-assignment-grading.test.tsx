@@ -1,9 +1,9 @@
 import { test, expect } from "../global-setup";
-import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import {
   createClass,
   createUsersInClass,
+  formatDateForTest,
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
@@ -11,8 +11,8 @@ import {
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
 import type { TablesInsert } from "../../utils/supabase/SupabaseTypes";
-import { addDays } from "date-fns";
 import { TEAM_COLLABORATION_SURVEY } from "../fixtures/teamCollaborationSurvey";
+import { visualScreenshot } from "./VisualTestUtils";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -22,6 +22,15 @@ type SurveyInsert = TablesInsert<"surveys">;
 
 /** Use shared team collaboration survey (same as DB seeding) */
 const teamCollaborationSurveyJson = TEAM_COLLABORATION_SURVEY;
+const TEAM_SURVEY_TITLE = "Week 5 Team Collaboration Survey";
+const COURSE_FEEDBACK_SURVEY_TITLE = "General Course Feedback";
+const SURVEY_DUE_DATE = new Date("2035-03-15T16:00:00.000Z");
+const ASSIGNMENT_DUE_DATE = new Date("2035-03-17T16:00:00.000Z");
+const SUBMITTED_AT = new Date("2035-03-10T16:00:00.000Z");
+
+const expectTransparentText = async (page: import("@playwright/test").Page, text: string | RegExp) => {
+  await expect(page.locator('[data-visual-test="transparent"]').filter({ hasText: text }).first()).toBeVisible();
+};
 
 const buildSurveyPayload = (course: Course, instructor: User, overrides: Partial<SurveyInsert> = {}): SurveyInsert => {
   const { json, ...rest } = overrides;
@@ -81,11 +90,46 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
   test.beforeEach(async () => {
     course = await createClass();
     const users = await createUsersInClass([
-      { role: "student", class_id: course.id, name: "Alice Student", useMagicLink: true },
-      { role: "student", class_id: course.id, name: "Bob Student", useMagicLink: true },
-      { role: "student", class_id: course.id, name: "Carol Student", useMagicLink: true },
-      { role: "instructor", class_id: course.id, name: "Survey Instructor", useMagicLink: true },
-      { role: "grader", class_id: course.id, name: "Survey Grader", useMagicLink: true }
+      {
+        role: "student",
+        class_id: course.id,
+        name: "Alice Student",
+        public_profile_name: "Survey Pseudonym Alice",
+        email: `survey-alice-${course.id}@pawtograder.net`,
+        useMagicLink: true
+      },
+      {
+        role: "student",
+        class_id: course.id,
+        name: "Bob Student",
+        public_profile_name: "Survey Pseudonym Bob",
+        email: `survey-bob-${course.id}@pawtograder.net`,
+        useMagicLink: true
+      },
+      {
+        role: "student",
+        class_id: course.id,
+        name: "Carol Student",
+        public_profile_name: "Survey Pseudonym Carol",
+        email: `survey-carol-${course.id}@pawtograder.net`,
+        useMagicLink: true
+      },
+      {
+        role: "instructor",
+        class_id: course.id,
+        name: "Survey Instructor",
+        public_profile_name: "Survey Pseudonym Instructor",
+        email: `survey-instructor-${course.id}@pawtograder.net`,
+        useMagicLink: true
+      },
+      {
+        role: "grader",
+        class_id: course.id,
+        name: "Survey Grader",
+        public_profile_name: "Survey Pseudonym Grader",
+        email: `survey-grader-${course.id}@pawtograder.net`,
+        useMagicLink: true
+      }
     ]);
     [studentA, studentB, studentC, instructor, grader] = users;
     await clearCourseSurveys();
@@ -97,20 +141,21 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
   test("student views team collaboration survey and takes it", async ({ page }) => {
     // Create a published survey with the team collaboration JSON
     const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
-      title: "Week 5 Team Collaboration Survey",
+      title: TEAM_SURVEY_TITLE,
       description: "Please complete this weekly survey about your team collaboration experience.",
       status: "published",
       json: teamCollaborationSurveyJson,
-      due_date: addDays(new Date(), 3).toISOString()
+      due_date: SURVEY_DUE_DATE.toISOString()
     });
 
     await loginAsUser(page, studentA, course);
 
     // Navigate to the survey list
     await page.goto(`/course/${course.id}/surveys`);
-    await expect(page.getByText("Week 5 Team Collaboration Survey")).toBeVisible();
+    await expect(page.getByText(TEAM_SURVEY_TITLE)).toBeVisible();
+    await expectTransparentText(page, formatDateForTest(SURVEY_DUE_DATE, "America/New_York", "full"));
     await assertStudentPageAccessible(page, "survey assignment grading - survey list");
-    await argosScreenshot(page, "Student Survey List - Team Collaboration Survey Available");
+    await visualScreenshot(page, "Student Survey List - Team Collaboration Survey Available");
 
     // Click to start the survey
     const startLink = page.getByRole("link", { name: /Start Survey/i });
@@ -121,7 +166,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     // Page 1: Checkboxes
     // SurveyJS renders question titles in multiple places (span + hidden legend), so use .first()
     await expect(page.getByText("This week I have...").first()).toBeVisible();
-    await argosScreenshot(page, "Student Survey - Page 1 Checkboxes");
+    await visualScreenshot(page, "Student Survey - Page 1 Checkboxes");
 
     // Fill page 1 - click on the label text for SurveyJS checkboxes
     await page.locator("label").filter({ hasText: "Completed all my assigned tasks" }).click();
@@ -136,12 +181,12 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       .filter({ hasText: "Opened a Pull Request and asked my team for feedback on my code" })
       .click();
 
-    await argosScreenshot(page, "Student Survey - Page 1 Filled");
+    await visualScreenshot(page, "Student Survey - Page 1 Filled");
 
     // Navigate to page 2
     await page.getByRole("button", { name: /Next/i }).click();
     await expect(page.getByText("This week, I knew what I needed to get done").first()).toBeVisible();
-    await argosScreenshot(page, "Student Survey - Page 2 Likert Questions");
+    await visualScreenshot(page, "Student Survey - Page 2 Likert Questions");
 
     // Fill page 2 - click on the label text for SurveyJS radio buttons
     await page
@@ -149,12 +194,12 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
       .filter({ hasText: /^Strongly agree$/ })
       .first()
       .click();
-    await argosScreenshot(page, "Student Survey - Page 2 Partially Filled");
+    await visualScreenshot(page, "Student Survey - Page 2 Partially Filled");
 
     // Navigate to page 3
     await page.getByRole("button", { name: /Next/i }).click();
     await expect(page.getByText("In our team we relied on each other to get the job done.").first()).toBeVisible();
-    await argosScreenshot(page, "Student Survey - Page 3 Team Dynamics");
+    await visualScreenshot(page, "Student Survey - Page 3 Team Dynamics");
 
     // Navigate to page 4
     await page.getByRole("button", { name: /Next/i }).click();
@@ -162,15 +207,17 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await expect(
       page.getByText("How do you feel about your team's collaboration process in this project?").first()
     ).toBeVisible();
-    await argosScreenshot(page, "Student Survey - Page 4 Impediments and Reflection");
+    await visualScreenshot(page, "Student Survey - Page 4 Impediments and Reflection");
     await assertStudentPageAccessible(page, "team collaboration survey page 4 (shell)");
   });
 
   test("student sees survey status banner on submission page", async ({ page }) => {
     // Create an assignment
     const assignment = await insertAssignment({
-      due_date: addDays(new Date(), 7).toISOString(),
-      class_id: course.id
+      due_date: ASSIGNMENT_DUE_DATE.toISOString(),
+      class_id: course.id,
+      name: "Survey Banner Assignment",
+      assignment_slug: `survey-banner-assignment-${course.id}`
     });
 
     // Create a submission for studentA
@@ -182,12 +229,12 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
 
     // Create a survey linked to this assignment
     const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
-      title: "Week 5 Team Collaboration Survey",
+      title: TEAM_SURVEY_TITLE,
       description: "Complete this survey about your team.",
       status: "published",
       json: teamCollaborationSurveyJson,
       assignment_id: assignment.id,
-      due_date: addDays(new Date(), 5).toISOString()
+      due_date: SURVEY_DUE_DATE.toISOString()
     });
 
     await loginAsUser(page, studentA, course);
@@ -196,12 +243,13 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions`);
 
     // Wait for the survey status banner to appear
-    await expect(page.getByText("Survey: Week 5 Team Collaboration Survey")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(`Survey: ${TEAM_SURVEY_TITLE}`)).toBeVisible({ timeout: 10000 });
     await expect(page.getByText("Pending")).toBeVisible();
     await expect(page.getByText("Take Survey")).toBeVisible();
+    await expectTransparentText(page, /Due /);
     await assertStudentPageAccessible(page, "submission page survey pending banner");
 
-    await argosScreenshot(page, "Student Submission Page - Survey Pending Banner");
+    await visualScreenshot(page, "Student Submission Page - Survey Pending Banner");
 
     // Now submit a response for this student to see the completed state
     const { error: respError } = await supabase.from("survey_responses").insert({
@@ -223,25 +271,28 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
         q15: "Our team collaborates well through regular meetings and code reviews."
       },
       is_submitted: true,
-      submitted_at: new Date().toISOString()
+      submitted_at: SUBMITTED_AT.toISOString()
     });
     if (respError) throw new Error(`Failed to insert response: ${respError.message}`);
 
     // Reload to see the completed status
     await page.reload();
-    await expect(page.getByText("Survey: Week 5 Team Collaboration Survey")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(`Survey: ${TEAM_SURVEY_TITLE}`)).toBeVisible({ timeout: 10000 });
     await expect(page.getByText("Completed")).toBeVisible();
     await expect(page.getByText("View Response")).toBeVisible();
+    await expectTransparentText(page, /Submitted /);
     await assertStudentPageAccessible(page, "submission page survey completed banner");
 
-    await argosScreenshot(page, "Student Submission Page - Survey Completed Banner");
+    await visualScreenshot(page, "Student Submission Page - Survey Completed Banner");
   });
 
   test("instructor views survey responses and analytics", async ({ page }) => {
     // Create an assignment
     const assignment = await insertAssignment({
-      due_date: addDays(new Date(), 7).toISOString(),
-      class_id: course.id
+      due_date: ASSIGNMENT_DUE_DATE.toISOString(),
+      class_id: course.id,
+      name: "Survey Responses Assignment",
+      assignment_slug: `survey-responses-assignment-${course.id}`
     });
 
     // Create groups for the assignment with a mentor
@@ -295,12 +346,12 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
 
     // Create a survey linked to this assignment
     const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
-      title: "Week 5 Team Collaboration Survey",
+      title: TEAM_SURVEY_TITLE,
       description: "Complete this survey about your team.",
       status: "published",
       json: teamCollaborationSurveyJson,
       assignment_id: assignment.id,
-      due_date: addDays(new Date(), 5).toISOString()
+      due_date: SURVEY_DUE_DATE.toISOString()
     });
 
     // Insert survey responses for all three students with varied numeric answers
@@ -324,7 +375,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
           q15: "Our team collaboration has been excellent. We meet regularly and everyone contributes."
         },
         is_submitted: true,
-        submitted_at: new Date().toISOString()
+        submitted_at: SUBMITTED_AT.toISOString()
       },
       {
         survey_id: survey.id,
@@ -345,7 +396,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
           q15: "Good progress but some scheduling issues. We need to plan our sprints better."
         },
         is_submitted: true,
-        submitted_at: new Date().toISOString()
+        submitted_at: SUBMITTED_AT.toISOString()
       },
       {
         survey_id: survey.id,
@@ -366,7 +417,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
           q15: "I feel our team could communicate more. I was stuck waiting for others to finish their parts."
         },
         is_submitted: true,
-        submitted_at: new Date().toISOString()
+        submitted_at: SUBMITTED_AT.toISOString()
       }
     ];
 
@@ -379,49 +430,54 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
 
     // Wait for the page to load
     await expect(page.getByRole("heading", { name: /Survey Responses/i })).toBeVisible();
-    await argosScreenshot(page, "Instructor Survey Responses - Overview");
 
     // Verify legacy summary stats are visible (exact match to avoid collision with analytics "Total Responses")
     await expect(page.getByText("TOTAL RESPONSES", { exact: true })).toBeVisible();
     await expect(page.getByText("RESPONSE RATE", { exact: true })).toBeVisible();
     await expect(page.getByText("TIME REMAINING", { exact: true })).toBeVisible();
+    await expectTransparentText(page, /day|Closed|Less than|h|m/);
 
     // Verify new analytics UI: SurveyAnalytics block and numeric stat
     await expect(page.getByRole("heading", { name: "Survey Analytics" })).toBeVisible();
+    await expect(page.getByText("Loading analytics...")).toBeHidden();
     await expect(page.getByText("Total Responses", { exact: true })).toBeVisible();
 
     // Verify group-specific section from group/mentor aggregation (GroupSummaryCards)
     await expect(page.getByText("Team Alpha").first()).toBeVisible();
     await expect(page.getByText("Team Beta").first()).toBeVisible();
 
+    await visualScreenshot(page, "Instructor Survey Responses - Overview");
+
     // Check responses table shows at least some survey response content (text may be truncated)
     await expect(page.locator("body")).toContainText("Our team collaboration");
     await expect(page.locator("body")).toContainText("Good progress");
 
-    await argosScreenshot(page, "Instructor Survey Responses - Individual Responses Table");
+    await expectTransparentText(page, /[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M E[DS]T/);
+    await visualScreenshot(page, "Instructor Survey Responses - Individual Responses Table");
   });
 
   test("instructor views survey manage page with linked assignment column", async ({ page }) => {
     // Create an assignment to link
     const assignment = await insertAssignment({
-      due_date: addDays(new Date(), 7).toISOString(),
+      due_date: ASSIGNMENT_DUE_DATE.toISOString(),
       class_id: course.id,
-      name: "Project Sprint 5"
+      name: "Project Sprint 5",
+      assignment_slug: `project-sprint-5-${course.id}`
     });
 
     // Create a survey linked to the assignment
     await seedSurvey(course, instructor, {
-      title: "Week 5 Team Collaboration Survey",
+      title: TEAM_SURVEY_TITLE,
       description: "Weekly team survey",
       status: "published",
       json: teamCollaborationSurveyJson,
       assignment_id: assignment.id,
-      due_date: addDays(new Date(), 5).toISOString()
+      due_date: SURVEY_DUE_DATE.toISOString()
     });
 
     // Create an unlinked survey
     await seedSurvey(course, instructor, {
-      title: "General Course Feedback",
+      title: COURSE_FEEDBACK_SURVEY_TITLE,
       description: "End of semester feedback",
       status: "published",
       json: { pages: [{ name: "p1", elements: [{ type: "comment", name: "feedback", title: "General feedback" }] }] }
@@ -431,28 +487,28 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     await page.goto(`/course/${course.id}/manage/surveys`);
 
     // The manage page should show the linked assignment column
-    await expect(page.getByText("Week 5 Team Collaboration Survey")).toBeVisible();
-    await expect(page.getByText("General Course Feedback")).toBeVisible();
+    await expect(page.getByText(TEAM_SURVEY_TITLE)).toBeVisible();
+    await expect(page.getByText(COURSE_FEEDBACK_SURVEY_TITLE)).toBeVisible();
 
     // Verify linked-assignment column cells: linked survey shows assignment label, unlinked shows fallback
-    const linkedRow = page.getByRole("row").filter({ hasText: "Week 5 Team Collaboration Survey" });
+    const linkedRow = page.getByRole("row").filter({ hasText: TEAM_SURVEY_TITLE });
     await expect(linkedRow).toContainText("Project Sprint 5");
 
-    const unlinkedRow = page.getByRole("row").filter({ hasText: "General Course Feedback" });
+    const unlinkedRow = page.getByRole("row").filter({ hasText: COURSE_FEEDBACK_SURVEY_TITLE });
     await expect(unlinkedRow).toContainText("—");
 
-    await argosScreenshot(page, "Instructor Manage Surveys - Linked Assignment Column");
+    await visualScreenshot(page, "Instructor Manage Surveys - Linked Assignment Column");
   });
 
   test("student submitted survey shows read-only view", async ({ page }) => {
     // Create a published survey (editing NOT allowed)
     const survey = await seedSurvey<{ id: string; survey_id: string }>(course, instructor, {
-      title: "Week 5 Team Collaboration Survey",
+      title: TEAM_SURVEY_TITLE,
       description: "Please complete this weekly survey.",
       status: "published",
       json: teamCollaborationSurveyJson,
       allow_response_editing: false,
-      due_date: addDays(new Date(), 3).toISOString()
+      due_date: SURVEY_DUE_DATE.toISOString()
     });
 
     // Insert a submitted response for studentA
@@ -475,7 +531,7 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
         q15: "Great team collaboration this week!"
       },
       is_submitted: true,
-      submitted_at: new Date().toISOString()
+      submitted_at: SUBMITTED_AT.toISOString()
     });
 
     await loginAsUser(page, studentA, course);
@@ -484,6 +540,6 @@ test.describe("Survey Assignment Grading - E2E Screenshots", () => {
     // Should show read-only indicator
     await expect(page.getByText("This survey has been submitted and cannot be edited.")).toBeVisible();
     await assertStudentPageAccessible(page, "submitted survey read-only (shell)");
-    await argosScreenshot(page, "Student Survey - Submitted Read Only View");
+    await visualScreenshot(page, "Student Survey - Submitted Read Only View");
   });
 });
