@@ -179,11 +179,16 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
 /**
  * Type-safe filter for real-time event filtering.
- * Supports basic equality filters that match PostgrestFilterBuilder patterns.
+ * Supports basic equality filters that match PostgrestFilterBuilder patterns, or
+ * a predicate function for cases where the row's match condition isn't a simple
+ * AND over column equalities (e.g. "root threads OR duplicate-marked threads").
  */
-export type RealtimeFilter<T extends TablesThatHaveAnIDField> = {
+export type RealtimeFilterRecord<T extends TablesThatHaveAnIDField> = {
   [K in keyof DatabaseTableTypes[T]["Row"]]?: DatabaseTableTypes[T]["Row"][K] | DatabaseTableTypes[T]["Row"][K][];
 };
+export type RealtimeFilter<T extends TablesThatHaveAnIDField> =
+  | RealtimeFilterRecord<T>
+  | ((row: DatabaseTableTypes[T]["Row"]) => boolean);
 
 /**
  * Hook that returns all values from a TableController that match a predicate.
@@ -1459,20 +1464,23 @@ export default class TableController<
 
     const refetchedRows = await this._refetchRowsByIds(ids);
 
-    // Update existing rows and add new ones
+    // Mirror the matchesFilter handling in _handleUpdate so that a row whose
+    // refetched state no longer matches the realtime filter is evicted from
+    // the cache (e.g. a discussion_thread whose root_class_id was nulled out
+    // after a duplicate-merge no longer belongs in the teaser list).
     for (const [id, row] of refetchedRows) {
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+      const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
 
-      if (existingRow) {
+      if (existingRow && !matchesFilter) {
+        this._removeRow(id);
+      } else if (existingRow && matchesFilter) {
         this._updateRow(id, row as ResultOne & { id: IDType }, false);
-      } else {
-        // Check if the fetched row matches our realtime filter
-        if (this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
-          this._addRow({
-            ...row,
-            __db_pending: false
-          });
-        }
+      } else if (!existingRow && matchesFilter) {
+        this._addRow({
+          ...row,
+          __db_pending: false
+        });
       }
     }
   }
@@ -2397,6 +2405,10 @@ export default class TableController<
   private _matchesRealtimeFilter(rowData: Record<string, unknown>): boolean {
     if (!this._realtimeFilter) {
       return true; // No filter means all rows match
+    }
+
+    if (typeof this._realtimeFilter === "function") {
+      return this._realtimeFilter(rowData as DatabaseTableTypes[RelationName]["Row"]);
     }
 
     for (const [key, filterValue] of Object.entries(this._realtimeFilter)) {

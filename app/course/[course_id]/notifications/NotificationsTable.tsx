@@ -41,10 +41,15 @@ type HelpRequestBody = {
 
 type DiscussionBody = {
   type: "discussion_thread";
+  action?: "new_post" | "reply" | "marked_duplicate";
   root_thread_id: number;
   new_comment_number?: number;
   reply_author_name?: string;
   teaser?: string;
+  marked_by_name?: string;
+  duplicate_original_subject?: string;
+  original_thread_subject?: string;
+  duplicate_thread_ordinal?: number;
 };
 
 type RegradeRequestBody = {
@@ -127,7 +132,12 @@ export default function NotificationsTable() {
   function openDiscussion(n: Notification) {
     try {
       const body = (n.body || {}) as Partial<DiscussionBody>;
-      const replyIdx = body.new_comment_number ? `#post-${body.new_comment_number}` : "";
+      const replyIdx =
+        body.action === "marked_duplicate" && body.duplicate_thread_ordinal != null
+          ? `#post-${body.duplicate_thread_ordinal}`
+          : body.new_comment_number
+            ? `#post-${body.new_comment_number}`
+            : "";
       const url = `/course/${course_id}/discussion/${String(body.root_thread_id ?? "")}${replyIdx}`;
       router.push(url);
     } catch (e) {
@@ -502,7 +512,16 @@ export default function NotificationsTable() {
               ) : (
                 discussion.map((n) => {
                   const b = (n.body || {}) as Partial<DiscussionBody>;
-                  const kind = b.new_comment_number && b.new_comment_number > 1 ? "replied" : "new post";
+                  const isDupMerge = b.action === "marked_duplicate";
+                  const kind = isDupMerge
+                    ? "duplicate"
+                    : b.new_comment_number && b.new_comment_number > 1
+                      ? "replied"
+                      : "new post";
+                  const whoCell = isDupMerge ? b.marked_by_name || "" : b.reply_author_name || "";
+                  const teaserCell = isDupMerge
+                    ? `${b.marked_by_name ?? "Staff"} marked "${b.duplicate_original_subject ?? ""}" as a duplicate of "${b.original_thread_subject ?? ""}".`
+                    : b.teaser || "";
                   return (
                     <Table.Row key={n.id} bg={!n.viewed_at ? "blue.subtle" : undefined}>
                       <Table.Cell>
@@ -511,16 +530,19 @@ export default function NotificationsTable() {
                         </Text>
                       </Table.Cell>
                       <Table.Cell>
-                        <Badge variant="subtle" colorPalette={kind === "replied" ? "blue" : "green"}>
+                        <Badge
+                          variant="subtle"
+                          colorPalette={kind === "replied" ? "blue" : kind === "duplicate" ? "orange" : "green"}
+                        >
                           {kind}
                         </Badge>
                       </Table.Cell>
                       <Table.Cell>
-                        <Text fontWeight="medium">{b.reply_author_name || ""}</Text>
+                        <Text fontWeight="medium">{whoCell}</Text>
                       </Table.Cell>
                       <Table.Cell>
                         <Text lineClamp={2} color="fg.muted">
-                          {b.teaser || ""}
+                          {teaserCell}
                         </Text>
                       </Table.Cell>
                       <Table.Cell>

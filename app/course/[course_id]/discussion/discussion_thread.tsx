@@ -297,6 +297,25 @@ const DiscussionThreadContent = memo(
                 borderRadius="l3"
               >
                 <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref}>
+                  {thread.duplicate_original_subject &&
+                    thread.duplicate_marked_by_display_name &&
+                    thread.duplicate_marked_at && (
+                      <Box
+                        mb="2"
+                        py="1.5"
+                        px="2"
+                        rounded="md"
+                        bg="orange.subtle"
+                        borderWidth="1px"
+                        borderColor="orange.muted"
+                      >
+                        <Text fontSize="xs" color="fg.default">
+                          Originally <strong>{thread.duplicate_original_subject}</strong> —{" "}
+                          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and
+                          merged it here.
+                        </Text>
+                      </Box>
+                    )}
                   <HStack gap="1">
                     <Text textStyle="sm" fontWeight="semibold">
                       <Link

@@ -1,8 +1,8 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { createClass, createUsersInClass, loginAsUser, supabase, TestingUser } from "./TestingUtils";
 import { visualScreenshot } from "./VisualTestUtils";
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -383,5 +383,130 @@ test.describe("Custom Discussion Topics", () => {
     await expect(page.getByText("HW1 Discussion", { exact: true })).not.toBeVisible();
 
     await visualScreenshot(page, "After Deleting Custom Topic");
+  });
+});
+
+test.describe("Discussion duplicate merge (grader)", () => {
+  test.describe.configure({ mode: "serial" });
+  test.setTimeout(120_000);
+
+  test("Grader marks a thread duplicate, student sees banner and notification", async ({ page }) => {
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const dupCourse = await createClass({ name: `E2E discussion duplicate class ${runId}` });
+    const [dupStudent, dupGrader] = await createUsersInClass([
+      {
+        name: "DupMerge Student",
+        role: "student",
+        class_id: dupCourse.id,
+        useMagicLink: true,
+        randomSuffix: `dup-stu-${runId}`
+      },
+      {
+        name: "DupMerge Grader",
+        role: "grader",
+        class_id: dupCourse.id,
+        useMagicLink: true,
+        randomSuffix: `dup-grd-${runId}`
+      }
+    ]);
+    const { error: renameErr } = await supabase
+      .from("users")
+      .update({ name: "E2E Dup Grader" })
+      .eq("user_id", dupGrader.user_id);
+    if (renameErr) {
+      throw new Error(`Failed to rename grader ${dupGrader.user_id}: ${renameErr.message}`);
+    }
+    const { data: topicRow, error: topicErr } = await supabase
+      .from("discussion_topics")
+      .select("id")
+      .eq("class_id", dupCourse.id)
+      .order("ordinal", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (topicErr || !topicRow) {
+      throw new Error(topicErr?.message ?? "No discussion topic for duplicate E2E class");
+    }
+
+    const { data: origThread, error: origErr } = await supabase
+      .from("discussion_threads")
+      .insert({
+        subject: "E2E Dup Original Subject",
+        body: "Original thread body for duplicate merge test.",
+        topic_id: topicRow.id,
+        is_question: false,
+        instructors_only: false,
+        author: dupStudent.private_profile_id,
+        class_id: dupCourse.id,
+        draft: false,
+        root_class_id: dupCourse.id
+      })
+      .select("id")
+      .single();
+    if (origErr || !origThread) {
+      throw new Error(origErr?.message ?? "Failed to insert original thread");
+    }
+
+    const { data: dupThread, error: dupErr } = await supabase
+      .from("discussion_threads")
+      .insert({
+        subject: "E2E Dup Duplicate Subject",
+        body: "Duplicate thread body.",
+        topic_id: topicRow.id,
+        is_question: false,
+        instructors_only: false,
+        author: dupStudent.private_profile_id,
+        class_id: dupCourse.id,
+        draft: false,
+        root_class_id: dupCourse.id
+      })
+      .select("id")
+      .single();
+    if (dupErr || !dupThread) {
+      throw new Error(dupErr?.message ?? "Failed to insert duplicate thread");
+    }
+
+    const { error: replyErr } = await supabase.from("discussion_threads").insert({
+      subject: `Re: E2E Dup Duplicate Subject`,
+      body: "A reply under the duplicate root before merge.",
+      topic_id: topicRow.id,
+      is_question: false,
+      instructors_only: false,
+      author: dupStudent.private_profile_id,
+      class_id: dupCourse.id,
+      draft: false,
+      parent: dupThread.id,
+      root: dupThread.id
+    });
+    if (replyErr) {
+      throw new Error(replyErr.message);
+    }
+
+    await loginAsUser(page, dupGrader, dupCourse);
+    await page.goto(`/course/${dupCourse.id}/discussion/${dupThread.id}`);
+    await expect(page.getByRole("heading", { name: "E2E Dup Duplicate Subject" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Mark duplicate" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByTestId("mark-duplicate-search-input").fill("E2E Dup Original");
+    await page.getByTestId(`mark-duplicate-result-${origThread.id}`).click();
+    await expect(page.getByText("Selected original")).toBeVisible();
+    await page.getByTestId("mark-duplicate-confirm").click();
+    await page.waitForURL(`**/course/${dupCourse.id}/discussion/${origThread.id}`);
+
+    await expect(page.getByRole("heading", { name: "E2E Dup Original Subject" })).toBeVisible();
+    await expect(page.getByText("E2E Dup Duplicate Subject").first()).toBeVisible();
+    await expect(page.getByText(/E2E Dup Grader.*marked this as a duplicate/)).toBeVisible();
+    await expect(page.getByText("A reply under the duplicate root before merge.")).toBeVisible();
+
+    // The duplicate-marked thread must disappear from the discussion feed teasers.
+    await page.goto(`/course/${dupCourse.id}/discussion`);
+    await expect(page.getByText("E2E Dup Original Subject").first()).toBeVisible();
+    await expect(page.getByText("E2E Dup Duplicate Subject")).toHaveCount(0);
+
+    await loginAsUser(page, dupStudent, dupCourse);
+    await page.goto(`/course/${dupCourse.id}/notifications`);
+    await expect(
+      page.getByText(/E2E Dup Grader marked "E2E Dup Duplicate Subject" as a duplicate of "E2E Dup Original Subject"/)
+    ).toBeVisible();
   });
 });
