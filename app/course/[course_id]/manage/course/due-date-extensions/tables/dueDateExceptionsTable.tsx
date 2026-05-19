@@ -32,6 +32,14 @@ type DueDateExceptionRow = {
   assigneeDetails: string;
 };
 
+// Module-scope so the predicate identity stays stable across renders. An
+// inline `() => true` is a fresh function every render, which makes
+// `useListTableControllerValues`'s effect treat the predicate as changed
+// and resubscribe + rederive 6000+ items of state on every scroll-triggered
+// render. The dependent useMemos (rows/filteredRows) and TanStack's row
+// model then all recompute, which is what makes scrolling janky at scale.
+const matchAll = () => true;
+
 /**
  * Renders all due date exceptions for the class in one virtualized table.
  */
@@ -39,8 +47,8 @@ export default function DueDateExceptionsTable() {
   const unsortedAssignments = useAssignments();
   const students = useAllStudentProfiles();
   const { assignmentDueDateExceptions, assignmentGroupsWithMembers } = useCourseController();
-  const dueDateExceptions = useListTableControllerValues(assignmentDueDateExceptions, () => true);
-  const assignmentGroups = useListTableControllerValues(assignmentGroupsWithMembers, () => true);
+  const dueDateExceptions = useListTableControllerValues(assignmentDueDateExceptions, matchAll);
+  const assignmentGroups = useListTableControllerValues(assignmentGroupsWithMembers, matchAll);
   const isReady = useIsTableControllerReady(assignmentDueDateExceptions);
 
   const addOpen = useModalManager<AddExtensionDefaults>();
