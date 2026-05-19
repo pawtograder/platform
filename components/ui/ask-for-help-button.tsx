@@ -1,9 +1,10 @@
 "use client";
 import { Button, Icon } from "@chakra-ui/react";
-import { FaQuestionCircle } from "react-icons/fa";
 import { useFeatureEnabled } from "@/hooks/useClassProfiles";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { FaQuestionCircle } from "react-icons/fa";
 export default function AskForHelpButton() {
-  const featureEnabled = useFeatureEnabled("office-hours");
+  const featureEnabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS);
   if (!featureEnabled) {
     return null;
   }

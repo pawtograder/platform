@@ -286,7 +286,7 @@ const DiscussionThreadContent = memo(
               {authorProfile ? (
                 <Avatar.Root size="sm" variant="outline" shape="square">
                   <Avatar.Fallback name={authorProfile.name} />
-                  <Avatar.Image src={authorProfile.avatar_url} />
+                  <Avatar.Image src={authorProfile.avatar_url} alt="" />
                 </Avatar.Root>
               ) : (
                 <SkeletonCircle width="40px" height="40px" />
@@ -297,6 +297,25 @@ const DiscussionThreadContent = memo(
                 borderRadius="l3"
               >
                 <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref}>
+                  {thread.duplicate_original_subject &&
+                    thread.duplicate_marked_by_display_name &&
+                    thread.duplicate_marked_at && (
+                      <Box
+                        mb="2"
+                        py="1.5"
+                        px="2"
+                        rounded="md"
+                        bg="orange.subtle"
+                        borderWidth="1px"
+                        borderColor="orange.muted"
+                      >
+                        <Text fontSize="xs" color="fg.default">
+                          Originally <strong>{thread.duplicate_original_subject}</strong> —{" "}
+                          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and
+                          merged it here.
+                        </Text>
+                      </Box>
+                    )}
                   <HStack gap="1">
                     <Text textStyle="sm" fontWeight="semibold">
                       <Link
@@ -363,7 +382,13 @@ const DiscussionThreadContent = memo(
                   )}
                 </Box>
                 <HStack fontWeight="semibold" textStyle="xs" ps="2">
-                  <Text textStyle="sm" color="fg.muted" ms="3" data-visual-test="blackout">
+                  <Text
+                    textStyle="sm"
+                    color="fg.muted"
+                    ms="3"
+                    data-visual-test="transparent"
+                    data-visual-placeholder="relative-time"
+                  >
                     {formatRelative(thread.created_at, new Date())}
                   </Text>
                   <Link onClick={showReply} color="fg.muted">
@@ -378,7 +403,7 @@ const DiscussionThreadContent = memo(
                     </Link>
                   )}
                   {root_thread?.is_question && canEdit && !isAnswered && (
-                    <Button variant="surface" onClick={toggleAnswered} size="xs" colorPalette="green">
+                    <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
                       Mark as Answer
                     </Button>
                   )}

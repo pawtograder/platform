@@ -1,10 +1,10 @@
 import TableController, {
-  useListTableControllerValues,
+  useIndexedTableControllerValues,
   useTableControllerTableValues,
   useTableControllerValueById
 } from "@/lib/TableController";
 import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { DiscussionThreadRealTimeController } from "@/lib/DiscussionThreadRealTimeController";
 
@@ -23,8 +23,11 @@ export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus 
 export function useDiscussionThreadRoot() {
   const controller = useDiscussionThreadsController();
   const rootThread = useTableControllerValueById(controller.tableController, controller.root_id);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === rootThread?.id, [rootThread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  // Indexed on `parent`: every PostRow that mounted in this thread tree used
+  // to register its own predicate-scan list-listener, so each row mutation
+  // re-scanned every row × every listener (O(N²) per write). The indexed
+  // path fans out only to the listener whose `value` actually matches.
+  const children = useIndexedTableControllerValues(controller.tableController, "parent", rootThread?.id);
   const ret = useMemo(() => {
     if (!rootThread) return undefined;
     return {
@@ -42,8 +45,9 @@ export function useDiscussionThreadRoot() {
 export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
   const controller = useDiscussionThreadsController();
   const thread = useTableControllerValueById(controller.tableController, threadId);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === thread?.id, [thread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  // See `useDiscussionThreadRoot` above — indexed by `parent` to avoid
+  // O(listeners × rows) predicate scans on every reply mutation.
+  const children = useIndexedTableControllerValues(controller.tableController, "parent", thread?.id);
 
   // Stable sort order: capture initial order on first render, maintain it during session
   // Reset when threadId changes (component remounts)
@@ -188,70 +192,98 @@ export function DiscussionThreadsControllerProvider({
     threadRealTimeController: DiscussionThreadRealTimeController;
   } | null>(null);
 
-  // Create all controllers with async initialization
+  // Create all controllers with async initialization.
+  //
+  // Previously this awaited threadRealTimeController.start() before creating
+  // the TableController and resolving setController(...). On webkit (and
+  // anywhere websocket negotiation is slow) that gated the entire provider
+  // subtree behind realtime channel join — including the discussion thread
+  // heading, which only depends on the course-wide teasers controller.
+  // Symptom: navigating into a thread, the URL changed but the page sat on
+  // the loading skeleton until reload.
+  //
+  // Fix: construct the per-thread controllers synchronously and resolve
+  // setController immediately. The realtime controller starts in the
+  // background; the TableController buffers any pre-join broadcasts and
+  // catches up once the channel reaches "joined" via its existing
+  // since-watermark mechanism.
   useEffect(() => {
-    let cancelled = false;
+    if (!courseController?.client) {
+      // Clear any previously-set controller so consumers don't render with
+      // a stale, already-closed reference if the client briefly drops.
+      setController(null);
+      return;
+    }
 
-    const initializeControllers = async () => {
-      if (!courseController?.client) {
-        return;
-      }
+    // Create DiscussionThreadRealTimeController for per-thread channel
+    const threadRealTimeController = new DiscussionThreadRealTimeController({
+      client: courseController.client,
+      threadRootId: root_id
+    });
 
-      // Create DiscussionThreadRealTimeController for per-thread channel
-      const threadRealTimeController = new DiscussionThreadRealTimeController({
-        client: courseController.client,
-        threadRootId: root_id
+    // Kick off realtime channel join in the background; do not block render.
+    // Without the .catch, a subscription failure silently leaves the thread
+    // with a half-initialized realtime controller and no diagnostics. close()
+    // is async (returns a Promise); chain its own .catch so a teardown failure
+    // doesn't surface as an unhandled rejection.
+    void threadRealTimeController.start().catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error("Failed to start DiscussionThreadRealTimeController:", error);
+      void threadRealTimeController.close().catch((closeError) => {
+        // eslint-disable-next-line no-console
+        console.error("Failed to close DiscussionThreadRealTimeController after start failure:", closeError);
       });
+    });
 
-      // Start the realtime controller
-      await threadRealTimeController.start();
+    // Create TableController with BOTH class and thread-specific realtime controllers.
+    //
+    // Hot path: rehydrate from the per-course LRU cache so the second
+    // (and subsequent) visits to a thread skip the SELECT round trip
+    // entirely. The TableController will still do a since-watermark
+    // refetch once the realtime channel joins, picking up any replies
+    // that arrived while the user was off this thread — see
+    // `_needsCatchUpAfterInitialDataHydration` in TableController.
+    const cachedRows = courseController.getCachedDiscussionThreadRows(root_id);
+    const tableController = new TableController({
+      client: courseController.client,
+      table: "discussion_threads",
+      query: courseController.client
+        .from("discussion_threads")
+        .select("*")
+        .eq("root", root_id)
+        .order("created_at", { ascending: true }),
+      classRealTimeController: courseController.classRealTimeController,
+      additionalRealTimeControllers: [threadRealTimeController],
+      realtimeFilter: { root: root_id },
+      loadEntireTable: true,
+      initialData: cachedRows
+    });
 
-      if (cancelled) {
-        await threadRealTimeController.close();
-        return;
-      }
+    // Create DiscussionThreadsController
+    const discussionController = new DiscussionThreadsController(root_id, tableController, threadRealTimeController);
 
-      // Create TableController with BOTH class and thread-specific realtime controllers
-      const tableController = new TableController({
-        client: courseController.client,
-        table: "discussion_threads",
-        query: courseController.client
-          .from("discussion_threads")
-          .select("*")
-          .eq("root", root_id)
-          .order("created_at", { ascending: true }),
-        classRealTimeController: courseController.classRealTimeController,
-        additionalRealTimeControllers: [threadRealTimeController],
-        realtimeFilter: { root: root_id },
-        loadEntireTable: true
-      });
-
-      if (cancelled) {
-        await threadRealTimeController.close();
-        tableController.close();
-        return;
-      }
-
-      // Create DiscussionThreadsController
-      const discussionController = new DiscussionThreadsController(root_id, tableController, threadRealTimeController);
-
-      controllersRef.current = {
-        threadController: discussionController,
-        tableController,
-        threadRealTimeController
-      };
-
-      setController(discussionController);
+    controllersRef.current = {
+      threadController: discussionController,
+      tableController,
+      threadRealTimeController
     };
 
-    initializeControllers();
+    setController(discussionController);
 
     return () => {
-      cancelled = true;
       if (controllersRef.current) {
+        // Snapshot rows BEFORE closing — `close()` clears `_rows`. Caching
+        // these means the next mount for the same `root_id` rehydrates
+        // synchronously and skips the REST round trip.
+        const snapshot = controllersRef.current.tableController.rows as DiscussionThread[];
+        if (snapshot.length > 0) {
+          courseController.cacheDiscussionThreadRows(root_id, snapshot);
+        }
+        // threadController.close() already closes the realtime controller
+        // (DiscussionThreadsController.close at line ~168), so no explicit
+        // threadRealTimeController.close here.
         controllersRef.current.threadController.close();
         controllersRef.current.tableController.close();
-        controllersRef.current.threadRealTimeController.close();
         controllersRef.current = null;
       }
     };

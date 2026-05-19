@@ -1,5 +1,9 @@
 export const dynamic = "force-dynamic";
 
+export const metadata = {
+  title: "Dashboard"
+};
+
 import { AdminDashboardSkeleton } from "@/components/ui/route-loading-skeleton";
 import { Button } from "@/components/ui/button";
 import { Flex, Heading, HStack, Text, VStack } from "@chakra-ui/react";

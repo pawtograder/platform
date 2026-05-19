@@ -1,6 +1,6 @@
 import { createAdminClient } from "@/utils/supabase/client";
 import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 console.log(process.env.NEXT_PUBLIC_SUPABASE_URL);
 export async function generateMagicLink(email: string) {

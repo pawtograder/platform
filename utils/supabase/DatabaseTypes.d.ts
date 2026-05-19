@@ -56,6 +56,8 @@ export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg
 export type ActiveSubmissionsWithGradesForAssignment =
   Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
     id: number;
+    /** Present on `submissions_with_grades_for_assignment_nice` when group mentors exist. */
+    assignment_group_mentor_name?: string | null;
   };
 export type ActiveSubmissionsWithRegressionTestResults =
   Database["public"]["Views"]["submissions_with_grades_for_assignment_and_regression_test"]["Row"] & {

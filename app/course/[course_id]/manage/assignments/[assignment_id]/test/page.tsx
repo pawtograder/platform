@@ -5,6 +5,7 @@ import CreateStudentReposButton from "@/app/course/[course_id]/assignments/creat
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
@@ -116,7 +117,7 @@ export default function TestAssignmentPage() {
                 <Table.Cell>
                   <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
                     {submission.submission_reviews?.completed_at
-                      ? `${submission.submission_reviews?.total_score}/${assignment.data.total_points}`
+                      ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.data.total_points}`
                       : submission.is_active
                         ? "Pending"
                         : ""}

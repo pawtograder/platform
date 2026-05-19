@@ -732,3 +732,8 @@ entrypoint = "./functions/mcp-server/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/mcp-tokens/index.ts"
+
+[functions.cli]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/cli/index.ts"

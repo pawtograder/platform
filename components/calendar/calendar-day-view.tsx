@@ -345,7 +345,7 @@ function CurrentTimeIndicator() {
         position="absolute"
         left="50px"
         top="-10px"
-        bg="red.500"
+        bg="red.solid"
         color="white"
         fontSize="xs"
         px={2}

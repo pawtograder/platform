@@ -38,7 +38,7 @@ export default function StudentPollsTable({ polls, onPollClick }: StudentPollsTa
                 </Text>
               </Table.Cell>
               <Table.Cell pl={2} pr={4} py={3} textAlign="right">
-                <Button size="sm" bg="green.500" color="white" _hover={{ bg: "green.600" }} onClick={onPollClick}>
+                <Button size="sm" colorPalette="green" variant="solid" onClick={onPollClick}>
                   Answer Poll
                 </Button>
               </Table.Cell>

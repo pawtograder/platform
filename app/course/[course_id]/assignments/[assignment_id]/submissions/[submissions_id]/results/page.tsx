@@ -44,6 +44,24 @@ import { ErrorPinCallout } from "@/components/discussion/ErrorPinCallout";
 import { AIHelpSubmissionErrorButton } from "@/components/ai-help/AIHelpSubmissionErrorButton";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 
+/** When create-submission already recorded a user-visible message (e.g. grade.yml mismatch), hide the generic missing-grader-result row. */
+function filterWorkflowRunErrorsForDisplay<
+  T extends { data?: unknown; is_private?: boolean | null; id?: string | number }
+>(errors: T[]): T[] {
+  const hasUserVisibleType = errors.some((e) => {
+    const d = e.data;
+    return d !== null && typeof d === "object" && "type" in d && (d as { type?: string }).type === "user_visible_error";
+  });
+  if (!hasUserVisibleType) return errors;
+  return errors.filter((e) => {
+    const d = e.data;
+    if (d !== null && typeof d === "object" && "error_type" in d) {
+      return (d as { error_type?: string }).error_type !== "missing_grader_result";
+    }
+    return true;
+  });
+}
+
 function LLMHintButton({ testId, onHintGenerated }: { testId: number; onHintGenerated: (hint: string) => void }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -415,6 +433,7 @@ function HintFeedbackForm({
         size="sm"
         mb={3}
         maxLength={500}
+        aria-label="Additional feedback about this Feedbot response (optional)"
       />
 
       <HStack>
@@ -642,7 +661,11 @@ function PyretRepl({
         as="button"
         onClick={handleExpand}
         aria-expanded={isExpanded}
-        aria-controls={regionId}
+        // `aria-controls` must point at an element that exists in the DOM. The
+        // controlled region is only mounted when expanded, so only advertise
+        // the relationship while it's mounted (avoids WAVE "broken ARIA
+        // reference" / axe `aria-valid-attr-value`).
+        aria-controls={isExpanded ? regionId : undefined}
         width="100%"
         textAlign="left"
         bg="bg.muted"
@@ -833,7 +856,7 @@ export default function GraderResults() {
     return <Box>No grader results found</Box>;
   }
   if (query.data.data.workflow_run_error && query.data.data.workflow_run_error.length > 0) {
-    const errors = query.data.data.workflow_run_error;
+    const errors = filterWorkflowRunErrorsForDisplay(query.data.data.workflow_run_error);
 
     // Check if any errors are user-visible
     const hasUserVisibleErrors = errors.some((error) => !error.is_private);

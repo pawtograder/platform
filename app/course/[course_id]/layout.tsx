@@ -3,6 +3,7 @@ import { Box } from "@chakra-ui/react";
 import React from "react";
 
 import { FloatingHelpRequestWidget } from "@/components/help-queue/floating-help-request-widget";
+import { GlobalSearchProvider } from "@/components/ui/global-search";
 import { NavigationProgressProvider } from "@/components/ui/navigation-progress";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
@@ -12,12 +13,17 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import DynamicCourseNav from "./dynamicCourseNav";
 import { HelpDrawerProvider } from "@/hooks/useHelpDrawer";
+import { KeyboardShortcutsProvider } from "@/hooks/useKeyboardShortcuts";
 
 export async function generateMetadata({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
   const course = await getCourse(Number(course_id));
+  const name = course?.course_title || course?.name || "Course";
   return {
-    title: `${course?.course_title || course?.name || "Course"} - Pawtograder`
+    title: {
+      default: `${name} · Pawtograder`,
+      template: `%s · ${name} · Pawtograder`
+    }
   };
 }
 
@@ -66,13 +72,24 @@ const ProtectedLayout = async ({
               role={user_role.role}
             >
               <HelpDrawerProvider>
-                <DynamicCourseNav />
-                {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
-                {/* mobilenav */}
-                <Box pt="0" ml="0" mr="0" pb="80px">
-                  {children}
-                </Box>
-                <FloatingHelpRequestWidget />
+                <GlobalSearchProvider>
+                  <KeyboardShortcutsProvider courseId={Number.parseInt(course_id)}>
+                    <DynamicCourseNav />
+                    <Box
+                      as="main"
+                      id="main-content"
+                      tabIndex={-1}
+                      pt="0"
+                      ml="0"
+                      mr="0"
+                      pb="80px"
+                      _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
+                    >
+                      {children}
+                    </Box>
+                    <FloatingHelpRequestWidget />
+                  </KeyboardShortcutsProvider>
+                </GlobalSearchProvider>
               </HelpDrawerProvider>
             </OfficeHoursControllerProvider>
           </CourseControllerProvider>

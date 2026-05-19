@@ -14,7 +14,7 @@ export async function generateMetadata({ params }: { params: Promise<{ assignmen
     .single();
 
   return {
-    title: `${assignment?.title || "Assignment"} - Manage - Pawtograder`
+    title: assignment?.title ? `Manage ${assignment.title}` : "Manage Assignment"
   };
 }
 

@@ -10,9 +10,16 @@ jobs:
       app_uuid: ${{ steps.deploy.outputs.app_uuid }}
     steps:
       - uses: actions/checkout@v4
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node-22-
       - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: 22
       - name: Install dependencies
         run: npm ci
       - name: Deploy an E2E testing environment

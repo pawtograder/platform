@@ -4,12 +4,17 @@ import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { TimeZoneAwareDate } from "@/components/TimeZoneAwareDate";
 import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
+import { PageContainer } from "@/components/ui/page-container";
+import { ResponsiveTable } from "@/components/ui/responsive-table";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Container, EmptyState, Heading, Icon, Skeleton, Table, Text } from "@chakra-ui/react";
+import { InputGroup } from "@/components/ui/input-group";
+import { Box, EmptyState, Heading, Icon, Input, Skeleton, Stack, Table, Text } from "@chakra-ui/react";
+import { useState } from "react";
+import { BsSearch } from "react-icons/bs";
 import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { UserIdentity } from "@supabase/supabase-js";
@@ -68,6 +73,7 @@ export default function StudentPage() {
   const { user } = useAuthState();
   const { role } = useClassProfiles();
   const course = role.classes;
+  const [query, setQuery] = useState("");
 
   const private_profile_id = role.private_profile_id;
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
@@ -182,14 +188,48 @@ export default function StudentPage() {
     };
   }, [assignments, groups, course, course_id]);
 
+  const filterWork = (rows: AssignmentUnit[]) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((row) => {
+      const haystacks = [row.name, row.repo, row.submission_text, row.group, row.type];
+      return haystacks.some((s) => (s ?? "").toLowerCase().includes(q));
+    });
+  };
+  const visibleFuture = filterWork(workInFuture);
+  const visiblePast = filterWork(workInPast);
+
   return (
-    <Container>
+    <PageContainer maxW="container.lg">
       {actions}
       <ResendOrgInvitation />
-      <Heading size="lg" mb={4}>
+      <Heading as="h1" size="lg" mb={4}>
+        Assignments
+      </Heading>
+      <Stack direction={{ base: "column", md: "row" }} gap={2} mb={3} align={{ base: "stretch", md: "center" }}>
+        <Box flex="1" maxW={{ base: "100%", md: "360px" }}>
+          <InputGroup startElement={<BsSearch aria-hidden />}>
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search assignments"
+              aria-label="Search assignments"
+              data-shortcut="search"
+              size="sm"
+            />
+          </InputGroup>
+        </Box>
+        {query && (
+          <Text fontSize="xs" color="fg.muted" aria-live="polite">
+            {visibleFuture.length + visiblePast.length} match
+            {visibleFuture.length + visiblePast.length === 1 ? "" : "es"}
+          </Text>
+        )}
+      </Stack>
+      <Heading as="h2" size="md" mb={2}>
         Upcoming Assignments
       </Heading>
-      <Table.Root>
+      <ResponsiveTable>
         <Table.Header>
           <Table.Row>
             <Table.ColumnHeader>
@@ -206,7 +246,7 @@ export default function StudentPage() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {workInFuture.length === 0 && !isLoading && (
+          {visibleFuture.length === 0 && !isLoading && (
             <Table.Row>
               <Table.Cell colSpan={5}>
                 <EmptyState.Root size="md">
@@ -214,9 +254,13 @@ export default function StudentPage() {
                     <EmptyState.Indicator>
                       <Icon as={FaCheckCircle} />
                     </EmptyState.Indicator>
-                    <EmptyState.Title>No upcoming deadlines available</EmptyState.Title>
+                    <EmptyState.Title>
+                      {query ? `No upcoming matches for "${query}"` : "No upcoming deadlines available"}
+                    </EmptyState.Title>
                     <EmptyState.Description>
-                      Your instructor may not have released any upcoming assignments yet.
+                      {query
+                        ? "Try a different search term, or clear the filter to see all upcoming work."
+                        : "Your instructor may not have released any upcoming assignments yet."}
                     </EmptyState.Description>
                   </EmptyState.Content>
                 </EmptyState.Root>
@@ -231,7 +275,7 @@ export default function StudentPage() {
               </Table.Cell>
             </Table.Row>
           )}
-          {workInFuture.map((work) => {
+          {visibleFuture.map((work) => {
             const isCloseDeadline = work.due_date && differenceInHours(work.due_date, new Date()) < 24;
             return (
               <Table.Row
@@ -263,11 +307,11 @@ export default function StudentPage() {
             );
           })}
         </Table.Body>
-      </Table.Root>
-      <Heading size="lg" mb={4}>
+      </ResponsiveTable>
+      <Heading as="h2" size="md" mt={6} mb={2}>
         Past Assignments
       </Heading>
-      <Table.Root>
+      <ResponsiveTable>
         <Table.Header>
           <Table.Row>
             <Table.ColumnHeader>
@@ -284,7 +328,7 @@ export default function StudentPage() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {workInPast.length === 0 && !isLoading && (
+          {visiblePast.length === 0 && !isLoading && (
             <Table.Row>
               <Table.Cell colSpan={5}>
                 <EmptyState.Root size="md">
@@ -292,7 +336,9 @@ export default function StudentPage() {
                     <EmptyState.Indicator>
                       <Icon as={FaCheckCircle} />
                     </EmptyState.Indicator>
-                    <EmptyState.Title>No due dates have passed</EmptyState.Title>
+                    <EmptyState.Title>
+                      {query ? `No past matches for "${query}"` : "No due dates have passed"}
+                    </EmptyState.Title>
                   </EmptyState.Content>
                 </EmptyState.Root>
               </Table.Cell>
@@ -306,7 +352,7 @@ export default function StudentPage() {
               </Table.Cell>
             </Table.Row>
           )}
-          {workInPast.map((work) => {
+          {visiblePast.map((work) => {
             return (
               <Table.Row key={work.key}>
                 <Table.Cell>
@@ -332,7 +378,7 @@ export default function StudentPage() {
             );
           })}
         </Table.Body>
-      </Table.Root>
-    </Container>
+      </ResponsiveTable>
+    </PageContainer>
   );
 }

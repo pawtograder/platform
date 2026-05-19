@@ -1,59 +1,27 @@
 "use client";
 
+import {
+  AppealGrantedCell,
+  RegradeRequestContextLink,
+  StatusCell,
+  StudentOrGroupLabel
+} from "@/components/regrade-requests/InstructorRegradeTableShared";
 import PersonName from "@/components/ui/person-name";
 import { useAllRubricChecks, useRubricCheck } from "@/hooks/useAssignment";
 import { useCustomTable } from "@/hooks/useCustomTable";
 import { useTableControllerTableValues } from "@/lib/TableController";
 import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, HStack, Icon, Input, Table, Tag, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, HStack, Icon, Input, Table, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
-import type { LucideIcon } from "lucide-react";
-import { AlertCircle, ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
-import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import DiscordMessageLink from "@/components/discord/discord-message-link";
 import { useCourseController } from "@/hooks/useCourseController";
-
-// Status configuration
-const statusConfig: Record<
-  RegradeStatus,
-  {
-    colorPalette: string;
-    icon: LucideIcon;
-    label: string;
-  }
-> = {
-  draft: {
-    colorPalette: "gray",
-    icon: Clock,
-    label: "Draft"
-  },
-  opened: {
-    colorPalette: "orange",
-    icon: AlertCircle,
-    label: "Pending"
-  },
-  resolved: {
-    colorPalette: "blue",
-    icon: CheckCircle,
-    label: "Resolved"
-  },
-  escalated: {
-    colorPalette: "red",
-    icon: ArrowUp,
-    label: "Escalated"
-  },
-  closed: {
-    colorPalette: "gray",
-    icon: XCircle,
-    label: "Closed"
-  }
-};
 
 // Type for regrade request with populated relations
 type RegradeRequestRow = GetResult<
@@ -63,93 +31,6 @@ type RegradeRequestRow = GetResult<
   Database["public"]["Tables"]["submission_regrade_requests"]["Relationships"],
   "*, submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id), submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id), submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id), submissions!inner(id, profiles(name), assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name))))"
 >;
-
-/**
- * Renders a status tag with an icon and label corresponding to the given regrade request status.
- *
- * @param status - The status of the regrade request to display.
- */
-function StatusCell({ status }: { status: RegradeStatus }) {
-  const config = statusConfig[status];
-  const StatusIcon = config.icon;
-
-  return (
-    <Tag.Root colorPalette={config.colorPalette} variant="surface">
-      <HStack gap={1}>
-        <Icon as={StatusIcon} boxSize={3} />
-        <Tag.Label>{config.label}</Tag.Label>
-      </HStack>
-    </Tag.Root>
-  );
-}
-
-/**
- * Renders the student or group name associated with a submission, along with a button to open the submission details page in a new tab.
- *
- * If the submission is part of a group, displays the group members' names; otherwise, displays the individual student's name or "Unknown" if unavailable.
- *
- * @param submissionId - The unique identifier of the submission to link to.
- */
-function StudentCell({
-  submission,
-  submissionId,
-  regradeRequestId
-}: {
-  submission?: RegradeRequestRow["submissions"];
-  submissionId: number;
-  regradeRequestId: number;
-}) {
-  const { course_id, assignment_id } = useParams();
-
-  let displayName = "Unknown";
-  if (submission?.assignment_groups?.assignment_groups_members?.length) {
-    displayName = `Group: ${submission.assignment_groups.assignment_groups_members.map((member) => member.profiles.name).join(", ")}`;
-  } else if (submission?.profiles?.name) {
-    displayName = submission.profiles.name;
-  }
-
-  return (
-    <HStack>
-      <Text>{displayName}</Text>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => {
-          window.open(
-            `/course/${course_id}/assignments/${assignment_id}/submissions/${submissionId}#regrade-request-${regradeRequestId}`,
-            "_blank"
-          );
-        }}
-      >
-        <Icon as={FaExternalLinkAlt} boxSize={3} />
-      </Button>
-    </HStack>
-  );
-}
-
-/**
- * Displays whether an appeal was granted for a closed regrade request.
- *
- * Shows "Yes" with a green check icon if the closed points differ from the resolved points, "No" with a red cross if they are equal, and "N/A" if the request is not closed.
- */
-function AppealGrantedCell({ row }: { row: RegradeRequestRow }) {
-  const isAppealGranted =
-    row.status === "closed" &&
-    row.closed_points !== null &&
-    row.resolved_points !== null &&
-    row.closed_points !== row.resolved_points;
-
-  if (row.status !== "closed") {
-    return <Text color="fg.muted">N/A</Text>;
-  }
-
-  return (
-    <HStack gap={1}>
-      <Icon as={isAppealGranted ? FaCheck : FaTimes} boxSize={3} color={isAppealGranted ? "green.500" : "red.500"} />
-      <Text color={isAppealGranted ? "green.500" : "red.500"}>{isAppealGranted ? "Yes" : "No"}</Text>
-    </HStack>
-  );
-}
 
 /**
  * Displays the name of the rubric check associated with a regrade request row.
@@ -174,6 +55,11 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
  */
 export default function RegradeRequestsTable() {
   const { assignment_id, course_id } = useParams();
+  const courseIdParam = Array.isArray(course_id) ? course_id[0] : course_id;
+  const assignmentIdParam = Array.isArray(assignment_id) ? assignment_id[0] : assignment_id;
+  const courseIdNum = Number.parseInt(courseIdParam ?? "", 10);
+  const assignmentIdNum = Number.parseInt(assignmentIdParam ?? "", 10);
+  const hasValidRouteIds = Number.isFinite(courseIdNum) && Number.isFinite(assignmentIdNum);
   const courseController = useCourseController();
   const profiles = useTableControllerTableValues(courseController.profiles);
 
@@ -263,13 +149,25 @@ export default function RegradeRequestsTable() {
           }
           return row.submissions?.profiles?.name || "Unknown";
         },
-        cell: ({ row }) => (
-          <StudentCell
-            submission={row.original.submissions}
-            submissionId={row.original.submission_id}
-            regradeRequestId={row.original.id}
-          />
-        ),
+        cell: ({ row }) => {
+          const submission = row.original.submissions;
+          return (
+            <HStack align="flex-start">
+              <StudentOrGroupLabel
+                assignmentGroupsMembers={submission?.assignment_groups?.assignment_groups_members}
+                profileName={submission?.profiles?.name}
+              />
+              {hasValidRouteIds && (
+                <RegradeRequestContextLink
+                  courseId={courseIdNum}
+                  assignmentId={assignmentIdNum}
+                  submissionId={row.original.submission_id}
+                  regradeRequestId={row.original.id}
+                />
+              )}
+            </HStack>
+          );
+        },
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
           if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
@@ -329,7 +227,13 @@ export default function RegradeRequestsTable() {
             row.closed_points !== row.resolved_points
           );
         },
-        cell: ({ row }) => <AppealGrantedCell row={row.original} />,
+        cell: ({ row }) => (
+          <AppealGrantedCell
+            status={row.original.status}
+            closedPoints={row.original.closed_points}
+            resolvedPoints={row.original.resolved_points}
+          />
+        ),
         enableColumnFilter: true,
         enableSorting: false,
         filterFn: (row, id, filterValue) => {
@@ -384,7 +288,7 @@ export default function RegradeRequestsTable() {
         }
       }
     ],
-    [allRubricChecks, course_id]
+    [allRubricChecks, course_id, courseIdNum, assignmentIdNum, hasValidRouteIds]
   );
 
   const {

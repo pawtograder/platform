@@ -21,9 +21,9 @@ const SUPABASE_ANON_KEY_ENV = "SUPABASE_ANON_KEY";
 // Token prefix for MCP API tokens
 export const MCP_TOKEN_PREFIX = "mcp_";
 
-// Available scopes
-export type MCPScope = "mcp:read" | "mcp:write";
-export const VALID_SCOPES: MCPScope[] = ["mcp:read", "mcp:write"];
+// Available scopes (MCP and CLI)
+export type MCPScope = "mcp:read" | "mcp:write" | "cli:read" | "cli:write";
+export const VALID_SCOPES: MCPScope[] = ["mcp:read", "mcp:write", "cli:read", "cli:write"];
 
 // API Token payload (index signature required for djwt Payload compatibility)
 export interface MCPApiTokenPayload {

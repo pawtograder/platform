@@ -4,6 +4,7 @@ import { AIHelpIconButton } from "@/components/ai-help/AIHelpButton";
 import DiscordDiscussionMessageLink from "@/components/discord/discord-discussion-message-link";
 import { ErrorPinManageModal } from "@/components/discussion/ErrorPinManageModal";
 import { KarmaBadge } from "@/components/discussion/KarmaBadge";
+import { MarkDuplicateThreadModal } from "@/components/discussion/MarkDuplicateThreadModal";
 import { StaffThreadActions } from "@/components/discussion/StaffThreadActions";
 import { DiscussionThreadLikeButton } from "@/components/ui/discussion-post-summary";
 import Markdown from "@/components/ui/markdown";
@@ -35,13 +36,23 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
   const userProfile = useUserProfile(thread.author);
   const { course_id } = useParams();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const duplicateBanner =
+    thread.duplicate_original_subject && thread.duplicate_marked_by_display_name && thread.duplicate_marked_at ? (
+      <Box w="100%" mb="3" py="2" px="3" rounded="l3" bg="orange.subtle" borderWidth="1px" borderColor="orange.muted">
+        <Text fontSize="sm" color="fg.default">
+          This post was originally titled <strong>{thread.duplicate_original_subject}</strong>, then{" "}
+          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and merged it here.
+        </Text>
+      </Box>
+    ) : null;
   return (
     <Box>
+      {duplicateBanner}
       <VStack gap="0" align="start">
         <HStack align="start" gap="2" alignSelf="flex-start">
           {userProfile ? (
             <Avatar.Root size="xs">
-              <Avatar.Image src={userProfile?.avatar_url} />
+              <Avatar.Image src={userProfile?.avatar_url} alt="" />
               <Avatar.Fallback>{userProfile?.name?.charAt(0) || "?"}</Avatar.Fallback>
             </Avatar.Root>
           ) : (
@@ -95,14 +106,17 @@ function ThreadActions({
   thread,
   editing,
   setEditing,
-  topicAssignmentId
+  topicAssignmentId,
+  onDuplicateMerged
 }: {
   thread: DiscussionThreadType;
   editing: boolean;
   setEditing: (editing: boolean) => void;
   topicAssignmentId?: number | null;
+  onDuplicateMerged?: (originalRootId: number) => void;
 }) {
   const [replyVisible, setReplyVisible] = useState(false);
+  const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
   const errorPinModal = useModalManager<number>();
   const { public_profile_id, private_profile_id, role } = useClassProfiles();
   const { discussionThreadTeasers } = useCourseController();
@@ -112,6 +126,8 @@ function ThreadActions({
     role.role === "instructor" ||
     role.role === "grader";
   const canPin = role.role === "instructor" || role.role === "grader";
+  const isRootThread = thread.root != null && thread.id === thread.root;
+  const canMarkDuplicate = canPin && isRootThread && !thread.duplicate_original_subject;
 
   const handleTogglePin = useCallback(async () => {
     const newPinnedStatus = !thread.pinned;
@@ -161,6 +177,13 @@ function ThreadActions({
           </Button>
         </Tooltip>
       )}
+      {canMarkDuplicate && (
+        <Tooltip content="Merge this thread into another as a duplicate">
+          <Button aria-label="Mark duplicate" onClick={() => setDuplicateModalOpen(true)} variant="ghost" size="sm">
+            Mark Duplicate
+          </Button>
+        </Tooltip>
+      )}
       <Tooltip content="Reply">
         <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm">
           <FaReply />
@@ -194,6 +217,16 @@ function ThreadActions({
           defaultAssignmentId={topicAssignmentId}
         />
       )}
+      {canMarkDuplicate && (
+        <MarkDuplicateThreadModal
+          isOpen={duplicateModalOpen}
+          onClose={() => setDuplicateModalOpen(false)}
+          duplicateRootId={thread.id}
+          onMerged={(originalRootId) => {
+            onDuplicateMerged?.(originalRootId);
+          }}
+        />
+      )}
     </Box>
   );
 }
@@ -218,6 +251,19 @@ function DiscussionPost({ root_id }: { root_id: number }) {
   const discussion_topics = useDiscussionTopics();
   const { discussionThreadTeasers } = useCourseController();
   const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
+  // Force a single-row fetch on mount / root_id change so the heading paints
+  // reliably on first navigation. The course-wide teasers controller is
+  // populated by an initial-load query plus realtime broadcasts; if neither
+  // has delivered this row yet (race when the user navigates before the
+  // teasers controller's initial fetch resolves, or when realtime delivery
+  // for a freshly-created thread lags the navigation), getById() returns
+  // undefined and the page sits on the Skeleton until reload. refetchByIds
+  // always queries the DB and adds the row, which fires the listener wired
+  // up by useTableControllerValueById.
+  useEffect(() => {
+    discussionThreadTeasers.refetchByIds([root_id]);
+  }, [discussionThreadTeasers, root_id]);
+
   const [editing, setEditing] = useState(false);
   const [visibility, setVisibility] = useState(rootThread?.instructors_only ? "instructors_only" : "all");
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -339,6 +385,13 @@ function DiscussionPost({ root_id }: { root_id: number }) {
     discussionThreadTeasers.refetchByIds([root_id]);
   }, [discussionThreadTeasers, root_id]);
 
+  const handleDuplicateMerged = useCallback(
+    (originalRootId: number) => {
+      discussionThreadTeasers.refetchByIds([root_id, originalRootId]);
+    },
+    [discussionThreadTeasers, root_id]
+  );
+
   if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;
   }
@@ -406,6 +459,7 @@ function DiscussionPost({ root_id }: { root_id: number }) {
         editing={editing}
         setEditing={setEditing}
         topicAssignmentId={topic?.assignment_id}
+        onDuplicateMerged={handleDuplicateMerged}
       />
     </>
   );
@@ -433,6 +487,7 @@ function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   useEffect(() => {
     document.title = `${courseController.course.name} - Discussion - ${thread?.subject}`;
   }, [courseController.course.name, thread?.subject]);
+
   return (
     <>
       <DiscussionPost root_id={root_id} />

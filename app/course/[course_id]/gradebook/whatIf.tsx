@@ -1,6 +1,7 @@
 import Markdown from "@/components/ui/markdown";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useGradebookWhatIfFeatureEnabled } from "@/hooks/useCourseFeatures";
 import {
   useGradebookColumn,
   useGradebookColumns,
@@ -34,7 +35,12 @@ import {
 
 import { Alert } from "@/components/ui/alert";
 import pluralize from "pluralize";
+import type { CSSProperties, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// Module-stable style — `<Markdown>` is `memo`-wrapped (see
+// `components/ui/markdown.tsx`); inline literals defeat it.
+const COLUMN_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 import { FaExclamationTriangle, FaMagic } from "react-icons/fa";
 import { FaPencil } from "react-icons/fa6";
 import { LuChevronDown, LuChevronRight, LuExternalLink } from "react-icons/lu";
@@ -53,12 +59,14 @@ function WhatIfScoreCell({
   column,
   private_profile_id,
   isEditing,
-  setIsEditing
+  setIsEditing,
+  whatIfEnabled
 }: {
   column: GradebookColumn;
   private_profile_id: string;
   isEditing: boolean;
   setIsEditing: (isEditing: boolean) => void;
+  whatIfEnabled: boolean;
 }) {
   const renderer = useGradebookController().getRendererForColumn(column.id);
   const studentGrade = useGradebookColumnStudent(column.id, private_profile_id);
@@ -67,7 +75,7 @@ function WhatIfScoreCell({
   const score = studentGrade?.score_override ?? studentGrade?.score;
   const submissionStatus = useSubmissionIDForColumn(column.id, private_profile_id);
   const modifiedColumnsRef = useRef(new Set<number>());
-  if (isEditing) {
+  if (isEditing && whatIfEnabled) {
     return (
       <Box display="flex" flexDirection="column" alignItems="center">
         <Input
@@ -105,6 +113,7 @@ function WhatIfScoreCell({
     );
   }
   const isShowingWhatIf =
+    whatIfEnabled &&
     studentGrade?.score_override == null &&
     whatIfVal?.what_if !== undefined &&
     whatIfVal?.what_if !== null &&
@@ -132,7 +141,7 @@ function WhatIfScoreCell({
     }
   }
   return (
-    <HStack flexShrink={0} minW="fit-content" gap={0} pr={2}>
+    <HStack gap={0} pr={2} flexWrap="wrap" justifyContent="flex-end">
       {studentGrade?.score_override != null && studentGrade?.released && (
         <Tooltip
           content={`This value is overridden by an instructor, and does not reflect the calculated value. If you have a concern, please contact the instructor.${studentGrade?.score_override_note ? ` Note from instructor: ${studentGrade.score_override_note}` : ""}`}
@@ -143,8 +152,8 @@ function WhatIfScoreCell({
         </Tooltip>
       )}
       {column.render_expression && (
-        <Box pr={1} minW="fit-content">
-          <Text minW="fit-content" fontSize="sm">
+        <Box pr={1}>
+          <Text fontSize="sm">
             {" "}
             {renderer(
               isShowingWhatIf
@@ -173,7 +182,7 @@ function WhatIfScoreCell({
         </Box>
       )}
       {column.render_expression && "("}
-      <Text minW="fit-content" fontSize="sm">
+      <Text fontSize="sm" whiteSpace="nowrap">
         {scoreToShow}
         {column.max_score && `/${column.max_score}`}
       </Text>
@@ -182,16 +191,16 @@ function WhatIfScoreCell({
   );
 }
 
-// function canEditColumn(column: GradebookColumn) {
-//   const deps = column.dependencies;
-//   return !(
-//     deps &&
-//     typeof deps === "object" &&
-//     "gradebook_columns" in deps &&
-//     Array.isArray((deps as { gradebook_columns?: number[] }).gradebook_columns) &&
-//     (deps as { gradebook_columns?: number[] }).gradebook_columns!.length > 0
-//   );
-// }
+function canEditColumn(column: GradebookColumn) {
+  const deps = column.dependencies;
+  return !(
+    deps &&
+    typeof deps === "object" &&
+    "gradebook_columns" in deps &&
+    Array.isArray((deps as { gradebook_columns?: number[] }).gradebook_columns) &&
+    (deps as { gradebook_columns?: number[] }).gradebook_columns!.length > 0
+  );
+}
 
 function IncompleteValuesAlert({
   incompleteValues,
@@ -202,9 +211,20 @@ function IncompleteValuesAlert({
 }) {
   const grade = useWhatIfGrade(column_id);
   const report_only = grade?.report_only;
-  const missingGradebookColumns = incompleteValues.missing?.gradebook_columns;
-  const notReleasedGradebookColumns = incompleteValues.not_released?.gradebook_columns;
   const controller = useGradebookController();
+  const slugToName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const col of controller.columns) {
+      if (col.slug && col.name) map.set(col.slug, col.name);
+    }
+    return map;
+  }, [controller.columns]);
+  const resolveNames = useCallback(
+    (slugs: string[] | undefined) => slugs?.map((s) => slugToName.get(s) ?? s),
+    [slugToName]
+  );
+  const missingGradebookColumns = resolveNames(incompleteValues.missing?.gradebook_columns);
+  const notReleasedGradebookColumns = resolveNames(incompleteValues.not_released?.gradebook_columns);
   const column = useGradebookColumn(column_id);
   const hasRenderExpr = column.render_expression !== null;
   const renderer = controller.getRendererForColumn(column_id);
@@ -280,9 +300,10 @@ function IncompleteValuesAlert({
 
 export default function WhatIfPage() {
   const { private_profile_id } = useClassProfiles();
+  const whatIfEnabled = useGradebookWhatIfFeatureEnabled();
   return (
     <GradebookWhatIfProvider private_profile_id={private_profile_id}>
-      <WhatIf private_profile_id={private_profile_id} />
+      <WhatIf private_profile_id={private_profile_id} whatIfEnabled={whatIfEnabled} />
     </GradebookWhatIfProvider>
   );
 }
@@ -290,19 +311,25 @@ export default function WhatIfPage() {
 function GradebookCard({
   column,
   private_profile_id,
-  isCollapsedGroupItem = false
+  isCollapsedGroupItem = false,
+  whatIfEnabled
 }: {
   column: GradebookColumn;
   private_profile_id: string;
   isCollapsedGroupItem?: boolean;
+  whatIfEnabled: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const whatIfVal = useWhatIfGrade(column.id);
   const studentGrade = useGradebookColumnStudent(column.id, private_profile_id);
   const score = studentGrade?.score_override ?? studentGrade?.score;
   const isShowingWhatIf =
-    studentGrade?.score_override == null && whatIfVal?.what_if !== undefined && whatIfVal?.what_if !== score;
-  const canEdit = false; //canEditColumn(column); TODO re-enable when fixing whatIf
+    whatIfEnabled &&
+    studentGrade?.score_override == null &&
+    whatIfVal?.what_if !== undefined &&
+    whatIfVal?.what_if !== null &&
+    whatIfVal?.what_if !== score;
+  const canEdit = whatIfEnabled && canEditColumn(column);
   const whatIfController = useGradebookWhatIf();
   const whatIfIncompleteValues = whatIfController.getIncompleteValues(column.id);
   const incompleteValues = whatIfIncompleteValues ?? studentGrade?.incomplete_values;
@@ -320,7 +347,17 @@ function GradebookCard({
       justifyContent="space-between"
       cursor={canEdit ? "pointer" : "default"}
       display="flex"
-      onClick={canEdit ? () => setIsEditing(true) : undefined}
+      onClick={
+        canEdit
+          ? (e: MouseEvent<HTMLDivElement>) => {
+              const target = e.target as HTMLElement;
+              if (target.closest("a, button, input, textarea, select, [role='link']")) {
+                return;
+              }
+              setIsEditing(true);
+            }
+          : undefined
+      }
       borderRadius="none"
       borderBottom="none"
       textAlign="left"
@@ -337,9 +374,9 @@ function GradebookCard({
           </Float>
         </Tooltip>
       )}
-      <HStack align="top">
-        <Card.Header flexGrow={10} p={0}>
-          <VStack align="left" maxW="md">
+      <HStack align="start" flexWrap="wrap" gap={2} w="100%">
+        <Card.Header flexGrow={10} minW={0} p={0}>
+          <VStack align="start" w="100%">
             <Heading size="sm" id={`grade-title-${column.id}`}>
               {column.name}
             </Heading>
@@ -356,17 +393,18 @@ function GradebookCard({
             )}
           </VStack>
         </Card.Header>
-        <Card.Body p={0} minW="fit-content">
+        <Card.Body p={0}>
           <WhatIfScoreCell
             column={column}
             private_profile_id={private_profile_id}
             isEditing={isEditing}
             setIsEditing={setIsEditing}
+            whatIfEnabled={whatIfEnabled}
           />
         </Card.Body>
       </HStack>
-      <Box id={`grade-description-${column.id}`}>
-        <Markdown style={{ fontSize: "0.8rem" }}>{column.description}</Markdown>
+      <Box id={`grade-description-${column.id}`} overflowWrap="anywhere" w="100%">
+        <Markdown style={COLUMN_DESCRIPTION_STYLE}>{column.description}</Markdown>
       </Box>
       {hasIncompleteValues && (
         <IncompleteValuesAlert incompleteValues={incompleteValues as IncompleteValuesAdvice} column_id={column.id} />
@@ -412,10 +450,12 @@ function GroupHeader({
 
 function CollapsedGroupColumn({
   groupColumns,
-  private_profile_id
+  private_profile_id,
+  whatIfEnabled
 }: {
   groupColumns: GradebookColumn[];
   private_profile_id: string;
+  whatIfEnabled: boolean;
 }) {
   // For now, let's use a simpler approach that checks just the first and last columns
   // to avoid React hooks rule violations with dynamic loops
@@ -449,11 +489,12 @@ function CollapsedGroupColumn({
       column={selectedColumn}
       private_profile_id={private_profile_id}
       isCollapsedGroupItem={true}
+      whatIfEnabled={whatIfEnabled}
     />
   );
 }
 
-export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
+export function WhatIf({ private_profile_id, whatIfEnabled }: { private_profile_id: string; whatIfEnabled: boolean }) {
   const columns = useGradebookColumns();
 
   // State for collapsible groups - use base group name as key for stability
@@ -582,7 +623,14 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
       if (group.columns.length === 1) {
         // Single column - no need for group header
         const column = group.columns[0];
-        items.push(<GradebookCard key={column.id} column={column} private_profile_id={private_profile_id} />);
+        items.push(
+          <GradebookCard
+            key={column.id}
+            column={column}
+            private_profile_id={private_profile_id}
+            whatIfEnabled={whatIfEnabled}
+          />
+        );
       } else {
         // Multiple columns - handle collapsed state using base group name
         const isCollapsed = collapsedGroups.has(group.groupName);
@@ -601,7 +649,14 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
         if (!isCollapsed) {
           // Show all columns when expanded
           group.columns.forEach((column) => {
-            items.push(<GradebookCard key={column.id} column={column} private_profile_id={private_profile_id} />);
+            items.push(
+              <GradebookCard
+                key={column.id}
+                column={column}
+                private_profile_id={private_profile_id}
+                whatIfEnabled={whatIfEnabled}
+              />
+            );
           });
         } else {
           // Show the appropriate column when collapsed (first if no grades, last if grades exist)
@@ -610,6 +665,7 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
               key={`collapsed-${groupKey}`}
               groupColumns={group.columns}
               private_profile_id={private_profile_id}
+              whatIfEnabled={whatIfEnabled}
             />
           );
         }
@@ -617,10 +673,15 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
     });
 
     return items;
-  }, [groupedColumns, collapsedGroups, toggleGroup, private_profile_id]);
+  }, [groupedColumns, collapsedGroups, toggleGroup, private_profile_id, whatIfEnabled]);
 
   return (
-    <VStack minW="md" maxW="xl" align="flex-start" role="region" aria-label="Student Gradebook" gap={0}>
+    <VStack w="100%" maxW="3xl" align="flex-start" role="region" aria-label="Student Gradebook" gap={0}>
+      {!whatIfEnabled && (
+        <Text fontSize="sm" color="fg.muted" px={2} py={2} w="100%">
+          Grade simulations (What If) are not enabled for this course. You can still view released grades below.
+        </Text>
+      )}
       {/* Expand/Collapse All Buttons */}
       {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
         <HStack gap={2} justifyContent="flex-end" w="100%" px={2} py={2}>

@@ -53,7 +53,9 @@ import {
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
-import { submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
+import { formatGradingReviewScoreLines } from "@/lib/formatGradingReviewForMarkdown";
+import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
+import { graderResultsHasAutograderTestsOrOutput, submissionHasGraderOutput } from "@/lib/submissionHasGraderOutput";
 import { createClient } from "@/utils/supabase/client";
 import { GraderResultTestExtraData } from "@/utils/supabase/DatabaseTypes";
 import { Icon } from "@chakra-ui/react";
@@ -868,7 +870,13 @@ function generateSubmissionMarkdown(
       const review = sub.submission_reviews;
       lines.push("### Grading Review");
       lines.push("");
-      lines.push(`- **Total Score:** ${review.total_score ?? "Not graded"}`);
+      lines.push(
+        ...formatGradingReviewScoreLines({
+          total_score: review.total_score,
+          per_student_grading_totals: review.per_student_grading_totals,
+          individual_scores: review.individual_scores
+        })
+      );
       lines.push(`- **Released:** ${review.released ? "Yes" : "No"}`);
       if (review.completed_at) {
         lines.push(`- **Completed:** ${format(new Date(review.completed_at), "MMMM d, yyyy 'at' h:mm a")}`);
@@ -1070,6 +1078,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
 }
 
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
+  const { private_profile_id } = useClassProfiles();
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -1192,7 +1201,12 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   <Table.Cell>
                     <Link href={link}>
                       {historical_submission.submission_reviews?.completed_at &&
-                        historical_submission.submission_reviews?.total_score +
+                        (getDisplayedGradingTotalForStudent(
+                          historical_submission.submission_reviews,
+                          private_profile_id
+                        ) ??
+                          historical_submission.submission_reviews.total_score ??
+                          "—") +
                           "/" +
                           (assignment?.total_points ?? <Skeleton height="20px" />)}
                     </Link>
@@ -1331,6 +1345,21 @@ function TestResults() {
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
   const hasBuildError = submission.grader_results?.lint_output === "Gradle build failed";
+  const hasRealAutograderOutput = graderResultsHasAutograderTestsOrOutput(submission.grader_results);
+
+  if (!hasRealAutograderOutput) {
+    return (
+      <Box>
+        <Heading size="md" mt={2}>
+          Automated Check Results
+        </Heading>
+        <Text fontSize="sm" color="text.muted" mt={2}>
+          No automated test results for this submission. Open the Results tab to see submission status or any reported
+          errors.
+        </Text>
+      </Box>
+    );
+  }
 
   // Get all unique error pin matches for prominent display on build errors
   const getAllMatches = () => {
@@ -1474,9 +1503,27 @@ function ReviewStats() {
       )}
       {!isInstructor && <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />}
       {completed_by && <DataListItem label="Completed by" value={<PersonName size="2xs" uid={completed_by} />} />}
-      {completed_at && <DataListItem label="Completed at" value={formatRelative(completed_at, new Date())} />}
+      {completed_at && (
+        <DataListItem
+          label="Completed at"
+          value={
+            <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+              {formatRelative(completed_at, new Date())}
+            </Text>
+          }
+        />
+      )}
       {checked_by && <DataListItem label="Checked by" value={<PersonName size="2xs" uid={checked_by} />} />}
-      {checked_at && <DataListItem label="Checked at" value={formatRelative(checked_at, new Date())} />}
+      {checked_at && (
+        <DataListItem
+          label="Checked at"
+          value={
+            <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+              {formatRelative(checked_at, new Date())}
+            </Text>
+          }
+        />
+      )}
       {mostRecentGrader && (
         <DataListItem label="Last updated by" value={<PersonName size="2xs" uid={mostRecentGrader} />} />
       )}
@@ -1578,7 +1625,9 @@ function ReviewActions() {
       <ReviewStats />
       {showCompleteReviewButton && !review.completed_at && (
         <VStack>
-          <Heading size="md">Submission Review Actions</Heading>
+          <Heading as="h2" size="md">
+            Submission Review Actions
+          </Heading>
           <HStack w="100%" justify="space-between">
             {!review.completed_at && <CompleteReviewButton />}
             {/* {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
@@ -1610,13 +1659,16 @@ function UnGradedGradingSummary() {
   const submission = useSubmission();
   const { assignment } = useAssignmentController();
   const gradingRubric = useRubric("grading-review");
+  const hasRealAutograderOutput = graderResultsHasAutograderTestsOrOutput(submission.grader_results);
   const graderResultsMaxScore = submission.grader_results?.max_score;
   const totalMaxScore = assignment.total_points;
   const isCapped = gradingRubric?.cap_score_to_assignment_points ?? false;
 
   return (
     <Box>
-      <Heading size="xl">Grading Summary</Heading>
+      <Heading as="h2" size="xl">
+        Grading Summary
+      </Heading>
       <Text color="text.muted" fontSize="sm">
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
@@ -1633,9 +1685,17 @@ function UnGradedGradingSummary() {
           <Text as="span" fontWeight="bold">
             Automated Checks:
           </Text>{" "}
-          {graderResultsMaxScore} points, results shown below.
+          {hasRealAutograderOutput ? (
+            <>{graderResultsMaxScore} points, results shown below.</>
+          ) : (
+            <>
+              No automated score recorded for this submission yet (the autograder may not have finished or produced
+              tests). See the Results tab for status.
+            </>
+          )}
         </List.Item>
-        {!isCapped &&
+        {hasRealAutograderOutput &&
+          !isCapped &&
           graderResultsMaxScore !== undefined &&
           totalMaxScore !== null &&
           graderResultsMaxScore > totalMaxScore && (
@@ -1826,16 +1886,18 @@ function RubricView() {
 
   return (
     <Box
-      position="sticky"
-      top="0"
+      as="aside"
+      aria-label="Grading summary"
+      position={{ base: "static", lg: "sticky" }}
+      top={{ base: "auto", lg: "0" }}
       borderTopWidth={{ base: "1px", lg: "0" }}
       borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
-      pb="80px"
-      height="100vh"
+      pb={{ base: "4", lg: "80px" }}
+      height={{ base: "auto", lg: "100vh" }}
       overflowX="hidden"
-      overflowY="auto"
+      overflowY={{ base: "visible", lg: "auto" }}
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
@@ -1846,8 +1908,10 @@ function RubricView() {
               Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
-            <Text fontSize="sm">Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}</Text>
-            <Text fontSize="sm" data-visual-test="blackout">
+            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
+              Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}
+            </Text>
+            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
               Due:{" "}
               {reviewAssignment.due_date ? (
                 <TimeZoneAwareDate date={reviewAssignment.due_date} format="MMM d, h:mm a" />
@@ -1868,7 +1932,7 @@ function RubricView() {
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
-            <Heading size="xl">
+            <Heading as="h2" size="xl">
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
@@ -1907,7 +1971,9 @@ function Comments() {
   }
   return (
     <Box>
-      <Heading size="md">Comments</Heading>
+      <Heading as="h2" size="md">
+        Comments
+      </Heading>
       <VStack align="start" gap={2}>
         {comments.map((comment) => (
           <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" />
@@ -1977,10 +2043,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                   <HStack gap={1}>
                     Group {assignmentGroupWithMembers.name} (
                     {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                      <HStack key={member.profile_id} gap={1}>
-                        <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
+                      <HStack key={member.id} gap={1}>
+                        <PersonName uid={member.profile_id} showAvatar={false} />
                         <StudentSummaryTrigger
-                          key={member.profile_id}
                           student_id={member.profile_id}
                           course_id={parseInt(course_id as string, 10)}
                         />
@@ -2023,7 +2088,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </VStack>
         </Box>
         {submission.is_not_graded && (
-          <Box flexShrink={1} maxW="lg" rounded="sm" bg="fg.warning" color="fg.inverted" p={2} textAlign="center" m={0}>
+          <Box
+            flexShrink={1}
+            maxW="lg"
+            rounded="sm"
+            colorPalette="orange"
+            bg="colorPalette.solid"
+            color="white"
+            p={2}
+            textAlign="center"
+            m={0}
+          >
             <Heading size="md">Viewing a not-for-grading submission.</Heading>
             <Text fontSize="xs">
               This submission was created with #NOT-GRADED in the commit message and cannot ever become active. It will
@@ -2032,7 +2107,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </Box>
         )}
         {!submission.is_active && !submission.is_not_graded && (
-          <Box rounded="sm" bg="red.fg" color="fg.inverted" px={6} py={2} textAlign="center" m={0}>
+          <Box
+            rounded="sm"
+            colorPalette="red"
+            bg="colorPalette.solid"
+            color="white"
+            px={6}
+            py={2}
+            textAlign="center"
+            m={0}
+          >
             <Heading size="md">Viewing a previous submission.</Heading>
             <Text fontSize="xs">
               Use the submission history to view or change the active submission. The active submission is the one that
@@ -2048,7 +2132,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </HStack>
       </Flex>
 
-      <Box p={0} m={0} borderBottomColor="border.emphasized" borderBottomWidth="2px" bg="bg.muted">
+      <Box
+        as="nav"
+        aria-label="Submission tabs"
+        p={0}
+        m={0}
+        borderBottomColor="border.emphasized"
+        borderBottomWidth="2px"
+        bg="bg.muted"
+        display="flex"
+        flexWrap="wrap"
+      >
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
@@ -2070,11 +2164,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </NextLink>
         )}
       </Box>
-      <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>
+      <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
           {children}
         </Box>
-        <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>
+        <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
           <RubricView />
         </Box>
       </Flex>

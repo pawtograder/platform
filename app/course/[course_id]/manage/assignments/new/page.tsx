@@ -23,7 +23,8 @@ export default function NewAssignmentPage() {
     refineCoreProps: { resource: "assignments", action: "create" },
     defaultValues: {
       allow_not_graded_submissions: true,
-      permit_empty_submissions: true
+      permit_empty_submissions: true,
+      require_tokens_before_due_date: true
     }
   });
   const router = useRouter();
@@ -89,6 +90,7 @@ export default function NewAssignmentPage() {
             allow_late: getValues("allow_late"),
             description: getValues("description"),
             max_late_tokens: getValues("max_late_tokens") || null,
+            require_tokens_before_due_date: getValues("require_tokens_before_due_date") !== false,
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
             permit_empty_submissions: getValues("permit_empty_submissions") !== false,
             total_points: getValues("total_points"),

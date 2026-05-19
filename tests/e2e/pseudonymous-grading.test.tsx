@@ -1,7 +1,6 @@
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { type Page } from "@playwright/test";
-import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -10,10 +9,13 @@ import {
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
+  supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { stabilizeRubricSidebar, visualScreenshot } from "./VisualTestUtils";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
@@ -50,6 +52,7 @@ test.beforeAll(async () => {
   [student, instructor] = await createUsersInClass([
     {
       name: "Pseudonymous Student",
+      public_profile_name: "Pseudonymous Student Alias",
       email: "pseudonymous-student@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -57,6 +60,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Pseudonymous Instructor",
+      public_profile_name: "Pseudonymous Instructor Alias",
       email: "pseudonymous-instructor@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -98,13 +102,51 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   test("Students can submit self-review", async ({ page }) => {
     await loginAsUser(page, student!, course);
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
+    // The "Submission finalized" toast is the application's explicit signal
+    // that finalize_submission_early completed and reviewAssignments has
+    // refetched (see finalizeSubmissionEarly.tsx). Without it the next
+    // assertion races the "Complete Self Review" button into existence.
+    // Visual-test mode removes toasts from layout before screenshots, so the
+    // explicit app signal is attachment rather than visibility.
+    await expect(page.getByText("Submission finalized").first()).toBeAttached();
+    // Even after the toast appears, the "Complete Self Review" button only
+    // renders once useMyReviewAssignments() observes the new row AND
+    // useRubric("self-review") returns the matching rubric (see
+    // components/ui/self-review-notice.tsx). Under webkit CI load we have
+    // observed both inputs lag behind the toast: the toast's setState
+    // commits in the same React batch as refetchAll's listener-fired
+    // setStates, but the realtime UPDATE that delivers the new
+    // review_assignment row to *other* tabs/clients can race the
+    // server-direct refetch — and webkit's microtask scheduling for
+    // multiple-controller cascades sometimes leaves myReviewAssignments
+    // empty in DOM for several frames after the toast is visible. Gate the
+    // click on the DB truth: poll review_assignments with the service-role
+    // supabase client until the new self-review row exists for THIS
+    // student + submission. This is a tight signal (DB == truth) that
+    // doesn't depend on React rendering ordering.
+    await expect(async () => {
+      const { data: selfReviewRubric } = await supabase
+        .from("rubrics")
+        .select("id")
+        .eq("assignment_id", assignment!.id)
+        .eq("review_round", "self-review")
+        .single();
+      expect(selfReviewRubric?.id).toBeTruthy();
+      const { data: ra } = await supabase
+        .from("review_assignments")
+        .select("id, rubric_id, assignee_profile_id, submission_id")
+        .eq("submission_id", submission_id!)
+        .eq("assignee_profile_id", student!.private_profile_id)
+        .eq("rubric_id", selfReviewRubric!.id);
+      expect(ra?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
     await page.getByRole("button", { name: "Complete Self Review" }).click();
     await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
 
@@ -145,6 +187,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Complete Review" }).click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
+    await assertStudentPageAccessible(page, "pseudonymous self-review completed");
   });
 
   test("Instructors can grade the submission with pseudonymous mode enabled", async ({ page }) => {
@@ -165,7 +208,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("option", { name: "Grading Review Check 1 (+10)" }).click();
     await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
     await page.getByRole("textbox", { name: "Optionally add a comment, or" }).fill(GRADING_REVIEW_COMMENT_1);
-    await argosScreenshot(page, "Pseudonymous grading - Instructor adds a grading review check");
+    await visualScreenshot(page, "Pseudonymous grading - Instructor adds a grading review check", {
+      stabilizeRubric: "Grading Rubric"
+    });
     await page.getByRole("button", { name: "Add Check" }).click();
     await page.getByText("Annotate line 4 with a check:").waitFor({ state: "hidden" });
 
@@ -197,13 +242,27 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Mark as Complete" }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
-    // Release All Submission Reviews
+    // Release selected submission reviews (select all in filtered view, then release)
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
 
-    await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "All in view" }).click();
+    const releaseBtn = page.getByRole("button", { name: /Release \d+ selected submission/ });
+    await expect(releaseBtn).toBeEnabled();
+    await releaseBtn.click();
+    // Wait for the release to land in the DB before navigating to the
+    // submission page. On webkit the SSR'd submission page sometimes paints
+    // before the released flag has propagated, leading to the badge showing
+    // "No" indefinitely (mirrors grading.test.tsx's release polling).
+    await expect(async () => {
+      const { data } = await supabase
+        .from("submission_reviews")
+        .select("released")
+        .eq("submission_id", submission_id!)
+        .eq("released", true);
+      expect(data?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 30_000, intervals: [500, 1000, 2000] });
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
-    await expect(page.getByText("Released to studentYes")).toBeVisible();
+    await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
 
   test("Instructors see their real name in parentheses on grading comments", async ({ page }) => {
@@ -220,24 +279,25 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(rubricSidebar).toContainText(`(${instructor!.private_profile_name})`);
 
     // Scroll grading rubric to top of its container
-    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
-      el.scrollIntoView({ block: "start", behavior: "instant" });
+    await stabilizeRubricSidebar(page, "Grading Rubric");
+    await visualScreenshot(page, "Pseudonymous grading - Instructor sees real name in parentheses", {
+      stabilizeRubric: "Grading Rubric"
     });
-    await page.waitForTimeout(100);
-    await argosScreenshot(page, "Pseudonymous grading - Instructor sees real name in parentheses");
   });
 
   test("Students see only the grader's pseudonym, not their real name", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
     await page.getByRole("button", { name: "Files" }).click();
-    await page.getByText("public int doMath(int a, int").click();
+    const doMathLine = page.getByText("public int doMath(int a, int");
+    await expect(doMathLine).toBeVisible();
+    await doMathLine.click({ force: true });
 
     const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);
     await expect(rubricSidebar).toContainText("Grading Review Criteria 20/20");
@@ -252,11 +312,11 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(rubricSidebar).not.toContainText(`(${instructor!.private_profile_name})`);
 
     // Scroll grading rubric to top of its container
-    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
-      el.scrollIntoView({ block: "start", behavior: "instant" });
+    await stabilizeRubricSidebar(page, "Grading Rubric");
+    await visualScreenshot(page, "Pseudonymous grading - Student sees only pseudonym", {
+      stabilizeRubric: "Grading Rubric"
     });
-    await page.waitForTimeout(100);
-    await argosScreenshot(page, "Pseudonymous grading - Student sees only pseudonym");
+    await assertStudentPageAccessible(page, "pseudonymous student grading view");
   });
 
   test("Student can request a regrade and sees grader's pseudonym in responses", async ({ page }) => {
@@ -278,7 +338,10 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
     await expect(region.getByText(REGRADE_REQUEST_COMMENT).first()).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
-    await argosScreenshot(page, "Pseudonymous grading - Student opens regrade request");
+    await visualScreenshot(page, "Pseudonymous grading - Student opens regrade request", {
+      stabilizeRubric: "Grading Rubric"
+    });
+    await assertStudentPageAccessible(page, "pseudonymous regrade request opened");
   });
 
   test("Instructor resolves regrade with pseudonymous profile and adds comment", async ({ page }) => {
@@ -302,7 +365,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(region).toContainText(instructor!.public_profile_name);
     await expect(region).toContainText(`(${instructor!.private_profile_name})`);
 
-    await argosScreenshot(page, "Pseudonymous grading - Instructor sees real name in regrade comment");
+    await visualScreenshot(page, "Pseudonymous grading - Instructor sees real name in regrade comment", {
+      stabilizeRubric: "Grading Rubric"
+    });
 
     // Resolve the regrade request
     await region.getByRole("button", { name: "Resolve Request" }).click();
@@ -326,7 +391,10 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     // Student should NOT see the grader's real name
     await expect(region).not.toContainText(`(${instructor!.private_profile_name})`);
 
-    await argosScreenshot(page, "Pseudonymous grading - Student sees only pseudonym in regrade");
+    await visualScreenshot(page, "Pseudonymous grading - Student sees only pseudonym in regrade", {
+      stabilizeRubric: "Grading Rubric"
+    });
+    await assertStudentPageAccessible(page, "pseudonymous grading - student regrade response /files");
   });
 
   test("Student escalates the regrade request", async ({ page }) => {
@@ -346,7 +414,17 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByRole("button", { name: "Escalate to Instructor" }).click();
     await page.getByRole("button", { name: "Escalate Request" }).click();
 
-    await argosScreenshot(page, "Pseudonymous grading - Student escalates regrade");
+    // Wait for the escalation popover/button to close before axe so the scan
+    // doesn't race the in-flight focus-trap teardown (same pattern as the
+    // grading.test.tsx escalation scan).
+    await expect(
+      page.getByRole("button", { name: "Escalate Request" }),
+      "Escalate Request button is removed after escalation"
+    ).toHaveCount(0);
+    await visualScreenshot(page, "Pseudonymous grading - Student escalates regrade", {
+      stabilizeRubric: "Grading Rubric"
+    });
+    await assertStudentPageAccessible(page, "pseudonymous grading - student escalation /files");
   });
 
   test("Instructor closes escalated regrade with their REAL identity (not pseudonym)", async ({ page }) => {
@@ -361,6 +439,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await region.getByPlaceholder("Add a comment to continue the").click();
     await region.getByPlaceholder("Add a comment to continue the").fill(INSTRUCTOR_FINAL_DECISION);
     await region.getByLabel("Add Comment", { exact: true }).click();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
 
     // Close the escalated regrade request
     await region.getByRole("button", { name: "Decide Escalation" }).click();
@@ -369,7 +449,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     // Verify the regrade is closed
     await expect(region.getByText("Regrade Closed")).toBeVisible();
 
-    await argosScreenshot(page, "Pseudonymous grading - Instructor closes escalation with real name");
+    await visualScreenshot(page, "Pseudonymous grading - Instructor closes escalation with real name", {
+      stabilizeRubric: "Grading Rubric"
+    });
   });
 
   test("Student sees instructor's REAL name (not pseudonym) for final escalation decision", async ({ page }) => {
@@ -393,6 +475,9 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await expect(region.getByText(GRADER_REGRADE_RESPONSE)).toBeVisible();
     await expect(region.getByText(INSTRUCTOR_FINAL_DECISION)).toBeVisible();
 
-    await argosScreenshot(page, "Pseudonymous grading - Student sees instructor real name for final decision");
+    await visualScreenshot(page, "Pseudonymous grading - Student sees instructor real name for final decision", {
+      stabilizeRubric: "Grading Rubric"
+    });
+    await assertStudentPageAccessible(page, "pseudonymous regrade closed student view");
   });
 });

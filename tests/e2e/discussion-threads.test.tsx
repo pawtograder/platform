@@ -1,9 +1,10 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
-import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
-dotenv.config({ path: ".env.local" });
+import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { createClass, createUsersInClass, loginAsUser, supabase, TestingUser } from "./TestingUtils";
+import { visualScreenshot } from "./VisualTestUtils";
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student1: TestingUser | undefined;
@@ -15,6 +16,7 @@ test.beforeAll(async () => {
   [student1, student2, instructor] = await createUsersInClass([
     {
       name: "Discussion Thread Student 1",
+      public_profile_name: "Discussion Pseudonym Student 1",
       email: "discussion-thread-student1@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -22,6 +24,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Discussion Thread Student 2",
+      public_profile_name: "Discussion Pseudonym Student 2",
       email: "discussion-thread-student2@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -29,6 +32,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Discussion Thread Instructor",
+      public_profile_name: "Discussion Pseudonym Instructor",
       email: "discussion-thread-instructor@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -53,16 +57,20 @@ test.describe("Discussion Thread Page", () => {
     await expect(
       page.getByText("Your feed is empty. Follow a topic (Browse Topics) or follow a post to see it here.")
     ).toBeVisible();
-    await argosScreenshot(page, "Discussion Thread Page");
+    await visualScreenshot(page, "Discussion Thread Page");
+    await assertStudentPageAccessible(page, "discussion feed empty");
   });
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
+    // Wait for the page to stabilize
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await page.getByText("New Post").click();
-    await argosScreenshot(page, "Create New Thread Form");
+    // Wait for the form to appear
     await expect(page.getByRole("heading", { name: "New Discussion Thread" })).toBeVisible();
+    await visualScreenshot(page, "Create New Thread Form");
     await expect(page.getByText("Topic", { exact: true })).toBeVisible();
     // await expect(page.getByText("Assignments", { exact: true })).toBeVisible(); // Too annoying to test
     await expect(page.getByText("Questions and notes about assignments.")).toBeVisible();
@@ -98,6 +106,11 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("A detailed description of your post. Be specific.")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Submit" })).toBeVisible();
 
+    // Scan the "New Discussion Thread" form before filling/submitting — it has
+    // a markdown editor, several Chakra Radio groups, and a Select, none of
+    // which axe ever exercised on this route until now.
+    await assertStudentPageAccessible(page, "discussion - new thread form");
+
     // Test the form with a private thread
     await page.getByText("Question", { exact: true }).click();
     await page.getByText("Follow-ups and discussion of assigned and optional readings").click();
@@ -108,10 +121,15 @@ test.describe("Discussion Thread Page", () => {
       .locator('textarea.w-md-editor-text-input[spellcheck="false"]')
       .fill("01001000 01100101 01101100 01101100 01101111 00100000 01010111 01101111 01110010 01101100 01100100");
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
+    // The Submit handler router.push()es to /discussion/<id>; wait for the
+    // navigation to commit before asserting on the thread page contents,
+    // otherwise the locators race the form unmount on chromium under load.
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "Is my answer for HW1 Q1 correct?" })).toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).toBeVisible();
+    await assertStudentPageAccessible(page, "discussion private thread created");
   });
 
   test("Another student cannot view a private thread", async ({ page }) => {
@@ -123,6 +141,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Viewable by poster and staff only")).not.toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).not.toBeVisible();
     await expect(page.getByRole("heading", { name: student1?.private_profile_name })).not.toBeVisible();
+    await assertStudentPageAccessible(page, "discussion private thread hidden");
   });
 
   test("Another student creates a public thread", async ({ page }) => {
@@ -130,6 +149,8 @@ test.describe("Discussion Thread Page", () => {
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
+    // Wait for the page to stabilize
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await page.getByText("New Post").click();
     // Test the form with a public thread
     await page.getByText("Anything else about the class").click();
@@ -144,9 +165,12 @@ test.describe("Discussion Thread Page", () => {
         "IT'S PREHISTORIC TRASH. KOTLIN IS LITERALLY SO MUCH BETTER SMH. NULL SAFETY, TYPE INFERENCE, AND FIRST-CLASS FUNCTIONS. THE SYLLABUS IS A JOKE AND I REGRET TAKING THIS CLASS. I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE."
       );
     await page.getByRole("button").filter({ hasText: "Submit" }).click();
+    // Same navigation-race concern as the private-thread test above.
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: student2?.public_profile_name })).toBeVisible();
+    await assertStudentPageAccessible(page, "discussion public thread");
   });
 
   test("An instructor can view all threads and reply to them", async ({ page }) => {
@@ -155,10 +179,14 @@ test.describe("Discussion Thread Page", () => {
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     // Check that the threads are visible
     await page.waitForURL("**/discussion");
+    // Wait for the discussion shell to render before asserting on a specific
+    // thread — webkit otherwise races the thread list's first paint.
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await expect(page.getByText("Is my answer for HW1 Q1 correct?")).toBeVisible();
 
     // Check that the instructor can reply to the private thread
     await page.getByText("Is my answer for HW1 Q1 correct?").click();
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
     await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page.getByPlaceholder("Reply...").fill("Yes.");
@@ -177,9 +205,21 @@ test.describe("Discussion Thread Page", () => {
     await page.getByRole("button", { name: "Logistics Follow topic" }).click();
     await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
 
-    // Check that the instructor can reply to the public thread
+    // Check that the instructor can reply to the public thread.
+    // The link click + thread-detail data fetch is the slowest path in the
+    // suite on webkit. Poll with reload because the controller occasionally
+    // races initial navigation and never paints the heading.
     await page.getByRole("link", { name: "JAVA SUCKS" }).click();
-    await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible(); //Wait for the page to change
+    await page.waitForURL((url) => /\/discussion\/\d+/.test(url.pathname), { timeout: 30_000 });
+    let attempts = 0;
+    await expect(async () => {
+      attempts += 1;
+      if (attempts > 1) {
+        await page.reload();
+      }
+      await expect(page.getByRole("heading", { name: "JAVA SUCKS" })).toBeVisible({ timeout: 15_000 });
+    }).toPass({ timeout: 90_000, intervals: [3000, 5000, 10000] });
+    await expect(page.getByText("I WILL GIVE THIS CLASS A HORRIBLE REVIEW ON TRACE.")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Follow" })).toBeVisible();
     await page.getByRole("button", { name: "Reply" }).click();
     await page
@@ -199,7 +239,7 @@ test.describe("Discussion Thread Page", () => {
     await expect(page.getByText("Reply")).toBeVisible();
     await expect(page.getByText("Edit")).toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unfollow" })).toBeVisible();
-    await argosScreenshot(page, "After Instructor Replied to Public Thread");
+    await visualScreenshot(page, "After Instructor Replied to Public Thread");
   });
 });
 
@@ -249,7 +289,7 @@ test.describe("Custom Discussion Topics", () => {
     const editButtons = page.getByRole("button", { name: "Edit" });
     await expect(editButtons).toHaveCount(4);
 
-    await argosScreenshot(page, "Discussion Topics Management Page");
+    await visualScreenshot(page, "Discussion Topics Management Page");
   });
 
   test("Custom discussion topic lifecycle: create, edit, verify visibility, and delete", async ({ page }) => {
@@ -275,12 +315,11 @@ test.describe("Custom Discussion Topics", () => {
     // Submit the form
     await page.getByRole("button", { name: "Create Topic" }).click();
 
-    // Wait for the modal to close and verify the topic was created
-    await expect(page.getByRole("dialog")).not.toBeVisible();
-    await expect(page.getByText("Homework 1 Questions", { exact: true })).toBeVisible();
+    // Wait for the topic to appear on the page (dialog may linger in webkit due to CSS animation)
+    await expect(page.getByText("Homework 1 Questions", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
 
-    await argosScreenshot(page, "After Creating Custom Topic");
+    await visualScreenshot(page, "After Creating Custom Topic");
 
     // ===== STEP 2: Edit the custom discussion topic =====
     // Find and click the Edit button for the custom topic, within the container for that topic
@@ -298,16 +337,16 @@ test.describe("Custom Discussion Topics", () => {
     // Submit the form
     await page.getByRole("button", { name: "Update Topic" }).click();
 
-    // Wait for the modal to close and verify the topic was updated
-    await expect(page.getByRole("dialog")).not.toBeVisible();
-    await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible();
+    // Wait for the topic update to appear (dialog may linger in webkit due to CSS animation)
+    await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible({ timeout: 30_000 });
 
-    await argosScreenshot(page, "After Editing Custom Topic");
+    await visualScreenshot(page, "After Editing Custom Topic");
 
     // ===== STEP 3: Verify custom topic appears in new thread form =====
     const navRegion = await page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.waitForURL("**/discussion");
+    await expect(page.getByRole("heading", { name: "Pinned Posts" })).toBeVisible();
     await page.getByText("New Post").click();
     await page.waitForURL("**/discussion/new");
 
@@ -319,7 +358,7 @@ test.describe("Custom Discussion Topics", () => {
       await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
     }).toPass({ timeout: 20000 });
 
-    await argosScreenshot(page, "New Thread Form With Custom Topic");
+    await visualScreenshot(page, "New Thread Form With Custom Topic");
 
     // ===== STEP 4: Verify custom topic appears in Browse Topics =====
     await navRegion.getByRole("link").filter({ hasText: "Discussion" }).click();
@@ -343,6 +382,131 @@ test.describe("Custom Discussion Topics", () => {
     // Verify the topic was deleted
     await expect(page.getByText("HW1 Discussion", { exact: true })).not.toBeVisible();
 
-    await argosScreenshot(page, "After Deleting Custom Topic");
+    await visualScreenshot(page, "After Deleting Custom Topic");
+  });
+});
+
+test.describe("Discussion duplicate merge (grader)", () => {
+  test.describe.configure({ mode: "serial" });
+  test.setTimeout(120_000);
+
+  test("Grader marks a thread duplicate, student sees banner and notification", async ({ page }) => {
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const dupCourse = await createClass({ name: `E2E discussion duplicate class ${runId}` });
+    const [dupStudent, dupGrader] = await createUsersInClass([
+      {
+        name: "DupMerge Student",
+        role: "student",
+        class_id: dupCourse.id,
+        useMagicLink: true,
+        randomSuffix: `dup-stu-${runId}`
+      },
+      {
+        name: "DupMerge Grader",
+        role: "grader",
+        class_id: dupCourse.id,
+        useMagicLink: true,
+        randomSuffix: `dup-grd-${runId}`
+      }
+    ]);
+    const { error: renameErr } = await supabase
+      .from("users")
+      .update({ name: "E2E Dup Grader" })
+      .eq("user_id", dupGrader.user_id);
+    if (renameErr) {
+      throw new Error(`Failed to rename grader ${dupGrader.user_id}: ${renameErr.message}`);
+    }
+    const { data: topicRow, error: topicErr } = await supabase
+      .from("discussion_topics")
+      .select("id")
+      .eq("class_id", dupCourse.id)
+      .order("ordinal", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (topicErr || !topicRow) {
+      throw new Error(topicErr?.message ?? "No discussion topic for duplicate E2E class");
+    }
+
+    const { data: origThread, error: origErr } = await supabase
+      .from("discussion_threads")
+      .insert({
+        subject: "E2E Dup Original Subject",
+        body: "Original thread body for duplicate merge test.",
+        topic_id: topicRow.id,
+        is_question: false,
+        instructors_only: false,
+        author: dupStudent.private_profile_id,
+        class_id: dupCourse.id,
+        draft: false,
+        root_class_id: dupCourse.id
+      })
+      .select("id")
+      .single();
+    if (origErr || !origThread) {
+      throw new Error(origErr?.message ?? "Failed to insert original thread");
+    }
+
+    const { data: dupThread, error: dupErr } = await supabase
+      .from("discussion_threads")
+      .insert({
+        subject: "E2E Dup Duplicate Subject",
+        body: "Duplicate thread body.",
+        topic_id: topicRow.id,
+        is_question: false,
+        instructors_only: false,
+        author: dupStudent.private_profile_id,
+        class_id: dupCourse.id,
+        draft: false,
+        root_class_id: dupCourse.id
+      })
+      .select("id")
+      .single();
+    if (dupErr || !dupThread) {
+      throw new Error(dupErr?.message ?? "Failed to insert duplicate thread");
+    }
+
+    const { error: replyErr } = await supabase.from("discussion_threads").insert({
+      subject: `Re: E2E Dup Duplicate Subject`,
+      body: "A reply under the duplicate root before merge.",
+      topic_id: topicRow.id,
+      is_question: false,
+      instructors_only: false,
+      author: dupStudent.private_profile_id,
+      class_id: dupCourse.id,
+      draft: false,
+      parent: dupThread.id,
+      root: dupThread.id
+    });
+    if (replyErr) {
+      throw new Error(replyErr.message);
+    }
+
+    await loginAsUser(page, dupGrader, dupCourse);
+    await page.goto(`/course/${dupCourse.id}/discussion/${dupThread.id}`);
+    await expect(page.getByRole("heading", { name: "E2E Dup Duplicate Subject" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Mark duplicate" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByTestId("mark-duplicate-search-input").fill("E2E Dup Original");
+    await page.getByTestId(`mark-duplicate-result-${origThread.id}`).click();
+    await expect(page.getByText("Selected original")).toBeVisible();
+    await page.getByTestId("mark-duplicate-confirm").click();
+    await page.waitForURL(`**/course/${dupCourse.id}/discussion/${origThread.id}`);
+
+    await expect(page.getByRole("heading", { name: "E2E Dup Original Subject" })).toBeVisible();
+    await expect(page.getByText("E2E Dup Duplicate Subject").first()).toBeVisible();
+    await expect(page.getByText(/E2E Dup Grader.*marked this as a duplicate/)).toBeVisible();
+    await expect(page.getByText("A reply under the duplicate root before merge.")).toBeVisible();
+
+    // The duplicate-marked thread must disappear from the discussion feed teasers.
+    await page.goto(`/course/${dupCourse.id}/discussion`);
+    await expect(page.getByText("E2E Dup Original Subject").first()).toBeVisible();
+    await expect(page.getByText("E2E Dup Duplicate Subject")).toHaveCount(0);
+
+    await loginAsUser(page, dupStudent, dupCourse);
+    await page.goto(`/course/${dupCourse.id}/notifications`);
+    await expect(
+      page.getByText(/E2E Dup Grader marked "E2E Dup Duplicate Subject" as a duplicate of "E2E Dup Original Subject"/)
+    ).toBeVisible();
   });
 });

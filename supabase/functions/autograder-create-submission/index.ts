@@ -27,6 +27,23 @@ import { Buffer } from "node:buffer";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
 import * as Sentry from "npm:@sentry/deno";
 
+const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
+
+/**
+ * User-facing explanation when the student's workflow file hash does not match the course handout.
+ * Same text is shown to students (API error) and recorded for instructors (workflow_run_error).
+ */
+function formatGradeYmlWorkflowMismatchMessage(syncedRepoSha: string | null): string {
+  const restoreOneLiner = syncedRepoSha?.trim()
+    ? `git checkout ${syncedRepoSha.trim()} -- ${GRADE_WORKFLOW_PATH}`
+    : `git checkout $(git rev-list --max-parents=0 HEAD | tail -n 1) -- ${GRADE_WORKFLOW_PATH}`;
+  return [
+    `Your ${GRADE_WORKFLOW_PATH} file does not match the expected contents for this assignment (it may have been edited, or your copy may differ from the handout).`,
+    "Restore the file from your repository's initial commit, then commit and push. From your assignment repo:",
+    restoreOneLiner
+  ].join(" ");
+}
+
 function sha256Hex(buf: Uint8Array): string {
   const hash = createHash("sha256");
   hash.update(buf);
@@ -599,7 +616,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
     .select(
-      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, autograder(*), classes(time_zone))"
+      "*, assignments(class_id, due_date, allow_not_graded_submissions, permit_empty_submissions, max_late_tokens, require_tokens_before_due_date, autograder(*), classes(time_zone, late_tokens_per_student))"
     )
     .eq("repository", repository)
     .maybeSingle();
@@ -896,9 +913,46 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               if (hasNegativeException) {
                 errorMessage =
                   "You have already finalized your submission for this assignment. You cannot submit additional code after finalization.";
+                throw new UserVisibleError(errorMessage, 400);
               }
             }
-            throw new UserVisibleError(errorMessage, 400);
+
+            // Auto-apply a late token if the assignment allows it
+            if (
+              !repoData.assignments.require_tokens_before_due_date &&
+              (repoData.assignments.max_late_tokens ?? 0) > 0
+            ) {
+              const minutesLate = Math.ceil((pushTime.getTime() - finalDueDate.getTime()) / 60000);
+              const hoursLate = Math.max(1, Math.ceil(minutesLate / 60));
+              const tokensNeeded = Math.ceil(hoursLate / 24);
+              const hoursToGrant = tokensNeeded * 24;
+
+              // Atomically check token balance and insert extension in one DB transaction.
+              const { data: result, error: rpcError } = await adminSupabase.rpc("apply_late_token_extension", {
+                p_assignment_id: repoData.assignment_id,
+                p_student_id: repoData.assignment_group_id ? null : profileId,
+                p_assignment_group_id: repoData.assignment_group_id ?? null,
+                p_class_id: repoData.assignments.class_id!,
+                p_creator_id: profileId!,
+                p_hours_late: hoursToGrant,
+                p_tokens_needed: tokensNeeded
+              });
+
+              if (rpcError) {
+                Sentry.captureException(rpcError, scope);
+                throw new UserVisibleError(`Failed to auto-apply late token: ${rpcError.message}`);
+              }
+
+              if (!result.success) {
+                throw new UserVisibleError(
+                  `You don't have enough late tokens to submit. You need ${result.tokens_needed} token(s) but only have ${result.tokens_remaining} remaining.`,
+                  400
+                );
+              }
+              // Fall through — submission will proceed normally
+            } else {
+              throw new UserVisibleError(errorMessage, 400);
+            }
           }
         }
         // Check the max submissions per-time
@@ -946,6 +1000,28 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       }
 
       if (!isRegressionRerun) {
+        // Group assignment: once a student is on a team, personal-repo pushes must not create submissions.
+        if (
+          repoData.profile_id &&
+          (repoData.assignment_group_id === null || repoData.assignment_group_id === undefined)
+        ) {
+          const { data: teamMembership, error: teamMembershipError } = await adminSupabase
+            .from("assignment_groups_members")
+            .select("assignment_group_id, assignment_groups(name)")
+            .eq("assignment_id", assignment_id)
+            .eq("profile_id", repoData.profile_id)
+            .maybeSingle();
+          if (teamMembershipError) {
+            Sentry.captureException(teamMembershipError, scope);
+            throw new UserVisibleError(`Internal error: ${teamMembershipError.message}`);
+          }
+          if (teamMembership) {
+            const groupName = teamMembership.assignment_groups?.name ?? `group ${teamMembership.assignment_group_id}`;
+            throw new UserVisibleError(
+              `Your assignment is now being submitted as a group. Please push to your group repository instead of your personal repository. (assignment: ${assignment_id}, group: ${groupName}) If the group repository is not ready yet, wait for it to be provisioned or ask your instructor or TA.`
+            );
+          }
+        }
         // First check if there's an existing submission with this unique key
         const { data: existingSubmission } = await adminSupabase
           .from("submissions")
@@ -1177,18 +1253,18 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         ) {
           scope.setTag("hash_in_db", config.workflow_sha);
           scope.setTag("hash_in_student_repo", hashStr);
-          const errorMessage = `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}.`;
+          const mismatchMessage = formatGradeYmlWorkflowMismatchMessage(repoData.synced_repo_sha);
           Sentry.captureMessage("workflow sha mismatch", scope);
           if (isGraderOrInstructor) {
             await recordWorkflowRunError({
-              name: `.github/workflows/grade.yml SHA is different from that in handout!!! You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
+              name: mismatchMessage,
               data: {
-                type: "security_error"
+                type: "user_visible_error"
               },
-              is_private: true
+              is_private: false
             });
           } else {
-            throw new SecurityError(errorMessage);
+            throw new UserVisibleError(mismatchMessage, 400);
           }
         }
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
@@ -1221,6 +1297,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               file.type === "File" && // Do not submit directories
               expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
           );
+          if (submittedFiles.length === 0) {
+            if (submission_id !== undefined) {
+              try {
+                await safeCleanupRejectedSubmission({ adminSupabase, submissionId: submission_id });
+                submission_id = undefined;
+              } catch (cleanupErr) {
+                Sentry.captureException(cleanupErr, scope);
+              }
+            }
+            throw new UserVisibleError(
+              `No files in the repository matched the assignment's submissionFiles patterns (${expectedFiles.join(", ")}). ` +
+                `Instructor: check pawtograder.yml in grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha} — the patterns appear not to match any file in the student repository.`,
+              400
+            );
+          }
           // Make sure that all files that are NOT glob patterns are present
           const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
           const allNonGlobFilesPresent = nonGlobFiles.every((file) =>

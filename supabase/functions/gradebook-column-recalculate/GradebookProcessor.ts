@@ -14,6 +14,89 @@ import {
 import * as Sentry from "npm:@sentry/deno";
 
 const DEBUG_LOG = Boolean(Deno.env.get("DEBUG_GRADEBOOK_CALCULATION")) || false;
+
+/** Comma-separated slugs, e.g. `final-course-total`. Read on each check so CLI scripts can set env before processing. */
+function getDebugGradebookColumnSlugs(): Set<string> | null {
+  const raw = Deno.env.get("DEBUG_GRADEBOOK_COLUMN_SLUG");
+  if (!raw?.trim()) return null;
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+}
+
+function shouldDebugGradebookColumnSlug(slug: string | null | undefined): boolean {
+  if (!slug) return false;
+  const set = getDebugGradebookColumnSlugs();
+  return set !== null && set.has(slug);
+}
+
+type DebugGcsSnapshot = {
+  score: number | null;
+  score_override: number | null;
+  is_missing: boolean | null;
+};
+
+type RowOverrideSnapshot = {
+  score: number | null;
+  score_override: number | null;
+  is_missing: boolean;
+};
+
+/** Log dependency rows and expression before evaluating a watched slug (see DEBUG_GRADEBOOK_COLUMN_SLUG). */
+function logDebugGradebookColumnPreEval(opts: {
+  column: ColumnWithPrefix;
+  allColumns: ColumnWithPrefix[];
+  class_id: number;
+  gradebook_id: number;
+  student_id: string;
+  is_private: boolean;
+  gcsByColumnId: Map<number, DebugGcsSnapshot>;
+  studentOverrideMap: Map<string, RowOverrideSnapshot>;
+}) {
+  const prefix = opts.column.gradebooks?.expression_prefix ?? "";
+  const fullExpr = `${prefix}\n${opts.column.score_expression ?? ""}`.trim();
+  const depIds = (opts.column.dependencies as { gradebook_columns?: number[] } | null)?.gradebook_columns ?? [];
+  const lines: string[] = [
+    `[DEBUG_GRADEBOOK_COLUMN_SLUG] pre-eval ${opts.column.slug} id=${opts.column.id} student=${opts.student_id} is_private=${opts.is_private} class_id=${opts.class_id} gradebook_id=${opts.gradebook_id}`,
+    `  full_expression: ${JSON.stringify(fullExpr)}`,
+    `  gradebook_column dependencies (${depIds.length}):`
+  ];
+  for (const depId of depIds) {
+    const depCol = opts.allColumns.find((c) => c.id === depId);
+    const depSlug = depCol?.slug ?? `?id=${depId}`;
+    const gcs = opts.gcsByColumnId.get(depId);
+    const ov = opts.studentOverrideMap.get(depSlug);
+    const gcsPart = gcs
+      ? `gcs{score=${gcs.score},override=${gcs.score_override},missing=${gcs.is_missing}}`
+      : "gcs{absent in batch — value comes from bulk RPC only}";
+    const ovPart = ov
+      ? `overrideMap{score=${ov.score},override=${ov.score_override},missing=${ov.is_missing}}`
+      : "overrideMap{absent}";
+    lines.push(`    - ${depSlug} (id ${depId}): ${ovPart}; ${gcsPart}`);
+  }
+  const assignDeps = (opts.column.dependencies as { assignments?: number[] } | null)?.assignments ?? [];
+  if (assignDeps.length > 0) {
+    lines.push(`  assignment dependencies (ids): ${assignDeps.join(", ")}`);
+  }
+  console.log(lines.join("\n"));
+}
+
+function logDebugGradebookColumnPostEval(opts: {
+  column: ColumnWithPrefix;
+  student_id: string;
+  rawResult: unknown;
+  nextScore: number | null;
+  nextIncomplete: unknown;
+  isMissing: boolean;
+}) {
+  console.log(
+    `[DEBUG_GRADEBOOK_COLUMN_SLUG] post-eval ${opts.column.slug} id=${opts.column.id} student=${opts.student_id} raw=${JSON.stringify(opts.rawResult)} nextScore=${opts.nextScore} isMissing=${opts.isMissing} incomplete_values=${JSON.stringify(opts.nextIncomplete)}`
+  );
+}
+
 type ColumnWithPrefix = Database["public"]["Tables"]["gradebook_columns"]["Row"] & {
   gradebooks: { expression_prefix: string | null };
 };
@@ -33,6 +116,10 @@ function nearlyEqual(a: number | null, b: number | null, eps = 1e-9): boolean {
   if (a === null && b === null) return true;
   if (a === null || b === null) return false;
   return Math.abs(a - b) <= eps;
+}
+
+function isInstructorOnlyColumn(column: ColumnWithPrefix): boolean {
+  return Boolean(column.instructor_only);
 }
 
 type GradebookCellRequest = {
@@ -449,6 +536,34 @@ export async function processGradebookRowCalculation(
     if (column.score_expression) {
       try {
         const compiled = compiledById.get(columnId)!;
+        if (shouldDebugGradebookColumnSlug(slug)) {
+          const gcsSnap = new Map<number, DebugGcsSnapshot>();
+          for (const [id, r] of gcsByColumnId) {
+            gcsSnap.set(id, {
+              score: r.score ?? null,
+              score_override: r.score_override ?? null,
+              is_missing: r.is_missing ?? null
+            });
+          }
+          const ovSnap = new Map<string, RowOverrideSnapshot>();
+          for (const [s, v] of rowOverrideMap) {
+            ovSnap.set(s, {
+              score: v.score,
+              score_override: v.score_override,
+              is_missing: v.is_missing
+            });
+          }
+          logDebugGradebookColumnPreEval({
+            column,
+            allColumns: columns as unknown as ColumnWithPrefix[],
+            class_id,
+            gradebook_id,
+            student_id,
+            is_private,
+            gcsByColumnId: gcsSnap,
+            studentOverrideMap: ovSnap
+          });
+        }
         const result = compiled.evaluate({ context });
         if (DEBUG_LOG) {
           console.log(
@@ -483,8 +598,23 @@ export async function processGradebookRowCalculation(
         } else {
           nextReleased = ((column as unknown as { released: boolean | null }).released ?? false) as boolean;
         }
+        if (shouldDebugGradebookColumnSlug(slug)) {
+          logDebugGradebookColumnPostEval({
+            column,
+            student_id,
+            rawResult: result,
+            nextScore,
+            nextIncomplete,
+            isMissing
+          });
+        }
       } catch (e) {
         console.log(e);
+        if (shouldDebugGradebookColumnSlug(slug)) {
+          console.log(
+            `[DEBUG_GRADEBOOK_COLUMN_SLUG] ERROR ${slug} id=${column.id} student=${student_id}: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
         const error = new Error(`Error calculating gradebook column in class ${column.class_id} num ${column.id}`);
         error.cause = e;
         Sentry.captureException(error, scope);
@@ -719,9 +849,43 @@ export async function processGradebookRowsCalculation(
       let nextIncomplete: unknown | null = null;
       let nextReleased = false;
 
+      // Do not put a public snapshot in studentOverrideMap: gradebook_columns(...) must resolve
+      // instructor-only deps via base values (private row), not shadow them with the frozen student row.
+      if (isInstructorOnlyColumn(column) && !is_private) {
+        continue;
+      }
+
       if (column.score_expression) {
         try {
           const compiled = compiledById.get(columnId)!;
+          if (shouldDebugGradebookColumnSlug(slug)) {
+            const gcsSnap = new Map<number, DebugGcsSnapshot>();
+            for (const [id, r] of gcsByColumnId) {
+              gcsSnap.set(id, {
+                score: r.score ?? null,
+                score_override: r.score_override ?? null,
+                is_missing: r.is_missing ?? null
+              });
+            }
+            const ovSnap = new Map<string, RowOverrideSnapshot>();
+            for (const [s, v] of studentOverrideMap) {
+              ovSnap.set(s, {
+                score: v.score,
+                score_override: v.score_override,
+                is_missing: v.is_missing
+              });
+            }
+            logDebugGradebookColumnPreEval({
+              column: column as unknown as ColumnWithPrefix,
+              allColumns: columns as unknown as ColumnWithPrefix[],
+              class_id,
+              gradebook_id,
+              student_id,
+              is_private,
+              gcsByColumnId: gcsSnap,
+              studentOverrideMap: ovSnap
+            });
+          }
           const resultVal = compiled.evaluate({ context });
           if (DEBUG_LOG) {
             console.log(
@@ -761,9 +925,24 @@ export async function processGradebookRowsCalculation(
           } else {
             nextReleased = (column.released ?? false) as boolean;
           }
+          if (shouldDebugGradebookColumnSlug(slug)) {
+            logDebugGradebookColumnPostEval({
+              column: column as unknown as ColumnWithPrefix,
+              student_id,
+              rawResult: resultVal,
+              nextScore,
+              nextIncomplete,
+              isMissing
+            });
+          }
         } catch (e) {
           if (DEBUG_LOG) {
             console.log(`Error evaluating column ${column.slug} ${column.id} ${column.score_expression}: ${e}`);
+          }
+          if (shouldDebugGradebookColumnSlug(slug)) {
+            console.log(
+              `[DEBUG_GRADEBOOK_COLUMN_SLUG] ERROR ${slug} id=${column.id} student=${student_id}: ${e instanceof Error ? e.message : String(e)}`
+            );
           }
           Sentry.captureException(e, scope);
           nextScore = null;
@@ -971,6 +1150,17 @@ async function processCellBatch(
       scope.setTag("student_id", cell.student_id);
       scope.setTag("gradebook_column_student_id", cell.gradebook_column_student_id);
       scope.setTag("is_private", cell.is_private);
+      if (isInstructorOnlyColumn(column) && !cell.is_private) {
+        const { error: clearErr } = await adminSupabase
+          .from("gradebook_column_students")
+          .update({ is_recalculating: false })
+          .eq("id", cell.gradebook_column_student_id);
+        if (clearErr) {
+          Sentry.captureException(clearErr, scope);
+        }
+        await cell.onComplete();
+        continue;
+      }
       if ((column.score_expression ?? "").startsWith("importCSV")) {
         await cell.onComplete();
         continue;

@@ -2,10 +2,17 @@
  * Debug script to process gradebook rows for a specific student.
  *
  * Usage:
- *   deno run --allow-net --allow-env DebugOneRow.ts <student_private_profile_id>
+ *   deno run --allow-net --allow-env DebugOneRow.ts <student_private_profile_id> [column_slug]
  *
  * Example:
  *   deno run --allow-net --allow-env DebugOneRow.ts 123e4567-e89b-12d3-a456-426614174000
+ *   deno run --allow-net --allow-env DebugOneRow.ts 123e4567-e89b-12d3-a456-426614174000 final-course-total
+ *
+ * Environment:
+ *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY — required
+ *   DEBUG_GRADEBOOK_COLUMN_SLUG — optional; comma-separated column slugs to trace (deps + raw eval result).
+ *     The optional CLI `[column_slug]` sets this env var before running (overrides if both are set after).
+ *   DEBUG_GRADEBOOK_CALCULATION — optional; if truthy, verbose logs for every calculated column
  *
  * This script will:
  * 1. Find all gradebook rows for the specified student
@@ -20,9 +27,11 @@ import * as Sentry from "npm:@sentry/deno";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookRowsCalculation } from "./GradebookProcessor.ts";
 
-console.log(Deno.env.get("SUPABASE_URL"));
-
-export async function debugOneRow(studentPrivateProfileId: string) {
+export async function debugOneRow(studentPrivateProfileId: string, columnSlugFilter?: string) {
+  if (columnSlugFilter?.trim()) {
+    Deno.env.set("DEBUG_GRADEBOOK_COLUMN_SLUG", columnSlugFilter.trim());
+    console.log(`DEBUG_GRADEBOOK_COLUMN_SLUG=${columnSlugFilter.trim()}`);
+  }
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -181,11 +190,14 @@ export async function debugOneRow(studentPrivateProfileId: string) {
 // Parse command line arguments
 const args = Deno.args;
 if (args.length < 1) {
-  console.error("Usage: deno run DebugOneRow.ts <student_private_profile_id>");
+  console.error(
+    "Usage: deno run --allow-net --allow-env DebugOneRow.ts <student_private_profile_id> [DEBUG_GRADEBOOK_COLUMN_SLUG]"
+  );
   Deno.exit(1);
 }
 
 const studentPrivateProfileId = args[0];
+const columnSlugFilter = args[1];
 
 // Initialize Sentry if configured
 if (Deno.env.get("SENTRY_DSN")) {
@@ -200,7 +212,7 @@ if (Deno.env.get("SENTRY_DSN")) {
 }
 
 // Run the debug function
-debugOneRow(studentPrivateProfileId).catch((error) => {
+debugOneRow(studentPrivateProfileId, columnSlugFilter).catch((error) => {
   console.error("Error running debug script:", error);
   Deno.exit(1);
 });

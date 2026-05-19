@@ -92,7 +92,7 @@ export default function PollBuilderModal({ isOpen, onClose, onSave, initialJson 
             >
               Cancel
             </Button>
-            <Button size="sm" bg="green.500" color="white" _hover={{ bg: "green.600" }} onClick={handleUsePoll}>
+            <Button size="sm" colorPalette="green" variant="solid" onClick={handleUsePoll}>
               Use This Poll
             </Button>
           </HStack>

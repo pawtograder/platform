@@ -12,6 +12,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -191,8 +192,8 @@ test.describe("Assignment due dates", () => {
     await expect(page.locator("body")).toContainText(
       `${testGroupAssignment!.title}Due${getDueDateShortString(new TZDate(testGroupAssignment!.due_date, "America/New_York"))}Most recent submissionNo submissions`
     );
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    const link = page.getByRole("link").filter({ hasText: "Assignments" });
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    const link = page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
     //Wait for the page to load to avoid race condition
     await expect(page).toHaveURL(/\/assignments\b/);
@@ -214,12 +215,13 @@ test.describe("Assignment due dates", () => {
     await expect(
       groupRow.getByText(formatDateForTest(new TZDate(testGroupAssignment!.due_date, "America/New_York")))
     ).toBeVisible();
+    await assertStudentPageAccessible(page, "due dates assignments table");
   });
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
     //Test with the lab section assignment
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    const link = page.getByRole("link").filter({ hasText: "Assignments" });
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    const link = page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
     //Wait for the page to load to avoid race condition
     await expect(page).toHaveURL(/\/assignments\b/);
@@ -234,6 +236,7 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
@@ -247,6 +250,7 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
@@ -262,9 +266,11 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
+    await assertStudentPageAccessible(page, "due dates after token extensions");
   });
 });
 
@@ -373,8 +379,13 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const hours = 24;
     await addExtensionModal.locator('input[name="hours"]').fill(hours.toString());
     await addExtensionModal.getByRole("button", { name: "Add Extension" }).click();
-    // Wait for the modal to close, indicating the extension was saved
-    await expect(addExtensionModal).not.toBeVisible();
+    // Chakra v3's Dialog.Root open={isOpen} with Portal can fully unmount
+    // on close — in that case the locator resolves to no element and
+    // toHaveAttribute would time out (no element to read attributes
+    // from). toHaveCount(0) matches the unmounted case AND covers the
+    // original "not visible" intent without racing webkit's
+    // exit-animation budget.
+    await expect(addExtensionModal).toHaveCount(0);
     await expect(
       page.getByRole("row", {
         name: `${student2!.private_profile_name} ${hours} No`
@@ -401,7 +412,8 @@ test.describe("Due Date Exceptions & Extensions", () => {
     await studentExtRow.getByLabel("Delete").click();
     const confirmDialog = page.getByRole("alertdialog");
     await page.getByRole("button", { name: "Confirm action" }).click();
-    // Wait for the confirmation dialog to close, indicating the delete completed
+    // alertdialog unmounts cleanly on dismiss (unlike the regular dialog used
+    // earlier in this test), so visibility resolves correctly to "not found".
     await expect(confirmDialog).not.toBeVisible();
     await expect(
       page.getByRole("row", {

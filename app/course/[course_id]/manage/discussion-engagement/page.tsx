@@ -1,3 +1,4 @@
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { createClient } from "@/utils/supabase/server";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
@@ -50,7 +51,7 @@ export default async function DiscussionEngagementPage({ params }: { params: Pro
 
   if (courseData?.features && Array.isArray(courseData.features)) {
     const features = courseData.features as { name: string; enabled: boolean }[];
-    const discussionFeature = features.find((f) => f.name === "discussion");
+    const discussionFeature = features.find((f) => f.name === COURSE_FEATURES.DISCUSSION);
     if (discussionFeature && !discussionFeature.enabled) {
       redirect(`/course/${course_id}`);
     }

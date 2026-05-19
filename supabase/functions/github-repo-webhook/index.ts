@@ -126,6 +126,20 @@ if (Deno.env.get("SENTRY_DSN")) {
 }
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
+/**
+ * Returns true if the given file path appears in the modified/added/removed lists
+ * of ANY commit in the push (not just `head_commit`). GitHub `push` events deliver
+ * up to 20 commits in `payload.commits`; checking only `head_commit` misses changes
+ * made in earlier commits of a multi-commit push.
+ */
+function pushTouchedFile(payload: PushEvent, path: string): boolean {
+  const head = payload.head_commit;
+  if (head && (head.modified.includes(path) || head.added.includes(path) || head.removed.includes(path))) {
+    return true;
+  }
+  return payload.commits.some((c) => c.modified.includes(path) || c.added.includes(path) || c.removed.includes(path));
+}
+
 function sha256Hex(buf: Uint8Array): string {
   const hash = createHash("sha256");
   hash.update(buf);
@@ -500,14 +514,15 @@ async function handlePushToGraderSolution(
       Sentry.captureException(new Error("No head commit found in payload"), scope);
       return;
     }
-    const isModified = payload.head_commit.modified.includes(PAWTOGRADER_YML_PATH);
-    const isRemoved = payload.head_commit.removed.includes(PAWTOGRADER_YML_PATH);
-    const isAdded = payload.head_commit.added.includes(PAWTOGRADER_YML_PATH);
-    scope?.setTag("is_modified", isModified.toString());
-    scope?.setTag("is_removed", isRemoved.toString());
-    scope?.setTag("is_added", isAdded.toString());
-    if (isModified || isRemoved || isAdded) {
-      console.log("Pawtograder yml changed");
+    const ymlTouched = pushTouchedFile(payload, PAWTOGRADER_YML_PATH);
+    scope?.setTag("yml_touched_in_push", ymlTouched.toString());
+    // Always reconcile pawtograder.yml on a push to main, even if no commit in this
+    // push touched the file. This makes the autograder config self-healing: if a
+    // previous webhook missed an update (e.g. the file was changed in a non-head
+    // commit of a multi-commit push, or the >20-commit truncation hid it), an
+    // instructor can force a re-sync by pushing any commit (e.g. touching README).
+    try {
+      console.log("Reconciling pawtograder.yml on push to main", { ymlTouched });
       const file = await getFileFromRepo(repoName, PAWTOGRADER_YML_PATH);
       const parsedYml = parse(file.content) as PawtograderConfig;
       if (!parsedYml.gradedParts) {
@@ -557,12 +572,24 @@ async function handlePushToGraderSolution(
         })
       );
       scope?.setTag("updated_autograders_count", autograders.length.toString());
+    } catch (err) {
+      // Don't fail the whole webhook if pawtograder.yml is missing/malformed —
+      // log it and continue so we still update the latest_autograder_sha below.
+      scope?.setTag("error_source", "pawtograder_yml_reconcile_failed");
+      scope?.setTag("yml_touched_in_push", ymlTouched.toString());
+      console.error("Failed to reconcile pawtograder.yml", err);
+      Sentry.captureException(err, scope);
     }
+    // `payload.commits` is ordered oldest -> newest, so commits[0] is the FIRST
+    // (oldest) commit in the push, not the head. Use payload.after / head_commit
+    // so multi-commit pushes don't leave latest_autograder_sha stuck on an old SHA.
+    const newAutograderSha =
+      payload.after || payload.head_commit?.id || payload.commits.at(-1)?.id || payload.commits[0]?.id;
     for (const autograder of autograders) {
       const { error } = await adminSupabase
         .from("autograder")
         .update({
-          latest_autograder_sha: payload.commits[0].id
+          latest_autograder_sha: newAutograderSha
         })
         .eq("id", autograder.id)
         .single();
@@ -626,42 +653,51 @@ async function handlePushToTemplateRepo(
     Sentry.captureException(new Error("No head commit found in payload"), scope);
     return;
   }
-  //Check for modifications
-  const isModified = payload.head_commit.modified.includes(GRADER_WORKFLOW_PATH);
-  const isRemoved = payload.head_commit.removed.includes(GRADER_WORKFLOW_PATH);
-  const isAdded = payload.head_commit.added.includes(GRADER_WORKFLOW_PATH);
-  scope?.setTag("is_modified", isModified.toString());
-  scope?.setTag("is_removed", isRemoved.toString());
-  scope?.setTag("is_added", isAdded.toString());
-  if (isModified || isRemoved || isAdded) {
-    if (!assignments[0].template_repo) {
-      Sentry.captureMessage("No matching assignment found", scope);
-      return;
-    }
-    const file = (await getFileFromRepo(assignments[0].template_repo!, GRADER_WORKFLOW_PATH)) as { content: string };
-    const hash = createHash("sha256");
-    if (!file.content) {
-      Sentry.captureMessage(`File ${GRADER_WORKFLOW_PATH} not found for ${assignments[0].template_repo}`, scope);
-      return;
-    }
-    // Remove all whitespace (spaces, tabs, newlines, etc.) before hashing
-    const contentWithoutWhitespace = file.content.replace(/\s+/g, "");
-    hash.update(contentWithoutWhitespace);
-    const hashStr = hash.digest("hex");
-    scope?.setTag("new_autograder_workflow_hash", hashStr);
-    for (const assignment of assignments) {
-      const { error } = await adminSupabase
-        .from("autograder")
-        .update({
-          workflow_sha: hashStr
-        })
-        .eq("id", assignment.id);
-      if (error) {
-        scope.setTag("error_source", "autograder_workflow_hash_update_failed");
-        scope.setTag("error_context", "Failed to update autograder workflow hash");
-        Sentry.captureException(error, scope);
-        throw error;
+  // Always reconcile the grade.yml workflow hash on a push to main, even if no
+  // commit in this push touched the file. This makes workflow_sha self-healing:
+  // an instructor can fix a stale hash (e.g. caused by a multi-commit push where
+  // grade.yml was changed in a non-head commit, or by GitHub's 20-commit truncation)
+  // by pushing any commit (e.g. touching README) to the template repo.
+  const workflowTouched = pushTouchedFile(payload, GRADER_WORKFLOW_PATH);
+  scope?.setTag("workflow_touched_in_push", workflowTouched.toString());
+  if (!assignments[0].template_repo) {
+    Sentry.captureMessage("No matching assignment found", scope);
+  } else {
+    try {
+      const file = (await getFileFromRepo(assignments[0].template_repo!, GRADER_WORKFLOW_PATH)) as {
+        content: string;
+      };
+      if (!file.content) {
+        Sentry.captureMessage(`File ${GRADER_WORKFLOW_PATH} not found for ${assignments[0].template_repo}`, scope);
+      } else {
+        // Remove all whitespace (spaces, tabs, newlines, etc.) before hashing
+        const contentWithoutWhitespace = file.content.replace(/\s+/g, "");
+        const hash = createHash("sha256");
+        hash.update(contentWithoutWhitespace);
+        const hashStr = hash.digest("hex");
+        scope?.setTag("new_autograder_workflow_hash", hashStr);
+        for (const assignment of assignments) {
+          const { error } = await adminSupabase
+            .from("autograder")
+            .update({
+              workflow_sha: hashStr
+            })
+            .eq("id", assignment.id);
+          if (error) {
+            scope.setTag("error_source", "autograder_workflow_hash_update_failed");
+            scope.setTag("error_context", "Failed to update autograder workflow hash");
+            Sentry.captureException(error, scope);
+            throw error;
+          }
+        }
       }
+    } catch (err) {
+      // Don't fail the whole webhook if grade.yml is missing — log and continue
+      // so latest_template_sha still gets updated below.
+      scope?.setTag("error_source", "grade_yml_reconcile_failed");
+      scope?.setTag("workflow_touched_in_push", workflowTouched.toString());
+      console.error("Failed to reconcile grade.yml workflow hash", err);
+      Sentry.captureException(err, scope);
     }
   }
   for (const assignment of assignments) {
@@ -1259,6 +1295,22 @@ async function handleWorkflowCompletionErrors(
         scope.setTag(`submission_${submission.id}_has_grader_result`, hasGraderResult.toString());
 
         if (!hasGraderResult) {
+          const { data: userVisibleErrRows, error: userVisibleErrLookupError } = await adminSupabase
+            .from("workflow_run_error")
+            .select("id")
+            .eq("repository_id", repositoryId)
+            .eq("run_number", workflowRun.id)
+            .eq("run_attempt", workflowRun.run_attempt)
+            .eq("data->>type", "user_visible_error")
+            .limit(1);
+          if (userVisibleErrLookupError) {
+            Sentry.captureException(userVisibleErrLookupError, scope);
+          }
+          if (userVisibleErrRows && userVisibleErrRows.length > 0) {
+            scope.setTag("missing_grader_result_skipped", "user_visible_error_present");
+            continue;
+          }
+
           const sentryMessage = "Workflow terminated without creating a grader result.";
           const userErrorMessage =
             "The grading container failed to terminate cleanly. This may indicate that the grading script ran out of memory or encountered an unexpected error. Please contact your instructor for assistance.";

@@ -37,17 +37,35 @@ let mathjsCache: {
 } | null = null;
 
 async function loadMathJS() {
-  if (!mathjsCache) {
-    const mathjs = await import("mathjs");
-    mathjsCache = {
-      all: mathjs.all,
-      create: mathjs.create,
-      ConstantNode: mathjs.ConstantNode,
-      FunctionNode: mathjs.FunctionNode,
-      Matrix: mathjs.Matrix
-    };
+  if (mathjsCache) {
+    return mathjsCache;
   }
-  return mathjsCache;
+  // Transient chunk-load errors can happen under `next dev` (and occasionally under
+  // `next start` after a fresh deploy invalidates cached chunks). Retry with
+  // exponential backoff so a flaky first load doesn't permanently wedge the
+  // gradebook behind an error screen.
+  const maxAttempts = 4;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const mathjs = await import("mathjs");
+      mathjsCache = {
+        all: mathjs.all,
+        create: mathjs.create,
+        ConstantNode: mathjs.ConstantNode,
+        FunctionNode: mathjs.FunctionNode,
+        Matrix: mathjs.Matrix
+      };
+      return mathjsCache;
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) break;
+      const baseDelayMs = 200 * 2 ** (attempt - 1);
+      const jitterMs = Math.random() * 100;
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs + jitterMs));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 // Synchronous accessor that throws if MathJS isn't loaded yet
@@ -110,6 +128,34 @@ export function useGradebookColumns() {
   }, [gradebookController]);
 
   return columns;
+}
+
+/**
+ * Subscribes to changes in `gradebooks.expression_prefix` so any component
+ * that depends on the prefix (e.g. the Expression Builder's render-expression
+ * preview) re-renders when the prefix is edited elsewhere. Without this a
+ * component would read `GradebookController.expressionPrefix` on first render
+ * and then drift when the value changed, because only the controller's
+ * cell-renderer cache listens to the underlying `gradebook_row` updates.
+ */
+export function useGradebookExpressionPrefix() {
+  const gradebookController = useGradebookController();
+  const [prefix, setPrefix] = useState<string>(gradebookController.expressionPrefix);
+  useEffect(() => {
+    const { unsubscribe, data } = gradebookController.gradebook_row.list((rows) => {
+      // Read the prefix directly from the freshly-listed rows rather than
+      // relying on the controller's cached `_expression_prefix` — subscriber
+      // ordering between this callback and the controller's own hydration
+      // callback is not guaranteed, and we want to render the newest value
+      // either way.
+      const row = rows.find((r) => r.id === gradebookController.gradebook_id) ?? rows[0];
+      setPrefix(row?.expression_prefix ?? "");
+    });
+    const row = data.find((r) => r.id === gradebookController.gradebook_id) ?? data[0];
+    setPrefix(row?.expression_prefix ?? "");
+    return unsubscribe;
+  }, [gradebookController]);
+  return prefix;
 }
 
 export function useGradebookColumn(column_id: number) {
@@ -1485,6 +1531,11 @@ export class GradebookController {
 
   public set assignments(assignments: Assignment[]) {
     this._assignments = assignments;
+  }
+
+  /** Expression prefix from `gradebooks.expression_prefix`, prepended to every column's render expression. */
+  public get expressionPrefix() {
+    return this._expression_prefix;
   }
 
   // Removed old subscription methods - use TableController directly

@@ -11,7 +11,7 @@ import {
 import { expect } from "../global-setup";
 // removed unused import
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 async function test() {
   let students: TestingUser[] = [];

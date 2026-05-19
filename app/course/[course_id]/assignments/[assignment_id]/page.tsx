@@ -11,6 +11,7 @@ import { SurveyStatusBanner } from "@/components/ui/survey-status-banner";
 import { useAssignmentController } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
+import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
 import { useFindTableControllerValue, useListTableControllerValues } from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -20,6 +21,7 @@ import {
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { ResponsiveTable } from "@/components/ui/responsive-table";
 import { Alert, Box, Flex, Grid, GridItem, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
@@ -120,7 +122,9 @@ export default function AssignmentPage() {
         <GridItem>
           <Flex width="100%" alignItems={"center"}>
             <Box>
-              <Heading size="lg">{assignment.title}</Heading>
+              <Heading as="h1" size="lg">
+                {assignment.title}
+              </Heading>
               <HStack>
                 <AssignmentDueDate
                   assignment={assignment}
@@ -161,7 +165,7 @@ export default function AssignmentPage() {
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
           )}
           {submissionsPeriod && maxSubmissions ? (
-            <Box w="925px">
+            <Box w="100%" maxW="4xl">
               <Alert.Root
                 status={submissionsRemaining === 0 ? "warning" : submissionsRemaining <= 1 ? "warning" : "info"}
                 flexDirection="column"
@@ -198,7 +202,7 @@ export default function AssignmentPage() {
             assignment_group_id={assignmentGroup?.id}
             profile_id={enrollment?.private_profile_id}
           />
-          <Table.Root maxW="2xl">
+          <ResponsiveTable wrapperProps={{ maxW: "4xl" }}>
             <Table.Header>
               <Table.Row>
                 <Table.ColumnHeader>Submission #</Table.ColumnHeader>
@@ -220,9 +224,11 @@ export default function AssignmentPage() {
                         : `(Old #${submission.ordinal})`}
                     </Link>
                   </Table.Cell>
-                  <Table.Cell data-visual-test="blackout">
+                  <Table.Cell>
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {format(new TZDate(submission.created_at, timeZone), "MMM d h:mm aaa")}
+                      <span data-visual-test="transparent" data-visual-placeholder="date">
+                        {format(new TZDate(submission.created_at, timeZone), "MMM d h:mm aaa")}
+                      </span>
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -240,20 +246,31 @@ export default function AssignmentPage() {
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
-                    <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                      {submission.submission_reviews?.completed_at
-                        ? `${submission.submission_reviews?.total_score}/${assignment.total_points}`
+                    {(() => {
+                      const gradeLabel = submission.submission_reviews?.completed_at
+                        ? `${getDisplayedGradingTotalForStudent(submission.submission_reviews, private_profile_id) ?? submission.submission_reviews.total_score ?? "—"}/${assignment.total_points}`
                         : submission.is_active
                           ? "Pending"
                           : submission.is_not_graded
                             ? "Not for grading"
-                            : ""}
-                    </Link>
+                            : "—";
+                      return (
+                        <Link
+                          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}
+                          // Only fall back to a synthetic accessible name when the visible
+                          // label is the dash placeholder — otherwise the visible text is
+                          // already the link's name (and tests / screen readers expect it).
+                          aria-label={gradeLabel === "—" ? `Submission #${submission.ordinal} grade` : undefined}
+                        >
+                          {gradeLabel}
+                        </Link>
+                      );
+                    })()}
                   </Table.Cell>
                 </Table.Row>
               ))}
             </Table.Body>
-          </Table.Root>
+          </ResponsiveTable>
         </GridItem>
 
         {assignment.show_leaderboard && (

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import PersonName from "@/components/ui/person-name";
 import { Toaster, toaster } from "@/components/ui/toaster";
+import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 import {
@@ -46,10 +47,6 @@ import {
   Input,
   Link,
   List,
-  PopoverBody,
-  PopoverContent,
-  PopoverRoot,
-  PopoverTrigger,
   Portal,
   Spinner,
   Table,
@@ -114,6 +111,8 @@ import {
 } from "react-icons/lu";
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
 import { WhatIf } from "../../gradebook/whatIf";
+import { ExpressionBuilder, shouldBlockSave } from "@/app/course/[course_id]/manage/gradebook/expressionBuilder";
+import type { ValidationResult } from "@/lib/gradebookExpressionTester";
 import GradebookCell from "./gradebookCell";
 import { GradebookPopoverProvider, useGradebookPopover } from "./GradebookPopoverProvider";
 import ImportGradebookColumn from "./importGradebookColumn";
@@ -374,6 +373,16 @@ function ScoreExprDocs() {
     </Text>
   );
 }
+
+function normalizeScoreExpression(scoreExpression: string | undefined): string | null {
+  const normalized = scoreExpression?.trim();
+  return normalized ? normalized : null;
+}
+
+function effectiveInstructorOnlyForSubmit(scoreExpression: string | undefined, instructorOnly: boolean | undefined) {
+  return Boolean(normalizeScoreExpression(scoreExpression)) && Boolean(instructorOnly);
+}
+
 function AddColumnDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const gradebookController = useGradebookController();
@@ -390,12 +399,15 @@ function AddColumnDialog() {
     slug: string;
     scoreExpression?: string;
     renderExpression?: string;
+    instructorOnly: boolean;
   };
 
   const {
     register,
     handleSubmit,
     reset,
+    setValue,
+    watch,
     formState: { errors }
   } = useForm<FormValues>({
     defaultValues: {
@@ -404,18 +416,33 @@ function AddColumnDialog() {
       maxScore: 0,
       slug: "",
       scoreExpression: "",
-      renderExpression: ""
+      renderExpression: "",
+      instructorOnly: false
     }
   });
+  const scoreExpression = watch("scoreExpression") ?? "";
+  const renderExpressionValue = watch("renderExpression") ?? "";
+  const maxScoreValue = watch("maxScore");
+  const [isExpressionBuilderExpanded, setIsExpressionBuilderExpanded] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
 
   // Reset form when dialog opens/closes
   useEffect(() => {
     if (!isOpen) {
       reset();
+      setIsExpressionBuilderExpanded(false);
+      setValidation(null);
     }
   }, [isOpen, reset]);
 
   const onSubmit = async (data: FieldValues) => {
+    if (shouldBlockSave(validation, data.scoreExpression)) {
+      toaster.error({
+        title: "Invalid score expression",
+        description: validation?.parseError || validation?.dependencyError || "Fix the expression before saving."
+      });
+      return;
+    }
     setIsLoading(true);
     try {
       const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", -1);
@@ -424,8 +451,9 @@ function AddColumnDialog() {
         description: data.description,
         max_score: data.maxScore,
         slug: data.slug,
-        score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
+        score_expression: normalizeScoreExpression(data.scoreExpression),
         render_expression: data.renderExpression?.length ? data.renderExpression : null,
+        instructor_only: effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly),
         dependencies,
         class_id: gradebookController.class_id,
         gradebook_id: gradebookController.gradebook_id,
@@ -457,20 +485,38 @@ function AddColumnDialog() {
   };
 
   return (
-    <Dialog.Root open={isOpen} size={"md"} placement={"center"} lazyMount unmountOnExit>
+    <Dialog.Root
+      open={isOpen}
+      size={isExpressionBuilderExpanded ? "cover" : "md"}
+      placement={"center"}
+      lazyMount
+      unmountOnExit
+    >
       <Dialog.Trigger asChild>
-        <Button variant="surface" size="sm" colorPalette="green" onClick={() => setIsOpen(true)}>
+        <Button variant="solid" size="sm" colorPalette="green" onClick={() => setIsOpen(true)}>
           <Icon as={FiPlus} mr={2} /> Add Column
         </Button>
       </Dialog.Trigger>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content>
+          <Dialog.Content
+            maxW={isExpressionBuilderExpanded ? "100vw" : undefined}
+            maxH={isExpressionBuilderExpanded ? "100dvh" : undefined}
+            display={isExpressionBuilderExpanded ? "flex" : undefined}
+            flexDirection={isExpressionBuilderExpanded ? "column" : undefined}
+            overflow={isExpressionBuilderExpanded ? "hidden" : undefined}
+          >
             <Dialog.Header>
               <Dialog.Title>Add Column</Dialog.Title>
             </Dialog.Header>
-            <Dialog.Body as="form" onSubmit={handleSubmit(onSubmit)}>
+            <Dialog.Body
+              as="form"
+              onSubmit={handleSubmit(onSubmit)}
+              flex={isExpressionBuilderExpanded ? "1" : undefined}
+              minH={isExpressionBuilderExpanded ? "0" : undefined}
+              overflowY={isExpressionBuilderExpanded ? "auto" : undefined}
+            >
               <VStack gap={3} align="stretch">
                 <Box>
                   <Label htmlFor="name">
@@ -534,12 +580,18 @@ function AddColumnDialog() {
                   )}
                 </Box>
                 <Box>
-                  <Label htmlFor="scoreExpression">Score Expression</Label>
-                  <Textarea
-                    id="scoreExpression"
-                    {...register("scoreExpression")}
-                    placeholder="Score Expression"
-                    rows={4}
+                  <ExpressionBuilder
+                    expression={scoreExpression}
+                    onExpressionChange={(val) =>
+                      setValue("scoreExpression", val, { shouldDirty: true, shouldValidate: true })
+                    }
+                    editingColumnId={null}
+                    isExpanded={isExpressionBuilderExpanded}
+                    onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
+                    math={null}
+                    renderExpression={renderExpressionValue}
+                    maxScore={Number.isFinite(Number(maxScoreValue)) ? Number(maxScoreValue) : null}
+                    onValidationChange={setValidation}
                   />
                   {errors.scoreExpression && (
                     <Text color="red.500" fontSize="sm">
@@ -558,8 +610,18 @@ function AddColumnDialog() {
                   )}
                   <RenderExprDocs />
                 </Box>
+                <Box>
+                  <Checkbox {...register("instructorOnly")}>
+                    Staff-only column (hidden from students until you release it)
+                  </Checkbox>
+                </Box>
                 <HStack justifyContent="flex-end">
-                  <Button type="submit" colorPalette="green" loading={isLoading}>
+                  <Button
+                    type="submit"
+                    colorPalette="green"
+                    loading={isLoading}
+                    disabled={shouldBlockSave(validation, scoreExpression)}
+                  >
                     Save
                   </Button>
                   <Button type="button" variant="ghost" onClick={onClose}>
@@ -591,6 +653,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     scoreExpression?: string;
     renderExpression?: string;
     showCalculatedRanges?: boolean;
+    instructorOnly: boolean;
   };
 
   const {
@@ -598,6 +661,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     handleSubmit,
     reset,
     setError,
+    setValue,
     watch,
     formState: { errors }
   } = useForm<FormValues>({
@@ -608,31 +672,62 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       slug: column?.slug ?? "",
       scoreExpression: column?.score_expression ?? "",
       renderExpression: column?.render_expression ?? "",
-      showCalculatedRanges: column?.show_calculated_ranges ?? false
+      showCalculatedRanges: column?.show_calculated_ranges ?? false,
+      instructorOnly: column?.instructor_only ?? false
     }
   });
 
+  const scoreExpression = watch("scoreExpression") ?? "";
+  const renderExpressionValue = watch("renderExpression") ?? "";
+  const maxScoreValue = watch("maxScore");
+  const [isExpressionBuilderExpanded, setIsExpressionBuilderExpanded] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+
   useEffect(() => {
     if (column) {
+      const expr = column.score_expression ?? "";
       reset({
         name: column.name ?? "",
         description: column.description ?? "",
         maxScore: column.max_score ?? 0,
         slug: column.slug ?? "",
-        scoreExpression: column.score_expression ?? "",
+        scoreExpression: expr,
         renderExpression: column.render_expression ?? "",
-        showCalculatedRanges: column.show_calculated_ranges ?? false
+        showCalculatedRanges: column.show_calculated_ranges ?? false,
+        instructorOnly: column.instructor_only ?? false
       });
+      // Clear any ValidationResult cached from a previously-edited column so
+      // a stale error state can't briefly gate the Save button before
+      // ExpressionBuilder's first `onValidationChange` fires for the new one.
+      setValidation(null);
     }
   }, [columnId, column, reset]);
 
   if (!columnId) return null;
   if (!column) throw new Error(`Column ${columnId} not found`);
 
-  const scoreExpression = watch("scoreExpression");
-  const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
+  // Pin the "is this column assignment-backed?" gate to the column's
+  // PERSISTED score expression, not the live-watched form value. Otherwise
+  // the moment an instructor types `assignments(` while editing a regular
+  // column, `canEditScoreExpression` flips to `false`, ExpressionBuilder
+  // unmounts mid-edit, and the instructor loses the full-screen state
+  // (expanded mode, selected student, and the mathjs / intermediate
+  // annotations that had already loaded).
+  const canEditScoreExpression = !(column.score_expression?.startsWith("assignments(") ?? false);
 
   const onSubmit = async (data: FieldValues) => {
+    // When the score expression is not user-editable (assignment-backed
+    // columns), ExpressionBuilder is not mounted, so `validation` never
+    // updates. Skipping the client-side guard in that case lets instructors
+    // save metadata-only edits (name, description, max_score, etc.); the
+    // server-side extractAndValidateDependencies below still runs.
+    if (canEditScoreExpression && shouldBlockSave(validation, data.scoreExpression)) {
+      toaster.error({
+        title: "Invalid score expression",
+        description: validation?.parseError || validation?.dependencyError || "Fix the score expression before saving."
+      });
+      return;
+    }
     toaster.create({
       title: "Saving...",
       description: "This may take a few seconds to recalculate...",
@@ -648,10 +743,13 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       if (column.description !== data.description) settingsChanged.push("description");
       if (column.max_score !== data.maxScore) settingsChanged.push("max_score");
       if (column.slug !== data.slug) settingsChanged.push("slug");
-      if ((column.score_expression ?? "") !== (data.scoreExpression ?? "")) settingsChanged.push("score_expression");
+      const normalizedExpr = normalizeScoreExpression(data.scoreExpression);
+      if ((column.score_expression ?? null) !== normalizedExpr) settingsChanged.push("score_expression");
       if ((column.render_expression ?? "") !== (data.renderExpression ?? "")) settingsChanged.push("render_expression");
       if ((column.show_calculated_ranges ?? false) !== (data.showCalculatedRanges ?? false))
         settingsChanged.push("show_calculated_ranges");
+      const submittedInstructorOnly = effectiveInstructorOnlyForSubmit(data.scoreExpression, data.instructorOnly);
+      if ((column.instructor_only ?? false) !== submittedInstructorOnly) settingsChanged.push("instructor_only");
 
       await updateColumn({
         resource: "gradebook_columns",
@@ -661,9 +759,10 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
           description: data.description,
           max_score: data.maxScore,
           slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
+          score_expression: normalizedExpr,
           render_expression: data.renderExpression?.length ? data.renderExpression : null,
           show_calculated_ranges: data.showCalculatedRanges ?? false,
+          instructor_only: submittedInstructorOnly,
           dependencies
         }
       });
@@ -683,15 +782,33 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   };
 
   return (
-    <Dialog.Root open={true} size={"md"} placement={"center"} lazyMount unmountOnExit>
+    <Dialog.Root
+      open={true}
+      size={isExpressionBuilderExpanded ? "cover" : "md"}
+      placement={"center"}
+      lazyMount
+      unmountOnExit
+    >
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content>
+          <Dialog.Content
+            maxW={isExpressionBuilderExpanded ? "100vw" : undefined}
+            maxH={isExpressionBuilderExpanded ? "100dvh" : undefined}
+            display={isExpressionBuilderExpanded ? "flex" : undefined}
+            flexDirection={isExpressionBuilderExpanded ? "column" : undefined}
+            overflow={isExpressionBuilderExpanded ? "hidden" : undefined}
+          >
             <Dialog.Header>
-              <Dialog.Title>Edit Column</Dialog.Title>
+              <Dialog.Title>Edit Column{isExpressionBuilderExpanded ? " — Expression Builder" : ""}</Dialog.Title>
             </Dialog.Header>
-            <Dialog.Body as="form" onSubmit={handleSubmit(onSubmit)}>
+            <Dialog.Body
+              as="form"
+              onSubmit={handleSubmit(onSubmit)}
+              flex={isExpressionBuilderExpanded ? "1" : undefined}
+              minH={isExpressionBuilderExpanded ? "0" : undefined}
+              overflowY={isExpressionBuilderExpanded ? "auto" : undefined}
+            >
               <VStack gap={3} align="stretch">
                 <Box>
                   <Label htmlFor="name">
@@ -760,14 +877,42 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   )}
                 </Box>
                 <Box>
-                  <Label htmlFor="scoreExpression">Score Expression</Label>
-                  <Textarea
-                    id="scoreExpression"
-                    disabled={!canEditScoreExpression}
-                    {...register("scoreExpression")}
-                    placeholder="Score Expression"
-                    rows={4}
-                  />
+                  {canEditScoreExpression ? (
+                    <ExpressionBuilder
+                      expression={scoreExpression}
+                      onExpressionChange={(val) =>
+                        setValue("scoreExpression", val, { shouldDirty: true, shouldValidate: true })
+                      }
+                      editingColumnId={columnId}
+                      isExpanded={isExpressionBuilderExpanded}
+                      onExpandToggle={() => setIsExpressionBuilderExpanded((prev) => !prev)}
+                      math={null}
+                      renderExpression={renderExpressionValue}
+                      maxScore={Number.isFinite(Number(maxScoreValue)) ? Number(maxScoreValue) : null}
+                      onValidationChange={setValidation}
+                    />
+                  ) : (
+                    <>
+                      <Label htmlFor="scoreExpression">Score Expression</Label>
+                      {/*
+                        Use `readOnly` instead of `disabled` — a bare HTML
+                        `disabled` attribute tells the browser to omit the
+                        field from form submission (react-hook-form then
+                        hands `undefined` back to `onSubmit`, which would
+                        wipe the persisted `assignments(...)` expression
+                        when the instructor saves a metadata-only edit).
+                        `readOnly` keeps the field non-editable while still
+                        letting react-hook-form read the registered value.
+                      */}
+                      <Textarea
+                        id="scoreExpression"
+                        readOnly
+                        {...register("scoreExpression")}
+                        placeholder="Score Expression"
+                        rows={4}
+                      />
+                    </>
+                  )}
                   {errors.scoreExpression && (
                     <Text color="red.500" fontSize="sm">
                       {errors.scoreExpression.message as string}
@@ -788,6 +933,11 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   </Box>
                 )}
                 <Box>
+                  <Checkbox {...register("instructorOnly")} checked={watch("instructorOnly") ?? false}>
+                    Staff-only column (hidden from students until you release it)
+                  </Checkbox>
+                </Box>
+                <Box>
                   <Label htmlFor="renderExpression">Render Expression</Label>
                   <Input id="renderExpression" {...register("renderExpression")} placeholder="Render Expression" />
                   {errors.renderExpression && (
@@ -803,7 +953,12 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   </Text>
                 )}
                 <HStack justifyContent="flex-end">
-                  <Button type="submit" colorPalette="green" loading={isLoading}>
+                  <Button
+                    type="submit"
+                    colorPalette="green"
+                    loading={isLoading}
+                    disabled={canEditScoreExpression && shouldBlockSave(validation, scoreExpression)}
+                  >
                     Save
                   </Button>
                   <Button type="button" variant="ghost" onClick={onClose}>
@@ -992,6 +1147,35 @@ function ExternalDataAdvice({ externalData }: { externalData: GradebookColumnExt
   );
 }
 
+function filterOptionsAllSelected<T extends { value: string }>(options: T[], selected: T[]): boolean {
+  if (options.length === 0) return false;
+  const selectedSet = new Set(selected.map((s) => s.value));
+  return options.every((o) => selectedSet.has(o.value));
+}
+
+function FilterSelectAllNoneToolbar({
+  onSelectAll,
+  onSelectNone,
+  disableSelectAll,
+  disableSelectNone
+}: {
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+  disableSelectAll: boolean;
+  disableSelectNone: boolean;
+}) {
+  return (
+    <HStack justifyContent="flex-end" gap={1} mb={2} flexWrap="wrap">
+      <Button type="button" size="xs" variant="ghost" onClick={onSelectAll} disabled={disableSelectAll}>
+        Select all
+      </Button>
+      <Button type="button" size="xs" variant="ghost" onClick={onSelectNone} disabled={disableSelectNone}>
+        Select none
+      </Button>
+    </HStack>
+  );
+}
+
 // New component for filtering a gradebook column
 function GradebookColumnFilter({
   columnName,
@@ -1120,6 +1304,13 @@ function GradebookColumnFilter({
             </IconButton>
           </HStack>
 
+          <FilterSelectAllNoneToolbar
+            onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
+            onSelectNone={() => columnModel.setFilterValue("")}
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
+            disableSelectNone={selectedOptions.length === 0}
+          />
+
           {/* Filter input */}
           <Select
             size="sm"
@@ -1228,6 +1419,13 @@ function SectionFilter({
             </IconButton>
           </HStack>
 
+          <FilterSelectAllNoneToolbar
+            onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
+            onSelectNone={() => columnModel.setFilterValue("")}
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
+            disableSelectNone={selectedOptions.length === 0}
+          />
+
           <Select
             size="sm"
             placeholder={`Filter ${columnName}...`}
@@ -1315,6 +1513,12 @@ function GenericColumnFilter({
         zIndex={1000}
       >
         <PopoverBody p={3}>
+          <FilterSelectAllNoneToolbar
+            onSelectAll={() => columnModel.setFilterValue(selectOptions.map((o) => o.value))}
+            onSelectNone={() => columnModel.setFilterValue("")}
+            disableSelectAll={selectOptions.length === 0 || filterOptionsAllSelected(selectOptions, selectedOptions)}
+            disableSelectNone={selectedOptions.length === 0}
+          />
           <Select
             size="sm"
             placeholder={`Filter ${columnName}...`}
@@ -1580,11 +1784,36 @@ function GradebookColumnHeader({
   }, [column_id, column, supabase, gradebookController]);
 
   const releaseColumn = useCallback(async () => {
+    if (column.instructor_only) {
+      // Block release while grades are being recalculated
+      const hasRecalculating = allGrades.some((grade) => grade.is_recalculating);
+      if (hasRecalculating) {
+        toaster.create({
+          title: "Column is recalculating",
+          description: "Some grades are still being recalculated. Please try again in a moment.",
+          type: "error"
+        });
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Releasing "${column.name}" will make it permanently visible to students and it will behave as a normal column. This cannot be undone. Continue?`
+      );
+      if (!confirmed) return;
+    }
+
     setIsReleasing(true);
     try {
-      const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
-
-      if (error) throw error;
+      if (column.instructor_only) {
+        // Atomic: release + clear instructor_only in a single transaction
+        const { error } = await supabase.rpc("release_instructor_only_gradebook_column", {
+          p_column_id: column_id
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
+        if (error) throw error;
+      }
 
       await gradebookController.gradebook_columns.refetchByIds([column_id]);
 
@@ -1602,7 +1831,7 @@ function GradebookColumnHeader({
     } finally {
       setIsReleasing(false);
     }
-  }, [column_id, column, supabase, gradebookController]);
+  }, [column_id, column, supabase, gradebookController, allGrades]);
 
   const unreleaseColumn = useCallback(async () => {
     setIsUnreleasing(true);
@@ -1649,10 +1878,13 @@ function GradebookColumnHeader({
         ret.push(`Mixed release status: ${releasedCount}/${totalCount} students can see their grades`);
       }
     }
+    if (column.instructor_only) {
+      ret.push("Staff-only: hidden from students until released");
+    }
     if (column.render_expression) {
       ret.push(`Rendered as ${column.render_expression}`);
     }
-    if (!column.score_expression) {
+    if (!column.score_expression && !column.instructor_only) {
       if (column.released) {
         ret.push("Released to students");
       } else {
@@ -1770,7 +2002,7 @@ function GradebookColumnHeader({
                 {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
                 Move Right
               </MenuItem>
-              {!column.score_expression && (
+              {(!column.score_expression || column.instructor_only) && (
                 <>
                   <MenuSeparator />
                   <MenuItem
@@ -1871,7 +2103,13 @@ function GradebookColumnHeader({
                   </Tooltip.Root>
                 </Box>
               )}
-              {column.score_expression ? (
+              {column.instructor_only ? (
+                <Box position="relative" zIndex={10000}>
+                  <WrappedTooltip content="Staff-only: hidden from students until released">
+                    <Icon as={LucideInfo} size="sm" color="purple.500" />
+                  </WrappedTooltip>
+                </Box>
+              ) : column.score_expression ? (
                 <Box position="relative" zIndex={10000}>
                   <WrappedTooltip content="Visibility: Students see this value calculated based on released dependencies">
                     <Icon as={LucideInfo} size="sm" color="blue.500" />
@@ -2193,7 +2431,7 @@ function StudentDetailDialog() {
             </Text>
             {view && (
               <GradebookWhatIfProvider private_profile_id={view}>
-                <WhatIf private_profile_id={view} />
+                <WhatIf private_profile_id={view} whatIfEnabled={true} />
               </GradebookWhatIfProvider>
             )}
           </Dialog.Body>
@@ -2235,6 +2473,17 @@ export default function GradebookTable() {
     }
     return { sortVal, filterVal };
   }, [gradebookColumns, gradebookDataEpoch, gradebookController]);
+
+  // Mirror scoreMaps into a ref so the accessor/filter closures baked into
+  // our `columns` memo can always read the latest values without forcing a
+  // ColumnDef rebuild on every gradebook data tick. Rebuilding `columns`
+  // makes useReactTable regenerate every header object, which under some
+  // conditions causes DraggableGradebookHeaderBox (keyed by `header.id`) to
+  // unmount and remount its DOM subtree — and any in-flight playwright click
+  // on the "Column options" button gets "element detached" mid-action. See
+  // tests/e2e/gradebook.test.tsx Move Left/Move Right flake.
+  const scoreMapsRef = useRef(scoreMaps);
+  scoreMapsRef.current = scoreMaps;
 
   const isInstructor = useIsInstructor();
   const isRefetching = useGradebookRefetchStatus();
@@ -2649,7 +2898,9 @@ export default function GradebookTable() {
         cols.push({
           id: `grade_${col.id}`,
           header: col.name,
-          accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? null,
+          // Read scoreMaps via ref so this ColumnDef stays referentially
+          // stable across gradebookDataEpoch ticks — see scoreMapsRef.
+          accessorFn: (row) => scoreMapsRef.current.sortVal.get(row.id)?.get(col.id) ?? null,
           sortingFn: (rowA, rowB, columnId) =>
             compareGradeColumnSortValues(rowA.getValue(columnId), rowB.getValue(columnId)),
           cell: ({ row }) => {
@@ -2657,7 +2908,7 @@ export default function GradebookTable() {
           },
           enableColumnFilter: true,
           filterFn: (row, columnId, filterValue) => {
-            const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? null;
+            const fv = scoreMapsRef.current.filterVal.get(row.original.id)?.get(col.id) ?? null;
             return gradebookScoreFilterMatches(filterValue, gradebookScoreToFilterRawString(fv));
           },
           enableSorting: true
@@ -2671,7 +2922,7 @@ export default function GradebookTable() {
           cols.push({
             id: `grade_${col.id}`,
             header: col.name,
-            accessorFn: (row) => scoreMaps.sortVal.get(row.id)?.get(col.id) ?? null,
+            accessorFn: (row) => scoreMapsRef.current.sortVal.get(row.id)?.get(col.id) ?? null,
             sortingFn: (rowA, rowB, columnId) =>
               compareGradeColumnSortValues(rowA.getValue(columnId), rowB.getValue(columnId)),
             cell: ({ row }) => {
@@ -2679,7 +2930,7 @@ export default function GradebookTable() {
             },
             enableColumnFilter: true,
             filterFn: (row, columnId, filterValue) => {
-              const fv = scoreMaps.filterVal.get(row.original.id)?.get(col.id) ?? null;
+              const fv = scoreMapsRef.current.filterVal.get(row.original.id)?.get(col.id) ?? null;
               return gradebookScoreFilterMatches(filterValue, gradebookScoreToFilterRawString(fv));
             },
             enableSorting: true,
@@ -2701,13 +2952,26 @@ export default function GradebookTable() {
     collapsedGroups,
     findBestColumnToShow,
     classSections?.data,
-    labSections,
-    scoreMaps
+    labSections
+    // intentionally NOT depending on `scoreMaps`: accessorFn/filterFn read
+    // it via scoreMapsRef. Row-model invalidation on data ticks is driven by
+    // `studentProfiles` getting a fresh array reference per epoch (see memo
+    // below), which makes TanStack re-run accessor/filter/sort closures.
   ]);
 
+  // NOTE: depending on `gradebookDataEpoch` here is load-bearing. Our `columns`
+  // memo intentionally omits `scoreMaps` from its deps (see scoreMapsRef
+  // comment above) so ColumnDef objects stay stable across data ticks. But
+  // TanStack Table caches its sorted/filtered row models keyed by the
+  // `(data, columns)` references, so with both stable across ticks the
+  // accessor/filter closures never re-run and a sorted/filtered view stays
+  // stale after a realtime score update. Returning a fresh array reference
+  // per epoch tick invalidates the row-model memos without rebuilding any
+  // ColumnDef — accessors then run with the live scoreMapsRef values.
   const studentProfiles = useMemo(() => {
     return students.map((student) => student.profiles);
-  }, [students]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [students, gradebookDataEpoch]);
   // Table instance
   const table = useReactTable({
     data: studentProfiles,

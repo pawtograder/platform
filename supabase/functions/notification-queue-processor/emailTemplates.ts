@@ -65,6 +65,10 @@ export const emailTemplates = {
     reply: {
       subject: "{course_name} - {thread_name} has a new reply from {reply_author_name}",
       body: "{reply_author_name} has replied to your post in {thread_name}:\n\n{message_body}\n\nRead more details in Pawtograder at {thread_url}\n\n{notification_footer}"
+    },
+    marked_duplicate: {
+      subject: "{course_name} - Your discussion post was merged as a duplicate",
+      body: '{marked_by_name} marked your post "{duplicate_original_subject}" as a duplicate of "{original_thread_subject}" and merged it into that thread.\n\nOpen the merged thread in Pawtograder: {thread_url}\n\n{notification_footer}'
     }
   },
   email: {

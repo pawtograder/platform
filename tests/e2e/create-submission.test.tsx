@@ -13,7 +13,8 @@ import {
   submitFeedbackViaAPI,
   createSampleGradingResult
 } from "./TestingUtils";
-import { argosScreenshot } from "@argos-ci/playwright";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { visualScreenshot } from "./VisualTestUtils";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -56,6 +57,7 @@ test.beforeAll(async () => {
   [student] = await createUsersInClass([
     {
       name: "Create Submission Student",
+      public_profile_name: "Create Submission Pseudonym Student",
       role: "student",
       class_id: course.id,
       useMagicLink: true
@@ -132,11 +134,12 @@ test.describe("Create submission", () => {
     });
     expect(submission).toBeDefined();
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - future deadline files");
   });
   test("If the deadline has passed, the student cannot create a submission", async () => {
     const submission = insertSubmissionViaAPI({
@@ -154,11 +157,12 @@ test.describe("Create submission", () => {
     });
     expect(submission).toBeDefined();
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentInFuture!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - extended due date files");
   });
 
   test("Student can create NOT-GRADED submission after deadline when assignment allows it", async ({ page }) => {
@@ -171,11 +175,12 @@ test.describe("Create submission", () => {
     expect(submission).toBeDefined();
 
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const submissionPage = `/course/${course.id}/assignments/${assignmentWithNotGraded!.id}/submissions/${submission.submission_id}`;
     await page.goto(submissionPage);
     await page.getByRole("button", { name: "Files" }).click();
     await expect(page.getByText("package com.pawtograder.example.java")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - not graded files");
   });
 
   test("NOT-GRADED submission does not become active", async ({ page }) => {
@@ -196,7 +201,7 @@ test.describe("Create submission", () => {
       class_id: course.id
     });
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const assignmentPage = `/course/${course.id}/assignments/${assignmentWithGradedAndNotGraded!.id}`;
     await page.goto(assignmentPage);
 
@@ -207,9 +212,12 @@ test.describe("Create submission", () => {
     await expect(notGradedRow).toBeVisible();
     await expect(activeRow.getByText("Pending")).toBeVisible();
     await expect(notGradedRow.getByText("Not for grading")).toBeVisible();
-    await argosScreenshot(page, "Showing active and not-graded submissions");
+    await expect(page.getByRole("row").filter({ hasText: activeSHA })).toHaveCount(1);
+    await expect(page.getByRole("row").filter({ hasText: notGradedSHA })).toHaveCount(1);
+    await visualScreenshot(page, "Showing active and not-graded submissions");
     await page.getByRole("link", { name: "Not for grading" }).click();
     await expect(page.getByText("Viewing a not-for-grading submission")).toBeVisible();
+    await assertStudentPageAccessible(page, "create submission - not graded detail");
   });
 
   test("Empty submission is accepted when permitted, and flagged", async () => {
@@ -229,9 +237,15 @@ test.describe("Create submission", () => {
     if (submissionFilesError || !submissionFiles) {
       throw new Error(`Failed to load submission files: ${submissionFilesError?.message}`);
     }
-    const { combined_hash, file_hashes } = computeCombinedHashFromSubmissionFiles(
-      submissionFiles.map((f) => ({ name: f.name, contents: f.contents ?? "" }))
-    );
+    const filesForHash = submissionFiles.map((f) => {
+      if (f.contents == null) {
+        throw new Error(
+          `E2E: submission file ${JSON.stringify(f.name)} has null/undefined contents; refusing to normalize to "" before computeCombinedHashFromSubmissionFiles`
+        );
+      }
+      return { name: f.name, contents: f.contents };
+    });
+    const { combined_hash, file_hashes } = computeCombinedHashFromSubmissionFiles(filesForHash);
 
     // Store as a handout version for multiple assignments.
     await supabase.from("assignment_handout_file_hashes").insert([
