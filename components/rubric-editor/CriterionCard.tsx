@@ -4,7 +4,19 @@ import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria } from "@/utils/supabase/DatabaseTypes";
 import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
-import { Box, Button, Collapsible, Heading, HStack, IconButton, Input, Stack, Text, Textarea } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  Collapsible,
+  Heading,
+  HStack,
+  IconButton,
+  Input,
+  Stack,
+  Text,
+  Textarea,
+  VStack
+} from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
 import { CheckRow } from "@/components/rubric-editor/CheckRow";
@@ -141,10 +153,16 @@ export function CriterionCard({
       </HStack>
       {expanded && (
         <Stack gap={3} p={3} pt={0}>
-          <Field label="Name" required invalid={!!nameError} errorText={nameError}>
+          <Field
+            label="Name"
+            required
+            invalid={!!nameError}
+            errorText={nameError}
+            helperText="A single rule or quality to assess (e.g., 'Code style', 'Q1 reflection')."
+          >
             <Input value={criteria.name ?? ""} onChange={(e) => onChange({ ...criteria, name: e.target.value })} />
           </Field>
-          <Field label="Description" helperText="Markdown supported.">
+          <Field label="Description" helperText="Optional. Markdown supported. Shown to graders above the checks.">
             <Textarea
               value={criteria.description ?? ""}
               onChange={(e) => onChange({ ...criteria, description: e.target.value || null })}
@@ -156,18 +174,45 @@ export function CriterionCard({
               value={mode}
               onValueChange={(d) => d.value && onChange(applyScoringMode(criteria, d.value as ScoringMode))}
             >
-              <HStack gap={4}>
-                <Radio value="additive">Additive</Radio>
-                <Radio value="non-additive">Non-additive</Radio>
-                <Radio value="deduction-only">Deduction only</Radio>
-              </HStack>
+              <Stack gap={2} align="stretch">
+                <Radio value="additive" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Additive</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Points add up from each check the grader applies. The criterion&apos;s total points is the cap.
+                    </Text>
+                  </VStack>
+                </Radio>
+                <Radio value="non-additive" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Non-additive</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Graders pick one outcome - the points of the applied check stand on their own. Combine with
+                      min/max checks to force a single pick.
+                    </Text>
+                  </VStack>
+                </Radio>
+                <Radio value="deduction-only" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Deduction only</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Students start at the criterion&apos;s total points and lose points for each check applied. Useful
+                      for penalty-only grading (e.g., code-style violations).
+                    </Text>
+                  </VStack>
+                </Radio>
+              </Stack>
             </RadioGroup>
           </Field>
           <HStack gap={4} align="flex-end" wrap="wrap">
             <Field
               label="Total points"
               maxW="40"
-              helperText={mode === "additive" ? `Auto-summed from checks (currently ${summedCheckPoints}).` : undefined}
+              helperText={
+                mode === "additive"
+                  ? `Auto-summed from checks (currently ${summedCheckPoints}).`
+                  : "The maximum points this criterion can contribute. For additive criteria this is computed from the checks; for the others, set it explicitly."
+              }
             >
               <Input
                 type="number"
@@ -194,7 +239,13 @@ export function CriterionCard({
             </Collapsible.Trigger>
             <Collapsible.Content>
               <HStack gap={4} mt={2} wrap="wrap">
-                <Field label="Min checks per submission" maxW="48" invalid={!!minError} errorText={minError}>
+                <Field
+                  label="Min checks per submission"
+                  maxW="48"
+                  invalid={!!minError}
+                  errorText={minError}
+                  helperText="Minimum number of checks a grader must apply. Set to 1 (with max=1) to force a single-pick rubric like Met/Partial/Not met."
+                >
                   <Input
                     type="number"
                     value={criteria.min_checks_per_submission ?? ""}
@@ -206,7 +257,11 @@ export function CriterionCard({
                     }
                   />
                 </Field>
-                <Field label="Max checks per submission" maxW="48">
+                <Field
+                  label="Max checks per submission"
+                  maxW="48"
+                  helperText="Maximum number of checks a grader can apply. Leave empty for unlimited."
+                >
                   <Input
                     type="number"
                     value={criteria.max_checks_per_submission ?? ""}

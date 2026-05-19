@@ -20,7 +20,8 @@ import {
   NativeSelect,
   Stack,
   Text,
-  Textarea
+  Textarea,
+  VStack
 } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2, LuArrowUp, LuArrowDown, LuLink, LuX } from "react-icons/lu";
@@ -257,29 +258,42 @@ export function CheckRow({
       </HStack>
       {expanded && (
         <Stack gap={3} p={3} pt={0}>
-          <Field label="Name" required invalid={!!nameError} errorText={nameError}>
+          <Field
+            label="Name"
+            required
+            invalid={!!nameError}
+            errorText={nameError}
+            helperText="Short label shown in the grading UI. Keep it concise — the description carries the details."
+          >
             <Input
               value={check.name ?? ""}
               onChange={(e) => onChange({ ...check, name: e.target.value })}
               placeholder="Check name"
             />
           </Field>
-          <Field label="Description" helperText="Markdown supported.">
+          <Field
+            label="Description"
+            helperText="Markdown supported. Shown to graders, and to students when student visibility allows."
+          >
             <Textarea
               value={check.description ?? ""}
               onChange={(e) => onChange({ ...check, description: e.target.value || null })}
               rows={2}
             />
           </Field>
-          <HStack gap={4} align="flex-end" wrap="wrap">
-            <Field label="Points" maxW="32">
+          <HStack gap={4} align="flex-start" wrap="wrap">
+            <Field label="Points" maxW="32" helperText="Awarded (additive) or deducted (deduction-only) when applied.">
               <Input
                 type="number"
                 value={check.points ?? 0}
                 onChange={(e) => onChange({ ...check, points: Number(e.target.value) })}
               />
             </Field>
-            <Field label="Student visibility" maxW="56">
+            <Field
+              label="Student visibility"
+              maxW="56"
+              helperText="Controls when (or whether) this check appears to students. 'Always' publishes it in advance; 'If released' waits until grading is released; 'If applied' shows it only on submissions where it was used; 'Never' keeps it grader-only."
+            >
               <NativeSelect.Root size="sm">
                 <NativeSelect.Field
                   value={check.student_visibility ?? "always"}
@@ -299,30 +313,66 @@ export function CheckRow({
                 <NativeSelect.Indicator />
               </NativeSelect.Root>
             </Field>
-            <Switch checked={check.is_required} onCheckedChange={(d) => onChange({ ...check, is_required: d.checked })}>
-              Required
-            </Switch>
-            <Switch
-              checked={check.is_comment_required}
-              onCheckedChange={(d) => onChange({ ...check, is_comment_required: d.checked })}
-            >
-              Comment required
-            </Switch>
+            <VStack align="start" gap={0}>
+              <Switch
+                checked={check.is_required}
+                onCheckedChange={(d) => onChange({ ...check, is_required: d.checked })}
+              >
+                Required
+              </Switch>
+              <Text fontSize="xs" color="fg.muted" mt={1}>
+                Grader must apply or explicitly skip this check before submitting their review.
+              </Text>
+            </VStack>
+            <VStack align="start" gap={0}>
+              <Switch
+                checked={check.is_comment_required}
+                onCheckedChange={(d) => onChange({ ...check, is_comment_required: d.checked })}
+              >
+                Comment required
+              </Switch>
+              <Text fontSize="xs" color="fg.muted" mt={1}>
+                Grader must add a written comment when applying this check.
+              </Text>
+            </VStack>
           </HStack>
 
           <Field label="Check type">
             <RadioGroup value={checkType} onValueChange={(d) => d.value && handleTypeChange(d.value as CheckType)}>
-              <HStack gap={4}>
-                <Radio value="checkbox">Checkbox</Radio>
-                <Radio value="options">Multi-option</Radio>
-                <Radio value="annotation">Annotation</Radio>
-              </HStack>
+              <Stack gap={2} align="stretch">
+                <Radio value="checkbox" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Checkbox</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Single yes/no check, worth its full point value when applied.
+                    </Text>
+                  </VStack>
+                </Radio>
+                <Radio value="options" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Multi-option</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Single-pick from a list of labels, each with its own point value. Common for tiered scoring like
+                      Met=5 / Partial=3 / Not met=0.
+                    </Text>
+                  </VStack>
+                </Radio>
+                <Radio value="annotation" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Annotation</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Grader places this on a specific line or region of the submission. Useful for inline feedback such
+                      as code-style violations or comment-on-this-paragraph.
+                    </Text>
+                  </VStack>
+                </Radio>
+              </Stack>
             </RadioGroup>
           </Field>
 
           {checkType === "options" && (
             <Box border="1px dashed" borderColor="border.subtle" borderRadius="md" p={2}>
-              <HStack justify="space-between" mb={2}>
+              <HStack justify="space-between" mb={1}>
                 <Text fontSize="sm" fontWeight="medium">
                   Options
                 </Text>
@@ -330,6 +380,9 @@ export function CheckRow({
                   <LuPlus /> Add option
                 </Button>
               </HStack>
+              <Text fontSize="xs" color="fg.muted" mb={2}>
+                Label: what the grader sees in the picker. Points: how many points this option is worth when chosen.
+              </Text>
               <Stack gap={2}>
                 {options.map((opt, idx) => (
                   <HStack key={idx} gap={2} align="flex-end">
@@ -390,8 +443,13 @@ export function CheckRow({
 
           {checkType === "annotation" && (
             <Stack gap={2}>
-              <HStack gap={4} wrap="wrap">
-                <Field label="File" flex="1" minW="60">
+              <HStack gap={4} wrap="wrap" align="flex-start">
+                <Field
+                  label="File"
+                  flex="1"
+                  minW="60"
+                  helperText="Optional. Restrict this annotation to a specific file path (e.g., 'src/main.ts'). Leave empty to allow it anywhere in the submission."
+                >
                   <Input
                     value={check.file ?? ""}
                     onChange={(e) => onChange({ ...check, file: e.target.value || null })}
@@ -403,6 +461,7 @@ export function CheckRow({
                   maxW="40"
                   invalid={!!maxAnnotationsError}
                   errorText={maxAnnotationsError}
+                  helperText="Max times a grader can apply this on one submission. Empty for unlimited."
                 >
                   <Input
                     type="number"
@@ -423,14 +482,23 @@ export function CheckRow({
                   </Button>
                 </Collapsible.Trigger>
                 <Collapsible.Content>
-                  <HStack gap={4} mt={2} wrap="wrap">
-                    <Field label="Artifact" flex="1" minW="48">
+                  <HStack gap={4} mt={2} wrap="wrap" align="flex-start">
+                    <Field
+                      label="Artifact"
+                      flex="1"
+                      minW="48"
+                      helperText="Optional. Restrict this annotation to a specific build artifact instead of a file."
+                    >
                       <Input
                         value={check.artifact ?? ""}
                         onChange={(e) => onChange({ ...check, artifact: e.target.value || null })}
                       />
                     </Field>
-                    <Field label="Annotation target" maxW="48">
+                    <Field
+                      label="Annotation target"
+                      maxW="48"
+                      helperText="Whether this annotation is placed on a file or on an artifact. Defaults based on whichever of File/Artifact is set."
+                    >
                       <NativeSelect.Root size="sm">
                         <NativeSelect.Field
                           value={check.annotation_target ?? ""}
@@ -464,6 +532,11 @@ export function CheckRow({
             <Collapsible.Content>
               <Box mt={2} p={2} border="1px dashed" borderColor="border.subtle" borderRadius="md">
                 <Stack gap={2}>
+                  <Text fontSize="xs" color="fg.muted">
+                    Link this check to a check from another rubric on this assignment (e.g., a grading-review check that
+                    refers to the matching self-review check). The grader sees the student&apos;s response to the linked
+                    check while grading. References are cross-rubric only.
+                  </Text>
                   {existingRefs.length === 0 && (
                     <Text fontSize="xs" color="fg.muted">
                       No references. Add a reference to link this check to a check in another review round.

@@ -4,7 +4,20 @@ import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { HydratedRubric, HydratedRubricCriteria, HydratedRubricPart } from "@/utils/supabase/DatabaseTypes";
 import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
-import { Box, Button, Heading, HStack, IconButton, Input, Menu, Portal, Stack, Text, Textarea } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  Heading,
+  HStack,
+  IconButton,
+  Input,
+  Menu,
+  Portal,
+  Stack,
+  Text,
+  Textarea,
+  VStack
+} from "@chakra-ui/react";
 import { useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
 import { CriterionCard } from "@/components/rubric-editor/CriterionCard";
@@ -121,10 +134,23 @@ export function PartCard({
       </HStack>
       {expanded && (
         <Stack gap={3} p={3} pt={0}>
-          <Field label="Name" required invalid={!!nameError} errorText={nameError}>
+          <Text fontSize="xs" color="fg.muted">
+            A part is the smallest unit that can be assigned to a grader. Use parts to break a rubric into chunks that
+            different graders can tackle independently.
+          </Text>
+          <Field
+            label="Name"
+            required
+            invalid={!!nameError}
+            errorText={nameError}
+            helperText="A logical section of the rubric. Often a question, problem, or deliverable."
+          >
             <Input value={part.name ?? ""} onChange={(e) => onChange({ ...part, name: e.target.value })} />
           </Field>
-          <Field label="Description" helperText="Markdown supported.">
+          <Field
+            label="Description"
+            helperText="Optional. Markdown supported. Shown to graders above this part's criteria."
+          >
             <Textarea
               value={part.description ?? ""}
               onChange={(e) => onChange({ ...part, description: e.target.value || null })}
@@ -136,11 +162,33 @@ export function PartCard({
               value={mode}
               onValueChange={(d) => d.value && onChange(applyPartMode(part, d.value as PartMode))}
             >
-              <HStack gap={4} wrap="wrap">
-                <Radio value="standard">Standard</Radio>
-                <Radio value="is_individual_grading">Individual grading</Radio>
-                <Radio value="is_assign_to_student">Assign to student</Radio>
-              </HStack>
+              <Stack gap={2} align="stretch">
+                <Radio value="standard" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Standard</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Graded once per submission by one assigned grader.
+                    </Text>
+                  </VStack>
+                </Radio>
+                <Radio value="is_individual_grading" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Individual grading</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Each member of a group is graded separately on this part.
+                    </Text>
+                  </VStack>
+                </Radio>
+                <Radio value="is_assign_to_student" alignItems="flex-start">
+                  <VStack align="start" gap={0}>
+                    <Text>Assign to student</Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Each instance of this part is assigned to a specific student. Use this for self-review or
+                      peer-review where each student fills out their own copy.
+                    </Text>
+                  </VStack>
+                </Radio>
+              </Stack>
             </RadioGroup>
           </Field>
 
