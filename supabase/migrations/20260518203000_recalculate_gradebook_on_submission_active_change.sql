@@ -98,8 +98,7 @@ JOIN public.gradebook_columns gc
 JOIN public.gradebook_column_students gcs
   ON gcs.gradebook_column_id = gc.id
  AND gcs.student_id = s.profile_id
-WHERE s.is_active = true
-  AND s.assignment_group_id IS NULL
+WHERE s.assignment_group_id IS NULL
   AND s.profile_id IS NOT NULL
 
 UNION
@@ -115,8 +114,7 @@ JOIN public.gradebook_columns gc
 JOIN public.gradebook_column_students gcs
   ON gcs.gradebook_column_id = gc.id
  AND gcs.student_id = agm.profile_id
-WHERE s.is_active = true
-  AND s.assignment_group_id IS NOT NULL;
+WHERE s.assignment_group_id IS NOT NULL;
 
 DO $backfill$
 DECLARE

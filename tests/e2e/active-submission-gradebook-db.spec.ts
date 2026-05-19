@@ -133,8 +133,9 @@ test.describe("active submission gradebook recalculation", () => {
   async function kickGradebookWorker() {
     try {
       await supabase.rpc("invoke_gradebook_recalculation_background_task");
-    } catch {
+    } catch (error) {
       // The direct edge-function kick below is the reliable local fallback.
+      console.warn("Failed to invoke gradebook recalculation background RPC:", error);
     }
 
     const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
@@ -143,7 +144,9 @@ test.describe("active submission gradebook recalculation", () => {
         .invoke("gradebook-column-recalculate", {
           headers: { "x-edge-function-secret": edgeSecret }
         })
-        .catch(() => {});
+        .catch((error) => {
+          console.warn("Failed to invoke gradebook recalculation edge function:", error);
+        });
     }
   }
 
@@ -189,6 +192,7 @@ test.describe("active submission gradebook recalculation", () => {
 
   async function waitForRecalcVersionGreaterThan(version: number) {
     await expect(async () => {
+      await kickGradebookWorker();
       const nextVersion = await getRecalcVersion();
       expect(nextVersion).toBeGreaterThan(version);
     }).toPass({ timeout: 30_000 });
