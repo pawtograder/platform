@@ -120,11 +120,17 @@ test.describe("Course-wide manage regrade requests", () => {
     await expect(onlyRow).toContainText(ASSIGN_A_TITLE);
     await expect(onlyRow.getByText(ASSIGN_B_TITLE)).toHaveCount(0);
 
-    const hideCheckbox = page.getByRole("checkbox", { name: /Hide draft and resolved/i });
-    await expect(hideCheckbox).toBeChecked();
-    // Click the visible label (Chakra positions the native input off-screen).
-    await page.getByText("Hide draft and resolved", { exact: true }).click();
-    await expect(hideCheckbox).not.toBeChecked();
+    // The Status filter defaults to ["opened", "escalated"] (server-enforced),
+    // so draft and resolved rows are hidden. Clearing it reveals all 3.
+    // react-select removes the rightmost selected pill on Backspace when the
+    // input is empty; two presses clear the two default-selected statuses.
+    const statusFilterCombobox = page
+      .getByText("Filter by Status:", { exact: true })
+      .locator("..")
+      .getByRole("combobox");
+    await statusFilterCombobox.focus();
+    await statusFilterCombobox.press("Backspace");
+    await statusFilterCombobox.press("Backspace");
     await expect(dataRows).toHaveCount(3);
 
     const openedRow = page.getByRole("row").filter({ hasText: ASSIGN_A_TITLE }).filter({ hasText: "Pending" });
