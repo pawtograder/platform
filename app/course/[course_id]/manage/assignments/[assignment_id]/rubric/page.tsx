@@ -1532,6 +1532,7 @@ function InnerRubricPage() {
               size="xs"
               variant={viewMode === "gui" ? "solid" : "ghost"}
               onClick={() => handleViewModeChange("gui")}
+              data-testid="rubric-gui-toggle"
             >
               GUI
             </Button>
@@ -1539,6 +1540,7 @@ function InnerRubricPage() {
               size="xs"
               variant={viewMode === "source" ? "solid" : "ghost"}
               onClick={() => handleViewModeChange("source")}
+              data-testid="rubric-source-toggle"
             >
               YAML source
             </Button>
@@ -1594,6 +1596,7 @@ function InnerRubricPage() {
               loadingText="Saving..."
               loading={isSaving}
               disabled={isSaving || !hasUnsavedChanges}
+              data-testid="rubric-save"
               onClick={async () => {
                 try {
                   setIsSaving(true);
@@ -1634,7 +1637,7 @@ function InnerRubricPage() {
                 </Center>
               )}
               {viewMode === "gui" && activeRubric && (
-                <Box w="100%" h="calc(100vh - 150px)" overflowY="auto">
+                <Box w="100%" h="calc(100vh - 150px)" overflowY="auto" data-testid="rubric-gui-pane">
                   <RubricEditorTree
                     rubric={activeRubric}
                     onChange={handleGuiChange}
@@ -1664,6 +1667,7 @@ function InnerRubricPage() {
                 w="100%"
                 h="calc(100vh - 150px)"
                 display={viewMode === "source" ? "block" : "none"}
+                data-testid="rubric-source-pane"
               >
                 <Editor
                   height="calc(100vh - 150px)"

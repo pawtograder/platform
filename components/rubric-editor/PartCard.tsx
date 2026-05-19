@@ -90,7 +90,13 @@ export function PartCard({
   };
 
   return (
-    <Box border="1px solid" borderColor={nameError ? "border.error" : "border.subtle"} borderRadius="md" bg="bg.panel">
+    <Box
+      border="1px solid"
+      borderColor={nameError ? "border.error" : "border.subtle"}
+      borderRadius="md"
+      bg="bg.panel"
+      data-testid={`rubric-part-${part.ordinal}`}
+    >
       <HStack justify="space-between" p={2}>
         <HStack gap={2} flex="1" minW="0">
           <IconButton
@@ -143,7 +149,7 @@ export function PartCard({
               <Heading size="xs">Criteria</Heading>
               <Menu.Root>
                 <Menu.Trigger asChild>
-                  <Button size="2xs" variant="surface">
+                  <Button size="2xs" variant="surface" data-testid="rubric-add-criterion">
                     <LuPlus /> Add criterion
                   </Button>
                 </Menu.Trigger>
@@ -151,7 +157,12 @@ export function PartCard({
                   <Menu.Positioner>
                     <Menu.Content>
                       {(Object.keys(CRITERIA_TEMPLATES) as CriteriaTemplateKey[]).map((key) => (
-                        <Menu.Item key={key} value={key} onClick={() => handleAddTemplate(key)}>
+                        <Menu.Item
+                          key={key}
+                          value={key}
+                          onClick={() => handleAddTemplate(key)}
+                          data-testid={`rubric-add-criterion-template-${key}`}
+                        >
                           {TEMPLATE_LABELS[key]}
                         </Menu.Item>
                       ))}

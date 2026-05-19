@@ -225,7 +225,7 @@ export function CriterionCard({
           <Box>
             <HStack justify="space-between" mb={2}>
               <Heading size="xs">Checks</Heading>
-              <Button size="2xs" variant="surface" onClick={handleAddCheck}>
+              <Button size="2xs" variant="surface" onClick={handleAddCheck} data-testid="rubric-add-check">
                 <LuPlus /> Add check
               </Button>
             </HStack>

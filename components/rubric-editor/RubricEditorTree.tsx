@@ -85,7 +85,7 @@ export function RubricEditorTree({
       <Box>
         <HStack justify="space-between" mb={2}>
           <Heading size="sm">Parts</Heading>
-          <Button size="xs" variant="surface" onClick={handleAddPart}>
+          <Button size="xs" variant="surface" onClick={handleAddPart} data-testid="rubric-add-part">
             <LuPlus /> Add part
           </Button>
         </HStack>
