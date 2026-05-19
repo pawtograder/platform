@@ -352,8 +352,9 @@ export function CheckRow({
                   <VStack align="start" gap={0}>
                     <Text>Multi-option</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Single-pick from a list of labels, each with its own point value. Common for tiered scoring like
-                      Met=5 / Partial=3 / Not met=0.
+                      Single-pick from a list of labels, each with its own point value. For tiered scoring like Met=5 /
+                      Partial=3 / Not met=0, prefer separate Checkbox checks inside a criterion with min/max checks set
+                      to 1 - that renders as radio buttons in the grading UI and is generally easier to work with.
                     </Text>
                   </VStack>
                 </Radio>

@@ -175,7 +175,9 @@ export function PartCard({
                   <VStack align="start" gap={0}>
                     <Text>Individual grading</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Each member of a group is graded separately on this part.
+                      The part is repeated once per student in the group, and each student is scored independently. Use
+                      this when every group member has to do something (like a personal reflection) and earns their own
+                      score rather than sharing one group score.
                     </Text>
                   </VStack>
                 </Radio>
@@ -183,8 +185,9 @@ export function PartCard({
                   <VStack align="start" gap={0}>
                     <Text>Assign to student</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Each instance of this part is assigned to a specific student. Use this for self-review or
-                      peer-review where each student fills out their own copy.
+                      The part is assigned to a single student in the group, and points are applied only to that
+                      student. Use this when one student owns a deliverable (e.g., a section of a group project) and
+                      only they receive the score.
                     </Text>
                   </VStack>
                 </Radio>

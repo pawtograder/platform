@@ -199,11 +199,7 @@ export function CriterionCard({
               </Stack>
             </RadioGroup>
           </Field>
-          <Field
-            label="Total points"
-            maxW="40"
-            helperText="The maximum points this criterion can contribute."
-          >
+          <Field label="Total points" maxW="40" helperText="The maximum points this criterion can contribute.">
             <Input
               type="number"
               value={criteria.total_points ?? 0}
@@ -224,7 +220,7 @@ export function CriterionCard({
                   maxW="48"
                   invalid={!!minError}
                   errorText={minError}
-                  helperText="Minimum number of checks a grader must apply. Set to 1 (with max=1) to force a single-pick rubric like Met/Partial/Not met."
+                  helperText="Minimum number of checks a grader must apply. Set min and max both to 1 to render the checks as radio buttons in the grading UI - this is the preferred way to build a single-pick rubric like Met/Partial/Not met."
                 >
                   <Input
                     type="number"
