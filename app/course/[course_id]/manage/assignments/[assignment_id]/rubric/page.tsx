@@ -46,12 +46,15 @@ import {
   setRubricUnsavedChangesFlag
 } from "@/lib/rubricUnsavedChanges";
 import {
+  computeRubricPointsBreakdown,
   findChanges,
   findUpdatedPropertyNames,
   HydratedRubricToYamlRubric,
+  maxPointsForCriterion,
   resolveReferences,
   YamlRubricToHydratedRubric
 } from "@/lib/rubric";
+import type { RubricPointsBreakdown } from "@/lib/rubric";
 import { RubricEditorTree, validateRubric } from "@/components/rubric-editor";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
@@ -279,46 +282,50 @@ function InnerRubricPage() {
 
   const assignmentMaxPoints = assignmentDetails?.total_points ?? 0;
   const autograderPoints = assignmentDetails?.autograder_points ?? 0;
-  const gradingRubricPoints = useMemo(() => {
-    // If we're previewing the grading-review, calculate from preview data
+
+  // Breakdown reflects whichever source is the freshest: live editor state when
+  // we're on the grading-review tab, else the DB-derived rubric. Both editors
+  // (GUI + YAML) feed `rubricForSidebar` so the comparison updates in real time
+  // when points, scoring mode, cap, or part mode changes.
+  const gradingRubricBreakdown = useMemo<RubricPointsBreakdown | undefined>(() => {
     if (activeReviewRound === "grading-review" && rubricForSidebar) {
-      let total = 0;
-      for (const part of rubricForSidebar.rubric_parts) {
-        for (const criteria of part.rubric_criteria) {
-          const criteriaTotal = criteria.total_points ?? 0;
-          const sumCheckPoints = criteria.rubric_checks.reduce((acc: number, check) => acc + (check.points ?? 0), 0);
-
-          if (criteria.is_additive) {
-            total += Math.min(sumCheckPoints, criteriaTotal);
-          } else {
-            total += criteriaTotal;
-          }
-        }
-      }
-      return total;
+      return computeRubricPointsBreakdown(rubricForSidebar);
     }
 
-    // Otherwise calculate from database data
-    if (!gradingRubricFromDb) return 0;
-    let total = 0;
-
+    if (!gradingRubricFromDb) {
+      return { total: 0 } as RubricPointsBreakdown & { total: 0 };
+    }
     if (!gradingRubricCriteria || !gradingRubricChecks) return undefined;
+
+    // The DB controllers expose flat lists; the part list isn't memoized here so
+    // we approximate the breakdown from criteria + checks alone (i.e. without
+    // per-part split-grading info). That's fine because the editor-side
+    // breakdown above is what users actually interact with — this branch only
+    // covers the initial render before `rubricForSidebar` is populated.
+    let total = 0;
     for (const criteria of gradingRubricCriteria) {
-      const criteriaTotal = criteria.total_points ?? 0;
       const checksForCriteria = gradingRubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
-      const sumCheckPoints = checksForCriteria.reduce((acc: number, check) => acc + (check.points ?? 0), 0);
-
-      if (criteria.is_additive) {
-        total += Math.min(sumCheckPoints, criteriaTotal);
-      } else {
-        total += criteriaTotal;
-      }
+      total += maxPointsForCriterion({ ...criteria, rubric_checks: checksForCriteria });
     }
-
-    return total;
+    return {
+      total,
+      standard: total,
+      individual: 0,
+      assignToStudentPerStudent: 0,
+      assignToStudentTotal: 0,
+      assignToStudentParts: [],
+      assignToStudentUnbalanced: false
+    };
   }, [activeReviewRound, rubricForSidebar, gradingRubricFromDb, gradingRubricCriteria, gradingRubricChecks]);
 
-  const isCapped = gradingRubricFromDb?.cap_score_to_assignment_points ?? false;
+  const gradingRubricPoints = gradingRubricBreakdown?.total;
+
+  // `cap_score_to_assignment_points` is editable in the rubric header, so prefer
+  // the live edited rubric over the saved DB value when we have it.
+  const isCapped =
+    activeReviewRound === "grading-review" && rubricForSidebar
+      ? (rubricForSidebar.cap_score_to_assignment_points ?? false)
+      : (gradingRubricFromDb?.cap_score_to_assignment_points ?? false);
   const addsUp =
     gradingRubricPoints !== undefined &&
     (isCapped
@@ -1743,7 +1750,13 @@ function InnerRubricPage() {
                 mb={4}
                 p={3}
                 borderRadius="md"
-                bg={addsUp ? "bg.info" : "bg.warning"}
+                bg={
+                  gradingRubricBreakdown?.assignToStudentUnbalanced
+                    ? "bg.warning"
+                    : addsUp
+                      ? "bg.info"
+                      : "bg.warning"
+                }
               >
                 <Heading size="sm" mb={1}>
                   Grading Rubric Points Summary
@@ -1751,8 +1764,32 @@ function InnerRubricPage() {
                 <Text fontSize="sm" color="fg.muted">
                   The assignment&apos;s max points is set to {assignmentMaxPoints}, and the autograder is currently
                   configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
-                  {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
+                  {gradingRubricPoints} points per student. {addsUp && <Icon as={FaCheck} color="fg.success" />}
                 </Text>
+                {gradingRubricBreakdown &&
+                  (gradingRubricBreakdown.individual > 0 ||
+                    gradingRubricBreakdown.assignToStudentParts.length > 0) && (
+                    <Text fontSize="xs" mt={1} color="fg.muted">
+                      Per-student total breakdown: {gradingRubricBreakdown.standard} from shared parts
+                      {gradingRubricBreakdown.individual > 0 &&
+                        ` + ${gradingRubricBreakdown.individual} from individual-grading parts (each student earns independently)`}
+                      {gradingRubricBreakdown.assignToStudentParts.length > 0 &&
+                        ` + up to ${gradingRubricBreakdown.assignToStudentPerStudent} from assign-to-student parts (assuming each student is assigned at most one of the ${gradingRubricBreakdown.assignToStudentParts.length} such part${gradingRubricBreakdown.assignToStudentParts.length === 1 ? "" : "s"}, ${gradingRubricBreakdown.assignToStudentTotal} points total distributed across the group)`}
+                      .
+                    </Text>
+                  )}
+                {gradingRubricBreakdown?.assignToStudentUnbalanced && (
+                  <Alert status="warning" variant="surface" mt={2} title="Assign-to-student parts are unbalanced">
+                    <Text fontSize="sm">
+                      Multiple <code>is_assign_to_student</code> parts have different point totals, so students will
+                      have different maxes depending on which part they receive (
+                      {gradingRubricBreakdown.assignToStudentParts
+                        .map((p) => `${p.name}: ${p.max}`)
+                        .join(", ")}
+                      ). Rebalance them so every student is graded against the same max.
+                    </Text>
+                  </Alert>
+                )}
                 {isCapped && (
                   <Text fontSize="sm" mt={1} color="fg.muted">
                     Score capping is enabled. Manual grading can be used as a fallback when autograder fails, with the
