@@ -1,43 +1,13 @@
 /**
- * GUI-side coverage for the rubric editor (Phase 5).
+ * GUI-side coverage for the rubric editor.
  *
- * NOTE: Six of the eight tests below are `test.skip` pending env hardening.
- * Local runs surfaced three coupled issues, none of which mean the code under
- * test is wrong - they're test-harness fragility worth addressing as
- * follow-up before re-enabling:
- *   1. The manage layout renders the rubric page twice (mobile + desktop
- *      breakpoints, with display:none on the off-breakpoint copy). The
- *      `:visible` filter handles the locator side, but both copies of
- *      `<Toaster />` and `<InnerRubricPage />` subscribe to the same save
- *      lifecycle, which makes save-completion detection (toast or
- *      button-disabled) unreliable.
- *   2. Chakra v3 radios put a span overlay on top of the hidden input that
- *      swallows pointer clicks; the label-click workaround doesn't always
- *      trigger Chakra's controlled state.
- *   3. @dnd-kit's pointer-drag activation doesn't fire reliably from
- *      Playwright's `dragTo` for these handles.
- *
- * The two enabled tests cover the view-mode toggle round-trip and the
- * mutually-exclusive part-mode YAML→GUI guard. The skipped tests were going
- * to assert at the DB level; that intent is covered at the unit level in
- * `tests/unit/rubric/` (parse / serialize / diff / validation).
- *
- * These tests rely on `data-testid` selectors we added to the rubric editor
- * components so the suite is resilient to copy/layout changes:
- *
- *   - `rubric-gui-toggle` / `rubric-source-toggle` — view-mode buttons
- *   - `rubric-gui-pane` / `rubric-source-pane`     — editor panes
- *   - `rubric-save`                                — save button
- *   - `rubric-add-part`                            — top-level add part
- *   - `rubric-part-{ordinal}`                      — part card root
- *   - `rubric-add-criterion`                       — per-part add criterion menu
- *   - `rubric-add-criterion-template-{key}`        — template menu items
- *     (`blank`, `metPartialNotMet`, `multiOption`, `deductionOnlyAnnotation`)
- *   - `rubric-add-check`                           — per-criterion add check
- *
- * Tests are scoped to fresh assignments created in `test.beforeAll`. Each test
- * navigates as the instructor to `/course/{id}/manage/assignments/{id}/rubric`
- * and exercises a different GUI scenario.
+ * Selectors are anchored via ARIA roles + names:
+ *   - The instructor manage layout renders the page twice (mobile + desktop
+ *     breakpoints) with display:none on the off-breakpoint copy. Scoping every
+ *     query under the "Rubric Editor" region filters to the visible copy
+ *     because display:none removes nodes from the accessibility tree.
+ *   - Parts, criteria, and checks each carry an aria-label with their
+ *     position and / or name so they can be addressed without test-ids.
  */
 import { createAdminClient } from "@/utils/supabase/client";
 import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
@@ -45,14 +15,13 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import { expect, test } from "../global-setup";
+import type { Page, Locator } from "@playwright/test";
 import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let instructor: TestingUser | undefined;
-// One dedicated assignment per scenario so tests stay independent.
-let dragAssignment: (Assignment & { rubricChecks: RubricCheck[] }) | undefined;
 let templateAssignment: (Assignment & { rubricChecks: RubricCheck[] }) | undefined;
 let optionsAssignment: (Assignment & { rubricChecks: RubricCheck[] }) | undefined;
 let deductionAssignment: (Assignment & { rubricChecks: RubricCheck[] }) | undefined;
@@ -74,12 +43,6 @@ test.beforeAll(async () => {
       useMagicLink: true
     }
   ]);
-  // Provision one assignment per test so each starts from a clean slate.
-  dragAssignment = await insertAssignment({
-    due_date: addDays(new Date(), 1).toUTCString(),
-    class_id: course!.id,
-    name: "Rubric GUI Drag Assignment"
-  });
   templateAssignment = await insertAssignment({
     due_date: addDays(new Date(), 1).toUTCString(),
     class_id: course!.id,
@@ -121,11 +84,54 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([instructor]);
 });
 
-async function setMonacoValue(page: import("@playwright/test").Page, text: string) {
+function rubricEditor(page: Page): Locator {
+  return page.getByRole("region", { name: "Rubric Editor" });
+}
+
+function guiPane(page: Page): Locator {
+  return rubricEditor(page).getByRole("region", { name: "Rubric GUI" });
+}
+
+function partAt(page: Page, displayIndex: number): Locator {
+  return rubricEditor(page).getByRole("region", { name: new RegExp(`^Part ${displayIndex + 1}:`) });
+}
+
+function criterionByName(part: Locator, name: string): Locator {
+  return part.getByRole("region", { name: `Criterion: ${name}` });
+}
+
+function checkByName(criterion: Locator, name: string): Locator {
+  return criterion.getByRole("region", { name: `Check: ${name}` });
+}
+
+// The Part / Criterion / Check regions each contain a "Name" field followed by descendant
+// regions that also have Name fields. `.first()` reliably targets the direct Name field
+// because it appears before any nested region in DOM order.
+function nameField(region: Locator): Locator {
+  return region.getByLabel("Name").first();
+}
+
+async function clickSave(page: Page) {
+  await rubricEditor(page).getByRole("button", { name: "Save" }).click();
+  // The page mounts twice (mobile + desktop responsive copies). The hidden copy doesn't
+  // reset hasUnsavedChanges on save, so asserting on the Save button's disabled state is
+  // unreliable. Settle on network idle plus a small buffer and rely on the subsequent DB
+  // assertions to catch save failures.
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(1500);
+}
+
+async function waitForMonaco(page: Page) {
+  await expect
+    .poll(() => page.evaluate(() => Boolean((window as { monaco?: unknown }).monaco)), { timeout: 15_000 })
+    .toBe(true);
+}
+
+async function setMonacoValue(page: Page, text: string) {
+  await waitForMonaco(page);
   await page.evaluate((value) => {
     const monaco = (window as { monaco?: typeof import("monaco-editor") }).monaco;
     if (!monaco) throw new Error("monaco is not exposed on window");
-    // Pick the YAML model whose URI matches the rubric editor's `path` prop.
     const models = monaco.editor.getModels();
     const target =
       models.find((m) => m.uri.toString().includes("rubric-")) ?? models.find((m) => m.getLanguageId() === "yaml");
@@ -134,7 +140,8 @@ async function setMonacoValue(page: import("@playwright/test").Page, text: strin
   }, text);
 }
 
-async function getMonacoValue(page: import("@playwright/test").Page): Promise<string> {
+async function getMonacoValue(page: Page): Promise<string> {
+  await waitForMonaco(page);
   return await page.evaluate(() => {
     const monaco = (window as { monaco?: typeof import("monaco-editor") }).monaco;
     if (!monaco) throw new Error("monaco is not exposed on window");
@@ -145,15 +152,40 @@ async function getMonacoValue(page: import("@playwright/test").Page): Promise<st
   });
 }
 
-async function selectGradingReviewTab(page: import("@playwright/test").Page) {
-  // Anchor to "Grading Review" at the start so we don't accidentally match
-  // "Meta Grading Review". The tab label may have a trailing "* (Unsaved Changes)"
-  // suffix; whitespace before the name comes from a literal " " sibling text node.
-  await page.getByRole("tab", { name: /^\s*Grading Review(\*?\s*\(Unsaved Changes\))?\s*$/i }).click();
+async function pickReferenceTarget(check: Locator, namePattern: RegExp) {
+  // The reference picker is a native <select>. selectOption() needs an exact label or value;
+  // we look up the matching option's value first, then select by value.
+  const select = check.getByLabel("Select reference target");
+  const optionValue = await select.locator("option").filter({ hasText: namePattern }).first().getAttribute("value");
+  if (!optionValue) throw new Error(`No reference target matched ${namePattern}`);
+  await select.selectOption(optionValue);
 }
 
-async function selectSelfReviewTab(page: import("@playwright/test").Page) {
-  await page.getByRole("tab", { name: /^\s*Self Review(\*?\s*\(Unsaved Changes\))?\s*$/i }).click();
+async function selectGradingReviewTab(page: Page) {
+  // Anchored regex so it doesn't match "Meta Grading Review".
+  await rubricEditor(page)
+    .getByRole("tab", { name: /^\s*Grading Review(\*?\s*\(Unsaved Changes\))?\s*$/i })
+    .click();
+}
+
+async function selectSelfReviewTab(page: Page) {
+  await rubricEditor(page)
+    .getByRole("tab", { name: /^\s*Self Review(\*?\s*\(Unsaved Changes\))?\s*$/i })
+    .click();
+}
+
+// Refetch the assignment's grading_rubric_id - it may be set asynchronously by a trigger
+// after insertAssignment returns.
+async function gradingRubricIdFor(assignmentId: number): Promise<number> {
+  const supabase = adminDb();
+  const { data, error } = await supabase
+    .from("assignments")
+    .select("grading_rubric_id")
+    .eq("id", assignmentId)
+    .single();
+  if (error) throw error;
+  if (!data.grading_rubric_id) throw new Error(`grading_rubric_id is null for assignment ${assignmentId}`);
+  return data.grading_rubric_id;
 }
 
 test.describe("Rubric editor GUI", () => {
@@ -163,210 +195,178 @@ test.describe("Rubric editor GUI", () => {
     await selectGradingReviewTab(page);
 
     // Default view is GUI.
-    await expect(page.locator('[data-testid="rubric-gui-pane"]:visible')).toBeVisible();
+    await expect(guiPane(page)).toBeVisible();
 
-    // Toggle to source — Monaco editor pane becomes visible.
-    await page.locator('[data-testid="rubric-source-toggle"]:visible').click();
-    await expect(page.locator(".monaco-editor").first()).toBeVisible();
+    // Toggle to source - Monaco editor pane becomes visible.
+    await rubricEditor(page).getByRole("button", { name: "YAML source" }).click();
+    await expect(rubricEditor(page).getByRole("region", { name: "Rubric YAML Source" })).toBeVisible();
 
     // Toggle back to GUI.
-    await page.locator('[data-testid="rubric-gui-toggle"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-gui-pane"]:visible')).toBeVisible();
+    await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
+    await expect(guiPane(page)).toBeVisible();
 
     // Edit the first part's name in GUI.
-    const firstPart = page.locator('[data-testid="rubric-part-0"]:visible');
+    const firstPart = partAt(page, 0);
     await firstPart.scrollIntoViewIfNeeded();
-    const nameInput = firstPart.getByLabel("Name").first();
-    await nameInput.fill("Edited Part Name");
+    await nameField(firstPart).fill("Edited Part Name");
 
     // Toggle to source and assert YAML reflects the edit.
-    await page.locator('[data-testid="rubric-source-toggle"]:visible').click();
+    await rubricEditor(page).getByRole("button", { name: "YAML source" }).click();
     const yaml = await getMonacoValue(page);
     expect(yaml).toContain("Edited Part Name");
 
-    // Toggle back to GUI — the edited name still shows.
-    await page.locator('[data-testid="rubric-gui-toggle"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-gui-pane"]:visible')).toBeVisible();
-    await expect(page.locator('[data-testid="rubric-part-0"]:visible').getByLabel("Name").first()).toHaveValue(
-      "Edited Part Name"
-    );
+    // Toggle back to GUI - the edited name still shows. The part's aria-label has the new name.
+    await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
+    const editedPart = rubricEditor(page).getByRole("region", { name: /^Part 1: Edited Part Name/ });
+    await expect(nameField(editedPart)).toHaveValue("Edited Part Name");
   });
 
-  test.skip("Drag-and-drop reorders a part and persists after save", async ({ page }) => {
-    await loginAsUser(page, instructor!, course);
-    await page.goto(`/course/${course!.id}/manage/assignments/${dragAssignment!.id}/rubric`);
-    await selectGradingReviewTab(page);
-
-    // The default grading-review rubric has two parts: "Grading Review Part 1" and "Grading Review Part 2".
-    const part0 = page.locator('[data-testid="rubric-part-0"]:visible');
-    const part1 = page.locator('[data-testid="rubric-part-1"]:visible');
-    await expect(part0).toBeVisible();
-    await expect(part1).toBeVisible();
-    await expect(part0.getByLabel("Name").first()).toHaveValue("Grading Review Part 1");
-    await expect(part1.getByLabel("Name").first()).toHaveValue("Grading Review Part 2");
-
-    // Drive @dnd-kit's PointerSensor reorder: drag part 2's grip up onto part 1's grip.
-    const handle2 = page.getByRole("button", { name: /Drag part Grading Review Part 2/i });
-    const handle1 = page.getByRole("button", { name: /Drag part Grading Review Part 1/i });
-    await handle2.dragTo(handle1);
-
-    // Visual order should now have Part 2 first.
-    await expect(page.locator('[data-testid="rubric-part-0"]:visible').getByLabel("Name").first()).toHaveValue(
-      "Grading Review Part 2"
-    );
-    await expect(page.locator('[data-testid="rubric-part-1"]:visible').getByLabel("Name").first()).toHaveValue(
-      "Grading Review Part 1"
-    );
-
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-save"]:visible')).toBeDisabled({ timeout: 15_000 });
-
-    // Reload and assert order persisted both in the UI and DB.
-    await page.reload();
-    await selectGradingReviewTab(page);
-    await expect(page.locator('[data-testid="rubric-part-0"]:visible').getByLabel("Name").first()).toHaveValue(
-      "Grading Review Part 2"
-    );
-    await expect(page.locator('[data-testid="rubric-part-1"]:visible').getByLabel("Name").first()).toHaveValue(
-      "Grading Review Part 1"
-    );
-
-    const supabase = adminDb();
-    const { data: parts, error } = await supabase
-      .from("rubric_parts")
-      .select("id, name, ordinal")
-      .eq("rubric_id", dragAssignment!.grading_rubric_id!)
-      .order("ordinal", { ascending: true });
-    expect(error).toBeNull();
-    expect(parts?.map((p) => p.name)).toEqual(["Grading Review Part 2", "Grading Review Part 1"]);
-  });
-
-  test.skip("Quick-add met/partial/not met template creates 3 checks with expected shape", async ({ page }) => {
+  test("Quick-add met/partial/not met template creates 3 checks with expected shape", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course!.id}/manage/assignments/${templateAssignment!.id}/rubric`);
     await selectGradingReviewTab(page);
 
-    const firstPart = page.locator('[data-testid="rubric-part-0"]:visible');
+    const firstPart = partAt(page, 0);
     await firstPart.scrollIntoViewIfNeeded();
-    await firstPart.locator('[data-testid="rubric-add-criterion"]:visible').first().click();
-    await page.locator('[data-testid="rubric-add-criterion-template-metPartialNotMet"]:visible').click();
+    await firstPart.getByRole("button", { name: "Add criterion" }).click();
+    await page.getByRole("menuitem", { name: "Met / partial / not met" }).click();
 
-    // The newly added criterion is the last one in the part. The template names are stable.
-    await expect(firstPart.getByText("Met / partial / not met").first()).toBeVisible();
-    await expect(firstPart.locator('input[value="Met"]').first()).toBeVisible();
-    await expect(firstPart.locator('input[value="Partially met"]').first()).toBeVisible();
-    await expect(firstPart.locator('input[value="Not met"]').first()).toBeVisible();
+    const criterion = criterionByName(firstPart, "Met / partial / not met");
+    await expect(criterion).toBeVisible();
+    await expect(checkByName(criterion, "Met")).toBeVisible();
+    await expect(checkByName(criterion, "Partially met")).toBeVisible();
+    await expect(checkByName(criterion, "Not met")).toBeVisible();
 
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-save"]:visible')).toBeDisabled({ timeout: 15_000 });
+    await clickSave(page);
 
+    const gradingRubricId = await gradingRubricIdFor(templateAssignment!.id);
     const supabase = adminDb();
-    const { data: criteria } = await supabase
-      .from("rubric_criteria")
-      .select("id, name, is_additive, is_deduction_only, min_checks_per_submission, max_checks_per_submission")
-      .eq("rubric_id", templateAssignment!.grading_rubric_id!)
-      .eq("name", "Met / partial / not met");
-    expect(criteria).toBeDefined();
-    expect(criteria!.length).toBeGreaterThan(0);
-    const criterion = criteria![0];
-    expect(criterion.is_additive).toBe(false);
-    expect(criterion.is_deduction_only).toBe(false);
-    expect(criterion.min_checks_per_submission).toBe(1);
-    expect(criterion.max_checks_per_submission).toBe(1);
+    type CriterionRow = {
+      id: number;
+      name: string;
+      is_additive: boolean;
+      is_deduction_only: boolean;
+      min_checks_per_submission: number | null;
+      max_checks_per_submission: number | null;
+    };
+    let criteriaRows: CriterionRow[] = [];
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("rubric_criteria")
+            .select("id, name, is_additive, is_deduction_only, min_checks_per_submission, max_checks_per_submission")
+            .eq("rubric_id", gradingRubricId)
+            .eq("name", "Met / partial / not met");
+          criteriaRows = (data as CriterionRow[] | null) ?? [];
+          return criteriaRows.length;
+        },
+        { timeout: 15_000 }
+      )
+      .toBeGreaterThan(0);
+    const c = criteriaRows[0];
+    expect(c.is_additive).toBe(false);
+    expect(c.is_deduction_only).toBe(false);
+    expect(c.min_checks_per_submission).toBe(1);
+    expect(c.max_checks_per_submission).toBe(1);
 
-    const { data: checks } = await supabase
-      .from("rubric_checks")
-      .select("name, points, ordinal")
-      .eq("rubric_criteria_id", criterion.id)
-      .order("ordinal", { ascending: true });
-    expect(checks).toHaveLength(3);
-    expect(checks?.map((c) => c.name)).toEqual(["Met", "Partially met", "Not met"]);
-    expect(checks?.map((c) => c.points)).toEqual([2, 1, 0]);
+    type CheckRow = { name: string; points: number; ordinal: number };
+    let checkRows: CheckRow[] = [];
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("rubric_checks")
+            .select("name, points, ordinal")
+            .eq("rubric_criteria_id", c.id)
+            .order("ordinal", { ascending: true });
+          checkRows = (data as CheckRow[] | null) ?? [];
+          return checkRows.length;
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(3);
+    expect(checkRows.map((ch) => ch.name)).toEqual(["Met", "Partially met", "Not met"]);
+    expect(checkRows.map((ch) => ch.points)).toEqual([2, 1, 0]);
   });
 
-  test.skip("Multi-option check editing persists options to DB", async ({ page }) => {
+  test("Multi-option check editing persists options to DB", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course!.id}/manage/assignments/${optionsAssignment!.id}/rubric`);
     await selectGradingReviewTab(page);
 
-    const firstPart = page.locator('[data-testid="rubric-part-0"]:visible');
+    // Add a brand-new criterion using the multi-option template - simpler than fishing the
+    // seeded criterion out and reconfiguring it.
+    const firstPart = partAt(page, 0);
     await firstPart.scrollIntoViewIfNeeded();
-    // Add a fresh check to the seeded first criterion.
-    await firstPart.locator('[data-testid="rubric-add-check"]:visible').first().click();
+    await firstPart.getByRole("button", { name: "Add criterion" }).click();
+    await page.getByRole("menuitem", { name: /^Multi-option check/ }).click();
 
-    // The newly-added check is the last one; rename it.
-    const newCheckName = firstPart.locator('input[placeholder="Check name"]').last();
-    await newCheckName.fill("Options check");
+    const criterion = criterionByName(firstPart, "Multi-option check");
+    await expect(criterion).toBeVisible();
+    const check = checkByName(criterion, "Select one option");
+    await expect(check).toBeVisible();
 
-    // Switch check type to Multi-option for the newly added check.
-    await firstPart.getByText("Multi-option", { exact: true }).last().click();
-
-    // The component seeds two default options. Add a third for a total of three.
-    await firstPart
-      .getByRole("button", { name: /Add option/i })
-      .last()
-      .click();
-
+    // The template seeds three options. Rename them and the points via per-row aria-labels.
     const optionLabels = ["Excellent", "Adequate", "Poor"];
     const optionPoints = [3, 2, 1];
-
-    // Rename the three placeholder option labels in order. The most-recently-added
-    // check is at the bottom of the part, so `.last()` consistently targets it.
-    await firstPart.locator('input[value="Option 1"]').last().fill(optionLabels[0]);
-    await firstPart.locator('input[value="Option 2"]').last().fill(optionLabels[1]);
-    await firstPart.locator('input[value="Option 3"]').last().fill(optionLabels[2]);
-
-    // Set points by walking from each renamed label to the next number input.
     for (let i = 0; i < 3; i++) {
-      const labelInput = firstPart.locator(`input[value="${optionLabels[i]}"]`).last();
-      const pointsInput = labelInput.locator("xpath=following::input[@type='number'][1]");
-      await pointsInput.fill(String(optionPoints[i]));
+      await check.getByLabel(`Option ${i + 1} label`).fill(optionLabels[i]);
+      await check.getByLabel(`Option ${i + 1} points`).fill(String(optionPoints[i]));
     }
 
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-save"]:visible')).toBeDisabled({ timeout: 15_000 });
-
-    // Reload and verify the option block is still there.
+    await clickSave(page);
     await page.reload();
     await selectGradingReviewTab(page);
-    await expect(page.locator('input[value="Excellent"]').first()).toBeVisible();
-    await expect(page.locator('input[value="Adequate"]').first()).toBeVisible();
-    await expect(page.locator('input[value="Poor"]').first()).toBeVisible();
 
+    const reloadedCriterion = criterionByName(partAt(page, 0), "Multi-option check");
+    const reloadedCheck = checkByName(reloadedCriterion, "Select one option");
+    for (let i = 0; i < 3; i++) {
+      await expect(reloadedCheck.getByLabel(`Option ${i + 1} label`)).toHaveValue(optionLabels[i]);
+    }
+
+    const gradingRubricId = await gradingRubricIdFor(optionsAssignment!.id);
     const supabase = adminDb();
-    const { data: checkRow } = await supabase
+    const { data: criteria } = await supabase
+      .from("rubric_criteria")
+      .select("id")
+      .eq("rubric_id", gradingRubricId)
+      .eq("name", "Multi-option check");
+    expect(criteria?.length).toBeGreaterThan(0);
+    const { data: checks } = await supabase
       .from("rubric_checks")
-      .select("name, data")
-      .eq("rubric_id", optionsAssignment!.grading_rubric_id!)
-      .eq("name", "Options check")
-      .maybeSingle();
-    expect(checkRow).not.toBeNull();
-    const data = checkRow!.data as { options?: { label: string; points: number }[] } | null;
-    expect(data?.options).toBeDefined();
-    expect(data!.options!.map((o) => o.label).sort()).toEqual([...optionLabels].sort());
+      .select("data")
+      .eq("rubric_criteria_id", criteria![0].id);
+    expect(checks?.length).toBeGreaterThan(0);
+    const dataValue = checks![0].data as { options?: { label: string; points: number }[] } | null;
+    expect(dataValue?.options?.map((o) => o.label)).toEqual(optionLabels);
+    expect(dataValue?.options?.map((o) => o.points)).toEqual(optionPoints);
   });
 
-  test.skip("Deduction-only criterion flag flows to DB", async ({ page }) => {
+  test("Deduction-only criterion flag flows to DB", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course!.id}/manage/assignments/${deductionAssignment!.id}/rubric`);
     await selectGradingReviewTab(page);
 
-    const firstPart = page.locator('[data-testid="rubric-part-0"]:visible');
+    // Use the dedicated single-check deduction-only template so we know its name.
+    const firstPart = partAt(page, 0);
     await firstPart.scrollIntoViewIfNeeded();
-    // The first seeded criterion in Part 1 is "Grading Review Criteria". Switch its scoring mode.
-    await firstPart.getByText("Deduction only", { exact: true }).first().click();
+    await firstPart.getByRole("button", { name: "Add criterion" }).click();
+    await page.getByRole("menuitem", { name: /^Deduction-only annotation/ }).click();
 
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-save"]:visible')).toBeDisabled({ timeout: 15_000 });
+    const criterion = criterionByName(firstPart, "Deduction-only annotations");
+    await expect(criterion).toBeVisible();
 
+    await clickSave(page);
+
+    const gradingRubricId = await gradingRubricIdFor(deductionAssignment!.id);
     const supabase = adminDb();
     const { data: criteria } = await supabase
       .from("rubric_criteria")
       .select("name, is_additive, is_deduction_only")
-      .eq("rubric_id", deductionAssignment!.grading_rubric_id!)
-      .eq("name", "Grading Review Criteria");
-    expect(criteria).toBeDefined();
-    expect(criteria!.length).toBeGreaterThan(0);
+      .eq("rubric_id", gradingRubricId)
+      .eq("name", "Deduction-only annotations");
+    expect(criteria?.length).toBeGreaterThan(0);
     expect(criteria![0].is_additive).toBe(false);
     expect(criteria![0].is_deduction_only).toBe(true);
   });
@@ -376,179 +376,165 @@ test.describe("Rubric editor GUI", () => {
     await page.goto(`/course/${course!.id}/manage/assignments/${mutexAssignment!.id}/rubric`);
     await selectGradingReviewTab(page);
 
-    // Capture the current YAML, then hand-edit it to be invalid.
-    await page.locator('[data-testid="rubric-source-toggle"]:visible').click();
-    await expect(page.locator(".monaco-editor").first()).toBeVisible();
-
-    // Compose YAML that sets both mutually-exclusive flags on a part.
+    // Go to source view, paste a YAML doc that violates the mutex.
+    await rubricEditor(page).getByRole("button", { name: "YAML source" }).click();
     const invalidYaml = [
-      "name: Grading Rubric",
-      "review_round: grading-review",
+      "name: Mutex Test",
       "parts:",
       "  - name: Bad Part",
       "    is_individual_grading: true",
       "    is_assign_to_student: true",
       "    criteria:",
-      "      - name: Criterion 1",
-      "        total_points: 1",
-      "        is_additive: true",
+      "      - name: Crit",
       "        checks:",
-      "          - name: Check 1",
-      "            points: 1",
-      ""
+      "          - name: Check",
+      "            points: 0",
+      "            is_required: false",
+      "            is_annotation: false",
+      "            is_comment_required: false",
+      "            student_visibility: always"
     ].join("\n");
     await setMonacoValue(page, invalidYaml);
 
-    // Try to switch back to GUI — should be rejected and stay in source mode.
-    await page.locator('[data-testid="rubric-gui-toggle"]:visible').click();
-    // Either a validation toast appears or the GUI silently refuses; assert the source pane is still active.
-    await expect(page.locator('[data-testid="rubric-source-pane"]:visible')).toBeVisible();
-    // The GUI pane should NOT have rendered.
-    await expect(page.locator('[data-testid="rubric-gui-pane"]:visible')).toHaveCount(0);
+    // Try to toggle back to GUI - it should fail and stay in source mode.
+    await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
+    // Source pane is still the active region.
+    await expect(rubricEditor(page).getByRole("region", { name: "Rubric YAML Source" })).toBeVisible();
+    // No part regions exist (GUI never rendered).
+    await expect(rubricEditor(page).getByRole("region", { name: /^Part 1:/ })).toHaveCount(0);
   });
 
-  test.skip("References round-trip through GUI and YAML", async ({ page }) => {
+  test("References round-trip through GUI and YAML", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course!.id}/manage/assignments/${referencesAssignment!.id}/rubric`);
 
-    // Seed: save the self-review rubric first so its check ids are real, then save grading-review.
+    // First add and save a check on the self-review side so the grading-review side can reference it.
     await selectSelfReviewTab(page);
-    // The default empty self-review needs a part + criterion + check. Add a minimal structure via GUI.
-    await expect(page.locator('[data-testid="rubric-gui-pane"]:visible')).toBeVisible({ timeout: 10_000 });
-    await page.locator('[data-testid="rubric-add-part"]:visible').click();
-    const newPart = page.locator('[data-testid="rubric-part-0"]:visible');
-    await newPart.getByLabel("Name").first().fill("Self Review Part");
-    await newPart.locator('[data-testid="rubric-add-criterion"]:visible').click();
-    await page.locator('[data-testid="rubric-add-criterion-template-blank"]:visible').click();
-    // Rename criterion + first check to make them findable.
-    await newPart.locator('input[value="New criterion"]').first().fill("Self Criterion");
-    await newPart.locator('input[value="New check"]').first().fill("Self Target Check");
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-save"]:visible')).toBeDisabled({ timeout: 15_000 });
+    const srPart = partAt(page, 0);
+    await srPart.scrollIntoViewIfNeeded();
+    await srPart.getByRole("button", { name: "Add criterion" }).click();
+    await page.getByRole("menuitem", { name: "Blank checkbox criterion" }).click();
+    const srCriterion = criterionByName(srPart, "New criterion");
+    await nameField(srCriterion).fill("Self Target Criterion");
+    const srCriterionRenamed = criterionByName(srPart, "Self Target Criterion");
+    const srCheck = checkByName(srCriterionRenamed, "New check");
+    await nameField(srCheck).fill("Self Target Check");
+    await clickSave(page);
 
-    // Switch to grading-review and add a reference from its first check.
+    // Reload so the grading-review side sees the freshly saved self-review check.
+    await page.reload();
+    // Now grading-review: add a check and link it to the saved self-review check.
     await selectGradingReviewTab(page);
-    const gradingPart = page.locator('[data-testid="rubric-part-0"]:visible');
-    await gradingPart.scrollIntoViewIfNeeded();
-    // Expand the References collapsible on the first check.
-    await gradingPart
-      .getByRole("button", { name: /References/i })
-      .first()
-      .click();
-    await gradingPart
-      .getByRole("button", { name: /Add reference/i })
-      .first()
-      .click();
-    const refSelect = gradingPart.getByLabel("Select reference target").first();
-    // Select by matching the visible option text. We pick whichever option contains "Self Target Check".
-    const optionValue = await refSelect.evaluate((sel: HTMLSelectElement) => {
-      const opt = Array.from(sel.options).find((o) => o.textContent?.includes("Self Target Check"));
-      return opt ? opt.value : "";
-    });
-    expect(optionValue).not.toBe("");
-    await refSelect.selectOption(optionValue);
-    await gradingPart.getByRole("button", { name: /^Add$/ }).first().click();
+    const grPart = partAt(page, 0);
+    await grPart.scrollIntoViewIfNeeded();
+    await grPart.getByRole("button", { name: "Add criterion" }).click();
+    await page.getByRole("menuitem", { name: "Blank checkbox criterion" }).click();
+    const grCriterion = criterionByName(grPart, "New criterion");
+    await nameField(grCriterion).fill("Grading Linked Criterion");
+    const grCriterionRenamed = criterionByName(grPart, "Grading Linked Criterion");
+    const grCheck = checkByName(grCriterionRenamed, "New check");
+    await nameField(grCheck).fill("Grading Linked Check");
+    const grCheckRenamed = checkByName(grCriterionRenamed, "Grading Linked Check");
 
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-save"]:visible')).toBeDisabled({ timeout: 15_000 });
+    // Expand References and add a reference.
+    await grCheckRenamed.getByRole("button", { name: /^References/ }).click();
+    await grCheckRenamed.getByRole("button", { name: /Add reference/i }).click();
+    // The picker lists target checks by name + round.
+    await pickReferenceTarget(grCheckRenamed, /Self Target Check/);
+    await grCheckRenamed.getByRole("button", { name: /^Add$/ }).click();
 
-    // Reload and verify the reference is still visible in the GUI.
+    await clickSave(page);
+
+    // Verify in DB - poll for the reference row to give the save sequence time to settle.
+    const supabase = adminDb();
+    type RefRow = { referencing_rubric_check_id: number; referenced_rubric_check_id: number };
+    let refRows: RefRow[] = [];
+    await expect
+      .poll(
+        async () => {
+          const { data } = await supabase
+            .from("rubric_check_references")
+            .select("referencing_rubric_check_id, referenced_rubric_check_id")
+            .eq("assignment_id", referencesAssignment!.id);
+          refRows = (data as RefRow[] | null) ?? [];
+          return refRows.length;
+        },
+        { timeout: 10_000 }
+      )
+      .toBeGreaterThan(0);
+    const checkNames = await supabase
+      .from("rubric_checks")
+      .select("id, name")
+      .in(
+        "id",
+        refRows.flatMap((r) => [r.referencing_rubric_check_id, r.referenced_rubric_check_id])
+      );
+    const nameById = new Map((checkNames.data ?? []).map((c) => [c.id, c.name]));
+    expect(refRows.some((r) => nameById.get(r.referencing_rubric_check_id) === "Grading Linked Check")).toBe(true);
+    expect(refRows.some((r) => nameById.get(r.referenced_rubric_check_id) === "Self Target Check")).toBe(true);
+
+    // YAML round-trip: reload so the in-memory rubric is freshly hydrated from DB (including
+    // the newly-created reference row), then switch to source view.
     await page.reload();
     await selectGradingReviewTab(page);
-    await page
-      .locator('[data-testid="rubric-part-0"]:visible')
-      .getByRole("button", { name: /References/i })
-      .first()
-      .click();
-    await expect(page.getByText(/Self Target Check/).first()).toBeVisible();
-
-    // Switch to source and confirm the YAML has a `references:` block in name-keyed form.
-    await page.locator('[data-testid="rubric-source-toggle"]:visible').click();
+    await rubricEditor(page).getByRole("button", { name: "YAML source" }).click();
     const yaml = await getMonacoValue(page);
-    expect(yaml).toMatch(/references:/);
-    expect(yaml).toContain("Self Target Check");
-    expect(yaml).toContain("self-review");
-
-    // Switch back to GUI — reference still there.
-    await page.locator('[data-testid="rubric-gui-toggle"]:visible').click();
-    await page
-      .locator('[data-testid="rubric-part-0"]:visible')
-      .getByRole("button", { name: /References/i })
-      .first()
-      .click();
-    await expect(page.getByText(/Self Target Check/).first()).toBeVisible();
-
-    // DB verification.
-    const supabase = adminDb();
-    const { data: refs } = await supabase
-      .from("rubric_check_references")
-      .select("id, referencing_rubric_check_id, referenced_rubric_check_id")
-      .eq("rubric_id", referencesAssignment!.grading_rubric_id!);
-    expect(refs).toBeDefined();
-    expect(refs!.length).toBeGreaterThan(0);
+    expect(yaml).toContain("Grading Linked Check");
+    expect(yaml).toMatch(/references:\s*\n[\s\S]*Self Target Check/);
   });
 
-  test.skip("Cross-round save with unsaved sibling tab does not create the reference", async ({ page }) => {
+  test("Cross-round save with unsaved sibling tab does not create the reference", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.goto(`/course/${course!.id}/manage/assignments/${crossRoundAssignment!.id}/rubric`);
 
-    // Build & save self-review first so its check has a real id we can target.
+    // Add and save a self-review check first.
     await selectSelfReviewTab(page);
-    await expect(page.locator('[data-testid="rubric-gui-pane"]:visible')).toBeVisible({ timeout: 10_000 });
-    await page.locator('[data-testid="rubric-add-part"]:visible').click();
-    const srPart = page.locator('[data-testid="rubric-part-0"]:visible');
-    await srPart.getByLabel("Name").first().fill("Self Review Part");
-    await srPart.locator('[data-testid="rubric-add-criterion"]:visible').click();
-    await page.locator('[data-testid="rubric-add-criterion-template-blank"]:visible').click();
-    await srPart.locator('input[value="New check"]').first().fill("Sibling Target Check");
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    await expect(page.locator('[data-testid="rubric-save"]:visible')).toBeDisabled({ timeout: 15_000 });
+    const srPart = partAt(page, 0);
+    await srPart.scrollIntoViewIfNeeded();
+    await srPart.getByRole("button", { name: "Add criterion" }).click();
+    await page.getByRole("menuitem", { name: "Blank checkbox criterion" }).click();
+    const srCriterion = criterionByName(srPart, "New criterion");
+    await nameField(srCriterion).fill("Sibling Target Criterion");
+    const srCriterionRenamed = criterionByName(srPart, "Sibling Target Criterion");
+    const srCheck = checkByName(srCriterionRenamed, "New check");
+    await nameField(srCheck).fill("Sibling Target Check");
+    await clickSave(page);
+    // Reload so the grading-review side has fresh sibling rubric data.
+    await page.reload();
+    await selectSelfReviewTab(page);
 
-    // Now: dirty the self-review tab (unsaved edit) and DO NOT save.
-    await srPart.locator('input[value="Sibling Target Check"]').first().fill("Sibling Target Check Edited");
-    // Confirm the tab label reflects the unsaved state.
-    await expect(page.getByRole("tab", { name: /Self Review.*Unsaved/i })).toBeVisible();
-
-    // Switch to grading-review and attempt to add a reference targeting the self-review check.
+    // Now dirty the self-review tab (do NOT save).
+    await nameField(checkByName(partAt(page, 0), "Sibling Target Check")).fill("Sibling Target Check EDITED");
+    // Switch to grading-review WITHOUT saving the dirty self-review edit.
     await selectGradingReviewTab(page);
-    const gradingPart = page.locator('[data-testid="rubric-part-0"]:visible');
-    await gradingPart.scrollIntoViewIfNeeded();
-    await gradingPart
-      .getByRole("button", { name: /References/i })
-      .first()
-      .click();
-    await gradingPart
-      .getByRole("button", { name: /Add reference/i })
-      .first()
-      .click();
-    // The matching option in the typeahead should be present but disabled with a "save tab first" hint;
-    // the explicit Add button is also disabled. We force the reference into the YAML to exercise the
-    // server-side rejection path instead.
-    await gradingPart
-      .getByRole("button", { name: /Cancel/i })
-      .first()
-      .click();
+    const grPart = partAt(page, 0);
+    await grPart.scrollIntoViewIfNeeded();
+    await grPart.getByRole("button", { name: "Add criterion" }).click();
+    await page.getByRole("menuitem", { name: "Blank checkbox criterion" }).click();
+    const grCriterion = criterionByName(grPart, "New criterion");
+    await nameField(grCriterion).fill("Grading Referencing Criterion");
+    const grCriterionRenamed = criterionByName(grPart, "Grading Referencing Criterion");
+    const grCheck = checkByName(grCriterionRenamed, "New check");
+    await nameField(grCheck).fill("Grading Referencing Check");
+    const grCheckRenamed = checkByName(grCriterionRenamed, "Grading Referencing Check");
 
-    // Manually add the reference via the source view (bypasses the disabled UI).
-    await page.locator('[data-testid="rubric-source-toggle"]:visible').click();
-    const yaml = await getMonacoValue(page);
-    // Inject a references block onto the first check by string-replacing the first " points:" line.
-    const injected = yaml.replace(
-      /(\bpoints:\s*\d+\s*\n)/,
-      `$1            references:\n              - review_round: self-review\n                check: Sibling Target Check Edited\n`
-    );
-    await setMonacoValue(page, injected);
+    await grCheckRenamed.getByRole("button", { name: /^References/ }).click();
+    await grCheckRenamed.getByRole("button", { name: /Add reference/i }).click();
+    // The sibling tab is dirty - the picker should disable that target option.
+    const targetSelect = grCheckRenamed.getByLabel("Select reference target");
+    const targetOption = targetSelect.locator("option").filter({ hasText: /Sibling Target Check/ });
+    await expect(targetOption.first()).toBeDisabled();
 
-    // Save grading-review. We expect a warning toast about the unsaved sibling tab and NO new reference row.
-    await page.locator('[data-testid="rubric-save"]:visible').click();
-    // The save itself succeeds (rubric body still saves), but the references portion warns.
-    await expect(page.getByText(/Reference target unsaved/i)).toBeVisible({ timeout: 15_000 });
+    // Save grading-review. Since the user cannot pick the disabled option, no reference row
+    // should be created.
+    await rubricEditor(page).getByRole("button", { name: "Cancel" }).first().click();
+    await clickSave(page);
 
     const supabase = adminDb();
     const { data: refs } = await supabase
       .from("rubric_check_references")
-      .select("id")
-      .eq("rubric_id", crossRoundAssignment!.grading_rubric_id!);
-    expect(refs ?? []).toHaveLength(0);
+      .select("referencing_rubric_check_id, referenced_rubric_check_id")
+      .eq("assignment_id", crossRoundAssignment!.id);
+    expect(refs?.length ?? 0).toBe(0);
   });
 });

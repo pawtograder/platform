@@ -50,8 +50,8 @@ function errorFor(errors: ValidationError[], path: string): string | undefined {
 
 type PartCardProps = {
   part: HydratedRubricPart;
-  // Display position within the parent rubric (0-indexed). Used for the data-testid so tests
-  // can target parts by visible order rather than by raw DB ordinal.
+  // Display position within the parent rubric (0-indexed). Surfaced in the aria-label so
+  // tests can address parts by visible order regardless of the raw DB ordinal.
   displayIndex: number;
   onChange: (next: HydratedRubricPart) => void;
   onDelete: () => void;
@@ -115,7 +115,8 @@ export function PartCard({
       borderColor={nameError ? "border.error" : "border.subtle"}
       borderRadius="md"
       bg="bg.panel"
-      data-testid={`rubric-part-${displayIndex}`}
+      role="region"
+      aria-label={`Part ${displayIndex + 1}: ${part.name || "(unnamed)"}`}
     >
       <HStack justify="space-between" p={2}>
         <HStack gap={2} flex="1" minW="0">
@@ -207,7 +208,7 @@ export function PartCard({
               <Heading size="xs">Criteria</Heading>
               <Menu.Root>
                 <Menu.Trigger asChild>
-                  <Button size="2xs" variant="surface" data-testid="rubric-add-criterion">
+                  <Button size="2xs" variant="surface">
                     <LuPlus /> Add criterion
                   </Button>
                 </Menu.Trigger>
@@ -215,12 +216,7 @@ export function PartCard({
                   <Menu.Positioner>
                     <Menu.Content>
                       {(Object.keys(CRITERIA_TEMPLATES) as CriteriaTemplateKey[]).map((key) => (
-                        <Menu.Item
-                          key={key}
-                          value={key}
-                          onClick={() => handleAddTemplate(key)}
-                          data-testid={`rubric-add-criterion-template-${key}`}
-                        >
+                        <Menu.Item key={key} value={key} onClick={() => handleAddTemplate(key)}>
                           {TEMPLATE_LABELS[key]}
                         </Menu.Item>
                       ))}

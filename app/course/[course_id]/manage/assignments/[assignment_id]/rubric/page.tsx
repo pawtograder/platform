@@ -568,6 +568,9 @@ function InnerRubricPage() {
   );
 
   function handleEditorWillMount(monaco: Monaco) {
+    // Expose the Monaco namespace for e2e tests that need to read/write YAML directly.
+    // No-op in normal use - just a property on window.
+    (window as Window & { monaco?: Monaco }).monaco = monaco;
     window.MonacoEnvironment = {
       getWorker(_module_id, label) {
         switch (label) {
@@ -659,16 +662,21 @@ function InnerRubricPage() {
     [debouncedParseYaml, errorMarkers.length]
   );
 
-  const handleGuiChange = useCallback((next: HydratedRubric) => {
-    setActiveRubric(next);
-    const yamlString = YAML.stringify(HydratedRubricToYamlRubric(next));
-    setValue(yamlString);
-    // GUI edits skip the parse debounce — the rubric is already structured.
-    setRubricForSidebar(next);
-    setError(undefined);
-    setUpdatePaused(false);
-    if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
-  }, []);
+  const handleGuiChange = useCallback(
+    (next: HydratedRubric) => {
+      setActiveRubric(next);
+      // Pass the full set of sibling rubrics so references serialize with their
+      // (review_round, part, criterion, check) name tuple instead of being dropped.
+      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(next, { allRubrics: allHydratedRubrics }));
+      setValue(yamlString);
+      // GUI edits skip the parse debounce — the rubric is already structured.
+      setRubricForSidebar(next);
+      setError(undefined);
+      setUpdatePaused(false);
+      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+    },
+    [allHydratedRubrics]
+  );
 
   const guiValidationErrors = useMemo(() => (activeRubric ? validateRubric(activeRubric) : []), [activeRubric]);
 
@@ -721,7 +729,7 @@ function InnerRubricPage() {
     }
 
     if (activeRubric) {
-      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(activeRubric));
+      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(activeRubric, { allRubrics: allHydratedRubrics }));
       setValue(yamlString);
       if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
       // Pass 0 for error markers, as this is a trusted source or new template
@@ -753,7 +761,8 @@ function InnerRubricPage() {
     assignment_id,
     createMinimalNewHydratedRubric,
     initialActiveRubricSnapshot,
-    wasRestoredFromStashRef
+    wasRestoredFromStashRef,
+    allHydratedRubrics
   ]);
 
   useEffect(() => {
@@ -1121,7 +1130,7 @@ function InnerRubricPage() {
   }
 
   return (
-    <Flex ref={setRubricPageRootElement} w="100%" minW="0" direction="column">
+    <Flex ref={setRubricPageRootElement} w="100%" minW="0" direction="column" role="region" aria-label="Rubric Editor">
       <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
         <Toaster />
         <VStack align="start">
@@ -1198,7 +1207,6 @@ function InnerRubricPage() {
               size="xs"
               variant={viewMode === "gui" ? "solid" : "ghost"}
               onClick={() => handleViewModeChange("gui")}
-              data-testid="rubric-gui-toggle"
             >
               GUI
             </Button>
@@ -1206,7 +1214,6 @@ function InnerRubricPage() {
               size="xs"
               variant={viewMode === "source" ? "solid" : "ghost"}
               onClick={() => handleViewModeChange("source")}
-              data-testid="rubric-source-toggle"
             >
               YAML source
             </Button>
@@ -1262,7 +1269,6 @@ function InnerRubricPage() {
               loadingText="Saving..."
               loading={isSaving}
               disabled={isSaving || !hasUnsavedChanges}
-              data-testid="rubric-save"
               onClick={async () => {
                 try {
                   setIsSaving(true);
@@ -1307,7 +1313,7 @@ function InnerRubricPage() {
                 </Center>
               )}
               {viewMode === "gui" && activeRubric && (
-                <Box w="100%" h="calc(100vh - 150px)" overflowY="auto" data-testid="rubric-gui-pane">
+                <Box w="100%" h="calc(100vh - 150px)" overflowY="auto" role="region" aria-label="Rubric GUI">
                   <RubricEditorTree
                     rubric={activeRubric}
                     onChange={handleGuiChange}
@@ -1337,7 +1343,8 @@ function InnerRubricPage() {
                 w="100%"
                 h="calc(100vh - 150px)"
                 display={viewMode === "source" ? "block" : "none"}
-                data-testid="rubric-source-pane"
+                role="region"
+                aria-label="Rubric YAML Source"
               >
                 <Editor
                   height="calc(100vh - 150px)"

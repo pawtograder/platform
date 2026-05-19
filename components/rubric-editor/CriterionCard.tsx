@@ -123,7 +123,14 @@ export function CriterionCard({
   };
 
   return (
-    <Box border="1px solid" borderColor={nameError ? "border.error" : "border.muted"} borderRadius="md" bg="bg.subtle">
+    <Box
+      border="1px solid"
+      borderColor={nameError ? "border.error" : "border.muted"}
+      borderRadius="md"
+      bg="bg.subtle"
+      role="region"
+      aria-label={`Criterion: ${criteria.name || "(unnamed)"}`}
+    >
       <HStack justify="space-between" p={2}>
         <HStack gap={2} flex="1" minW="0">
           <IconButton
@@ -255,7 +262,7 @@ export function CriterionCard({
           <Box>
             <HStack justify="space-between" mb={2}>
               <Heading size="xs">Checks</Heading>
-              <Button size="2xs" variant="surface" onClick={handleAddCheck} data-testid="rubric-add-check">
+              <Button size="2xs" variant="surface" onClick={handleAddCheck}>
                 <LuPlus /> Add check
               </Button>
             </HStack>

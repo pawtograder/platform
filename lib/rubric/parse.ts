@@ -68,23 +68,25 @@ export function YamlCriteriaToHydratedCriteria(
 }
 
 export function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPart[] {
-  const partsWithIds = parts.filter((part) => part.id);
+  // Only real DB IDs (positive integers) must be unique. Placeholder ids (-1 / 0 / undefined
+  // / null) are sentinels for "create new" and may legitimately appear on multiple new items
+  // emitted by the GUI's quick-add templates.
+  const hasRealId = <T extends { id?: number | null }>(item: T) => typeof item.id === "number" && item.id > 0;
+  const partsWithIds = parts.filter(hasRealId);
   const partIds = new Set(partsWithIds.map((part) => part.id));
   if (partIds.size !== partsWithIds.length) {
     throw new Error(
       "Duplicate part ids in YAML. If you intend to copy a part, simply remove the ID on the copy, and a new ID will be generated for the new part upon saving."
     );
   }
-  const criteriaWithIds = parts.flatMap((part) => part.criteria.filter((criteria) => criteria.id));
+  const criteriaWithIds = parts.flatMap((part) => part.criteria.filter(hasRealId));
   const criteriaIds = new Set(criteriaWithIds.map((criteria) => criteria.id));
   if (criteriaIds.size !== criteriaWithIds.length) {
     throw new Error(
       "Duplicate criteria ids in YAML. If you intend to copy a criteria, simply remove the ID on the copy, and a new ID will be generated for the new criteria upon saving."
     );
   }
-  const checksWithIds = parts.flatMap((part) =>
-    part.criteria.flatMap((criteria) => criteria.checks.filter((check) => check.id))
-  );
+  const checksWithIds = parts.flatMap((part) => part.criteria.flatMap((criteria) => criteria.checks.filter(hasRealId)));
   const checkIds = new Set(checksWithIds.map((check) => check.id));
   if (checkIds.size !== checksWithIds.length) {
     throw new Error(

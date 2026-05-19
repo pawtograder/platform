@@ -240,7 +240,14 @@ export function CheckRow({
   }, [check.points, check.is_required, checkType]);
 
   return (
-    <Box border="1px solid" borderColor={nameError ? "border.error" : "border.subtle"} borderRadius="md" bg="bg.panel">
+    <Box
+      border="1px solid"
+      borderColor={nameError ? "border.error" : "border.subtle"}
+      borderRadius="md"
+      bg="bg.panel"
+      role="region"
+      aria-label={`Check: ${check.name || "(unnamed)"}`}
+    >
       <HStack justify="space-between" p={2}>
         <HStack gap={2} flex="1" minW="0">
           <IconButton
@@ -392,22 +399,30 @@ export function CheckRow({
               <Text fontSize="xs" color="fg.muted" mb={2}>
                 Label: what the grader sees in the picker. Points: how many points this option is worth when chosen.
               </Text>
+              {options.length > 0 && (
+                <HStack mb={1} gap={2} fontSize="xs" color="fg.muted">
+                  <Text flex="1">Label</Text>
+                  <Text maxW="24" minW="16">
+                    Points
+                  </Text>
+                </HStack>
+              )}
               <Stack gap={2}>
                 {options.map((opt, idx) => (
-                  <HStack key={idx} gap={2} align="flex-end">
-                    <Field label={idx === 0 ? "Label" : undefined} flex="1">
-                      <Input
-                        value={opt.label ?? ""}
-                        onChange={(e) => handleOptionChange(idx, { label: e.target.value })}
-                      />
-                    </Field>
-                    <Field label={idx === 0 ? "Points" : undefined} maxW="24">
-                      <Input
-                        type="number"
-                        value={opt.points ?? 0}
-                        onChange={(e) => handleOptionChange(idx, { points: Number(e.target.value) })}
-                      />
-                    </Field>
+                  <HStack key={idx} gap={2} align="center">
+                    <Input
+                      flex="1"
+                      aria-label={`Option ${idx + 1} label`}
+                      value={opt.label ?? ""}
+                      onChange={(e) => handleOptionChange(idx, { label: e.target.value })}
+                    />
+                    <Input
+                      maxW="24"
+                      type="number"
+                      aria-label={`Option ${idx + 1} points`}
+                      value={opt.points ?? 0}
+                      onChange={(e) => handleOptionChange(idx, { points: Number(e.target.value) })}
+                    />
                     <IconButton
                       aria-label="Move option up"
                       size="2xs"
