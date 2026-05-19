@@ -60,9 +60,12 @@ type PartCardProps = {
 
 const TEMPLATE_LABELS: Record<CriteriaTemplateKey, string> = {
   blank: "Blank checkbox criterion",
+  metNotMet: "Met / not met (binary)",
   metPartialNotMet: "Met / partial / not met",
-  multiOption: "Multi-option check",
-  deductionOnlyAnnotation: "Deduction-only annotation"
+  fourTier: "Four-tier (excellent / good / fair / poor)",
+  multiOption: "Multi-option check (single check with options)",
+  annotationDeduction: "Code-quality deductions (multiple annotations)",
+  deductionOnlyAnnotation: "Deduction-only annotation (single)"
 };
 
 export function PartCard({

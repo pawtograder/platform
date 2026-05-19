@@ -79,6 +79,77 @@ export function metPartialNotMet(): HydratedRubricCriteria {
   });
 }
 
+export function metNotMet(): HydratedRubricCriteria {
+  return baseCriteria({
+    name: "Met / not met",
+    is_additive: true,
+    total_points: 1,
+    max_checks_per_submission: 1,
+    min_checks_per_submission: 1,
+    rubric_checks: [
+      baseCheck({ name: "Met", points: 1, ordinal: 0 }),
+      baseCheck({ name: "Not met", points: 0, ordinal: 1 })
+    ]
+  });
+}
+
+export function fourTier(): HydratedRubricCriteria {
+  return baseCriteria({
+    name: "Excellent / good / fair / poor",
+    is_additive: true,
+    total_points: 4,
+    max_checks_per_submission: 1,
+    min_checks_per_submission: 1,
+    rubric_checks: [
+      baseCheck({ name: "Excellent", points: 4, ordinal: 0 }),
+      baseCheck({ name: "Good", points: 3, ordinal: 1 }),
+      baseCheck({ name: "Fair", points: 2, ordinal: 2 }),
+      baseCheck({ name: "Poor", points: 0, ordinal: 3 })
+    ]
+  });
+}
+
+export function annotationDeduction(): HydratedRubricCriteria {
+  return baseCriteria({
+    name: "Code-quality deductions",
+    is_additive: false,
+    is_deduction_only: true,
+    total_points: 10,
+    rubric_checks: [
+      baseCheck({
+        name: "Style violation",
+        points: 1,
+        is_annotation: true,
+        is_comment_required: true,
+        max_annotations: 5,
+        annotation_target: "file",
+        student_visibility: "if_applied",
+        ordinal: 0
+      }),
+      baseCheck({
+        name: "Long method / function",
+        points: 2,
+        is_annotation: true,
+        is_comment_required: true,
+        max_annotations: 3,
+        annotation_target: "file",
+        student_visibility: "if_applied",
+        ordinal: 1
+      }),
+      baseCheck({
+        name: "Missing documentation",
+        points: 1,
+        is_annotation: true,
+        is_comment_required: false,
+        max_annotations: 5,
+        annotation_target: "file",
+        student_visibility: "if_applied",
+        ordinal: 2
+      })
+    ]
+  });
+}
+
 export function multiOption(): HydratedRubricCriteria {
   return baseCriteria({
     name: "Multi-option check",
@@ -123,8 +194,11 @@ export function deductionOnlyAnnotation(): HydratedRubricCriteria {
 
 export const CRITERIA_TEMPLATES = {
   blank: emptyCheckbox,
+  metNotMet,
   metPartialNotMet,
+  fourTier,
   multiOption,
+  annotationDeduction,
   deductionOnlyAnnotation
 } as const;
 
