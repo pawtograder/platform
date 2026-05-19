@@ -39,7 +39,7 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([student, instructor]);
 });
 
-test("instructors can view commits and request grading for a selected commit", async ({ page }) => {
+test("instructors can view commits and request grading from the submission view", async ({ page }) => {
   const repositoryName = `pawtograder-playground/e2e-ignore-commit-history-${Date.now()}`;
   const recordedSha = "1111111111111111111111111111111111111111";
   const githubOnlySha = "2222222222222222222222222222222222222222";
@@ -143,23 +143,24 @@ test("instructors can view commits and request grading for a selected commit", a
   });
 
   await loginAsUser(page, instructor, course);
-  await page.goto(`/course/${course.id}/manage/assignments/${assignment.id}/repositories`);
+  await page.goto(`/course/${course.id}/assignments/${assignment.id}/submissions/${submission!.id}`);
 
-  const repositoryRow = page.getByRole("row").filter({ hasText: repositoryName });
-  await expect(repositoryRow).toBeVisible();
-  await repositoryRow.getByRole("button", { name: "Commit History" }).click();
+  await page.getByRole("button", { name: "Commit History" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Commit History" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Commit date/time")).toBeVisible();
   await expect(dialog.getByText("Recorded webhook commit")).toBeVisible();
   await expect(dialog.getByText("Recorded Author")).toBeVisible();
-  await expect(dialog.getByText("#")).toBeVisible();
   await expect(dialog.getByText("GitHub-only late work")).toBeVisible();
   await expect(dialog.getByText("GitHub Author")).toBeVisible();
 
+  // The recorded commit has the active submission attached.
+  const recordedRow = dialog.getByRole("row").filter({ hasText: "Recorded webhook commit" });
+  await expect(recordedRow.getByText("Currently active")).toBeVisible();
+
+  // The GitHub-only commit has no submission yet, so the action is "Create submission and activate".
   const githubOnlyRow = dialog.getByRole("row").filter({ hasText: "GitHub-only late work" });
-  await githubOnlyRow.getByRole("button", { name: "Trigger grading" }).click();
+  await githubOnlyRow.getByRole("button", { name: /Create submission and activate/ }).click();
   await page.getByRole("button", { name: "Confirm action" }).last().click();
 
   await expect

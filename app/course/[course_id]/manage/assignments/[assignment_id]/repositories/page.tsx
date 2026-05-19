@@ -1,6 +1,5 @@
 "use client";
 
-import { RepositoryCommitHistoryDialog } from "@/components/assignments/commit-history-dialog";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
@@ -774,26 +773,15 @@ export default function RepositoriesPage() {
         id: "actions",
         header: "Actions",
         cell: ({ row }) => {
-          const label = row.original.assignment_groups?.name
-            ? `Group ${row.original.assignment_groups.name}`
-            : (row.original.profiles?.name ?? undefined);
           return (
             <HStack gap={2}>
-              <RepositoryCommitHistoryDialog
-                courseId={Number(course_id)}
-                assignmentId={Number(assignment_id)}
-                repositoryId={row.original.id}
-                repositoryFullName={row.original.repository}
-                studentOrGroupLabel={label}
-                showTriggerAction
-              />
               <SyncButton repoId={row.original.id} tableController={repositories} />
             </HStack>
           );
         }
       }
     ],
-    [repositories, assignment, course_id, assignment_id]
+    [repositories, assignment?.data?.template_repo, assignment?.data?.latest_template_sha]
   );
 
   const {

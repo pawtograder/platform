@@ -7,7 +7,20 @@ import {
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, Textarea, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  CloseButton,
+  Dialog,
+  Flex,
+  Heading,
+  HStack,
+  List,
+  Skeleton,
+  Table,
+  Text,
+  Textarea,
+  VStack
+} from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
@@ -52,6 +65,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { StaffCommitHistory } from "@/components/submissions/staff-commit-history";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatGradingReviewScoreLines } from "@/lib/formatGradingReviewForMarkdown";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
@@ -1262,7 +1276,11 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
 function SubmissionHistory({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const invalidate = useInvalidate();
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
+  const [isStaffDialogOpen, setIsStaffDialogOpen] = useState(false);
   const courseController = useCourseController();
+  const isStaff = useIsGraderOrInstructor();
+  const { course_id } = useParams();
+  const courseId = Number(course_id);
 
   // TODO: Remove this once we migrate to TableController for submissions tracking
   // Listen for submission broadcasts to detect when a new active submission appears
@@ -1317,6 +1335,60 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
     submission.assignment_group_id,
     invalidate
   ]);
+
+  if (isStaff) {
+    return (
+      <Dialog.Root
+        open={isStaffDialogOpen}
+        onOpenChange={(details) => setIsStaffDialogOpen(details.open)}
+        size="cover"
+        lazyMount
+        unmountOnExit
+      >
+        <Dialog.Trigger asChild>
+          <Button
+            variant={hasNewSubmission ? "solid" : "outline"}
+            colorPalette={hasNewSubmission ? "yellow" : "default"}
+          >
+            <Icon as={FaHistory} />
+            Commit History
+            {hasNewSubmission && <Icon as={FaBell} />}
+          </Button>
+        </Dialog.Trigger>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content p={3}>
+            <Dialog.Header p={0}>
+              <Flex justify="space-between" align="center" gap={4}>
+                <Box>
+                  <Dialog.Title>Commit History</Dialog.Title>
+                  <Text fontSize="sm" color="fg.muted">
+                    {submission.repository}
+                  </Text>
+                </Box>
+                <Dialog.CloseTrigger asChild>
+                  <CloseButton bg="bg" size="sm" />
+                </Dialog.CloseTrigger>
+              </Flex>
+            </Dialog.Header>
+            <Dialog.Body p={0} pt={3}>
+              {submission.repository_id !== null && (
+                <StaffCommitHistory
+                  courseId={courseId}
+                  assignmentId={submission.assignment_id}
+                  repositoryId={submission.repository_id}
+                  repositoryFullName={submission.repository}
+                  profileId={submission.profile_id}
+                  assignmentGroupId={submission.assignment_group_id}
+                  currentSubmissionId={submission.id}
+                />
+              )}
+            </Dialog.Body>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Dialog.Root>
+    );
+  }
 
   return (
     <PopoverRoot lazyMount unmountOnExit>
