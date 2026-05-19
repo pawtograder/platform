@@ -17,13 +17,21 @@ import {
   Textarea,
   VStack
 } from "@chakra-ui/react";
-import { useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
 import { CheckRow } from "@/components/rubric-editor/CheckRow";
 import { SortableList } from "@/components/rubric-editor/SortableList";
 import { ValidationError } from "@/components/rubric-editor/validation";
 
 type ScoringMode = "additive" | "non-additive" | "deduction-only";
+
+// Internal mode keys are preserved so YAML round-trips (`is_additive`,
+// `is_deduction_only`) keep working; the labels below are the user-facing names.
+const MODE_LABELS: Record<ScoringMode, string> = {
+  additive: "Award per check",
+  "non-additive": "Deduct from total",
+  "deduction-only": "Penalty only"
+};
 
 function getScoringMode(c: HydratedRubricCriteria): ScoringMode {
   if (c.is_deduction_only) return "deduction-only";
@@ -82,7 +90,7 @@ type CriterionCardProps = {
   referenceContext?: ReferenceEditorContext;
 };
 
-export function CriterionCard({
+export const CriterionCard = memo(function CriterionCard({
   criteria,
   onChange,
   onDelete,
@@ -95,32 +103,53 @@ export function CriterionCard({
   const [advancedOpen, setAdvancedOpen] = useState(
     criteria.min_checks_per_submission != null || criteria.max_checks_per_submission != null
   );
+  const criteriaRef = useRef(criteria);
+  criteriaRef.current = criteria;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const emitCriteria = useCallback((next: HydratedRubricCriteria) => {
+    onChangeRef.current(next);
+  }, []);
 
   const mode = getScoringMode(criteria);
   const nameError = errorFor(validationErrors, `${pathPrefix}.name`);
   const checksError = errorFor(validationErrors, `${pathPrefix}.checks`);
   const minError = errorFor(validationErrors, `${pathPrefix}.min_checks_per_submission`);
 
-  const handleChecksReorder = (next: HydratedRubricCheck[]) => {
-    onChange({ ...criteria, rubric_checks: next });
-  };
+  const handleChecksReorder = useCallback(
+    (next: HydratedRubricCheck[]) => {
+      const c = criteriaRef.current;
+      emitCriteria({ ...c, rubric_checks: next });
+    },
+    [emitCriteria]
+  );
 
-  const handleAddCheck = () => {
+  const handleAddCheck = useCallback(() => {
+    const c = criteriaRef.current;
     const next = blankCheck();
-    next.ordinal = criteria.rubric_checks.length;
-    onChange({ ...criteria, rubric_checks: [...criteria.rubric_checks, next] });
-  };
+    next.ordinal = c.rubric_checks.length;
+    emitCriteria({ ...c, rubric_checks: [...c.rubric_checks, next] });
+  }, [emitCriteria]);
 
-  const handleCheckChange = (idx: number, next: HydratedRubricCheck) => {
-    const arr = criteria.rubric_checks.slice();
-    arr[idx] = next;
-    onChange({ ...criteria, rubric_checks: arr });
-  };
+  const handleCheckChange = useCallback(
+    (idx: number, next: HydratedRubricCheck) => {
+      const c = criteriaRef.current;
+      const arr = c.rubric_checks.slice();
+      arr[idx] = next;
+      emitCriteria({ ...c, rubric_checks: arr });
+    },
+    [emitCriteria]
+  );
 
-  const handleCheckDelete = (idx: number) => {
-    const arr = criteria.rubric_checks.filter((_, i) => i !== idx).map((c, i) => ({ ...c, ordinal: i }));
-    onChange({ ...criteria, rubric_checks: arr });
-  };
+  const handleCheckDelete = useCallback(
+    (idx: number) => {
+      const c = criteriaRef.current;
+      const arr = c.rubric_checks.filter((_, i) => i !== idx).map((ch, i) => ({ ...ch, ordinal: i }));
+      emitCriteria({ ...c, rubric_checks: arr });
+    },
+    [emitCriteria]
+  );
 
   return (
     <Box
@@ -145,7 +174,7 @@ export function CriterionCard({
             {criteria.name || "(unnamed criterion)"}
           </Heading>
           <Text fontSize="xs" color="fg.muted">
-            {mode} · {criteria.total_points ?? 0} pts · {criteria.rubric_checks.length} check
+            {MODE_LABELS[mode]} · {criteria.total_points ?? 0} pts · {criteria.rubric_checks.length} check
             {criteria.rubric_checks.length === 1 ? "" : "s"}
           </Text>
         </HStack>
@@ -162,43 +191,48 @@ export function CriterionCard({
             errorText={nameError}
             helperText="A single rule or quality to assess (e.g., 'Code style', 'Q1 reflection')."
           >
-            <Input value={criteria.name ?? ""} onChange={(e) => onChange({ ...criteria, name: e.target.value })} />
+            <Input
+              value={criteria.name ?? ""}
+              onChange={(e) => emitCriteria({ ...criteriaRef.current, name: e.target.value })}
+            />
           </Field>
           <Field label="Description" helperText="Optional. Markdown supported. Shown to graders above the checks.">
             <Textarea
               value={criteria.description ?? ""}
-              onChange={(e) => onChange({ ...criteria, description: e.target.value || null })}
+              onChange={(e) => emitCriteria({ ...criteriaRef.current, description: e.target.value || null })}
               rows={2}
             />
           </Field>
           <Field label="Scoring mode">
             <RadioGroup
               value={mode}
-              onValueChange={(d) => d.value && onChange(applyScoringMode(criteria, d.value as ScoringMode))}
+              onValueChange={(d) =>
+                d.value && emitCriteria(applyScoringMode(criteriaRef.current, d.value as ScoringMode))
+              }
             >
               <Stack gap={2} align="stretch">
                 <Radio value="additive" alignItems="flex-start">
                   <VStack align="start" gap={0}>
-                    <Text>Additive</Text>
+                    <Text>Award per check</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Points add up from each check the grader applies. The criterion&apos;s total points is the cap.
+                      Students start at 0; each check the grader applies adds points, capped at the criterion total.
                     </Text>
                   </VStack>
                 </Radio>
                 <Radio value="non-additive" alignItems="flex-start">
                   <VStack align="start" gap={0}>
-                    <Text>Non-additive</Text>
+                    <Text>Deduct from total</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Students start at the total points for the criterion and lose points for each check applied.
+                      Students start at the criterion total; each check applied subtracts points, floored at 0.
                     </Text>
                   </VStack>
                 </Radio>
                 <Radio value="deduction-only" alignItems="flex-start">
                   <VStack align="start" gap={0}>
-                    <Text>Deduction only</Text>
+                    <Text>Penalty only</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Students start at 0 points for the criterion and lose points for each check applied. Useful for
-                      penalty-only grading.
+                      Students start at 0; each check applied subtracts points. The criterion never contributes
+                      positively — use it for pure penalties (e.g. style violations). The total points sets the floor.
                     </Text>
                   </VStack>
                 </Radio>
@@ -209,7 +243,7 @@ export function CriterionCard({
             <Input
               type="number"
               value={criteria.total_points ?? 0}
-              onChange={(e) => onChange({ ...criteria, total_points: Number(e.target.value) })}
+              onChange={(e) => emitCriteria({ ...criteriaRef.current, total_points: Number(e.target.value) })}
             />
           </Field>
 
@@ -232,8 +266,8 @@ export function CriterionCard({
                     type="number"
                     value={criteria.min_checks_per_submission ?? ""}
                     onChange={(e) =>
-                      onChange({
-                        ...criteria,
+                      emitCriteria({
+                        ...criteriaRef.current,
                         min_checks_per_submission: e.target.value === "" ? null : Number(e.target.value)
                       })
                     }
@@ -248,8 +282,8 @@ export function CriterionCard({
                     type="number"
                     value={criteria.max_checks_per_submission ?? ""}
                     onChange={(e) =>
-                      onChange({
-                        ...criteria,
+                      emitCriteria({
+                        ...criteriaRef.current,
                         max_checks_per_submission: e.target.value === "" ? null : Number(e.target.value)
                       })
                     }
@@ -296,4 +330,4 @@ export function CriterionCard({
       )}
     </Box>
   );
-}
+});

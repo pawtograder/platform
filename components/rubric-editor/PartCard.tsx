@@ -18,7 +18,7 @@ import {
   Textarea,
   VStack
 } from "@chakra-ui/react";
-import { useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
 import { CriterionCard } from "@/components/rubric-editor/CriterionCard";
 import { SortableList } from "@/components/rubric-editor/SortableList";
@@ -68,10 +68,10 @@ const TEMPLATE_LABELS: Record<CriteriaTemplateKey, string> = {
   fourTier: "Four-tier (excellent / good / fair / poor)",
   multiOption: "Multi-option check (single check with options)",
   annotationDeduction: "Code-quality deductions (multiple annotations)",
-  deductionOnlyAnnotation: "Deduction-only annotation (single)"
+  deductionOnlyAnnotation: "Penalty-only annotation (single)"
 };
 
-export function PartCard({
+export const PartCard = memo(function PartCard({
   part,
   displayIndex,
   onChange,
@@ -82,32 +82,56 @@ export function PartCard({
   referenceContext
 }: PartCardProps) {
   const [expanded, setExpanded] = useState(true);
+  const partRef = useRef(part);
+  partRef.current = part;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const emitPart = useCallback((next: HydratedRubricPart) => {
+    onChangeRef.current(next);
+  }, []);
 
   const mode = getPartMode(part);
   const nameError = errorFor(validationErrors, `${pathPrefix}.name`);
   const modeError = errorFor(validationErrors, `${pathPrefix}.mode`);
   const criteriaError = errorFor(validationErrors, `${pathPrefix}.criteria`);
 
-  const handleCriteriaReorder = (next: HydratedRubricCriteria[]) => {
-    onChange({ ...part, rubric_criteria: next });
-  };
+  const handleCriteriaReorder = useCallback(
+    (next: HydratedRubricCriteria[]) => {
+      const p = partRef.current;
+      emitPart({ ...p, rubric_criteria: next });
+    },
+    [emitPart]
+  );
 
-  const handleAddTemplate = (key: CriteriaTemplateKey) => {
-    const tpl = CRITERIA_TEMPLATES[key]();
-    tpl.ordinal = part.rubric_criteria.length;
-    onChange({ ...part, rubric_criteria: [...part.rubric_criteria, tpl] });
-  };
+  const handleAddTemplate = useCallback(
+    (key: CriteriaTemplateKey) => {
+      const p = partRef.current;
+      const tpl = CRITERIA_TEMPLATES[key]();
+      tpl.ordinal = p.rubric_criteria.length;
+      emitPart({ ...p, rubric_criteria: [...p.rubric_criteria, tpl] });
+    },
+    [emitPart]
+  );
 
-  const handleCriteriaChange = (idx: number, next: HydratedRubricCriteria) => {
-    const arr = part.rubric_criteria.slice();
-    arr[idx] = next;
-    onChange({ ...part, rubric_criteria: arr });
-  };
+  const handleCriteriaChange = useCallback(
+    (idx: number, next: HydratedRubricCriteria) => {
+      const p = partRef.current;
+      const arr = p.rubric_criteria.slice();
+      arr[idx] = next;
+      emitPart({ ...p, rubric_criteria: arr });
+    },
+    [emitPart]
+  );
 
-  const handleCriteriaDelete = (idx: number) => {
-    const arr = part.rubric_criteria.filter((_, i) => i !== idx).map((c, i) => ({ ...c, ordinal: i }));
-    onChange({ ...part, rubric_criteria: arr });
-  };
+  const handleCriteriaDelete = useCallback(
+    (idx: number) => {
+      const p = partRef.current;
+      const arr = p.rubric_criteria.filter((_, i) => i !== idx).map((c, i) => ({ ...c, ordinal: i }));
+      emitPart({ ...p, rubric_criteria: arr });
+    },
+    [emitPart]
+  );
 
   return (
     <Box
@@ -153,7 +177,7 @@ export function PartCard({
             errorText={nameError}
             helperText="A logical section of the rubric. Often a question, problem, or deliverable."
           >
-            <Input value={part.name ?? ""} onChange={(e) => onChange({ ...part, name: e.target.value })} />
+            <Input value={part.name ?? ""} onChange={(e) => emitPart({ ...partRef.current, name: e.target.value })} />
           </Field>
           <Field
             label="Description"
@@ -161,14 +185,14 @@ export function PartCard({
           >
             <Textarea
               value={part.description ?? ""}
-              onChange={(e) => onChange({ ...part, description: e.target.value || null })}
+              onChange={(e) => emitPart({ ...partRef.current, description: e.target.value || null })}
               rows={2}
             />
           </Field>
           <Field label="Mode" invalid={!!modeError} errorText={modeError}>
             <RadioGroup
               value={mode}
-              onValueChange={(d) => d.value && onChange(applyPartMode(part, d.value as PartMode))}
+              onValueChange={(d) => d.value && emitPart(applyPartMode(partRef.current, d.value as PartMode))}
             >
               <Stack gap={2} align="stretch">
                 <Radio value="standard" alignItems="flex-start">
@@ -254,4 +278,4 @@ export function PartCard({
       )}
     </Box>
   );
-}
+});

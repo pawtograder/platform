@@ -23,7 +23,7 @@ import {
   Textarea,
   VStack
 } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2, LuArrowUp, LuArrowDown, LuLink, LuX } from "react-icons/lu";
 import { ValidationError } from "@/components/rubric-editor/validation";
 import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
@@ -93,7 +93,7 @@ type CandidateTarget = {
   rubricHasUnsavedChanges: boolean;
 };
 
-export function CheckRow({
+export const CheckRow = memo(function CheckRow({
   check,
   onChange,
   onDelete,
@@ -295,7 +295,11 @@ export function CheckRow({
             />
           </Field>
           <HStack gap={4} align="flex-start" wrap="wrap">
-            <Field label="Points" maxW="32" helperText="Awarded (additive) or deducted (deduction-only) when applied.">
+            <Field
+              label="Points"
+              maxW="32"
+              helperText="Added to the score in award-per-check criteria; subtracted in deduct-from-total or penalty-only criteria."
+            >
               <Input
                 type="number"
                 value={check.points ?? 0}
@@ -694,4 +698,4 @@ export function CheckRow({
       )}
     </Box>
   );
-}
+});

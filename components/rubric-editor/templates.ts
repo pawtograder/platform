@@ -174,7 +174,7 @@ export function multiOption(): HydratedRubricCriteria {
 
 export function deductionOnlyAnnotation(): HydratedRubricCriteria {
   return baseCriteria({
-    name: "Deduction-only annotations",
+    name: "Penalty-only annotations",
     is_additive: false,
     is_deduction_only: true,
     total_points: 10,

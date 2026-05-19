@@ -1,4 +1,5 @@
 export { RubricEditorTree, type ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
+export { RubricGuiEditor, type RubricGuiEditorHandle } from "@/components/rubric-editor/RubricGuiEditor";
 export { RubricHeaderForm } from "@/components/rubric-editor/RubricHeaderForm";
 export { PartCard } from "@/components/rubric-editor/PartCard";
 export { CriterionCard } from "@/components/rubric-editor/CriterionCard";

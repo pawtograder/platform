@@ -53,7 +53,7 @@ import {
   YamlRubricToHydratedRubric
 } from "@/lib/rubric";
 import type { RubricPointsBreakdown } from "@/lib/rubric";
-import { RubricEditorTree, validateRubric } from "@/components/rubric-editor";
+import { RubricGuiEditor, type RubricGuiEditorHandle } from "@/components/rubric-editor";
 import { createClient } from "@/utils/supabase/client";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
@@ -265,6 +265,13 @@ function InnerRubricPage() {
   }, []);
 
   const debounceTimeoutRef = useRef<NodeJS.Timeout>();
+  const guiEditorRef = useRef<RubricGuiEditorHandle>(null);
+  const pendingGuiRubricRef = useRef<HydratedRubric | null>(null);
+  const [guiEditorEpoch, setGuiEditorEpoch] = useState(0);
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  /** Set by handleGuiChange so the activeRubric→YAML sync effect does not fight GUI edits. */
+  const skipActiveRubricYamlSyncRef = useRef(false);
   const wasRestoredFromStashRef = useRef(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
@@ -647,6 +654,9 @@ function InnerRubricPage() {
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value) {
+        // Monaco stays mounted while hidden; programmatic setValue from GUI sync must not
+        // drive YAML debounce / "preview paused" state.
+        if (viewModeRef.current === "gui") return;
         setValue(value);
         if (debounceTimeoutRef.current) {
           clearTimeout(debounceTimeoutRef.current);
@@ -662,23 +672,72 @@ function InnerRubricPage() {
     [debouncedParseYaml, errorMarkers.length]
   );
 
-  const handleGuiChange = useCallback(
-    (next: HydratedRubric) => {
-      setActiveRubric(next);
-      // Pass the full set of sibling rubrics so references serialize with their
-      // (review_round, part, criterion, check) name tuple instead of being dropped.
-      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(next, { allRubrics: allHydratedRubrics }));
-      setValue(yamlString);
-      // GUI edits skip the parse debounce — the rubric is already structured.
-      setRubricForSidebar(next);
-      setError(undefined);
-      setUpdatePaused(false);
-      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+  const applyGuiUnsavedStatus = useCallback(
+    (_rubric: HydratedRubric, yamlString: string) => {
+      if (!initialActiveRubricSnapshot) {
+        const dirty = yamlString.trim() !== "";
+        setHasUnsavedChanges(dirty);
+        if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: dirty }));
+        return;
+      }
+      const snapshotYaml = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
+      const changed = snapshotYaml !== yamlString;
+      setHasUnsavedChanges(changed);
+      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: changed }));
     },
-    [allHydratedRubrics]
+    [initialActiveRubricSnapshot, activeReviewRound]
   );
 
-  const guiValidationErrors = useMemo(() => (activeRubric ? validateRubric(activeRubric) : []), [activeRubric]);
+  const syncGuiRubricToYamlAndPreview = useCallback(
+    (rubric: HydratedRubric): string => {
+      skipActiveRubricYamlSyncRef.current = true;
+      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(rubric, { allRubrics: allHydratedRubrics }));
+      setValue(yamlString);
+      setRubricForSidebar(rubric);
+      applyGuiUnsavedStatus(rubric, yamlString);
+      setUpdatePaused(false);
+      return yamlString;
+    },
+    [allHydratedRubrics, applyGuiUnsavedStatus]
+  );
+
+  const flushPendingGuiSync = useCallback((): string => {
+    const rubric = guiEditorRef.current?.flushDraft() ?? pendingGuiRubricRef.current ?? activeRubric;
+    if (!rubric) return value;
+    pendingGuiRubricRef.current = rubric;
+    setActiveRubric(rubric);
+    return syncGuiRubricToYamlAndPreview(rubric);
+  }, [activeRubric, value, syncGuiRubricToYamlAndPreview]);
+
+  const handleGuiDraftActivity = useCallback(
+    (rubric: HydratedRubric) => {
+      pendingGuiRubricRef.current = rubric;
+      setUpdatePaused(true);
+      setHasUnsavedChanges(true);
+      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
+      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+    },
+    [activeReviewRound]
+  );
+
+  const handleGuiCommit = useCallback(
+    (rubric: HydratedRubric) => {
+      skipActiveRubricYamlSyncRef.current = true;
+      pendingGuiRubricRef.current = rubric;
+      setActiveRubric(rubric);
+      setError(undefined);
+      syncGuiRubricToYamlAndPreview(rubric);
+    },
+    [syncGuiRubricToYamlAndPreview]
+  );
+
+  const guiReferenceContext = useMemo(
+    () => ({
+      otherRubrics: allHydratedRubrics.filter((r) => r.review_round !== activeReviewRound),
+      unsavedRoundTabs: unsavedStatusPerTab
+    }),
+    [allHydratedRubrics, activeReviewRound, unsavedStatusPerTab]
+  );
 
   const handleViewModeChange = useCallback(
     (next: "gui" | "source") => {
@@ -707,6 +766,7 @@ function InnerRubricPage() {
           hydrated.review_round = activeReviewRound;
           if (activeRubric && activeRubric.id > 0) hydrated.id = activeRubric.id;
           setActiveRubric(hydrated);
+          setGuiEditorEpoch((e) => e + 1);
           setRubricForSidebar(hydrated);
           setError(undefined);
           persistViewMode("gui");
@@ -717,11 +777,21 @@ function InnerRubricPage() {
           });
         }
       } else {
-        // GUI -> Source. `value` is already kept in sync with activeRubric by handleGuiChange.
+        // GUI -> Source: flush debounced YAML so the editor shows the latest GUI edits.
+        flushPendingGuiSync();
         persistViewMode("source");
       }
     },
-    [viewMode, value, persistViewMode, assignment_id, activeReviewRound, assignmentDetails, activeRubric]
+    [
+      viewMode,
+      value,
+      persistViewMode,
+      assignment_id,
+      activeReviewRound,
+      assignmentDetails,
+      activeRubric,
+      flushPendingGuiSync
+    ]
   );
 
   useEffect(() => {
@@ -737,7 +807,12 @@ function InnerRubricPage() {
       // In source mode with unsaved YAML edits, activeRubric is stale relative to what the
       // user is typing. Re-serializing it (e.g. on a sibling-rubric refetch) would wipe their
       // in-flight edits.
+      if (skipActiveRubricYamlSyncRef.current) {
+        skipActiveRubricYamlSyncRef.current = false;
+        return;
+      }
       const yamlString = YAML.stringify(HydratedRubricToYamlRubric(activeRubric, { allRubrics: allHydratedRubrics }));
+      if (yamlString === value) return;
       setValue(yamlString);
       if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
       // Pass 0 for error markers, as this is a trusted source or new template
@@ -776,6 +851,8 @@ function InnerRubricPage() {
   ]);
 
   useEffect(() => {
+    if (viewMode === "gui") return;
+
     if (!initialActiveRubricSnapshot && !value) {
       setHasUnsavedChanges(false);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
@@ -818,7 +895,7 @@ function InnerRubricPage() {
     } else {
       setHasUnsavedChanges(!!value);
     }
-  }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id]);
+  }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id, viewMode]);
 
   useEffect(() => {
     if (!rubricPageRootElement) return;
@@ -1201,6 +1278,7 @@ function InnerRubricPage() {
                   activeReviewRound
                 );
                 setActiveRubric(demoTemplate);
+                setGuiEditorEpoch((e) => e + 1);
                 setValue(YAML.stringify(HydratedRubricToYamlRubric(demoTemplate)));
                 setStashedEditorStates((prev) => {
                   const newState = { ...prev };
@@ -1271,6 +1349,7 @@ function InnerRubricPage() {
               onClick={() => {
                 if (initialActiveRubricSnapshot) {
                   setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
+                  setGuiEditorEpoch((e) => e + 1);
                   setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
                   toaster.create({
                     title: "Reset",
@@ -1285,10 +1364,12 @@ function InnerRubricPage() {
                       activeReviewRound
                     );
                     setActiveRubric(minimal);
+                    setGuiEditorEpoch((e) => e + 1);
                     setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
                     setValue("");
                   } else {
                     setActiveRubric(undefined);
+                    setGuiEditorEpoch((e) => e + 1);
                     setInitialActiveRubricSnapshot(undefined);
                     setValue("");
                   }
@@ -1317,7 +1398,8 @@ function InnerRubricPage() {
               onClick={async () => {
                 try {
                   setIsSaving(true);
-                  const summary = await saveRubric(value);
+                  const yamlToSave = viewMode === "gui" ? flushPendingGuiSync() : value;
+                  const summary = await saveRubric(yamlToSave);
                   // Long-lived toast so the instructor has time to read what
                   // changed (including how many submission reviews were
                   // recomputed). The closable meta flag adds an X button so
@@ -1359,16 +1441,15 @@ function InnerRubricPage() {
               )}
               {viewMode === "gui" && activeRubric && (
                 <Box w="100%" h="calc(100vh - 150px)" overflowY="auto" role="region" aria-label="Rubric GUI">
-                  <RubricEditorTree
+                  <RubricGuiEditor
+                    key={`${activeReviewRound}-${activeRubric.id}-${guiEditorEpoch}`}
+                    ref={guiEditorRef}
                     rubric={activeRubric}
-                    onChange={handleGuiChange}
-                    validationErrors={guiValidationErrors}
+                    onCommit={handleGuiCommit}
+                    onDraftActivity={handleGuiDraftActivity}
                     assignmentMaxPoints={assignmentMaxPoints}
                     autograderPoints={autograderPoints}
-                    referenceContext={{
-                      otherRubrics: allHydratedRubrics.filter((r) => r.review_round !== activeReviewRound),
-                      unsavedRoundTabs: unsavedStatusPerTab
-                    }}
+                    referenceContext={guiReferenceContext}
                   />
                 </Box>
               )}
@@ -1655,8 +1736,8 @@ parts:
             max_annotations: 1
             points: 5
             student_visibility: always
-      - description: This is additive scoring with multiple checks. Each check has
-          multiple options. Graders must select one option for each check.
+      - description: This is award-per-check scoring with multiple checks. Each check
+          has multiple options. Graders must select one option for each check.
         is_additive: true
         name: Test case quality
         total_points: 10
@@ -1792,12 +1873,12 @@ parts:
             is_comment_required: true
             points: 2
             student_visibility: if_applied
-      - description: This is an example of deduction-only scoring. Students start at 0 points
+      - description: This is an example of penalty-only scoring. Students start at 0 points
           and can only lose points (down to -total_points). No positive points are ever
-          awarded. This is useful for penalty-only grading schemes.
+          awarded. This is useful for pure-penalty grading schemes.
         is_additive: false
         is_deduction_only: true
-        name: Deduction-only penalties
+        name: Penalty-only deductions
         total_points: 20
         checks:
           - name: Late submission
