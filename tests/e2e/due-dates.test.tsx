@@ -316,24 +316,20 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const note = "This is a test exception";
     await addExceptionModal.getByPlaceholder("Optional note").fill(note);
     await addExceptionModal.getByRole("button", { name: "Add Exception" }).click();
-    await expect(
-      page.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 ${tokensConsumed} ${instructor!.private_profile_name} ${note}`
-      })
-    ).toBeVisible();
+    // The consolidated due-date exceptions table now renders rows as:
+    //   Assignment | Student/Group (with "Individual exception" subtext) | Hours | Minutes | Tokens | Grantor | Note | Date | Actions
+    // Use the note (unique to this row) as the anchor for substring matching.
+    const exceptionRow = page.getByRole("row").filter({ hasText: note }).filter({ hasText: student2!.private_profile_name });
+    await expect(exceptionRow).toBeVisible();
+    await expect(exceptionRow).toContainText(testAssignment!.title);
+    await expect(exceptionRow).toContainText("Individual exception");
+    await expect(exceptionRow).toContainText(String(hours));
+    await expect(exceptionRow).toContainText(String(tokensConsumed));
+    await expect(exceptionRow).toContainText(instructor!.private_profile_name);
     // Test Delete
-    await page
-      .getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 ${tokensConsumed} ${instructor!.private_profile_name} ${note}`
-      })
-      .getByLabel("Delete")
-      .click();
+    await exceptionRow.getByRole("button", { name: "Delete exception" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
-    await expect(
-      page.getByRole("row", {
-        name: `${student2!.private_profile_name} ${hours} 0 ${tokensConsumed} ${instructor!.private_profile_name} ${note}`
-      })
-    ).not.toBeVisible();
+    await expect(exceptionRow).not.toBeVisible();
     // Test Gift Tokens to a student
     await page.getByRole("button", { name: "Gift Tokens" }).click();
     const giftTokensModal = page.getByRole("dialog");
@@ -352,22 +348,22 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const tokensGifted = 13;
     await giftTokensModal.locator('input[type="number"]').fill(tokensGifted.toString());
     await giftTokensModal.getByRole("button", { name: "Gift Tokens" }).click();
-    await expect(
-      page.getByRole("row", {
-        name: `${student2!.private_profile_name} 0 0 ${-tokensGifted} ${instructor!.private_profile_name} Tokens gifted by instructor`
-      })
-    ).toBeVisible();
+    const giftRow = page
+      .getByRole("row")
+      .filter({ hasText: "Tokens gifted by instructor" })
+      .filter({ hasText: student2!.private_profile_name });
+    await expect(giftRow).toBeVisible();
+    await expect(giftRow).toContainText(String(-tokensGifted));
+    await expect(giftRow).toContainText(instructor!.private_profile_name);
     // Clean up
-    await page
-      .getByRole("row", {
-        name: `${student2!.private_profile_name} 0 0 ${-tokensGifted} ${instructor!.private_profile_name} Tokens gifted by instructor`
-      })
-      .getByLabel("Delete")
-      .click();
+    await giftRow.getByRole("button", { name: "Delete exception" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
   });
   test("Student Due Date Extensions work correctly", async ({ page }) => {
-    await page.getByText("Student Extensions").click();
+    // The Chakra `Button asChild` wrapping NextLink in the nav doesn't reliably
+    // fire client-side navigation under Playwright in this env, so navigate by URL.
+    await page.goto(`/course/${course.id}/manage/course/due-date-extensions/student-extensions`);
+    await expect(page.getByRole("heading", { name: "Student-Wide Extensions" })).toBeVisible();
     await page.getByRole("button", { name: "Add Extension" }).click();
     const addExtensionModal = page.getByRole("dialog");
     await addExtensionModal
@@ -391,21 +387,34 @@ test.describe("Due Date Exceptions & Extensions", () => {
         name: `${student2!.private_profile_name} ${hours} No`
       })
     ).toBeVisible();
-    // Check that the extension is applied to the assignment exceptions
-    await page.getByText("Assignment Exceptions").click();
+    // Check that the extension is applied to the consolidated assignment exceptions table.
+    // The single virtualized table includes auto-generated rows with the instructor-granted note.
+    await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
     await expect(page.getByRole("heading", { name: "Assignment Due Date Exceptions" })).toBeVisible();
-    const dueDatesAssignment = page.getByLabel("Assignment Exceptions for Due Dates Assignment").first();
-    await expect(dueDatesAssignment).toContainText(
-      `${student2!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
-    );
 
-    const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();
-    await expect(dueDatesGroupAssignment).toContainText(
-      `${student2!.private_profile_name}Group: Test Group 1; Other members: ${student!.private_profile_name}${hours}00D${instructor!.private_profile_name}Instructor-granted extension for all assignments in class`
-    );
+    // The student-deadline-extension trigger creates per-assignment exceptions
+    // keyed by `student_id` — even for group assignments — so each row renders as
+    // an "Individual exception" for student2 in the consolidated table.
+    const autoExceptionNote = "Instructor-granted extension for all assignments in class";
+    const individualAutoRow = page
+      .getByRole("row")
+      .filter({ hasText: autoExceptionNote })
+      .filter({ hasText: testAssignment!.title })
+      .filter({ hasText: student2!.private_profile_name })
+      .filter({ hasText: "Individual exception" });
+    await expect(individualAutoRow.first()).toBeVisible();
+    await expect(individualAutoRow.first()).toContainText(String(hours));
 
-    // Test Delete
-    await page.getByText("Student Extensions").click();
+    const groupAutoRow = page
+      .getByRole("row")
+      .filter({ hasText: autoExceptionNote })
+      .filter({ hasText: testGroupAssignment!.title })
+      .filter({ hasText: student2!.private_profile_name });
+    await expect(groupAutoRow.first()).toBeVisible();
+    await expect(groupAutoRow.first()).toContainText(String(hours));
+
+    // Test Delete of the student-wide extension itself
+    await page.goto(`/course/${course.id}/manage/course/due-date-extensions/student-extensions`);
     const studentExtRow = page.getByRole("row", {
       name: `${student2!.private_profile_name} ${hours} No`
     });
@@ -421,14 +430,8 @@ test.describe("Due Date Exceptions & Extensions", () => {
       })
     ).not.toBeVisible();
     // Deleting the student-wide extension should not retroactively delete pre-existing assignment exceptions
-    await page.getByText("Assignment Exceptions").click();
-    await expect(
-      page
-        .getByRole("row", {
-          name: `${student2!.private_profile_name} ${hours} 0 0 ${instructor!.private_profile_name} Instructor-granted extension for all assignments in class`
-        })
-        .first()
-    ).toBeVisible();
+    await page.goto(`/course/${course.id}/manage/course/due-date-extensions`);
+    await expect(individualAutoRow.first()).toBeVisible();
   });
 
   test("Group-level exception displays group name and members", async ({ page }) => {
@@ -454,18 +457,19 @@ test.describe("Due Date Exceptions & Extensions", () => {
     // Reload the page
     await page.reload();
 
-    // Locate the group assignment exceptions table
-    const dueDatesGroupAssignment = page.getByLabel("Assignment Exceptions for Due Dates Group Assignment").first();
-
-    // Wait for the new group-level exception row to appear and verify content
-    const groupRow = dueDatesGroupAssignment.getByRole("row", { name: /Group-level exception for test/ });
+    // The consolidated exceptions table is unique by note. The "Student / Group" cell
+    // shows the group label plus a details line listing every group member.
+    const groupRow = page
+      .getByRole("row")
+      .filter({ hasText: /Group-level exception for test/ })
+      .filter({ hasText: testGroupAssignment!.title });
     await expect(groupRow).toBeVisible();
-    await expect(groupRow.getByText("Group: Test Group 1")).toBeVisible();
-    await expect(groupRow.getByText(student!.private_profile_name)).toBeVisible();
-    await expect(groupRow.getByText(student2!.private_profile_name)).toBeVisible();
+    await expect(groupRow).toContainText("Group: Test Group 1");
+    await expect(groupRow).toContainText(student!.private_profile_name);
+    await expect(groupRow).toContainText(student2!.private_profile_name);
 
     // Clean up by deleting the inserted group-level exception via UI
-    await groupRow.getByLabel("Delete").click();
+    await groupRow.getByRole("button", { name: "Delete exception" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
     await expect(groupRow).not.toBeVisible();
   });
@@ -494,8 +498,17 @@ test.describe("Due Date Exceptions & Extensions", () => {
     const note = "This is a test exception";
     await addExceptionModal.getByPlaceholder("Optional note").fill(note);
     await addExceptionModal.getByRole("button", { name: "Add Exception" }).click();
-    // Navigate to the Roster Tokens tab
-    await page.getByRole("link", { name: "Roster Tokens" }).click();
+    // Wait for the exception to appear in the consolidated table before navigating away
+    // so the in-flight insert finishes before we leave the page.
+    await expect(
+      page
+        .getByRole("row")
+        .filter({ hasText: note })
+        .filter({ hasText: student2!.private_profile_name })
+        .first()
+    ).toBeVisible();
+    // Navigate to the Roster Tokens tab (use goto: see note in "Student Due Date Extensions" test).
+    await page.goto(`/course/${course.id}/manage/course/due-date-extensions/roster-tokens`);
     await expect(page.getByRole("heading", { name: "Roster Tokens" })).toBeVisible();
 
     const student1Row = page.getByRole("row").filter({ has: page.getByText(student!.email) });
