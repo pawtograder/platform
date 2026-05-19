@@ -1232,7 +1232,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                       <>Not for grading</>
                     ) : (
                       <Button
-                        variant="outline"
+                        colorPalette="blue"
                         size="xs"
                         disabled={disableActivationButton}
                         loading={isActivating}

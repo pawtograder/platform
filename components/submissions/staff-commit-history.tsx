@@ -384,7 +384,7 @@ export function StaffCommitHistory({
                     {submission && !submission.is_active && !submission.is_not_graded && (
                       <Button
                         size="xs"
-                        variant="outline"
+                        colorPalette="blue"
                         loading={isBusy}
                         onClick={() => onActivateExisting(entry.sha, submission.id)}
                       >
