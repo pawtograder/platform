@@ -4,7 +4,7 @@ import { Field } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { HydratedRubric } from "@/utils/supabase/DatabaseTypes";
 import { Heading, Input, Stack, Textarea } from "@chakra-ui/react";
-import { ValidationError } from "./validation";
+import { ValidationError } from "@/components/rubric-editor/validation";
 
 type RubricHeaderFormProps = {
   rubric: HydratedRubric;

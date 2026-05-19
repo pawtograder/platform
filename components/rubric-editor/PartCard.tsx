@@ -3,14 +3,14 @@
 import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { HydratedRubric, HydratedRubricCriteria, HydratedRubricPart } from "@/utils/supabase/DatabaseTypes";
-import type { ReferenceEditorContext } from "./RubricEditorTree";
+import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
 import { Box, Button, Heading, HStack, IconButton, Input, Menu, Portal, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
-import { CriterionCard } from "./CriterionCard";
-import { SortableList } from "./SortableList";
-import { CRITERIA_TEMPLATES, CriteriaTemplateKey } from "./templates";
-import { ValidationError } from "./validation";
+import { CriterionCard } from "@/components/rubric-editor/CriterionCard";
+import { SortableList } from "@/components/rubric-editor/SortableList";
+import { CRITERIA_TEMPLATES, CriteriaTemplateKey } from "@/components/rubric-editor/templates";
+import { ValidationError } from "@/components/rubric-editor/validation";
 
 type PartMode = "standard" | "is_individual_grading" | "is_assign_to_student";
 
@@ -111,8 +111,8 @@ export function PartCard({
             {part.name || "(unnamed part)"}
           </Heading>
           <Text fontSize="xs" color="fg.muted">
-            {mode === "standard" ? "" : mode.replace(/_/g, " ")} · {part.rubric_criteria.length} criterion
-            {part.rubric_criteria.length === 1 ? "" : "a"}
+            {mode === "standard" ? "" : mode.replace(/_/g, " ")} · {part.rubric_criteria.length}{" "}
+            {part.rubric_criteria.length === 1 ? "criterion" : "criteria"}
           </Text>
         </HStack>
         <IconButton aria-label="Delete part" size="sm" variant="ghost" colorPalette="red" onClick={onDelete}>

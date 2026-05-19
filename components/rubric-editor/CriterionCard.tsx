@@ -3,13 +3,13 @@
 import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria } from "@/utils/supabase/DatabaseTypes";
-import type { ReferenceEditorContext } from "./RubricEditorTree";
+import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
 import { Box, Button, Collapsible, Heading, HStack, IconButton, Input, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
-import { CheckRow } from "./CheckRow";
-import { SortableList } from "./SortableList";
-import { ValidationError } from "./validation";
+import { CheckRow } from "@/components/rubric-editor/CheckRow";
+import { SortableList } from "@/components/rubric-editor/SortableList";
+import { ValidationError } from "@/components/rubric-editor/validation";
 
 type ScoringMode = "additive" | "non-additive" | "deduction-only";
 

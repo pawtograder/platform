@@ -36,7 +36,7 @@ export function hydratedRubricChecksToYamlRubric(
   checks: HydratedRubricCheck[],
   ctx?: SerializeContext
 ): YmlRubricChecksType[] {
-  return checks
+  return [...checks]
     .sort((a, b) => a.ordinal - b.ordinal)
     .map((check) => {
       const yamlCheck: Omit<YmlRubricChecksType, "data"> & { data?: Json | null } = {
@@ -69,18 +69,18 @@ export function hydratedRubricCriteriaToYamlRubric(
   criteria: HydratedRubricCriteria[],
   ctx?: SerializeContext
 ): YmlRubricCriteriaType[] {
-  criteria.sort((a, b) => a.ordinal - b.ordinal);
-  return criteria.map((criteria) => ({
-    id: criteria.id,
-    data: criteria.data,
-    description: valOrUndefined(criteria.description),
-    is_additive: criteria.is_additive,
-    is_deduction_only: criteria.is_deduction_only,
-    name: criteria.name,
-    total_points: criteria.total_points,
-    max_checks_per_submission: valOrUndefined(criteria.max_checks_per_submission),
-    min_checks_per_submission: valOrUndefined(criteria.min_checks_per_submission),
-    checks: hydratedRubricChecksToYamlRubric(criteria.rubric_checks, ctx)
+  const sorted = [...criteria].sort((a, b) => a.ordinal - b.ordinal);
+  return sorted.map((crit) => ({
+    id: crit.id,
+    data: crit.data,
+    description: valOrUndefined(crit.description),
+    is_additive: crit.is_additive,
+    is_deduction_only: crit.is_deduction_only,
+    name: crit.name,
+    total_points: crit.total_points,
+    max_checks_per_submission: valOrUndefined(crit.max_checks_per_submission),
+    min_checks_per_submission: valOrUndefined(crit.min_checks_per_submission),
+    checks: hydratedRubricChecksToYamlRubric(crit.rubric_checks, ctx)
   }));
 }
 
@@ -88,8 +88,8 @@ export function hydratedRubricPartToYamlRubric(
   parts: HydratedRubricPart[],
   ctx?: SerializeContext
 ): YmlRubricPartType[] {
-  parts.sort((a, b) => a.ordinal - b.ordinal);
-  return parts.map((part) => ({
+  const sorted = [...parts].sort((a, b) => a.ordinal - b.ordinal);
+  return sorted.map((part) => ({
     id: part.id,
     data: valOrUndefined(part.data),
     description: valOrUndefined(part.description),

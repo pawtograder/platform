@@ -3,10 +3,10 @@
 import { HydratedRubric, HydratedRubricPart } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Heading, HStack, Stack, Text } from "@chakra-ui/react";
 import { LuPlus } from "react-icons/lu";
-import { PartCard } from "./PartCard";
-import { RubricHeaderForm } from "./RubricHeaderForm";
-import { SortableList } from "./SortableList";
-import { ValidationError } from "./validation";
+import { PartCard } from "@/components/rubric-editor/PartCard";
+import { RubricHeaderForm } from "@/components/rubric-editor/RubricHeaderForm";
+import { SortableList } from "@/components/rubric-editor/SortableList";
+import { ValidationError } from "@/components/rubric-editor/validation";
 
 /**
  * Context the references UI inside CheckRow needs. The page passes the live set

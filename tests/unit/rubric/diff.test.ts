@@ -109,13 +109,11 @@ describe("findUpdatedPropertyNames", () => {
     expect(updated).toContain("data");
   });
 
-  it("treats identical-reference data as unchanged", () => {
-    // The implementation uses `!=` (reference inequality) on the non-data branch of the
-    // `||`, so deep-equal-but-distinct objects are still flagged. Asserting on the
-    // reference-identity case captures the only case where data is reliably ignored.
-    const shared = { options: [{ label: "x", points: 1 }] };
-    const a: Row = { ...base, data: shared };
-    const b: Row = { ...base, data: shared };
+  it("treats deep-equal data as unchanged even when references differ", () => {
+    // The implementation deep-compares the `data` field via JSON.stringify, so two
+    // distinct objects with identical contents should not be flagged as changed.
+    const a: Row = { ...base, data: { options: [{ label: "x", points: 1 }] } };
+    const b: Row = { ...base, data: { options: [{ label: "x", points: 1 }] } };
     const updated = findUpdatedPropertyNames(a, b);
     expect(updated).not.toContain("data");
   });

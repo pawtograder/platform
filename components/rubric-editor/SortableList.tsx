@@ -54,7 +54,7 @@ function SortableRow({ id, children, handleAriaLabel = "Drag to reorder" }: Sort
   );
 }
 
-type SortableListProps<T extends SortableItem> = {
+type SortableListProps<T extends SortableItem & { ordinal: number }> = {
   items: T[];
   onReorder: (next: T[]) => void;
   renderItem: (item: T, index: number) => ReactNode;
@@ -62,7 +62,7 @@ type SortableListProps<T extends SortableItem> = {
   handleAriaLabel?: (item: T, index: number) => string;
 };
 
-export function SortableList<T extends SortableItem>({
+export function SortableList<T extends SortableItem & { ordinal: number }>({
   items,
   onReorder,
   renderItem,

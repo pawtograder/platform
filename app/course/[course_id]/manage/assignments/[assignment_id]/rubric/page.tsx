@@ -73,6 +73,8 @@ const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>
   "code-walk"
 ];
 
+const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
+
 /**
  * Custom hook to get a fully hydrated rubric by review round
  */
@@ -242,7 +244,6 @@ function InnerRubricPage() {
   const [rubricForSidebar, setRubricForSidebar] = useState<HydratedRubric | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [errorMarkers, setErrorMarkers] = useState<{ message: string; startLineNumber: number }[]>([]);
-  const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
   const [viewMode, setViewMode] = useState<"gui" | "source">("gui");
   useEffect(() => {
     try {
@@ -324,7 +325,6 @@ function InnerRubricPage() {
       ? Math.max(autograderPoints, gradingRubricPoints) <= assignmentMaxPoints
       : assignmentMaxPoints === autograderPoints + gradingRubricPoints);
 
-  const assignmentControllerForRefs = useAssignmentController();
   const allHydratedRubrics = useAllHydratedRubrics();
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
@@ -1344,7 +1344,7 @@ function InnerRubricPage() {
             const { resolved, errors } = resolveReferences(filteredYamlRefs, {
               otherRubrics: otherHydratedRubrics,
               currentReviewRound: activeReviewRound,
-              existingReferences: (assignmentControllerForRefs.rubricCheckReferencesController.rows ?? [])
+              existingReferences: (assignmentController.rubricCheckReferencesController.rows ?? [])
                 .filter((r) => r.referencing_rubric_check_id === check.id)
                 .map((r) => ({ id: r.id, referenced_rubric_check_id: r.referenced_rubric_check_id }))
             });
@@ -1361,7 +1361,7 @@ function InnerRubricPage() {
       }
 
       // Reference rows in the DB owned by this rubric (filtered by rubric_id).
-      const existingReferenceRows = (assignmentControllerForRefs.rubricCheckReferencesController.rows ?? []).filter(
+      const existingReferenceRows = (assignmentController.rubricCheckReferencesController.rows ?? []).filter(
         (row) => row.rubric_id === currentEffectiveRubricId
       );
       // Build set of "desired" identities: pair of (referencing_check_id, referenced_check_id).
@@ -1437,7 +1437,7 @@ function InnerRubricPage() {
       initialActiveRubricSnapshot,
       invalidate,
       allHydratedRubrics,
-      assignmentControllerForRefs,
+      assignmentController,
       unsavedStatusPerTab
     ]
   );

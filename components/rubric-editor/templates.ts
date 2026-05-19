@@ -72,9 +72,9 @@ export function metPartialNotMet(): HydratedRubricCriteria {
     max_checks_per_submission: 1,
     min_checks_per_submission: 1,
     rubric_checks: [
-      baseCheck({ name: "Met", points: 2 }),
-      baseCheck({ name: "Partially met", points: 1 }),
-      baseCheck({ name: "Not met", points: 0 })
+      baseCheck({ name: "Met", points: 2, ordinal: 0 }),
+      baseCheck({ name: "Partially met", points: 1, ordinal: 1 }),
+      baseCheck({ name: "Not met", points: 0, ordinal: 2 })
     ]
   });
 }

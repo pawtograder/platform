@@ -24,8 +24,8 @@ import {
 } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2, LuArrowUp, LuArrowDown, LuLink, LuX } from "react-icons/lu";
-import { ValidationError } from "./validation";
-import type { ReferenceEditorContext } from "./RubricEditorTree";
+import { ValidationError } from "@/components/rubric-editor/validation";
+import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
 
 type CheckType = "checkbox" | "options" | "annotation";
 
@@ -113,10 +113,11 @@ export function CheckRow({
   const existingRefs: HydratedRubricCheckReference[] = useMemo(() => check.references ?? [], [check.references]);
   const referenceCount = existingRefs.length;
 
-  const candidateTargets: CandidateTarget[] = useMemo(() => {
+  // All cross-round checks (unfiltered). Used to resolve labels for existing
+  // references — including ones already referenced by this check.
+  const allTargets: CandidateTarget[] = useMemo(() => {
     if (!referenceContext) return [];
     const out: CandidateTarget[] = [];
-    const alreadyReferenced = new Set(existingRefs.map((r) => r.referenced_rubric_check_id));
     for (const rubric of referenceContext.otherRubrics) {
       // Cross-round only — skip rubrics that share the current review round.
       if (currentRubricReviewRound && rubric.review_round === currentRubricReviewRound) continue;
@@ -126,7 +127,6 @@ export function CheckRow({
         for (const crit of part.rubric_criteria) {
           for (const ch of crit.rubric_checks) {
             if (ch.id <= 0) continue;
-            if (alreadyReferenced.has(ch.id)) continue;
             out.push({
               id: ch.id,
               name: ch.name,
@@ -140,19 +140,26 @@ export function CheckRow({
       }
     }
     return out;
-  }, [referenceContext, currentRubricReviewRound, existingRefs]);
+  }, [referenceContext, currentRubricReviewRound]);
+
+  // Filtered list for the "Add reference" typeahead — excludes targets already
+  // referenced by this check so the user can't add a duplicate.
+  const addCandidateTargets: CandidateTarget[] = useMemo(() => {
+    const alreadyReferenced = new Set(existingRefs.map((r) => r.referenced_rubric_check_id));
+    return allTargets.filter((c) => !alreadyReferenced.has(c.id));
+  }, [allTargets, existingRefs]);
 
   const candidatesByRound: Record<string, CandidateTarget[]> = useMemo(() => {
     const grouped: Record<string, CandidateTarget[]> = {};
-    for (const c of candidateTargets) {
+    for (const c of addCandidateTargets) {
       if (!grouped[c.reviewRound]) grouped[c.reviewRound] = [];
       grouped[c.reviewRound].push(c);
     }
     return grouped;
-  }, [candidateTargets]);
+  }, [addCandidateTargets]);
 
   function lookupCandidate(id: number): CandidateTarget | undefined {
-    return candidateTargets.find((c) => c.id === id);
+    return allTargets.find((c) => c.id === id);
   }
 
   function addReference(targetId: number) {
@@ -544,10 +551,10 @@ export function CheckRow({
                         <NativeSelect.Indicator />
                       </NativeSelect.Root>
                       {selectedTargetId &&
-                        candidateTargets.find((c) => c.id === Number(selectedTargetId))?.rubricHasUnsavedChanges && (
+                        addCandidateTargets.find((c) => c.id === Number(selectedTargetId))?.rubricHasUnsavedChanges && (
                           <Text fontSize="xs" color="fg.warning">
-                            Save the {candidateTargets.find((c) => c.id === Number(selectedTargetId))?.reviewRound} tab
-                            first to reference this check.
+                            Save the {addCandidateTargets.find((c) => c.id === Number(selectedTargetId))?.reviewRound}{" "}
+                            tab first to reference this check.
                           </Text>
                         )}
                       <HStack gap={1}>
@@ -556,7 +563,8 @@ export function CheckRow({
                           colorPalette="green"
                           disabled={
                             !selectedTargetId ||
-                            !!candidateTargets.find((c) => c.id === Number(selectedTargetId))?.rubricHasUnsavedChanges
+                            !!addCandidateTargets.find((c) => c.id === Number(selectedTargetId))
+                              ?.rubricHasUnsavedChanges
                           }
                           onClick={() => {
                             const id = Number(selectedTargetId);

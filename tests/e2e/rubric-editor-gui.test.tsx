@@ -125,11 +125,14 @@ async function getMonacoValue(page: import("@playwright/test").Page): Promise<st
 }
 
 async function selectGradingReviewTab(page: import("@playwright/test").Page) {
-  await page.getByRole("tab", { name: /Grading Review/i }).click();
+  // Anchor to "Grading Review" at the start so we don't accidentally match
+  // "Meta Grading Review". The tab label may have a trailing "* (Unsaved Changes)"
+  // suffix; whitespace before the name comes from a literal " " sibling text node.
+  await page.getByRole("tab", { name: /^\s*Grading Review(\*?\s*\(Unsaved Changes\))?\s*$/i }).click();
 }
 
 async function selectSelfReviewTab(page: import("@playwright/test").Page) {
-  await page.getByRole("tab", { name: /^\s*Self Review/i }).click();
+  await page.getByRole("tab", { name: /^\s*Self Review(\*?\s*\(Unsaved Changes\))?\s*$/i }).click();
 }
 
 test.describe("Rubric editor GUI", () => {
@@ -382,6 +385,7 @@ test.describe("Rubric editor GUI", () => {
     // Seed: save the self-review rubric first so its check ids are real, then save grading-review.
     await selectSelfReviewTab(page);
     // The default empty self-review needs a part + criterion + check. Add a minimal structure via GUI.
+    await expect(page.getByTestId("rubric-gui-pane")).toBeVisible({ timeout: 10_000 });
     await page.getByTestId("rubric-add-part").click();
     const newPart = page.getByTestId("rubric-part-0");
     await newPart.getByLabel("Name").first().fill("Self Review Part");
@@ -461,6 +465,7 @@ test.describe("Rubric editor GUI", () => {
 
     // Build & save self-review first so its check has a real id we can target.
     await selectSelfReviewTab(page);
+    await expect(page.getByTestId("rubric-gui-pane")).toBeVisible({ timeout: 10_000 });
     await page.getByTestId("rubric-add-part").click();
     const srPart = page.getByTestId("rubric-part-0");
     await srPart.getByLabel("Name").first().fill("Self Review Part");

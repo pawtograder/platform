@@ -52,11 +52,12 @@ export function findUpdatedPropertyNames<T extends object>(newItem: T, existingI
         key !== "created_at" &&
         key !== "assignment_id"
     )
-    .filter(
-      (key) =>
-        (key === "data" &&
-          newItem[key as keyof T] != existingItem[key as keyof T] &&
-          JSON.stringify(newItem[key as keyof T]) != JSON.stringify(existingItem[key as keyof T])) ||
-        newItem[key as keyof T] != existingItem[key as keyof T]
-    ) as (keyof T)[];
+    .filter((key) => {
+      if (key === "data") {
+        // Deep compare via JSON stringify so distinct-but-deep-equal objects
+        // are not flagged as changed.
+        return JSON.stringify(newItem[key as keyof T]) != JSON.stringify(existingItem[key as keyof T]);
+      }
+      return newItem[key as keyof T] != existingItem[key as keyof T];
+    }) as (keyof T)[];
 }
