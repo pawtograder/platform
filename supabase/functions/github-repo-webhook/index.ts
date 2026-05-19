@@ -407,6 +407,15 @@ async function handlePushToStudentRepo(
       status: status as unknown as Json
     });
     if (checkRunError) {
+      // 23505 = unique_violation. With UNIQUE (repository_id, sha) the
+      // SELECT-then-INSERT pattern above has a race window: concurrent webhook
+      // deliveries for the same commit can both pass the SELECT, then one wins
+      // the INSERT and the other returns 23505. Treat that as a no-op so we
+      // don't throw and force GitHub to retry the whole delivery.
+      if (checkRunError.code === "23505") {
+        scope.setTag("repository_check_run_insert_race", "true");
+        continue;
+      }
       console.error(checkRunError);
       scope.setTag("error_source", "repository_check_run_insert_failed");
       scope.setTag("error_context", "Could not create repository_check_run");

@@ -311,6 +311,10 @@ export type AutograderTriggerGradingWorkflowRequest = {
   sha: string;
   class_id: number;
 };
+export type AutograderTriggerGradingWorkflowResponse = {
+  message: string;
+  repository_check_run_id: number;
+};
 
 export type AutograderRerunGraderRequest = {
   submission_ids: number[];
@@ -329,6 +333,8 @@ export type CheckRunStatus = {
   conclusion?: string;
   submission_id?: number;
   requested_at?: string;
+  workflow_triggered_at?: string;
+  check_run_marked_in_progress_at?: string;
 };
 
 export type AssignmentGroupInstructorCreateRequest = {

@@ -18,6 +18,7 @@ import { visualScreenshot } from "./VisualTestUtils";
 
 let course: Course;
 let student: TestingUser | undefined;
+let instructor: TestingUser | undefined;
 
 let assignmentInFuture: Assignment | undefined;
 let assignmentInPast: Assignment | undefined;
@@ -54,11 +55,18 @@ function computeCombinedHashFromSubmissionFiles(files: { name: string; contents:
 
 test.beforeAll(async () => {
   course = await createClass();
-  [student] = await createUsersInClass([
+  [student, instructor] = await createUsersInClass([
     {
       name: "Create Submission Student",
       public_profile_name: "Create Submission Pseudonym Student",
       role: "student",
+      class_id: course.id,
+      useMagicLink: true
+    },
+    {
+      name: "Create Submission Instructor",
+      public_profile_name: "Create Submission Pseudonym Instructor",
+      role: "instructor",
       class_id: course.id,
       useMagicLink: true
     }
@@ -123,7 +131,7 @@ test.beforeAll(async () => {
   });
 });
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
-  await logMagicLinksOnFailure([student]);
+  await logMagicLinksOnFailure([student, instructor]);
 });
 test.describe("Create submission", () => {
   test("If the deadline is in the future, the student can create a submission", async ({ page }) => {
@@ -148,6 +156,38 @@ test.describe("Create submission", () => {
       class_id: course.id
     });
     await expect(submission).rejects.toThrow("You cannot submit after the due date");
+  });
+  test("If staff manually triggered grading, the deadline is overridden and a submission is created", async () => {
+    const sha = "staff-triggered-deadline-override";
+    let submissionId: number | undefined;
+    try {
+      const submission = await insertSubmissionViaAPI({
+        student_profile_id: student!.private_profile_id,
+        assignment_id: assignmentInPast!.id,
+        class_id: course.id,
+        sha,
+        triggered_by: instructor!.private_profile_id
+      });
+      submissionId = submission.submission_id;
+    } catch (error) {
+      // The local E2E environment can lack real GitHub App credentials, causing
+      // the later repository clone step to fail after the submission row has
+      // already been created. That is still enough to prove the deadline gate
+      // was bypassed; a real deadline rejection would happen before insertion.
+      expect(error instanceof Error ? error.message : String(error)).not.toContain("due date");
+    }
+
+    let submissionQuery = supabase
+      .from("submissions")
+      .select("id, sha")
+      .eq("assignment_id", assignmentInPast!.id)
+      .eq("sha", sha);
+    if (submissionId) {
+      submissionQuery = submissionQuery.eq("id", submissionId);
+    }
+    const { data: submissionRows, error } = await submissionQuery;
+    expect(error).toBeNull();
+    expect(submissionRows?.some((row) => row.sha === sha)).toBe(true);
   });
   test("If the student has extended their due date, they can create a submission", async ({ page }) => {
     const submission = await insertSubmissionViaAPI({

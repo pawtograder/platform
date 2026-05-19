@@ -772,10 +772,16 @@ export default function RepositoriesPage() {
       {
         id: "actions",
         header: "Actions",
-        cell: ({ row }) => <SyncButton repoId={row.original.id} tableController={repositories} />
+        cell: ({ row }) => {
+          return (
+            <HStack gap={2}>
+              <SyncButton repoId={row.original.id} tableController={repositories} />
+            </HStack>
+          );
+        }
       }
     ],
-    [repositories, assignment]
+    [repositories, assignment?.data?.template_repo, assignment?.data?.latest_template_sha]
   );
 
   const {
