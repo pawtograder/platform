@@ -45,7 +45,7 @@ export function RubricHeaderForm({ rubric, onChange, validationErrors }: RubricH
         />
       </Field>
       {showCapToggle && (
-        <Field helperText="When on, a student's final score is clamped to the assignment's max points. Useful if manual rubric points are awarded as a fallback when the autograder fails.">
+        <Field helperText="Hard-cap the final score at the assignment's max points. The cap applies to the sum of autograder points + manual rubric score + any score tweak - anything above the assignment total is truncated. Commonly used when manual grading is a fallback for autograder failures, so awarding full rubric points can never push a student over the assignment total.">
           <Switch
             checked={rubric.cap_score_to_assignment_points ?? false}
             onCheckedChange={(details) => onChange({ ...rubric, cap_score_to_assignment_points: details.checked })}

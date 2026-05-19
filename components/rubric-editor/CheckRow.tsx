@@ -38,6 +38,9 @@ type CheckRowProps = {
   pathPrefix: string;
   currentRubricReviewRound?: HydratedRubric["review_round"];
   referenceContext?: ReferenceEditorContext;
+  // True when the parent criterion has min_checks_per_submission = max_checks_per_submission = 1,
+  // so the grading UI renders this criterion's checkbox-type checks as a radio-button group.
+  isRadioMode?: boolean;
 };
 
 const VISIBILITY_OPTIONS: { value: NonNullable<HydratedRubricCheck["student_visibility"]>; label: string }[] = [
@@ -97,7 +100,8 @@ export function CheckRow({
   validationErrors,
   pathPrefix,
   currentRubricReviewRound,
-  referenceContext
+  referenceContext,
+  isRadioMode = false
 }: CheckRowProps) {
   const [expanded, setExpanded] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -344,9 +348,11 @@ export function CheckRow({
               <Stack gap={2} align="stretch">
                 <Radio value="checkbox" alignItems="flex-start">
                   <VStack align="start" gap={0}>
-                    <Text>Checkbox</Text>
+                    <Text>{isRadioMode ? "Radio button" : "Checkbox"}</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Single yes/no check, worth its full point value when applied.
+                      {isRadioMode
+                        ? "Grader selects exactly one check for this criterion. The grading UI renders all checkbox-type checks in this criterion as a radio-button group (because min/max checks are both 1)."
+                        : "Single yes/no check, worth its full point value when applied."}
                     </Text>
                   </VStack>
                 </Radio>

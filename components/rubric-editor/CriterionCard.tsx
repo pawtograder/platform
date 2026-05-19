@@ -279,6 +279,7 @@ export function CriterionCard({
                     pathPrefix={`${pathPrefix}.checks[${idx}]`}
                     currentRubricReviewRound={currentRubricReviewRound}
                     referenceContext={referenceContext}
+                    isRadioMode={criteria.min_checks_per_submission === 1 && criteria.max_checks_per_submission === 1}
                   />
                 )}
               />
