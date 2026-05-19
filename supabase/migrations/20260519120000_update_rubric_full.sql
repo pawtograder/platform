@@ -94,6 +94,8 @@ DECLARE
   v_old_is_additive boolean;
   v_old_is_deduction_only boolean;
   v_old_points int;
+  v_old_is_individual_grading boolean;
+  v_old_is_assign_to_student boolean;
 
   v_changes text[] := ARRAY[]::text[];
   v_summary text;
@@ -203,6 +205,14 @@ BEGIN
       v_parts_added := v_parts_added + 1;
       v_broad_change := true;
     ELSE
+      -- Capture the part's scoring-mode flags before the update so we can detect a flip.
+      -- A change in is_individual_grading or is_assign_to_student changes how review
+      -- totals are interpreted, so the per-submission scores need to be recomputed.
+      SELECT is_individual_grading, is_assign_to_student
+      INTO v_old_is_individual_grading, v_old_is_assign_to_student
+      FROM public.rubric_parts
+      WHERE id = v_input_part_id AND rubric_id = v_rubric_id;
+
       UPDATE public.rubric_parts
       SET name = v_part->>'name',
           description = v_part->>'description',
@@ -214,6 +224,12 @@ BEGIN
 
       IF NOT FOUND THEN
         RAISE EXCEPTION 'Part % not in rubric %', v_input_part_id, v_rubric_id;
+      END IF;
+
+      IF v_old_is_individual_grading IS DISTINCT FROM COALESCE((v_part->>'is_individual_grading')::boolean, false)
+         OR v_old_is_assign_to_student IS DISTINCT FROM COALESCE((v_part->>'is_assign_to_student')::boolean, false)
+      THEN
+        v_broad_change := true;
       END IF;
 
       v_part_id_map := v_part_id_map || jsonb_build_object(v_input_part_id::text, v_input_part_id);
@@ -477,6 +493,25 @@ BEGIN
     RETURNING id
   )
   SELECT count(*) INTO v_refs_removed FROM del;
+
+  -- Server-side enforcement of the rules the GUI also applies before send:
+  --  1. The referenced check must exist.
+  --  2. It must live on the same assignment (cross-assignment references are nonsense).
+  --  3. It must live in a *different* review_round from the rubric we're saving
+  --     (same-round references are rejected; this is the cross-round-only contract).
+  -- A crafted RPC payload that violates any of these is rejected so bad rows never land
+  -- in rubric_check_references regardless of what the client sent.
+  IF EXISTS (
+    SELECT 1
+    FROM _desired_refs d
+    LEFT JOIN public.rubric_checks rc ON rc.id = d.referenced_check_id
+    LEFT JOIN public.rubrics rb ON rb.id = rc.rubric_id
+    WHERE rc.id IS NULL
+       OR rb.assignment_id IS DISTINCT FROM v_assignment_id
+       OR rb.review_round IS NOT DISTINCT FROM v_review_round
+  ) THEN
+    RAISE EXCEPTION 'rubric_check_references: one or more rows reference a missing, cross-assignment, or same-round check (rejected).';
+  END IF;
 
   WITH ins AS (
     INSERT INTO public.rubric_check_references (

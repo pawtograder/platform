@@ -685,6 +685,11 @@ function InnerRubricPage() {
       if (next === viewMode) return;
       if (next === "gui") {
         if (!value || value.trim() === "") {
+          // Empty YAML means the rubric was wiped. Clear the hydrated state too so the GUI
+          // doesn't resurrect whatever was previously in activeRubric / rubricForSidebar.
+          setActiveRubric(undefined);
+          setRubricForSidebar(undefined);
+          setError(undefined);
           persistViewMode("gui");
           return;
         }
@@ -728,14 +733,17 @@ function InnerRubricPage() {
       return;
     }
 
-    if (activeRubric) {
+    if (activeRubric && !(viewMode === "source" && hasUnsavedChanges)) {
+      // In source mode with unsaved YAML edits, activeRubric is stale relative to what the
+      // user is typing. Re-serializing it (e.g. on a sibling-rubric refetch) would wipe their
+      // in-flight edits.
       const yamlString = YAML.stringify(HydratedRubricToYamlRubric(activeRubric, { allRubrics: allHydratedRubrics }));
       setValue(yamlString);
       if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
       // Pass 0 for error markers, as this is a trusted source or new template
       debouncedParseYaml(yamlString, 0);
       setUpdatePaused(false);
-    } else {
+    } else if (!activeRubric) {
       // activeRubric is undefined.
       // This typically means no rubric from DB for this tab, or a reset to a non-existent state.
       if (initialActiveRubricSnapshot === undefined) {
@@ -762,7 +770,9 @@ function InnerRubricPage() {
     createMinimalNewHydratedRubric,
     initialActiveRubricSnapshot,
     wasRestoredFromStashRef,
-    allHydratedRubrics
+    allHydratedRubrics,
+    viewMode,
+    hasUnsavedChanges
   ]);
 
   useEffect(() => {
@@ -982,10 +992,34 @@ function InnerRubricPage() {
       const refsByPath = new Map<string, DesiredRef[]>();
       const pathKey = (p: number, c: number, k: number) => `${p}.${c}.${k}`;
 
+      // Build a lookup: referenced check id -> its rubric review_round, so we can tell which
+      // already-persisted references point at a dirty sibling tab and need to be preserved
+      // verbatim (since we can't resolve them against unsaved YAML).
+      const roundByCheckId = new Map<number, string | null>();
+      for (const rubric of allHydratedRubrics) {
+        for (const p of rubric.rubric_parts) {
+          for (const cr of p.rubric_criteria) {
+            for (const ck of cr.rubric_checks) {
+              if (ck.id > 0) roundByCheckId.set(ck.id, rubric.review_round);
+            }
+          }
+        }
+      }
+
       parsedRubricFromEditor.rubric_parts.forEach((part, partIdx) => {
         part.rubric_criteria.forEach((crit, critIdx) => {
           crit.rubric_checks.forEach((check, checkIdx) => {
             const yamlRefs = check.yaml_references;
+            const persistedRefs = check.references ?? [];
+            // Persisted references whose target lives in a dirty sibling round must survive
+            // the save even though we can't re-resolve them from the (stale) YAML.
+            const preservedFromDirty: DesiredRef[] = persistedRefs
+              .filter((r) => {
+                const targetRound = roundByCheckId.get(r.referenced_rubric_check_id);
+                return !!targetRound && !!unsavedStatusPerTab[targetRound];
+              })
+              .map((r) => ({ referenced_rubric_check_id: r.referenced_rubric_check_id }));
+
             if (yamlRefs && yamlRefs.length > 0) {
               const filteredYamlRefs = yamlRefs.filter((ref) => {
                 const targetRound = ref.review_round;
@@ -998,21 +1032,34 @@ function InnerRubricPage() {
               const { resolved, errors } = resolveReferences(filteredYamlRefs, {
                 otherRubrics: otherHydratedRubrics,
                 currentReviewRound: activeReviewRound,
-                existingReferences: (check.references ?? []).map((r) => ({
+                existingReferences: persistedRefs.map((r) => ({
                   id: r.id,
                   referenced_rubric_check_id: r.referenced_rubric_check_id
                 }))
               });
               for (const e of errors) referenceErrors.push(`${check.name}: ${e}`);
-              refsByPath.set(
-                pathKey(partIdx, critIdx, checkIdx),
-                resolved.map((r) => ({ referenced_rubric_check_id: r.referenced_rubric_check_id }))
-              );
-            } else if (check.references && check.references.length > 0) {
+              // Merge: resolved refs from YAML + any persisted refs pointing at dirty tabs.
+              // Dedupe on referenced_rubric_check_id so we don't double-list the same target.
+              const merged: DesiredRef[] = [];
+              const seen = new Set<number>();
+              for (const r of resolved) {
+                if (!seen.has(r.referenced_rubric_check_id)) {
+                  merged.push({ referenced_rubric_check_id: r.referenced_rubric_check_id });
+                  seen.add(r.referenced_rubric_check_id);
+                }
+              }
+              for (const r of preservedFromDirty) {
+                if (!seen.has(r.referenced_rubric_check_id)) {
+                  merged.push(r);
+                  seen.add(r.referenced_rubric_check_id);
+                }
+              }
+              refsByPath.set(pathKey(partIdx, critIdx, checkIdx), merged);
+            } else if (persistedRefs.length > 0) {
               // No fresh YAML refs — preserve the already-resolved DB references.
               refsByPath.set(
                 pathKey(partIdx, critIdx, checkIdx),
-                check.references.map((r) => ({ referenced_rubric_check_id: r.referenced_rubric_check_id }))
+                persistedRefs.map((r) => ({ referenced_rubric_check_id: r.referenced_rubric_check_id }))
               );
             }
           });
