@@ -184,9 +184,9 @@ async function handleAssignmentsDelete(ctx: MCPAuthContext, params: Record<strin
   return {
     success: true,
     data: {
-      message: `Assignment "${assignment.title}" has been deleted`,
+      message: (data as { message?: string })?.message ?? `Assignment "${assignment.title}" has been deleted`,
       assignment_id: assignment.id,
-      details: (data as { message?: string })?.message
+      details: data
     }
   };
 }
