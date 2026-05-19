@@ -1,0 +1,228 @@
+{
+  "id": 1086,
+  "name": "HW1 – Grading Review Rubric",
+  "parts": [
+    {
+      "id": 1444,
+      "data": null,
+      "name": "Part 1",
+      "ordinal": 0,
+      "criteria": [
+        {
+          "id": 2443,
+          "data": null,
+          "name": "Uses multiple doll components",
+          "checks": [
+            {
+              "id": 6683,
+              "data": {
+                "options": [
+                  {
+                    "label": "Used 2+ body parts",
+                    "points": 5
+                  },
+                  {
+                    "label": "Only the body, or a single part",
+                    "points": 3
+                  },
+                  {
+                    "label": "No body parts",
+                    "points": 0
+                  }
+                ]
+              },
+              "file": null,
+              "name": "Body + parts",
+              "group": null,
+              "points": 5,
+              "ordinal": 0,
+              "artifact": null,
+              "description": "Has an image with a body and some number of parts",
+              "is_required": true,
+              "kpi_category": null,
+              "is_annotation": false,
+              "max_annotations": null,
+              "annotation_target": null,
+              "student_visibility": "if_released",
+              "is_comment_required": false
+            }
+          ],
+          "ordinal": 0,
+          "description": "",
+          "is_additive": true,
+          "total_points": 5,
+          "is_deduction_only": false,
+          "max_checks_per_submission": null,
+          "min_checks_per_submission": null
+        },
+        {
+          "id": 2444,
+          "data": null,
+          "name": "Constructs an image",
+          "checks": [
+            {
+              "id": 6684,
+              "data": {
+                "options": [
+                  {
+                    "label": "Uses valid image operations",
+                    "points": 5
+                  },
+                  {
+                    "label": "Valid Pyret code, but not image operations",
+                    "points": 3
+                  },
+                  {
+                    "label": "Not valid Pyret code",
+                    "points": 0
+                  }
+                ]
+              },
+              "file": null,
+              "name": "Image",
+              "group": null,
+              "points": 5,
+              "ordinal": 0,
+              "artifact": null,
+              "description": "",
+              "is_required": true,
+              "kpi_category": null,
+              "is_annotation": false,
+              "max_annotations": null,
+              "annotation_target": null,
+              "student_visibility": "if_released",
+              "is_comment_required": false
+            }
+          ],
+          "ordinal": 1,
+          "description": "",
+          "is_additive": true,
+          "total_points": 5,
+          "is_deduction_only": false,
+          "max_checks_per_submission": null,
+          "min_checks_per_submission": null
+        }
+      ],
+      "description": "Creating Your Doll\n",
+      "is_assign_to_student": false,
+      "is_individual_grading": false
+    },
+    {
+      "id": 1445,
+      "data": null,
+      "name": "Part 2",
+      "ordinal": 1,
+      "criteria": [
+        {
+          "id": 2445,
+          "data": null,
+          "name": "Steps in the plan",
+          "checks": [
+            {
+              "id": 6685,
+              "data": {
+                "options": [
+                  {
+                    "label": "Steps are clear, simple, easy to follow",
+                    "points": 5
+                  },
+                  {
+                    "label": "Steps are clear, but not simple",
+                    "points": 4
+                  },
+                  {
+                    "label": "Steps exist, but are hard to understand",
+                    "points": 3
+                  },
+                  {
+                    "label": "No steps",
+                    "points": 0
+                  }
+                ]
+              },
+              "file": null,
+              "name": "Steps that lead to an image",
+              "group": null,
+              "points": 5,
+              "ordinal": 0,
+              "artifact": null,
+              "description": "",
+              "is_required": true,
+              "kpi_category": null,
+              "is_annotation": false,
+              "max_annotations": null,
+              "annotation_target": null,
+              "student_visibility": "if_released",
+              "is_comment_required": false
+            }
+          ],
+          "ordinal": 0,
+          "description": "",
+          "is_additive": true,
+          "total_points": 5,
+          "is_deduction_only": false,
+          "max_checks_per_submission": null,
+          "min_checks_per_submission": null
+        },
+        {
+          "id": 2446,
+          "data": null,
+          "name": "All parts of image are there",
+          "checks": [
+            {
+              "id": 6686,
+              "data": {
+                "options": [
+                  {
+                    "label": "All key elements of image exist in plan",
+                    "points": 5
+                  },
+                  {
+                    "label": "Most elements exist, but missing a few",
+                    "points": 4
+                  },
+                  {
+                    "label": "Some elements exist, including main ones",
+                    "points": 3
+                  },
+                  {
+                    "label": "Many elements, including critical ones, are missing",
+                    "points": 0
+                  }
+                ]
+              },
+              "file": null,
+              "name": "Includes necessary parts",
+              "group": null,
+              "points": 5,
+              "ordinal": 0,
+              "artifact": null,
+              "description": "",
+              "is_required": true,
+              "kpi_category": null,
+              "is_annotation": false,
+              "max_annotations": null,
+              "annotation_target": null,
+              "student_visibility": "if_released",
+              "is_comment_required": false
+            }
+          ],
+          "ordinal": 1,
+          "description": "",
+          "is_additive": true,
+          "total_points": 5,
+          "is_deduction_only": false,
+          "max_checks_per_submission": null,
+          "min_checks_per_submission": null
+        }
+      ],
+      "description": "Program Planning\n",
+      "is_assign_to_student": false,
+      "is_individual_grading": false
+    }
+  ],
+  "is_private": false,
+  "description": "Edit or delete this rubric to create your own.",
+  "review_round": "grading-review",
+  "cap_score_to_assignment_points": false
+}
