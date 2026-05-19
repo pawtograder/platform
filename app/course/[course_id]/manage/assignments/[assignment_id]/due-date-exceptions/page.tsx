@@ -894,8 +894,8 @@ export default function DueDateExceptions() {
                   <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
                 </Table.Row>
               ) : null}
-              {rowWindow.visibleRows.map((row, idx) => (
-                <Table.Row key={row.id} bg={idx % 2 === 0 ? "bg.subtle" : undefined}>
+              {rowWindow.visibleRows.map((row) => (
+                <Table.Row key={row.id} bg={row.index % 2 === 0 ? "bg.subtle" : undefined}>
                   {row.getVisibleCells().map((cell) => (
                     <Table.Cell key={cell.id} p={2}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}

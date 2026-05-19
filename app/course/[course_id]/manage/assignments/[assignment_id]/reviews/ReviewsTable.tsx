@@ -939,6 +939,10 @@ export default function ReviewsTable({
     estimatedRowHeight: 72,
     minRowsForVirtualization: 80
   });
+  const visibleColumnCount = useMemo(
+    () => columns.filter((c) => c.id !== "assignment_id_filter_col").length,
+    [columns]
+  );
   if (!rubricsReady || isLoadingReviewAssignments) {
     return <Spinner />;
   }
@@ -1042,7 +1046,7 @@ export default function ReviewsTable({
           <Table.Body>
             {rowWindow.shouldVirtualize && rowWindow.paddingTop > 0 ? (
               <Table.Row>
-                <Table.Cell colSpan={columns.length - 1} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
+                <Table.Cell colSpan={visibleColumnCount} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
               </Table.Row>
             ) : null}
             {rowWindow.visibleRows.map((row) => (
@@ -1059,7 +1063,7 @@ export default function ReviewsTable({
             ))}
             {rowWindow.shouldVirtualize && rowWindow.paddingBottom > 0 ? (
               <Table.Row>
-                <Table.Cell colSpan={columns.length - 1} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
+                <Table.Cell colSpan={visibleColumnCount} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
               </Table.Row>
             ) : null}
           </Table.Body>
