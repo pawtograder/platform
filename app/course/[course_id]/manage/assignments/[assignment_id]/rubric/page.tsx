@@ -9,8 +9,11 @@ import {
   useRubric,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric,
-  useRubricParts
+  useRubricParts,
+  useRubrics
 } from "@/hooks/useAssignment";
+import { useListTableControllerValues } from "@/lib/TableController";
+import type { RubricCheckReference } from "@/utils/supabase/DatabaseTypes";
 import {
   HydratedRubric,
   HydratedRubricCheck,
@@ -46,6 +49,7 @@ import {
   findChanges,
   findUpdatedPropertyNames,
   HydratedRubricToYamlRubric,
+  resolveReferences,
   YamlRubricToHydratedRubric
 } from "@/lib/rubric";
 import { RubricEditorTree, validateRubric } from "@/components/rubric-editor";
@@ -72,6 +76,12 @@ const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>
 /**
  * Custom hook to get a fully hydrated rubric by review round
  */
+function useReferencesForRubric(rubric_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const predicate = useCallback((row: RubricCheckReference) => row.rubric_id === rubric_id, [rubric_id]);
+  return useListTableControllerValues(controller.rubricCheckReferencesController, predicate);
+}
+
 function useHydratedRubricByReviewRound(
   review_round: NonNullable<HydratedRubric["review_round"]>
 ): HydratedRubric | undefined {
@@ -79,6 +89,7 @@ function useHydratedRubricByReviewRound(
   const parts = useRubricParts(rubric?.id);
   const allCriteria = useRubricCriteriaByRubric(rubric?.id);
   const allChecks = useRubricChecksByRubric(rubric?.id);
+  const allReferences = useReferencesForRubric(rubric?.id);
 
   return useMemo(() => {
     if (!rubric || !parts || !allCriteria || !allChecks) return undefined;
@@ -88,9 +99,15 @@ function useHydratedRubricByReviewRound(
       const partCriteria = allCriteria.filter((c) => c.rubric_part_id === part.id);
       const hydratedCriteria: HydratedRubricCriteria[] = partCriteria.map((criteria) => {
         const criteriaChecks = allChecks.filter((ch) => ch.rubric_criteria_id === criteria.id);
-        const hydratedChecks: HydratedRubricCheck[] = criteriaChecks.map((check) => ({
-          ...check
-        }));
+        const hydratedChecks: HydratedRubricCheck[] = criteriaChecks.map((check) => {
+          const refs = (allReferences ?? [])
+            .filter((r) => r.referencing_rubric_check_id === check.id)
+            .map((r) => ({ id: r.id, referenced_rubric_check_id: r.referenced_rubric_check_id }));
+          return {
+            ...check,
+            references: refs
+          };
+        });
 
         return {
           ...criteria,
@@ -108,7 +125,48 @@ function useHydratedRubricByReviewRound(
       ...rubric,
       rubric_parts: hydratedParts
     };
-  }, [rubric, parts, allCriteria, allChecks]);
+  }, [rubric, parts, allCriteria, allChecks, allReferences]);
+}
+
+/**
+ * Hydrate all rubrics on this assignment (parts + criteria + checks) without
+ * loading references. Used at save time to resolve cross-round references and
+ * by the GUI typeahead to enumerate candidate targets.
+ */
+function useAllHydratedRubrics(): HydratedRubric[] {
+  const controller = useAssignmentController();
+  const rubrics = useRubrics();
+  const parts = useListTableControllerValues(
+    controller.rubricPartsController,
+    useCallback(() => true, [])
+  );
+  const criteria = useListTableControllerValues(
+    controller.rubricCriteriaController,
+    useCallback(() => true, [])
+  );
+  const checks = useListTableControllerValues(
+    controller.rubricChecksController,
+    useCallback(() => true, [])
+  );
+  return useMemo(() => {
+    if (!rubrics) return [];
+    return rubrics.map((r) => {
+      const rParts = (parts ?? [])
+        .filter((p) => p.rubric_id === r.id)
+        .map((part) => {
+          const rCrits = (criteria ?? [])
+            .filter((c) => c.rubric_part_id === part.id)
+            .map((crit) => {
+              const rChecks = (checks ?? [])
+                .filter((ch) => ch.rubric_criteria_id === crit.id)
+                .map((ch) => ({ ...ch }) as HydratedRubricCheck);
+              return { ...crit, rubric_checks: rChecks } as HydratedRubricCriteria;
+            });
+          return { ...part, rubric_criteria: rCrits } as HydratedRubricPart;
+        });
+      return { ...r, rubric_parts: rParts } as HydratedRubric;
+    });
+  }, [rubrics, parts, criteria, checks]);
 }
 /**
  * Renders the main rubric editing page for managing and editing handgrading rubrics.
@@ -266,6 +324,8 @@ function InnerRubricPage() {
       ? Math.max(autograderPoints, gradingRubricPoints) <= assignmentMaxPoints
       : assignmentMaxPoints === autograderPoints + gradingRubricPoints);
 
+  const assignmentControllerForRefs = useAssignmentController();
+  const allHydratedRubrics = useAllHydratedRubrics();
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
       (acc, round) => {
@@ -1248,6 +1308,105 @@ function InnerRubricPage() {
         })
       );
 
+      // ---- References ----
+      // Now that all checks for this rubric have real DB ids, resolve & sync references.
+      // We resolve YAML references against the *current* set of other rubrics, then
+      // diff the desired set against the existing reference rows owned by this rubric.
+      const otherHydratedRubrics = allHydratedRubrics.filter((r) => r.id !== currentEffectiveRubricId);
+      const referencesUnsavedNotice: string[] = [];
+      const referenceErrors: string[] = [];
+      const desiredReferenceRows: Array<{
+        existingRowId?: number;
+        referencing_rubric_check_id: number;
+        referenced_rubric_check_id: number;
+      }> = [];
+
+      for (const part of parsedRubricFromEditor.rubric_parts) {
+        for (const crit of part.rubric_criteria) {
+          for (const check of crit.rubric_checks) {
+            // The check id was assigned above (toCreate path) or already real. Skip if still bogus.
+            if (!check.id || check.id <= 0) continue;
+            const yamlRefs = check.yaml_references;
+            if (!yamlRefs || yamlRefs.length === 0) continue;
+
+            // Reject any references whose target is in a sibling tab with unsaved changes —
+            // we don't yet know the final ids over there.
+            const filteredYamlRefs = yamlRefs.filter((ref) => {
+              // Try to determine the target review round, either explicitly or via the resolved id.
+              const targetRound = ref.review_round;
+              if (targetRound && unsavedStatusPerTab[targetRound]) {
+                referencesUnsavedNotice.push(targetRound);
+                return false;
+              }
+              return true;
+            });
+
+            const { resolved, errors } = resolveReferences(filteredYamlRefs, {
+              otherRubrics: otherHydratedRubrics,
+              currentReviewRound: activeReviewRound,
+              existingReferences: (assignmentControllerForRefs.rubricCheckReferencesController.rows ?? [])
+                .filter((r) => r.referencing_rubric_check_id === check.id)
+                .map((r) => ({ id: r.id, referenced_rubric_check_id: r.referenced_rubric_check_id }))
+            });
+            for (const e of errors) referenceErrors.push(`${check.name}: ${e}`);
+            for (const r of resolved) {
+              desiredReferenceRows.push({
+                existingRowId: r.id,
+                referencing_rubric_check_id: check.id,
+                referenced_rubric_check_id: r.referenced_rubric_check_id
+              });
+            }
+          }
+        }
+      }
+
+      // Reference rows in the DB owned by this rubric (filtered by rubric_id).
+      const existingReferenceRows = (assignmentControllerForRefs.rubricCheckReferencesController.rows ?? []).filter(
+        (row) => row.rubric_id === currentEffectiveRubricId
+      );
+      // Build set of "desired" identities: pair of (referencing_check_id, referenced_check_id).
+      const desiredKey = (a: number, b: number) => `${a}:${b}`;
+      const desiredSet = new Set(
+        desiredReferenceRows.map((r) => desiredKey(r.referencing_rubric_check_id, r.referenced_rubric_check_id))
+      );
+      const existingSet = new Set(
+        existingReferenceRows.map((r) => desiredKey(r.referencing_rubric_check_id, r.referenced_rubric_check_id))
+      );
+
+      const toDeleteRefRows = existingReferenceRows.filter(
+        (row) => !desiredSet.has(desiredKey(row.referencing_rubric_check_id, row.referenced_rubric_check_id))
+      );
+      const toCreateRefRows = desiredReferenceRows.filter(
+        (row) => !existingSet.has(desiredKey(row.referencing_rubric_check_id, row.referenced_rubric_check_id))
+      );
+
+      await Promise.all(
+        toDeleteRefRows.map((row) => deleteResource({ resource: "rubric_check_references", id: row.id }))
+      );
+      for (const row of toCreateRefRows) {
+        await createResource({
+          resource: "rubric_check_references",
+          values: {
+            assignment_id: assignmentDetails.id,
+            class_id: assignmentDetails.class_id,
+            rubric_id: currentEffectiveRubricId,
+            referencing_rubric_check_id: row.referencing_rubric_check_id,
+            referenced_rubric_check_id: row.referenced_rubric_check_id
+          }
+        });
+      }
+
+      const uniqueUnsavedRounds = Array.from(new Set(referencesUnsavedNotice));
+      for (const round of uniqueUnsavedRounds) {
+        toaster.warning({
+          title: "Reference target unsaved",
+          description: `Save '${round}' first to finalize the cross-round reference(s).`
+        });
+      }
+      for (const err of referenceErrors) {
+        toaster.warning({ title: "Reference not saved", description: err });
+      }
+
       const finalSavedRubricState = JSON.parse(JSON.stringify(parsedRubricFromEditor));
       setActiveRubric(finalSavedRubricState);
       setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(finalSavedRubricState))); // Update state
@@ -1276,7 +1435,10 @@ function InnerRubricPage() {
       refetchCurrentRubric,
       createMinimalNewHydratedRubric,
       initialActiveRubricSnapshot,
-      invalidate
+      invalidate,
+      allHydratedRubrics,
+      assignmentControllerForRefs,
+      unsavedStatusPerTab
     ]
   );
 
@@ -1479,6 +1641,10 @@ function InnerRubricPage() {
                     validationErrors={guiValidationErrors}
                     assignmentMaxPoints={assignmentMaxPoints}
                     autograderPoints={autograderPoints}
+                    referenceContext={{
+                      otherRubrics: allHydratedRubrics.filter((r) => r.review_round !== activeReviewRound),
+                      unsavedRoundTabs: unsavedStatusPerTab
+                    }}
                   />
                 </Box>
               )}

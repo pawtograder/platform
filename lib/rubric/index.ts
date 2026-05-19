@@ -13,3 +13,5 @@ export {
   YamlRubricToHydratedRubric
 } from "@/lib/rubric/parse";
 export { findChanges, findUpdatedPropertyNames } from "@/lib/rubric/diff";
+export { resolveReferences, serializeReferences } from "@/lib/rubric/references";
+export type { ResolvedReference, ResolveContext } from "@/lib/rubric/references";

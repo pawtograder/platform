@@ -36,7 +36,10 @@ export function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): Hydra
     points: check.points,
     is_required: check.is_required,
     annotation_target: valOrNull(check.annotation_target),
-    student_visibility: check.student_visibility || "always"
+    student_visibility: check.student_visibility || "always",
+    // Carry parsed YAML references through. Resolution (target-check-id lookup) is
+    // out of band and happens at save time when other rubrics are available.
+    yaml_references: check.references && check.references.length > 0 ? check.references : undefined
   }));
 }
 

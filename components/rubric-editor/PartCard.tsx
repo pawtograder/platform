@@ -2,7 +2,8 @@
 
 import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
-import { HydratedRubricCriteria, HydratedRubricPart } from "@/utils/supabase/DatabaseTypes";
+import { HydratedRubric, HydratedRubricCriteria, HydratedRubricPart } from "@/utils/supabase/DatabaseTypes";
+import type { ReferenceEditorContext } from "./RubricEditorTree";
 import { Box, Button, Heading, HStack, IconButton, Input, Menu, Portal, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
@@ -40,6 +41,8 @@ type PartCardProps = {
   onDelete: () => void;
   validationErrors: ValidationError[];
   pathPrefix: string;
+  currentRubricReviewRound?: HydratedRubric["review_round"];
+  referenceContext?: ReferenceEditorContext;
 };
 
 const TEMPLATE_LABELS: Record<CriteriaTemplateKey, string> = {
@@ -49,7 +52,15 @@ const TEMPLATE_LABELS: Record<CriteriaTemplateKey, string> = {
   deductionOnlyAnnotation: "Deduction-only annotation"
 };
 
-export function PartCard({ part, onChange, onDelete, validationErrors, pathPrefix }: PartCardProps) {
+export function PartCard({
+  part,
+  onChange,
+  onDelete,
+  validationErrors,
+  pathPrefix,
+  currentRubricReviewRound,
+  referenceContext
+}: PartCardProps) {
   const [expanded, setExpanded] = useState(true);
 
   const mode = getPartMode(part);
@@ -167,6 +178,8 @@ export function PartCard({ part, onChange, onDelete, validationErrors, pathPrefi
                     onDelete={() => handleCriteriaDelete(idx)}
                     validationErrors={validationErrors}
                     pathPrefix={`${pathPrefix}.criteria[${idx}]`}
+                    currentRubricReviewRound={currentRubricReviewRound}
+                    referenceContext={referenceContext}
                   />
                 )}
               />

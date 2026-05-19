@@ -4,14 +4,38 @@ import {
   HydratedRubricCriteria,
   HydratedRubricPart,
   Json,
+  YamlReference,
   YmlRubricChecksType,
   YmlRubricCriteriaType,
   YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
 import { valOrUndefined } from "@/lib/rubric/nullish";
+import { serializeReferences } from "@/lib/rubric/references";
 
-export function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRubricChecksType[] {
+/**
+ * Optional context passed through the serialize chain so reference emission can
+ * resolve target check ids back to the name-keyed YAML form.
+ */
+export type SerializeContext = {
+  /** All rubrics on the assignment (including the one being serialized). */
+  allRubrics: HydratedRubric[];
+};
+
+function emitReferencesForCheck(check: HydratedRubricCheck, ctx?: SerializeContext): YamlReference[] | undefined {
+  if (!check.references || check.references.length === 0) return undefined;
+  // Without context we can't safely emit names; fall back to id-only.
+  if (!ctx) {
+    return check.references.map((r) => ({ id: r.referenced_rubric_check_id }));
+  }
+  const refs = serializeReferences(check.references, ctx.allRubrics);
+  return refs.length > 0 ? refs : undefined;
+}
+
+export function hydratedRubricChecksToYamlRubric(
+  checks: HydratedRubricCheck[],
+  ctx?: SerializeContext
+): YmlRubricChecksType[] {
   return checks
     .sort((a, b) => a.ordinal - b.ordinal)
     .map((check) => {
@@ -33,11 +57,18 @@ export function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]):
       if (check.data !== null && check.data !== undefined) {
         yamlCheck.data = check.data;
       }
+      const refs = emitReferencesForCheck(check, ctx);
+      if (refs && refs.length > 0) {
+        (yamlCheck as YmlRubricChecksType).references = refs;
+      }
       return yamlCheck as YmlRubricChecksType;
     });
 }
 
-export function hydratedRubricCriteriaToYamlRubric(criteria: HydratedRubricCriteria[]): YmlRubricCriteriaType[] {
+export function hydratedRubricCriteriaToYamlRubric(
+  criteria: HydratedRubricCriteria[],
+  ctx?: SerializeContext
+): YmlRubricCriteriaType[] {
   criteria.sort((a, b) => a.ordinal - b.ordinal);
   return criteria.map((criteria) => ({
     id: criteria.id,
@@ -49,11 +80,14 @@ export function hydratedRubricCriteriaToYamlRubric(criteria: HydratedRubricCrite
     total_points: criteria.total_points,
     max_checks_per_submission: valOrUndefined(criteria.max_checks_per_submission),
     min_checks_per_submission: valOrUndefined(criteria.min_checks_per_submission),
-    checks: hydratedRubricChecksToYamlRubric(criteria.rubric_checks)
+    checks: hydratedRubricChecksToYamlRubric(criteria.rubric_checks, ctx)
   }));
 }
 
-export function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): YmlRubricPartType[] {
+export function hydratedRubricPartToYamlRubric(
+  parts: HydratedRubricPart[],
+  ctx?: SerializeContext
+): YmlRubricPartType[] {
   parts.sort((a, b) => a.ordinal - b.ordinal);
   return parts.map((part) => ({
     id: part.id,
@@ -62,15 +96,15 @@ export function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): Yml
     name: part.name,
     is_individual_grading: part.is_individual_grading || undefined,
     is_assign_to_student: part.is_assign_to_student || undefined,
-    criteria: hydratedRubricCriteriaToYamlRubric(part.rubric_criteria)
+    criteria: hydratedRubricCriteriaToYamlRubric(part.rubric_criteria, ctx)
   }));
 }
 
-export function HydratedRubricToYamlRubric(rubric: HydratedRubric): YmlRubricType {
+export function HydratedRubricToYamlRubric(rubric: HydratedRubric, ctx?: SerializeContext): YmlRubricType {
   return {
     name: rubric.name,
     description: valOrUndefined(rubric.description),
-    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts),
+    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts, ctx),
     cap_score_to_assignment_points: rubric.cap_score_to_assignment_points ?? undefined
   };
 }

@@ -2,7 +2,8 @@
 
 import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
-import { HydratedRubricCheck, HydratedRubricCriteria } from "@/utils/supabase/DatabaseTypes";
+import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria } from "@/utils/supabase/DatabaseTypes";
+import type { ReferenceEditorContext } from "./RubricEditorTree";
 import { Box, Button, Collapsible, Heading, HStack, IconButton, Input, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
@@ -65,9 +66,19 @@ type CriterionCardProps = {
   onDelete: () => void;
   validationErrors: ValidationError[];
   pathPrefix: string;
+  currentRubricReviewRound?: HydratedRubric["review_round"];
+  referenceContext?: ReferenceEditorContext;
 };
 
-export function CriterionCard({ criteria, onChange, onDelete, validationErrors, pathPrefix }: CriterionCardProps) {
+export function CriterionCard({
+  criteria,
+  onChange,
+  onDelete,
+  validationErrors,
+  pathPrefix,
+  currentRubricReviewRound,
+  referenceContext
+}: CriterionCardProps) {
   const [expanded, setExpanded] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(
     criteria.min_checks_per_submission != null || criteria.max_checks_per_submission != null
@@ -236,6 +247,8 @@ export function CriterionCard({ criteria, onChange, onDelete, validationErrors, 
                     onDelete={() => handleCheckDelete(idx)}
                     validationErrors={validationErrors}
                     pathPrefix={`${pathPrefix}.checks[${idx}]`}
+                    currentRubricReviewRound={currentRubricReviewRound}
+                    referenceContext={referenceContext}
                   />
                 )}
               />

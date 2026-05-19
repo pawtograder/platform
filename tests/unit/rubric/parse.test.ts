@@ -35,6 +35,30 @@ function makePart(overrides: Partial<YmlRubricPartType> = {}): YmlRubricPartType
   };
 }
 
+describe("YamlChecksToHydratedChecks - references", () => {
+  it("carries references through as yaml_references", () => {
+    const [hydrated] = YamlChecksToHydratedChecks([
+      makeCheck({
+        references: [{ review_round: "self-review", part: "P", criterion: "C", check: "X" }, { id: 42 }]
+      })
+    ]);
+    expect(hydrated.yaml_references).toEqual([
+      { review_round: "self-review", part: "P", criterion: "C", check: "X" },
+      { id: 42 }
+    ]);
+  });
+
+  it("omits yaml_references when none are given", () => {
+    const [hydrated] = YamlChecksToHydratedChecks([makeCheck()]);
+    expect(hydrated.yaml_references).toBeUndefined();
+  });
+
+  it("omits yaml_references when empty array is given", () => {
+    const [hydrated] = YamlChecksToHydratedChecks([makeCheck({ references: [] })]);
+    expect(hydrated.yaml_references).toBeUndefined();
+  });
+});
+
 describe("YamlChecksToHydratedChecks", () => {
   it("assigns ordinal from array index", () => {
     const hydrated = YamlChecksToHydratedChecks([makeCheck({ name: "a" }), makeCheck({ name: "b" })]);

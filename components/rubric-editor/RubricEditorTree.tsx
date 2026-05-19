@@ -8,12 +8,23 @@ import { RubricHeaderForm } from "./RubricHeaderForm";
 import { SortableList } from "./SortableList";
 import { ValidationError } from "./validation";
 
+/**
+ * Context the references UI inside CheckRow needs. The page passes the live set
+ * of other rubrics (hydrated) plus the unsaved-status map per review-round tab so
+ * the typeahead can gray out targets the user must save first.
+ */
+export type ReferenceEditorContext = {
+  otherRubrics: HydratedRubric[];
+  unsavedRoundTabs: Record<string, boolean>;
+};
+
 type RubricEditorTreeProps = {
   rubric: HydratedRubric;
   onChange: (next: HydratedRubric) => void;
   validationErrors: ValidationError[];
   assignmentMaxPoints: number;
   autograderPoints: number;
+  referenceContext?: ReferenceEditorContext;
 };
 
 function newBlankPart(ordinal: number): HydratedRubricPart {
@@ -38,7 +49,8 @@ export function RubricEditorTree({
   onChange,
   validationErrors,
   assignmentMaxPoints,
-  autograderPoints
+  autograderPoints,
+  referenceContext
 }: RubricEditorTreeProps) {
   const handleHeaderChange = (next: HydratedRubric) => onChange(next);
 
@@ -90,6 +102,8 @@ export function RubricEditorTree({
                 onDelete={() => handlePartDelete(idx)}
                 validationErrors={validationErrors}
                 pathPrefix={`parts[${idx}]`}
+                currentRubricReviewRound={rubric.review_round}
+                referenceContext={referenceContext}
               />
             )}
           />

@@ -3,7 +3,12 @@
 import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { Switch } from "@/components/ui/switch";
-import { HydratedRubricCheck, RubricChecksDataType } from "@/utils/supabase/DatabaseTypes";
+import {
+  HydratedRubric,
+  HydratedRubricCheck,
+  HydratedRubricCheckReference,
+  RubricChecksDataType
+} from "@/utils/supabase/DatabaseTypes";
 import {
   Badge,
   Box,
@@ -18,8 +23,9 @@ import {
   Textarea
 } from "@chakra-ui/react";
 import { useMemo, useState } from "react";
-import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2, LuArrowUp, LuArrowDown } from "react-icons/lu";
+import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2, LuArrowUp, LuArrowDown, LuLink, LuX } from "react-icons/lu";
 import { ValidationError } from "./validation";
+import type { ReferenceEditorContext } from "./RubricEditorTree";
 
 type CheckType = "checkbox" | "options" | "annotation";
 
@@ -29,6 +35,8 @@ type CheckRowProps = {
   onDelete: () => void;
   validationErrors: ValidationError[];
   pathPrefix: string;
+  currentRubricReviewRound?: HydratedRubric["review_round"];
+  referenceContext?: ReferenceEditorContext;
 };
 
 const VISIBILITY_OPTIONS: { value: NonNullable<HydratedRubricCheck["student_visibility"]>; label: string }[] = [
@@ -71,10 +79,29 @@ function errorsStartingWith(errors: ValidationError[], prefix: string): Validati
   return errors.filter((e) => e.path.startsWith(prefix));
 }
 
-export function CheckRow({ check, onChange, onDelete, validationErrors, pathPrefix }: CheckRowProps) {
+type CandidateTarget = {
+  id: number;
+  name: string;
+  points: number;
+  rubricName: string;
+  reviewRound: string;
+  rubricHasUnsavedChanges: boolean;
+};
+
+export function CheckRow({
+  check,
+  onChange,
+  onDelete,
+  validationErrors,
+  pathPrefix,
+  currentRubricReviewRound,
+  referenceContext
+}: CheckRowProps) {
   const [expanded, setExpanded] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [referencesOpen, setReferencesOpen] = useState(false);
+  const [isAddingReference, setIsAddingReference] = useState(false);
+  const [selectedTargetId, setSelectedTargetId] = useState<string>("");
 
   const checkType = getCheckType(check);
   const options = getOptions(check);
@@ -83,8 +110,60 @@ export function CheckRow({ check, onChange, onDelete, validationErrors, pathPref
   const optionsErrors = errorsStartingWith(validationErrors, `${pathPrefix}.data.options`);
   const maxAnnotationsError = errorFor(validationErrors, `${pathPrefix}.max_annotations`);
 
-  // Phase 3 will wire actual references; for now show a stub count of 0.
-  const referenceCount = 0;
+  const existingRefs: HydratedRubricCheckReference[] = useMemo(() => check.references ?? [], [check.references]);
+  const referenceCount = existingRefs.length;
+
+  const candidateTargets: CandidateTarget[] = useMemo(() => {
+    if (!referenceContext) return [];
+    const out: CandidateTarget[] = [];
+    const alreadyReferenced = new Set(existingRefs.map((r) => r.referenced_rubric_check_id));
+    for (const rubric of referenceContext.otherRubrics) {
+      // Cross-round only — skip rubrics that share the current review round.
+      if (currentRubricReviewRound && rubric.review_round === currentRubricReviewRound) continue;
+      const round = rubric.review_round ?? "(no round)";
+      const unsaved = !!referenceContext.unsavedRoundTabs[round];
+      for (const part of rubric.rubric_parts) {
+        for (const crit of part.rubric_criteria) {
+          for (const ch of crit.rubric_checks) {
+            if (ch.id <= 0) continue;
+            if (alreadyReferenced.has(ch.id)) continue;
+            out.push({
+              id: ch.id,
+              name: ch.name,
+              points: ch.points ?? 0,
+              rubricName: rubric.name,
+              reviewRound: round,
+              rubricHasUnsavedChanges: unsaved
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }, [referenceContext, currentRubricReviewRound, existingRefs]);
+
+  const candidatesByRound: Record<string, CandidateTarget[]> = useMemo(() => {
+    const grouped: Record<string, CandidateTarget[]> = {};
+    for (const c of candidateTargets) {
+      if (!grouped[c.reviewRound]) grouped[c.reviewRound] = [];
+      grouped[c.reviewRound].push(c);
+    }
+    return grouped;
+  }, [candidateTargets]);
+
+  function lookupCandidate(id: number): CandidateTarget | undefined {
+    return candidateTargets.find((c) => c.id === id);
+  }
+
+  function addReference(targetId: number) {
+    const next = [...existingRefs, { referenced_rubric_check_id: targetId }];
+    onChange({ ...check, references: next });
+  }
+
+  function removeReference(targetId: number) {
+    const next = existingRefs.filter((r) => r.referenced_rubric_check_id !== targetId);
+    onChange({ ...check, references: next });
+  }
 
   const handleTypeChange = (next: CheckType) => {
     if (next === checkType) return;
@@ -377,9 +456,132 @@ export function CheckRow({ check, onChange, onDelete, validationErrors, pathPref
             </Collapsible.Trigger>
             <Collapsible.Content>
               <Box mt={2} p={2} border="1px dashed" borderColor="border.subtle" borderRadius="md">
-                <Text fontSize="xs" color="fg.muted">
-                  References will be wired in phase 3.
-                </Text>
+                <Stack gap={2}>
+                  {existingRefs.length === 0 && (
+                    <Text fontSize="xs" color="fg.muted">
+                      No references. Add a reference to link this check to a check in another review round.
+                    </Text>
+                  )}
+                  {existingRefs.map((ref) => {
+                    const target = lookupCandidate(ref.referenced_rubric_check_id);
+                    return (
+                      <HStack
+                        key={ref.referenced_rubric_check_id}
+                        gap={2}
+                        p={1.5}
+                        borderRadius="sm"
+                        bg="bg.subtle"
+                        fontSize="xs"
+                      >
+                        <LuLink />
+                        <Text flex="1" truncate>
+                          {target ? (
+                            <>
+                              → {target.name}{" "}
+                              <Text as="span" color="fg.muted">
+                                ({target.reviewRound} · {target.points} pts)
+                              </Text>
+                            </>
+                          ) : (
+                            <>
+                              → check #{ref.referenced_rubric_check_id}{" "}
+                              <Text as="span" color="fg.muted">
+                                (target not found in loaded rubrics)
+                              </Text>
+                            </>
+                          )}
+                        </Text>
+                        <IconButton
+                          aria-label="Remove reference"
+                          size="2xs"
+                          variant="ghost"
+                          colorPalette="red"
+                          onClick={() => removeReference(ref.referenced_rubric_check_id)}
+                        >
+                          <LuX />
+                        </IconButton>
+                      </HStack>
+                    );
+                  })}
+
+                  {!referenceContext && (
+                    <Text fontSize="xs" color="fg.muted">
+                      Reference editing requires loaded sibling rubrics.
+                    </Text>
+                  )}
+                  {referenceContext && !isAddingReference && (
+                    <Button
+                      size="2xs"
+                      variant="outline"
+                      onClick={() => {
+                        setIsAddingReference(true);
+                        setSelectedTargetId("");
+                      }}
+                    >
+                      <LuPlus /> Add reference
+                    </Button>
+                  )}
+                  {referenceContext && isAddingReference && (
+                    <Stack gap={2}>
+                      <NativeSelect.Root size="sm">
+                        <NativeSelect.Field
+                          aria-label="Select reference target"
+                          value={selectedTargetId}
+                          onChange={(e) => setSelectedTargetId(e.target.value)}
+                        >
+                          <option value="">Select target check…</option>
+                          {Object.entries(candidatesByRound).map(([round, items]) => (
+                            <optgroup key={round} label={round}>
+                              {items.map((c) => (
+                                <option key={c.id} value={String(c.id)} disabled={c.rubricHasUnsavedChanges}>
+                                  {c.name} ({c.points} pts) — {c.rubricName}
+                                  {c.rubricHasUnsavedChanges ? " — save tab first" : ""}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </NativeSelect.Field>
+                        <NativeSelect.Indicator />
+                      </NativeSelect.Root>
+                      {selectedTargetId &&
+                        candidateTargets.find((c) => c.id === Number(selectedTargetId))?.rubricHasUnsavedChanges && (
+                          <Text fontSize="xs" color="fg.warning">
+                            Save the {candidateTargets.find((c) => c.id === Number(selectedTargetId))?.reviewRound} tab
+                            first to reference this check.
+                          </Text>
+                        )}
+                      <HStack gap={1}>
+                        <Button
+                          size="2xs"
+                          colorPalette="green"
+                          disabled={
+                            !selectedTargetId ||
+                            !!candidateTargets.find((c) => c.id === Number(selectedTargetId))?.rubricHasUnsavedChanges
+                          }
+                          onClick={() => {
+                            const id = Number(selectedTargetId);
+                            if (!id) return;
+                            addReference(id);
+                            setIsAddingReference(false);
+                            setSelectedTargetId("");
+                          }}
+                        >
+                          Add
+                        </Button>
+                        <Button
+                          size="2xs"
+                          variant="outline"
+                          onClick={() => {
+                            setIsAddingReference(false);
+                            setSelectedTargetId("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </HStack>
+                    </Stack>
+                  )}
+                </Stack>
               </Box>
             </Collapsible.Content>
           </Collapsible.Root>

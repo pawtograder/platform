@@ -43,11 +43,9 @@ import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import {
-  useAllRubricChecks,
   useAssignmentController,
   useAssignmentData,
   useGraderPseudonymousMode,
-  useReferenceCheckRecordsFromCheck,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
@@ -84,13 +82,12 @@ import {
 } from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { formatRelative } from "date-fns";
-import { useParams, usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
-import { FaCheckCircle, FaChartLine, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
+import { FaCheckCircle, FaChartLine, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
@@ -109,223 +106,6 @@ const KPI_LABELS: Record<string, string> = {
   issues_opened: "issues opened",
   issues_closed: "issues closed",
   issue_comments: "issue comments"
-};
-
-interface CheckOptionType extends OptionBase {
-  value: number;
-  label: string;
-  rubricName?: string;
-  reviewRound?: string;
-}
-
-/**
- * Inline reference management component for preview mode
- */
-const InlineReferenceManager = function InlineReferenceManager({
-  checkId,
-  classId,
-  currentRubricId
-}: {
-  checkId: number;
-  classId: number;
-  currentRubricId: number;
-}) {
-  const { assignment_id } = useParams();
-  const [isAddingReference, setIsAddingReference] = useState(false);
-  const [selectedCheckOption, setSelectedCheckOption] = useState<CheckOptionType | undefined>(undefined);
-
-  // Get existing references for this check
-  const referencingChecks = useReferenceCheckRecordsFromCheck(checkId);
-
-  // Get rubrics and all checks directly from controllers
-  const allRubrics = useRubrics();
-  const allChecks = useAllRubricChecks();
-  const otherRubrics = useMemo(
-    () => allRubrics?.filter((rubric) => rubric.id !== currentRubricId) ?? [],
-    [allRubrics, currentRubricId]
-  );
-  const { rubricCheckReferencesController } = useAssignmentController();
-
-  // Build check options from other rubrics only
-  const checkOptions: CheckOptionType[] = useMemo(() => {
-    if (!allChecks || !allRubrics || !referencingChecks) return [];
-
-    // Get checks for other rubrics
-    const otherRubricIds = otherRubrics.map((r) => r.id);
-
-    // Filter out negative/zero IDs (preview mode with unsaved rubric)
-    const validRubricIds = otherRubricIds.filter((id) => id > 0);
-
-    if (validRubricIds.length === 0) {
-      // In preview mode with unsaved rubric, no references available
-      return [];
-    }
-
-    const checksForOtherRubrics = allChecks.filter(
-      (check) =>
-        validRubricIds.includes(check.rubric_id) &&
-        !referencingChecks.find((c) => c.referenced_rubric_check_id === check.id)
-    );
-
-    return checksForOtherRubrics.map((c) => {
-      const rubric = allRubrics?.find((r) => r.id === c.rubric_id);
-      return {
-        value: c.id,
-        label: `${c.name} (${c.points} pts)`,
-        rubricName: rubric?.name || "Unknown",
-        reviewRound: rubric?.review_round || "General"
-      };
-    });
-  }, [allChecks, otherRubrics, allRubrics, referencingChecks]);
-
-  const handleAddReference = useCallback(async () => {
-    if (!selectedCheckOption) {
-      toaster.error({
-        title: "Error",
-        description: "Please select a check to reference."
-      });
-      return;
-    }
-
-    try {
-      await rubricCheckReferencesController.create({
-        assignment_id: Number.parseInt(assignment_id as string),
-        rubric_id: currentRubricId,
-        referencing_rubric_check_id: checkId,
-        referenced_rubric_check_id: selectedCheckOption.value,
-        class_id: classId
-      });
-      toaster.success({
-        title: "Reference Added",
-        description: "The rubric check reference has been added successfully."
-      });
-      setIsAddingReference(false);
-      setSelectedCheckOption(undefined);
-    } catch (error) {
-      toaster.error({
-        title: "Error Adding Reference",
-        description: error instanceof Error ? error.message : "Unknown error occurred"
-      });
-    }
-  }, [rubricCheckReferencesController, classId, selectedCheckOption, checkId, currentRubricId, assignment_id]);
-
-  const handleDeleteReference = useCallback(
-    async (referenceId: number) => {
-      try {
-        await rubricCheckReferencesController.hardDelete(referenceId);
-        toaster.success({
-          title: "Reference Removed",
-          description: "The reference has been removed successfully."
-        });
-      } catch (error) {
-        toaster.error({
-          title: "Error Removing Reference",
-          description: error instanceof Error ? error.message : "Unknown error occurred"
-        });
-      }
-    },
-    [rubricCheckReferencesController]
-  );
-
-  const existingReferences = referencingChecks || [];
-  // If no options available and we're in preview mode, show a message
-  if (checkOptions.length === 0 && currentRubricId <= 0) {
-    return (
-      <Box mt={2}>
-        <Text fontSize="xs" color="fg.muted">
-          Reference management will be available after saving this rubric.
-        </Text>
-      </Box>
-    );
-  }
-
-  return (
-    <Box mt={2}>
-      {/* Show existing references */}
-      {existingReferences.length > 0 && (
-        <VStack gap={1} alignItems="stretch" mb={2}>
-          {existingReferences.map((reference) => {
-            if (!reference) return null;
-
-            // Find the referenced check to get its name and points
-            const referencedCheck = allChecks.find((check) => check.id === reference.referenced_rubric_check_id);
-            if (!referencedCheck) return null;
-
-            return (
-              <HStack key={reference.id} fontSize="xs" gap={1} p={1} bg="bg.muted" borderRadius="sm">
-                <Icon as={FaLink} color="blue.500" />
-                <Text flex={1} truncate>
-                  {referencedCheck.name} ({referencedCheck.points} pts)
-                </Text>
-                <Button
-                  size="2xs"
-                  variant="ghost"
-                  colorPalette="red"
-                  onClick={() => handleDeleteReference(reference.id)}
-                >
-                  <Icon as={FaTimes} />
-                </Button>
-              </HStack>
-            );
-          })}
-        </VStack>
-      )}
-
-      {/* Add reference UI */}
-      {!isAddingReference ? (
-        <Button size="2xs" variant="outline" colorPalette="blue" onClick={() => setIsAddingReference(true)}>
-          <Icon as={FaLink} mr={1} />
-          Add Reference
-        </Button>
-      ) : (
-        <VStack gap={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default" bg="bg.canvas">
-          <ChakraReactSelect<CheckOptionType, false>
-            size="sm"
-            options={checkOptions}
-            value={selectedCheckOption}
-            onChange={(option) => setSelectedCheckOption(option || undefined)}
-            placeholder="Select check to reference..."
-            aria-label="Select check to reference"
-            isLoading={false}
-            formatOptionLabel={(option) => (
-              <VStack alignItems="flex-start" gap={0}>
-                <Text fontSize="sm">{option.label}</Text>
-                <Text fontSize="xs" color="fg.muted">
-                  {option.rubricName} ({option.reviewRound})
-                </Text>
-              </VStack>
-            )}
-            chakraStyles={{
-              menu: (provided) => ({ ...provided, zIndex: 10000 }),
-              control: (provided) => ({ ...provided, minHeight: "auto" })
-            }}
-          />
-          <HStack gap={1} w="100%">
-            <Button
-              size="2xs"
-              colorPalette="green"
-              onClick={handleAddReference}
-              disabled={!selectedCheckOption}
-              flex={1}
-            >
-              Add
-            </Button>
-            <Button
-              size="2xs"
-              variant="outline"
-              onClick={() => {
-                setIsAddingReference(false);
-                setSelectedCheckOption(undefined);
-              }}
-              flex={1}
-            >
-              Cancel
-            </Button>
-          </HStack>
-        </VStack>
-      )}
-    </Box>
-  );
 };
 
 export function CommentActions({
@@ -822,13 +602,12 @@ export function StudentVisibilityIndicator({
 export function RubricCheckAnnotation({
   check,
   criteria,
-  assignmentId,
-  classId,
   currentRubricId,
   targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
+  /** Kept on the parent prop type for back-compat with call sites; unused since reference editing moved into the rubric editor GUI. */
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -928,12 +707,7 @@ export function RubricCheckAnnotation({
         />
       ))}
 
-      {/* Inline reference management for preview mode */}
-      {isPreviewMode && assignmentId && classId && currentRubricId ? (
-        <InlineReferenceManager checkId={check.id} classId={classId} currentRubricId={currentRubricId} />
-      ) : (
-        <></>
-      )}
+      {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}
 
       {/* Show referenced feedback for grading mode */}
       {!isPreviewMode && gradingIsPermitted && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
@@ -945,14 +719,13 @@ export function RubricCheckGlobal({
   check,
   criteria,
   isSelected,
-  assignmentId,
-  classId,
   currentRubricId,
   targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
   isSelected: boolean;
+  /** Kept on the parent prop type for back-compat with call sites; unused since reference editing moved into the rubric editor GUI. */
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -1272,10 +1045,7 @@ export function RubricCheckGlobal({
         />
       ))}
 
-      {/* Inline reference management for preview mode */}
-      {isPreviewMode && assignmentId && classId && currentRubricId && (
-        <InlineReferenceManager checkId={check.id} classId={classId} currentRubricId={currentRubricId} />
-      )}
+      {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}
 
       {/* Show referenced feedback for grading mode */}
       {!isPreviewMode && gradingIsPermitted && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}

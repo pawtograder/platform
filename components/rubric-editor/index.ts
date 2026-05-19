@@ -1,4 +1,4 @@
-export { RubricEditorTree } from "./RubricEditorTree";
+export { RubricEditorTree, type ReferenceEditorContext } from "./RubricEditorTree";
 export { RubricHeaderForm } from "./RubricHeaderForm";
 export { PartCard } from "./PartCard";
 export { CriterionCard } from "./CriterionCard";
