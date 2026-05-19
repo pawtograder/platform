@@ -535,7 +535,7 @@ async function handlePushToGraderSolution(
             (unitAcc, unit) =>
               unitAcc +
               (isMutationTestUnit(unit)
-                ? unit.breakPoints[0].pointsToAward
+                ? (unit.linearScoring?.points ?? unit.breakPoints?.[0]?.pointsToAward ?? 0)
                 : isRegularTestUnit(unit)
                   ? unit.points
                   : 0),
@@ -1611,7 +1611,7 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
-  return "locations" in unit && "breakPoints" in unit;
+  return "locations" in unit;
 }
 
 // Type guard to check if a unit is a regular test unit

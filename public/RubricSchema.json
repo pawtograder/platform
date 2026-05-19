@@ -1,248 +1,347 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
-  "definitions": {
-    "Json": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/{[key:string]:Json|undefined;}"
-        },
-        {
-          "items": {
-            "$ref": "#/definitions/Json"
-          },
-          "type": "array"
-        },
-        {
-          "type": ["null", "string", "number", "boolean"]
-        }
-      ]
-    },
-    "YmlRubricChecksType": {
-      "additionalProperties": false,
-      "properties": {
-        "annotation_target": {
-          "enum": ["artifact", "file"],
-          "type": "string"
-        },
-        "artifact": {
-          "type": "string"
-        },
-        "data": {
-          "additionalProperties": false,
-          "properties": {
-            "options": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "description": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "points": {
-                    "type": "number"
-                  }
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+        "Json": {
+            "anyOf": [
+                {
+                    "$ref": "#/definitions/{[key:string]:Json|undefined;}"
                 },
-                "required": ["label", "points"],
-                "type": "object"
-              },
-              "type": "array"
-            }
-          },
-          "required": ["options"],
-          "type": "object"
+                {
+                    "items": {
+                        "$ref": "#/definitions/Json"
+                    },
+                    "type": "array"
+                },
+                {
+                    "type": [
+                        "null",
+                        "string",
+                        "number",
+                        "boolean"
+                    ]
+                }
+            ]
+        },
+        "YmlRubricChecksType": {
+            "additionalProperties": false,
+            "properties": {
+                "annotation_target": {
+                    "enum": [
+                        "artifact",
+                        "file"
+                    ],
+                    "type": "string"
+                },
+                "artifact": {
+                    "type": "string"
+                },
+                "data": {
+                    "additionalProperties": false,
+                    "properties": {
+                        "options": {
+                            "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "description": {
+                                        "type": "string"
+                                    },
+                                    "label": {
+                                        "type": "string"
+                                    },
+                                    "points": {
+                                        "type": "number"
+                                    }
+                                },
+                                "required": [
+                                    "label",
+                                    "points"
+                                ],
+                                "type": "object"
+                            },
+                            "type": "array"
+                        }
+                    },
+                    "required": [
+                        "options"
+                    ],
+                    "type": "object"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "file": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "number"
+                },
+                "is_annotation": {
+                    "type": "boolean"
+                },
+                "is_comment_required": {
+                    "type": "boolean"
+                },
+                "is_required": {
+                    "type": "boolean"
+                },
+                "kpi_category": {
+                    "anyOf": [
+                        {
+                            "enum": [
+                                "commits",
+                                "issue_comments",
+                                "issues_closed",
+                                "issues_opened",
+                                "pr_review_comments",
+                                "prs_opened"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                },
+                "max_annotations": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "points": {
+                    "type": "number"
+                },
+                "references": {
+                    "items": {
+                        "additionalProperties": false,
+                        "description": "A YAML reference entry on a rubric check. Either name-keyed (review_round + part +\ncriterion + check) or by numeric `id` (fallback for paste-from-DB). See\n`lib/rubric/references.ts` for resolution semantics.",
+                        "properties": {
+                            "check": {
+                                "type": "string"
+                            },
+                            "criterion": {
+                                "type": "string"
+                            },
+                            "id": {
+                                "type": "number"
+                            },
+                            "part": {
+                                "type": "string"
+                            },
+                            "review_round": {
+                                "type": "string"
+                            }
+                        },
+                        "type": "object"
+                    },
+                    "type": "array"
+                },
+                "student_visibility": {
+                    "enum": [
+                        "always",
+                        "if_applied",
+                        "if_released",
+                        "never"
+                    ],
+                    "type": "string"
+                },
+                "yaml_references": {
+                    "description": "Unresolved references parsed from YAML. Resolution to numeric ids happens at\nsave time once we have hydrated trees for the other rubrics on the assignment.",
+                    "items": {
+                        "additionalProperties": false,
+                        "description": "A YAML reference entry on a rubric check. Either name-keyed (review_round + part +\ncriterion + check) or by numeric `id` (fallback for paste-from-DB). See\n`lib/rubric/references.ts` for resolution semantics.",
+                        "properties": {
+                            "check": {
+                                "type": "string"
+                            },
+                            "criterion": {
+                                "type": "string"
+                            },
+                            "id": {
+                                "type": "number"
+                            },
+                            "part": {
+                                "type": "string"
+                            },
+                            "review_round": {
+                                "type": "string"
+                            }
+                        },
+                        "type": "object"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "is_annotation",
+                "is_comment_required",
+                "is_required",
+                "name",
+                "points"
+            ],
+            "type": "object"
+        },
+        "YmlRubricCriteriaType": {
+            "additionalProperties": false,
+            "properties": {
+                "checks": {
+                    "items": {
+                        "$ref": "#/definitions/YmlRubricChecksType"
+                    },
+                    "type": "array"
+                },
+                "data": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+                        },
+                        {
+                            "items": {
+                                "$ref": "#/definitions/Json"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": [
+                                "null",
+                                "string",
+                                "number",
+                                "boolean"
+                            ]
+                        }
+                    ]
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "number"
+                },
+                "is_additive": {
+                    "type": "boolean"
+                },
+                "is_deduction_only": {
+                    "type": "boolean"
+                },
+                "max_checks_per_submission": {
+                    "type": "number"
+                },
+                "min_checks_per_submission": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "total_points": {
+                    "type": "number"
+                }
+            },
+            "required": [
+                "checks",
+                "is_deduction_only",
+                "name"
+            ],
+            "type": "object"
+        },
+        "YmlRubricPartType": {
+            "additionalProperties": false,
+            "properties": {
+                "criteria": {
+                    "items": {
+                        "$ref": "#/definitions/YmlRubricCriteriaType"
+                    },
+                    "type": "array"
+                },
+                "data": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+                        },
+                        {
+                            "items": {
+                                "$ref": "#/definitions/Json"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": [
+                                "null",
+                                "string",
+                                "number",
+                                "boolean"
+                            ]
+                        }
+                    ]
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "number"
+                },
+                "is_assign_to_student": {
+                    "type": "boolean"
+                },
+                "is_individual_grading": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "criteria",
+                "name"
+            ],
+            "type": "object"
+        },
+        "{[key:string]:Json|undefined;}": {
+            "additionalProperties": {
+                "anyOf": [
+                    {
+                        "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+                    },
+                    {
+                        "items": {
+                            "$ref": "#/definitions/Json"
+                        },
+                        "type": "array"
+                    },
+                    {
+                        "type": [
+                            "null",
+                            "string",
+                            "number",
+                            "boolean"
+                        ]
+                    }
+                ]
+            },
+            "type": "object"
+        }
+    },
+    "properties": {
+        "cap_score_to_assignment_points": {
+            "type": "boolean"
         },
         "description": {
-          "type": "string"
-        },
-        "file": {
-          "type": "string"
-        },
-        "id": {
-          "type": "number"
-        },
-        "is_annotation": {
-          "type": "boolean"
-        },
-        "is_comment_required": {
-          "type": "boolean"
-        },
-        "is_required": {
-          "type": "boolean"
-        },
-        "kpi_category": {
-          "anyOf": [
-            {
-              "enum": [
-                "commits",
-                "issue_comments",
-                "issues_closed",
-                "issues_opened",
-                "pr_review_comments",
-                "prs_opened"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "max_annotations": {
-          "type": "number"
+            "type": "string"
         },
         "name": {
-          "type": "string"
+            "type": "string"
         },
-        "points": {
-          "type": "number"
-        },
-        "student_visibility": {
-          "enum": ["always", "if_applied", "if_released", "never"],
-          "type": "string"
-        }
-      },
-      "required": ["is_annotation", "is_comment_required", "is_required", "name", "points"],
-      "type": "object"
-    },
-    "YmlRubricCriteriaType": {
-      "additionalProperties": false,
-      "properties": {
-        "checks": {
-          "items": {
-            "$ref": "#/definitions/YmlRubricChecksType"
-          },
-          "type": "array"
-        },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/{[key:string]:Json|undefined;}"
-            },
-            {
-              "items": {
-                "$ref": "#/definitions/Json"
-              },
-              "type": "array"
-            },
-            {
-              "type": ["null", "string", "number", "boolean"]
-            }
-          ]
-        },
-        "description": {
-          "type": "string"
-        },
-        "id": {
-          "type": "number"
-        },
-        "is_additive": {
-          "type": "boolean"
-        },
-        "is_deduction_only": {
-          "type": "boolean"
-        },
-        "max_checks_per_submission": {
-          "type": "number"
-        },
-        "min_checks_per_submission": {
-          "type": "number"
-        },
-        "name": {
-          "type": "string"
-        },
-        "total_points": {
-          "type": "number"
-        }
-      },
-      "required": ["checks", "is_deduction_only", "name"],
-      "type": "object"
-    },
-    "YmlRubricPartType": {
-      "additionalProperties": false,
-      "properties": {
-        "criteria": {
-          "items": {
-            "$ref": "#/definitions/YmlRubricCriteriaType"
-          },
-          "type": "array"
-        },
-        "data": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/{[key:string]:Json|undefined;}"
-            },
-            {
-              "items": {
-                "$ref": "#/definitions/Json"
-              },
-              "type": "array"
-            },
-            {
-              "type": ["null", "string", "number", "boolean"]
-            }
-          ]
-        },
-        "description": {
-          "type": "string"
-        },
-        "id": {
-          "type": "number"
-        },
-        "is_individual_grading": {
-          "type": "boolean",
-          "description": "When true, this rubric part is graded per-student in a group submission"
-        },
-        "is_assign_to_student": {
-          "type": "boolean",
-          "description": "When true, the grader selects which student this part applies to (or skips it)"
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": ["criteria", "name"],
-      "type": "object"
-    },
-    "{[key:string]:Json|undefined;}": {
-      "additionalProperties": {
-        "anyOf": [
-          {
-            "$ref": "#/definitions/{[key:string]:Json|undefined;}"
-          },
-          {
+        "parts": {
             "items": {
-              "$ref": "#/definitions/Json"
+                "$ref": "#/definitions/YmlRubricPartType"
             },
             "type": "array"
-          },
-          {
-            "type": ["null", "string", "number", "boolean"]
-          }
-        ]
-      },
-      "type": "object"
-    }
-  },
-  "properties": {
-    "cap_score_to_assignment_points": {
-      "type": "boolean"
+        }
     },
-    "description": {
-      "type": "string"
-    },
-    "name": {
-      "type": "string"
-    },
-    "parts": {
-      "items": {
-        "$ref": "#/definitions/YmlRubricPartType"
-      },
-      "type": "array"
-    }
-  },
-  "required": ["name", "parts"],
-  "type": "object"
+    "required": [
+        "name",
+        "parts"
+    ],
+    "type": "object"
 }
+

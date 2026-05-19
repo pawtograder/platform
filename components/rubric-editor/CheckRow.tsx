@@ -84,6 +84,7 @@ type CandidateTarget = {
   id: number;
   name: string;
   points: number;
+  criterionName: string;
   rubricName: string;
   reviewRound: string;
   rubricHasUnsavedChanges: boolean;
@@ -132,6 +133,7 @@ export function CheckRow({
               id: ch.id,
               name: ch.name,
               points: ch.points ?? 0,
+              criterionName: crit.name,
               rubricName: rubric.name,
               reviewRound: round,
               rubricHasUnsavedChanges: unsaved
@@ -615,7 +617,7 @@ export function CheckRow({
                             <optgroup key={round} label={round}>
                               {items.map((c) => (
                                 <option key={c.id} value={String(c.id)} disabled={c.rubricHasUnsavedChanges}>
-                                  {c.name} ({c.points} pts) — {c.rubricName}
+                                  {c.criterionName} - {c.name} ({c.points} pts) — {c.rubricName}
                                   {c.rubricHasUnsavedChanges ? " — save tab first" : ""}
                                 </option>
                               ))}

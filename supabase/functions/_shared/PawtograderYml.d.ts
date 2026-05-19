@@ -15,10 +15,16 @@ export interface BreakPoint {
   pointsToAward: number;
 }
 
+export interface LinearScoring {
+  points: number;
+  total_faults: number;
+}
+
 export interface MutationTestUnit {
   name: string;
   locations: string[]; // format: "file:line-line"
-  breakPoints: BreakPoint[];
+  breakPoints?: BreakPoint[];
+  linearScoring?: LinearScoring;
 }
 
 // Regular test unit types

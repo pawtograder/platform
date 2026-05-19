@@ -182,8 +182,7 @@ export function CriterionCard({
                   <VStack align="start" gap={0}>
                     <Text>Non-additive</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Graders pick one outcome - the points of the applied check stand on their own. Combine with
-                      min/max checks to force a single pick.
+                      Students start at the total points for the criterion and lose points for each check applied.
                     </Text>
                   </VStack>
                 </Radio>
@@ -191,8 +190,8 @@ export function CriterionCard({
                   <VStack align="start" gap={0}>
                     <Text>Deduction only</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Students start at the criterion&apos;s total points and lose points for each check applied. Useful
-                      for penalty-only grading (e.g., code-style violations).
+                      Students start at 0 points for the criterion and lose points for each check applied. Useful
+                      for penalty-only grading.
                     </Text>
                   </VStack>
                 </Radio>

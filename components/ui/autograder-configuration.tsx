@@ -15,7 +15,14 @@ import { useAssignmentController } from "@/hooks/useAssignment";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
-  return "locations" in unit && "breakPoints" in unit;
+  return "locations" in unit;
+}
+
+function getMutationUnitPoints(unit: MutationTestUnit): number {
+  if (unit.linearScoring?.points != null) {
+    return unit.linearScoring.points;
+  }
+  return unit.breakPoints?.[0]?.pointsToAward ?? 0;
 }
 
 // Type guard to check if a unit is a regular test unit
@@ -87,28 +94,65 @@ function validatePawtograderConfig(config: unknown): { isValid: boolean; error?:
         return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].name must be a string` };
       }
 
-      // Check if it's a mutation test unit or regular test unit
-      const hasMutationFields = "locations" in unitObj && "breakPoints" in unitObj;
+      const hasLocations = "locations" in unitObj;
+      const hasBreakPoints = "breakPoints" in unitObj;
+      const hasLinearScoring = "linearScoring" in unitObj;
       const hasRegularFields = "tests" in unitObj && "points" in unitObj;
 
-      if (!hasMutationFields && !hasRegularFields) {
+      if (!hasLocations && !hasRegularFields) {
         return {
           isValid: false,
-          error: `gradedParts[${i}].gradedUnits[${j}] must have either (locations and breakPoints) for mutation testing or (tests and points) for regular testing`
+          error: `gradedParts[${i}].gradedUnits[${j}] must have locations (mutation testing) or tests and points (regular testing)`
         };
       }
 
-      if (hasMutationFields) {
-        if (!Array.isArray(unitObj["breakPoints"]) || (unitObj["breakPoints"] as unknown[]).length === 0) {
-          return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].breakPoints must be a non-empty array` };
+      if (hasLocations) {
+        if (!Array.isArray(unitObj["locations"]) || (unitObj["locations"] as unknown[]).length === 0) {
+          return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].locations must be a non-empty array` };
         }
 
-        const firstBreakPoint = (unitObj["breakPoints"] as unknown[])[0] as Record<string, unknown>;
-        if (!firstBreakPoint || typeof firstBreakPoint["pointsToAward"] !== "number") {
+        if (!hasBreakPoints && !hasLinearScoring) {
           return {
             isValid: false,
-            error: `gradedParts[${i}].gradedUnits[${j}].breakPoints[0].pointsToAward must be a number`
+            error: `gradedParts[${i}].gradedUnits[${j}] must have either breakPoints or linearScoring`
           };
+        }
+
+        if (hasBreakPoints) {
+          if (!Array.isArray(unitObj["breakPoints"]) || (unitObj["breakPoints"] as unknown[]).length === 0) {
+            return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].breakPoints must be a non-empty array` };
+          }
+
+          const firstBreakPoint = (unitObj["breakPoints"] as unknown[])[0] as Record<string, unknown>;
+          if (!firstBreakPoint || typeof firstBreakPoint["pointsToAward"] !== "number") {
+            return {
+              isValid: false,
+              error: `gradedParts[${i}].gradedUnits[${j}].breakPoints[0].pointsToAward must be a number`
+            };
+          }
+        }
+
+        if (hasLinearScoring) {
+          const linearScoring = unitObj["linearScoring"];
+          if (!linearScoring || typeof linearScoring !== "object") {
+            return {
+              isValid: false,
+              error: `gradedParts[${i}].gradedUnits[${j}].linearScoring must be an object`
+            };
+          }
+          const ls = linearScoring as Record<string, unknown>;
+          if (typeof ls["points"] !== "number") {
+            return {
+              isValid: false,
+              error: `gradedParts[${i}].gradedUnits[${j}].linearScoring.points must be a number`
+            };
+          }
+          if (typeof ls["total_faults"] !== "number") {
+            return {
+              isValid: false,
+              error: `gradedParts[${i}].gradedUnits[${j}].linearScoring.total_faults must be a number`
+            };
+          }
         }
       }
 
@@ -136,7 +180,7 @@ function safelyCalculateTotalPoints(config: PawtograderConfig): number {
           (unitAcc, unit) =>
             unitAcc +
             (isMutationTestUnit(unit)
-              ? (unit.breakPoints?.[0]?.pointsToAward ?? 0)
+              ? getMutationUnitPoints(unit)
               : isRegularTestUnit(unit)
                 ? (unit.points ?? 0)
                 : 0),
@@ -333,7 +377,8 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
               <Table.Cell>{part.name}</Table.Cell>
               <Table.Cell>
                 {part.gradedUnits.reduce(
-                  (acc, unit) => acc + (isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward : unit.points),
+                  (acc, unit) =>
+                    acc + (isMutationTestUnit(unit) ? getMutationUnitPoints(unit) : (unit as RegularTestUnit).points),
                   0
                 )}
               </Table.Cell>
