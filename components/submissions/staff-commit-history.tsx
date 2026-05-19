@@ -462,8 +462,8 @@ export function StaffCommitHistory({
           <strong>About these timestamps:</strong> the &ldquo;Date&rdquo; column shows the commit&apos;s author date,
           which is set by git on the committer&apos;s machine and can be backdated by adjusting the local clock. For
           commits Pawtograder recorded via a push webhook (&ldquo;Recorded by webhook&rdquo; or &ldquo;Recorded by
-          webhook + GitHub&rdquo;), the &ldquo;received&rdquo; line shows when our server first saw the commit —
-          that timestamp is trustworthy. For commits sourced only from the GitHub API (&ldquo;From GitHub&rdquo;), no
+          webhook + GitHub&rdquo;), the &ldquo;received&rdquo; line shows when our server first saw the commit — that
+          timestamp is trustworthy. For commits sourced only from the GitHub API (&ldquo;From GitHub&rdquo;), no
           server-side receipt exists, so all you have is the author-supplied date.
         </Text>
       </Box>
