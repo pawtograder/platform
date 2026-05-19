@@ -1,4 +1,4 @@
--- Atomic rubric update RPC.
+-- Single-shot rubric update RPC.
 --
 -- Replaces the multi-row save flow in app/.../rubric/page.tsx (which used per-row
 -- updateResource/createResource/deleteResource and relied on a per-check trigger
@@ -6,6 +6,11 @@
 -- in one call; this function diffs against the DB, applies all changes, cascades
 -- check.points to existing comments, and recomputes only the affected
 -- submission_reviews. Returns a friendly summary string the frontend toasts.
+--
+-- Note: the name avoids `atomic` because the supabase-cli SQL splitter treats
+-- it as the `BEGIN ATOMIC` SQL-function keyword and bundles every trailing
+-- statement into a single prepared statement, which Postgres then rejects with
+-- "cannot insert multiple commands into a prepared statement".
 --
 -- "Affected" decomposes into:
 --   - "targeted": only reviews holding comments on a check whose points changed
@@ -18,12 +23,12 @@
 DROP TRIGGER IF EXISTS on_rubric_check_points_updated ON public.rubric_checks;
 DROP FUNCTION IF EXISTS public.handle_rubric_check_points_update();
 
-CREATE OR REPLACE FUNCTION public.update_rubric_atomic(p_rubric jsonb)
+CREATE OR REPLACE FUNCTION public.update_rubric_full(p_rubric jsonb)
 RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
-AS $$
+AS $function$
 DECLARE
   v_rubric_id bigint;
   v_class_id bigint;
@@ -83,6 +88,14 @@ DECLARE
   -- Final set of reviews to recompute.
   v_affected_review_ids bigint[] := ARRAY[]::bigint[];
 
+  -- Scratch slots for old-vs-new comparisons, hoisted to the top so the function
+  -- body has no nested DECLARE blocks (which the supabase-cli SQL splitter mishandles).
+  v_old_total_points int;
+  v_old_is_additive boolean;
+  v_old_is_deduction_only boolean;
+  v_old_points int;
+
+  v_changes text[] := ARRAY[]::text[];
   v_summary text;
 BEGIN
   v_rubric_id := NULLIF((p_rubric->>'id')::bigint, 0);
@@ -261,21 +274,15 @@ BEGIN
         v_broad_change := true;
       ELSE
         -- Detect scoring-shape changes so we can flag broad recompute.
-        DECLARE
-          v_old_total_points int;
-          v_old_is_additive boolean;
-          v_old_is_deduction_only boolean;
-        BEGIN
-          SELECT total_points, is_additive, is_deduction_only
-          INTO v_old_total_points, v_old_is_additive, v_old_is_deduction_only
-          FROM public.rubric_criteria WHERE id = v_input_criteria_id;
+        SELECT total_points, is_additive, is_deduction_only
+        INTO v_old_total_points, v_old_is_additive, v_old_is_deduction_only
+        FROM public.rubric_criteria WHERE id = v_input_criteria_id;
 
-          IF v_old_total_points IS DISTINCT FROM COALESCE((v_criterion->>'total_points')::int, 0)
-             OR v_old_is_additive IS DISTINCT FROM COALESCE((v_criterion->>'is_additive')::boolean, false)
-             OR v_old_is_deduction_only IS DISTINCT FROM COALESCE((v_criterion->>'is_deduction_only')::boolean, false) THEN
-            v_broad_change := true;
-          END IF;
-        END;
+        IF v_old_total_points IS DISTINCT FROM COALESCE((v_criterion->>'total_points')::int, 0)
+           OR v_old_is_additive IS DISTINCT FROM COALESCE((v_criterion->>'is_additive')::boolean, false)
+           OR v_old_is_deduction_only IS DISTINCT FROM COALESCE((v_criterion->>'is_deduction_only')::boolean, false) THEN
+          v_broad_change := true;
+        END IF;
 
         UPDATE public.rubric_criteria
         SET name = v_criterion->>'name',
@@ -362,16 +369,12 @@ BEGIN
           v_checks_added := v_checks_added + 1;
           v_broad_change := true;
         ELSE
-          DECLARE
-            v_old_points int;
-          BEGIN
-            SELECT points INTO v_old_points
-            FROM public.rubric_checks WHERE id = v_input_check_id;
+          SELECT points INTO v_old_points
+          FROM public.rubric_checks WHERE id = v_input_check_id;
 
-            IF v_old_points IS DISTINCT FROM COALESCE((v_check->>'points')::int, 0) THEN
-              v_points_changed_check_ids := array_append(v_points_changed_check_ids, v_input_check_id);
-            END IF;
-          END;
+          IF v_old_points IS DISTINCT FROM COALESCE((v_check->>'points')::int, 0) THEN
+            v_points_changed_check_ids := array_append(v_points_changed_check_ids, v_input_check_id);
+          END IF;
 
           UPDATE public.rubric_checks
           SET name = v_check->>'name',
@@ -537,27 +540,23 @@ BEGIN
   ----------------------------------------------------------------
   v_summary := CASE WHEN v_is_new_rubric THEN 'Created rubric.' ELSE 'Saved rubric.' END;
 
-  DECLARE
-    v_changes text[] := ARRAY[]::text[];
-  BEGIN
-    IF v_parts_added > 0 THEN v_changes := v_changes || (v_parts_added || ' part' || CASE WHEN v_parts_added = 1 THEN '' ELSE 's' END || ' added'); END IF;
-    IF v_parts_updated > 0 THEN v_changes := v_changes || (v_parts_updated || ' part' || CASE WHEN v_parts_updated = 1 THEN '' ELSE 's' END || ' updated'); END IF;
-    IF v_parts_removed > 0 THEN v_changes := v_changes || (v_parts_removed || ' part' || CASE WHEN v_parts_removed = 1 THEN '' ELSE 's' END || ' removed'); END IF;
-    IF v_criteria_added > 0 THEN v_changes := v_changes || (v_criteria_added || ' criteri' || CASE WHEN v_criteria_added = 1 THEN 'on' ELSE 'a' END || ' added'); END IF;
-    IF v_criteria_updated > 0 THEN v_changes := v_changes || (v_criteria_updated || ' criteri' || CASE WHEN v_criteria_updated = 1 THEN 'on' ELSE 'a' END || ' updated'); END IF;
-    IF v_criteria_removed > 0 THEN v_changes := v_changes || (v_criteria_removed || ' criteri' || CASE WHEN v_criteria_removed = 1 THEN 'on' ELSE 'a' END || ' removed'); END IF;
-    IF v_checks_added > 0 THEN v_changes := v_changes || (v_checks_added || ' check' || CASE WHEN v_checks_added = 1 THEN '' ELSE 's' END || ' added'); END IF;
-    IF v_checks_updated > 0 THEN v_changes := v_changes || (v_checks_updated || ' check' || CASE WHEN v_checks_updated = 1 THEN '' ELSE 's' END || ' updated'); END IF;
-    IF v_checks_removed > 0 THEN v_changes := v_changes || (v_checks_removed || ' check' || CASE WHEN v_checks_removed = 1 THEN '' ELSE 's' END || ' removed'); END IF;
-    IF v_refs_added > 0 THEN v_changes := v_changes || (v_refs_added || ' reference' || CASE WHEN v_refs_added = 1 THEN '' ELSE 's' END || ' added'); END IF;
-    IF v_refs_removed > 0 THEN v_changes := v_changes || (v_refs_removed || ' reference' || CASE WHEN v_refs_removed = 1 THEN '' ELSE 's' END || ' removed'); END IF;
+  IF v_parts_added > 0 THEN v_changes := v_changes || (v_parts_added || ' part' || CASE WHEN v_parts_added = 1 THEN '' ELSE 's' END || ' added'); END IF;
+  IF v_parts_updated > 0 THEN v_changes := v_changes || (v_parts_updated || ' part' || CASE WHEN v_parts_updated = 1 THEN '' ELSE 's' END || ' updated'); END IF;
+  IF v_parts_removed > 0 THEN v_changes := v_changes || (v_parts_removed || ' part' || CASE WHEN v_parts_removed = 1 THEN '' ELSE 's' END || ' removed'); END IF;
+  IF v_criteria_added > 0 THEN v_changes := v_changes || (v_criteria_added || ' criteri' || CASE WHEN v_criteria_added = 1 THEN 'on' ELSE 'a' END || ' added'); END IF;
+  IF v_criteria_updated > 0 THEN v_changes := v_changes || (v_criteria_updated || ' criteri' || CASE WHEN v_criteria_updated = 1 THEN 'on' ELSE 'a' END || ' updated'); END IF;
+  IF v_criteria_removed > 0 THEN v_changes := v_changes || (v_criteria_removed || ' criteri' || CASE WHEN v_criteria_removed = 1 THEN 'on' ELSE 'a' END || ' removed'); END IF;
+  IF v_checks_added > 0 THEN v_changes := v_changes || (v_checks_added || ' check' || CASE WHEN v_checks_added = 1 THEN '' ELSE 's' END || ' added'); END IF;
+  IF v_checks_updated > 0 THEN v_changes := v_changes || (v_checks_updated || ' check' || CASE WHEN v_checks_updated = 1 THEN '' ELSE 's' END || ' updated'); END IF;
+  IF v_checks_removed > 0 THEN v_changes := v_changes || (v_checks_removed || ' check' || CASE WHEN v_checks_removed = 1 THEN '' ELSE 's' END || ' removed'); END IF;
+  IF v_refs_added > 0 THEN v_changes := v_changes || (v_refs_added || ' reference' || CASE WHEN v_refs_added = 1 THEN '' ELSE 's' END || ' added'); END IF;
+  IF v_refs_removed > 0 THEN v_changes := v_changes || (v_refs_removed || ' reference' || CASE WHEN v_refs_removed = 1 THEN '' ELSE 's' END || ' removed'); END IF;
 
-    IF array_length(v_changes, 1) > 0 THEN
-      v_summary := v_summary || ' ' || array_to_string(v_changes, ', ') || '.';
-    ELSIF NOT v_is_new_rubric THEN
-      v_summary := v_summary || ' No structural changes.';
-    END IF;
-  END;
+  IF array_length(v_changes, 1) > 0 THEN
+    v_summary := v_summary || ' ' || array_to_string(v_changes, ', ') || '.';
+  ELSIF NOT v_is_new_rubric THEN
+    v_summary := v_summary || ' No structural changes.';
+  END IF;
 
   IF v_checks_points_cascaded > 0 THEN
     v_summary := v_summary || ' Cascaded new points to existing comments on '
@@ -573,10 +572,11 @@ BEGIN
 
   RETURN v_summary;
 END;
-$$;
+$function$;
 
-COMMENT ON FUNCTION public.update_rubric_atomic(jsonb) IS
+COMMENT ON FUNCTION public.update_rubric_full(jsonb) IS
   'Atomically apply a hydrated rubric (top-level fields + parts/criteria/checks/references) in one transaction, cascade points changes to existing comments, recompute affected submission_reviews, and return a friendly summary. Replaces the per-row save flow + on_rubric_check_points_updated trigger.';
 
-REVOKE ALL ON FUNCTION public.update_rubric_atomic(jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.update_rubric_atomic(jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.update_rubric_full(jsonb) FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION public.update_rubric_full(jsonb) TO authenticated;

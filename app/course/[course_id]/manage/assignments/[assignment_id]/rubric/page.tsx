@@ -1083,7 +1083,7 @@ function InnerRubricPage() {
       };
 
       const supabase = createClient();
-      const { data, error } = await supabase.rpc("update_rubric_atomic", {
+      const { data, error } = await supabase.rpc("update_rubric_full", {
         p_rubric: payload as never
       });
       if (error) {
