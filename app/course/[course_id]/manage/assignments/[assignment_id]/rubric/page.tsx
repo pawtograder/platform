@@ -48,6 +48,7 @@ import {
   HydratedRubricToYamlRubric,
   YamlRubricToHydratedRubric
 } from "@/lib/rubric";
+import { RubricEditorTree, validateRubric } from "@/components/rubric-editor";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
@@ -183,6 +184,24 @@ function InnerRubricPage() {
   const [rubricForSidebar, setRubricForSidebar] = useState<HydratedRubric | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [errorMarkers, setErrorMarkers] = useState<{ message: string; startLineNumber: number }[]>([]);
+  const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
+  const [viewMode, setViewMode] = useState<"gui" | "source">("gui");
+  useEffect(() => {
+    try {
+      const stored = window.sessionStorage.getItem(VIEW_MODE_STORAGE_KEY);
+      if (stored === "gui" || stored === "source") setViewMode(stored);
+    } catch {
+      // sessionStorage may be unavailable; default stands.
+    }
+  }, []);
+  const persistViewMode = useCallback((next: "gui" | "source") => {
+    setViewMode(next);
+    try {
+      window.sessionStorage.setItem(VIEW_MODE_STORAGE_KEY, next);
+    } catch {
+      // Ignore restricted storage environments.
+    }
+  }, []);
 
   const { mutateAsync: updateResource } = useUpdate({});
   const { mutateAsync: deleteResource } = useDelete({});
@@ -575,6 +594,58 @@ function InnerRubricPage() {
       }
     },
     [debouncedParseYaml, errorMarkers.length]
+  );
+
+  const handleGuiChange = useCallback((next: HydratedRubric) => {
+    setActiveRubric(next);
+    const yamlString = YAML.stringify(HydratedRubricToYamlRubric(next));
+    setValue(yamlString);
+    // GUI edits skip the parse debounce — the rubric is already structured.
+    setRubricForSidebar(next);
+    setError(undefined);
+    setUpdatePaused(false);
+    if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+  }, []);
+
+  const guiValidationErrors = useMemo(() => (activeRubric ? validateRubric(activeRubric) : []), [activeRubric]);
+
+  const handleViewModeChange = useCallback(
+    (next: "gui" | "source") => {
+      if (next === viewMode) return;
+      if (next === "gui") {
+        if (!value || value.trim() === "") {
+          persistViewMode("gui");
+          return;
+        }
+        try {
+          const parsed = YAML.parse(value) as YmlRubricType;
+          const hydrated = YamlRubricToHydratedRubric(parsed, {
+            assignment_id: Number(assignment_id),
+            is_private: false,
+            review_round: activeReviewRound
+          });
+          if (assignmentDetails) {
+            hydrated.assignment_id = Number(assignment_id);
+            hydrated.class_id = assignmentDetails.class_id;
+          }
+          hydrated.review_round = activeReviewRound;
+          if (activeRubric && activeRubric.id > 0) hydrated.id = activeRubric.id;
+          setActiveRubric(hydrated);
+          setRubricForSidebar(hydrated);
+          setError(undefined);
+          persistViewMode("gui");
+        } catch (e) {
+          toaster.error({
+            title: "Cannot switch to GUI",
+            description: `YAML must be valid before switching: ${(e as Error).message}`
+          });
+        }
+      } else {
+        // GUI -> Source. `value` is already kept in sync with activeRubric by handleGuiChange.
+        persistViewMode("source");
+      }
+    },
+    [viewMode, value, persistViewMode, assignment_id, activeReviewRound, assignmentDetails, activeRubric]
   );
 
   useEffect(() => {
@@ -1293,86 +1364,104 @@ function InnerRubricPage() {
         </Tabs.List>
       </Tabs.Root>
       <VStack w="100%" h="100%" border="1px solid" borderColor={"border.subtle"}>
-        <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="end">
-          <Button
-            variant="ghost"
-            colorPalette="red"
-            size="xs"
-            onClick={() => {
-              if (initialActiveRubricSnapshot) {
-                setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
-                setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
-                toaster.create({
-                  title: "Reset",
-                  description: "Editor reset to last saved state for this tab.",
-                  type: "info"
-                });
-              } else {
-                if (assignmentDetails && activeReviewRound) {
-                  const minimal = createMinimalNewHydratedRubric(
-                    assignment_id as string,
-                    assignmentDetails.class_id,
-                    activeReviewRound
-                  );
-                  setActiveRubric(minimal);
-                  setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
-                  setValue("");
-                } else {
-                  setActiveRubric(undefined);
-                  setInitialActiveRubricSnapshot(undefined);
-                  setValue("");
-                }
-                toaster.create({
-                  title: "Reset",
-                  description: "Editor reset to an empty state for this tab.",
-                  type: "info"
-                });
-              }
-              setHasUnsavedChanges(false);
-              if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
-              setStashedEditorStates((prev) => {
-                const newState = { ...prev };
-                if (activeReviewRound) delete newState[activeReviewRound];
-                return newState;
-              });
-            }}
-          >
-            Reset
-          </Button>
-          <Button
-            colorPalette="green"
-            loadingText="Saving..."
-            loading={isSaving}
-            disabled={isSaving || !hasUnsavedChanges}
-            onClick={async () => {
-              try {
-                setIsSaving(true);
-                await saveRubric(value);
-                toaster.success({
-                  title: "Rubric Saved",
-                  description: "The rubric has been saved successfully."
-                });
-              } catch (error) {
-                Sentry.captureException(error);
-                console.error(error);
-                if (error instanceof Error) {
-                  toaster.error({
-                    title: "Failed to save rubric",
-                    description: `An unexpected error occurred: ${error.message}`
+        <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="space-between" px={2}>
+          <HStack gap={1}>
+            <Button
+              size="xs"
+              variant={viewMode === "gui" ? "solid" : "ghost"}
+              onClick={() => handleViewModeChange("gui")}
+            >
+              GUI
+            </Button>
+            <Button
+              size="xs"
+              variant={viewMode === "source" ? "solid" : "ghost"}
+              onClick={() => handleViewModeChange("source")}
+            >
+              YAML source
+            </Button>
+          </HStack>
+          <HStack>
+            <Button
+              variant="ghost"
+              colorPalette="red"
+              size="xs"
+              onClick={() => {
+                if (initialActiveRubricSnapshot) {
+                  setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
+                  setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
+                  toaster.create({
+                    title: "Reset",
+                    description: "Editor reset to last saved state for this tab.",
+                    type: "info"
                   });
                 } else {
-                  toaster.error({
-                    title: "Failed to save rubric",
-                    description: "An unknown error occurred during the save process."
+                  if (assignmentDetails && activeReviewRound) {
+                    const minimal = createMinimalNewHydratedRubric(
+                      assignment_id as string,
+                      assignmentDetails.class_id,
+                      activeReviewRound
+                    );
+                    setActiveRubric(minimal);
+                    setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
+                    setValue("");
+                  } else {
+                    setActiveRubric(undefined);
+                    setInitialActiveRubricSnapshot(undefined);
+                    setValue("");
+                  }
+                  toaster.create({
+                    title: "Reset",
+                    description: "Editor reset to an empty state for this tab.",
+                    type: "info"
                   });
                 }
-              } finally {
-                setIsSaving(false);
-              }
-            }}
-          >
-            Save
-          </Button>
+                setHasUnsavedChanges(false);
+                if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+                setStashedEditorStates((prev) => {
+                  const newState = { ...prev };
+                  if (activeReviewRound) delete newState[activeReviewRound];
+                  return newState;
+                });
+              }}
+            >
+              Reset
+            </Button>
+            <Button
+              colorPalette="green"
+              loadingText="Saving..."
+              loading={isSaving}
+              disabled={isSaving || !hasUnsavedChanges}
+              onClick={async () => {
+                try {
+                  setIsSaving(true);
+                  await saveRubric(value);
+                  toaster.success({
+                    title: "Rubric Saved",
+                    description: "The rubric has been saved successfully."
+                  });
+                } catch (error) {
+                  Sentry.captureException(error);
+                  console.error(error);
+                  if (error instanceof Error) {
+                    toaster.error({
+                      title: "Failed to save rubric",
+                      description: `An unexpected error occurred: ${error.message}`
+                    });
+                  } else {
+                    toaster.error({
+                      title: "Failed to save rubric",
+                      description: "An unknown error occurred during the save process."
+                    });
+                  }
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+            >
+              Save
+            </Button>
+          </HStack>
         </HStack>
         <Flex w="100%" minW="0" flexGrow={1}>
           <Box w="100%" minW="0">
@@ -1382,8 +1471,34 @@ function InnerRubricPage() {
                   <Spinner size="xl" />
                 </Center>
               )}
+              {viewMode === "gui" && activeRubric && (
+                <Box w="100%" h="calc(100vh - 150px)" overflowY="auto">
+                  <RubricEditorTree
+                    rubric={activeRubric}
+                    onChange={handleGuiChange}
+                    validationErrors={guiValidationErrors}
+                    assignmentMaxPoints={assignmentMaxPoints}
+                    autograderPoints={autograderPoints}
+                  />
+                </Box>
+              )}
+              {viewMode === "gui" && !activeRubric && (
+                <Center h="calc(100vh - 150px)" w="100%">
+                  <VStack>
+                    <Text>No rubric configured for this review round.</Text>
+                    <Text fontSize="sm" color="fg.muted">
+                      Load a demo template or switch to YAML to paste one in.
+                    </Text>
+                  </VStack>
+                </Center>
+              )}
               {/* keep the editor mounted at all times when it is doing work, otherwise there will be a runtime error */}
-              <Box position="relative" w="100%" h="calc(100vh - 150px)">
+              <Box
+                position="relative"
+                w="100%"
+                h="calc(100vh - 150px)"
+                display={viewMode === "source" ? "block" : "none"}
+              >
                 <Editor
                   height="calc(100vh - 150px)"
                   width="100%"
