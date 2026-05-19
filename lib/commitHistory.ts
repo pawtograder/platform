@@ -134,6 +134,10 @@ export function mergeCommitHistory({
   const entriesBySha = new Map<string, CommitHistoryEntry>();
 
   for (const checkRun of checkRuns) {
+    const existing = entriesBySha.get(checkRun.sha);
+    if (existing && parseTime(existing.recordedAt) >= parseTime(checkRun.created_at)) {
+      continue;
+    }
     const githubCommit = githubBySha.get(checkRun.sha);
     const status = normalizeCommitStatus(checkRun.status);
     const commitDate =

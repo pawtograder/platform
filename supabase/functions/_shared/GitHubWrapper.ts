@@ -1882,7 +1882,14 @@ export async function getCommit(
   scope?.setTag("repository", repo_full_name);
   scope?.setTag("ref", ref);
 
-  const [org, repo] = repo_full_name.split("/");
+  const parts = repo_full_name
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length !== 2) {
+    throw new Error(`Invalid repo_full_name format: ${repo_full_name}`);
+  }
+  const [org, repo] = parts;
   const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);

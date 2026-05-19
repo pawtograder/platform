@@ -123,7 +123,7 @@ export async function handleRequest(
   if (!repository || typeof repository !== "string" || !repository.includes("/")) {
     throw new SecurityError("Invalid repository");
   }
-  if (!sha || typeof sha !== "string") {
+  if (!sha || typeof sha !== "string" || !/^[0-9a-f]{7,40}$/i.test(sha)) {
     throw new SecurityError("Invalid sha");
   }
   if (!Number.isFinite(class_id) || class_id <= 0) {
@@ -166,14 +166,24 @@ export async function handleRequest(
 
   await triggerWorkflow(repository, sha, "grade.yml", scope);
 
+  const triggeredAt = new Date().toISOString();
+  const { data: latestCheckRun, error: latestCheckRunError } = await adminSupabase
+    .from("repository_check_runs")
+    .select("status")
+    .eq("id", checkRun.id)
+    .single();
+  if (latestCheckRunError) {
+    throw new SecurityError(`Failed to load workflow trigger status: ${latestCheckRunError.message}`);
+  }
+  const latestStatus = statusObject(latestCheckRun.status);
   const { error: triggerStatusUpdateError } = await adminSupabase
     .from("repository_check_runs")
     .update({
       triggered_by: enrollment.private_profile_id,
       status: {
-        ...statusObject(checkRun.status),
-        requested_at: statusObject(checkRun.status).requested_at ?? new Date().toISOString(),
-        workflow_triggered_at: new Date().toISOString()
+        ...latestStatus,
+        requested_at: latestStatus.requested_at ?? triggeredAt,
+        workflow_triggered_at: triggeredAt
       }
     })
     .eq("id", checkRun.id);

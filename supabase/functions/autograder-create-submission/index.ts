@@ -28,6 +28,7 @@ import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/sele
 import * as Sentry from "npm:@sentry/deno";
 
 const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
+const STAFF_ROLES = new Set(["admin", "instructor", "grader"]);
 
 /**
  * User-facing explanation when the student's workflow file hash does not match the course handout.
@@ -809,7 +810,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       const isRegressionRerun =
         hasRealCheckRun && Boolean(checkRun.is_regression_rerun && checkRun.target_submission_id);
       const rerunTargetSubmissionId = hasRealCheckRun ? (checkRun.target_submission_id ?? null) : null;
-      const actorIsStaff = checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
+      const actorIsStaff = checkRun.user_roles?.role ? STAFF_ROLES.has(checkRun.user_roles.role) : false;
       const staffTriggeredBy = hasRealCheckRun ? (checkRun.triggered_by ?? null) : null;
       const isStaffTriggeredSubmission = actorIsStaff || staffTriggeredBy !== null;
 
@@ -1239,10 +1240,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
 
         // Allow graders and instructors to submit even if the workflow SHA doesn't match, but show a warning.
-        const isGraderOrInstructor =
-          checkRun.user_roles?.role === "instructor" ||
-          checkRun.user_roles?.role === "grader" ||
-          isStaffTriggeredSubmission;
+        const isGraderOrInstructor = actorIsStaff || isStaffTriggeredSubmission;
         scope.setTag("check_run_profile_id", checkRun.profile_id);
         scope.setTag("check_run_assignment_group_id", checkRun.assignment_group_id);
         scope.setTag("check_run_user_role", checkRun.user_roles?.role);
@@ -1553,10 +1551,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
           // If the assignment prohibits empty submissions, reject after determining emptiness.
           // (Allow graders/instructors to bypass to avoid breaking staff workflows.)
-          const isGraderOrInstructor =
-            checkRun.user_roles?.role === "instructor" ||
-            checkRun.user_roles?.role === "grader" ||
-            isStaffTriggeredSubmission;
+          const isGraderOrInstructor = actorIsStaff || isStaffTriggeredSubmission;
           if (isEmpty && repoData.assignments.permit_empty_submissions === false && !isGraderOrInstructor) {
             if (submission_id === undefined) {
               throw new Error("submission_id is undefined during empty submission rejection");

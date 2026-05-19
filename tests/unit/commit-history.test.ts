@@ -106,6 +106,36 @@ describe("commit history helpers", () => {
     expect(entries[0].status.workflow_triggered_at).toBe("2026-01-04T00:01:00.000Z");
   });
 
+  it("uses the newest check run when duplicate rows share a commit SHA", () => {
+    const entries = mergeCommitHistory({
+      checkRuns: [
+        checkRun({
+          id: 1,
+          sha: "duplicate",
+          created_at: "2026-01-01T00:00:00.000Z",
+          commit_message: "Older check run",
+          status: { commit_date: "2026-01-01T00:00:00.000Z" }
+        }),
+        checkRun({
+          id: 2,
+          sha: "duplicate",
+          created_at: "2026-01-01T00:10:00.000Z",
+          commit_message: "Newer check run",
+          status: { commit_date: "2026-01-01T00:10:00.000Z" }
+        })
+      ],
+      githubCommits: [],
+      submissions: []
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      checkRunId: 2,
+      commitMessage: "Newer check run",
+      recordedAt: "2026-01-01T00:10:00.000Z"
+    });
+  });
+
   it("attaches multiple submissions for one commit newest first", () => {
     const entries = mergeCommitHistory({
       checkRuns: [checkRun({ sha: "aaa111" })],
