@@ -602,6 +602,20 @@ export class CourseController {
   get userId() {
     return this._userId;
   }
+
+  /** Move one SSR-hydration slice out of `_initialData` so TableController owns it. */
+  private _takeInitialDataSlice<K extends keyof CourseControllerInitialData>(key: K): CourseControllerInitialData[K] {
+    const data = this._initialData;
+    if (!data) {
+      return undefined;
+    }
+    const slice = data[key];
+    if (slice !== undefined) {
+      (data as Partial<CourseControllerInitialData>)[key] = undefined;
+    }
+    return slice;
+  }
+
   /**
    * Initialize critical TableControllers immediately after construction
    * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
@@ -689,7 +703,7 @@ export class CourseController {
         table: "profiles",
         query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.profiles
+        initialData: this._takeInitialDataSlice("profiles")
       });
     }
     return this._profiles;
@@ -898,7 +912,7 @@ export class CourseController {
         query,
         selectForSingleRow: staffSelect,
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.userRolesWithProfiles,
+        initialData: this._takeInitialDataSlice("userRolesWithProfiles"),
         autoFetchMissingRows: this.canViewFullClassUserRoles
       });
     }
