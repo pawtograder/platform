@@ -17,7 +17,7 @@ import {
   Textarea,
   VStack
 } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
 import { CheckRow } from "@/components/rubric-editor/CheckRow";
 import { SortableList } from "@/components/rubric-editor/SortableList";
@@ -100,11 +100,6 @@ export function CriterionCard({
   const nameError = errorFor(validationErrors, `${pathPrefix}.name`);
   const checksError = errorFor(validationErrors, `${pathPrefix}.checks`);
   const minError = errorFor(validationErrors, `${pathPrefix}.min_checks_per_submission`);
-
-  const summedCheckPoints = useMemo(
-    () => criteria.rubric_checks.reduce((acc, c) => acc + (c.points ?? 0), 0),
-    [criteria.rubric_checks]
-  );
 
   const handleChecksReorder = (next: HydratedRubricCheck[]) => {
     onChange({ ...criteria, rubric_checks: next });
@@ -204,32 +199,17 @@ export function CriterionCard({
               </Stack>
             </RadioGroup>
           </Field>
-          <HStack gap={4} align="flex-end" wrap="wrap">
-            <Field
-              label="Total points"
-              maxW="40"
-              helperText={
-                mode === "additive"
-                  ? `Auto-summed from checks (currently ${summedCheckPoints}).`
-                  : "The maximum points this criterion can contribute. For additive criteria this is computed from the checks; for the others, set it explicitly."
-              }
-            >
-              <Input
-                type="number"
-                value={criteria.total_points ?? 0}
-                onChange={(e) => onChange({ ...criteria, total_points: Number(e.target.value) })}
-              />
-            </Field>
-            {mode === "additive" && criteria.total_points !== summedCheckPoints && (
-              <Button
-                size="xs"
-                variant="surface"
-                onClick={() => onChange({ ...criteria, total_points: summedCheckPoints })}
-              >
-                Recompute to {summedCheckPoints}
-              </Button>
-            )}
-          </HStack>
+          <Field
+            label="Total points"
+            maxW="40"
+            helperText="The maximum points this criterion can contribute."
+          >
+            <Input
+              type="number"
+              value={criteria.total_points ?? 0}
+              onChange={(e) => onChange({ ...criteria, total_points: Number(e.target.value) })}
+            />
+          </Field>
 
           <Collapsible.Root open={advancedOpen} onOpenChange={(d) => setAdvancedOpen(d.open)}>
             <Collapsible.Trigger asChild>
