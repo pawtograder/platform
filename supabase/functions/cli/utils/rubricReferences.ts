@@ -12,25 +12,9 @@
  */
 
 import type { RubricWithHierarchy } from "../types.ts";
+import type { IndexedCheck, ResolveOutcome, YamlReference } from "../../_shared/FunctionTypes.d.ts";
 
-export type YamlReference = {
-  review_round?: string;
-  part?: string;
-  criterion?: string;
-  check?: string;
-  id?: number;
-};
-
-export type IndexedCheck = {
-  checkId: number;
-  checkName: string;
-  partName: string;
-  criterionName: string;
-  reviewRound: string | null;
-  rubricId: number;
-  assignmentId: number;
-  classId: number;
-};
+export type { IndexedCheck, ResolveOutcome, YamlReference };
 
 export function indexAssignmentRubrics(rubrics: RubricWithHierarchy[]): IndexedCheck[] {
   const out: IndexedCheck[] = [];
@@ -105,8 +89,6 @@ export function serializeReferencesForExport(
   }
   return out;
 }
-
-export type ResolveOutcome = { ok: true; target: IndexedCheck } | { ok: false; reason: string };
 
 /**
  * Resolve a single YAML reference against the indexed checks of an assignment.
