@@ -163,8 +163,17 @@ test("instructors can view commits and request grading from the submission view"
   await githubOnlyRow.getByRole("button", { name: /Create submission and activate/ }).click();
   await page.getByRole("button", { name: "Confirm action" }).last().click();
 
-  await expect
-    .poll(() => triggerPayload, { timeout: 5000 })
-    .toMatchObject({ repository: repositoryName, sha: githubOnlySha, class_id: course.id });
-  await expect(page.getByText("Grading workflow triggered")).toBeAttached();
+  // Assert on a durable in-row signal rather than the ephemeral Chakra toast: once
+  // triggerWorkflow resolves, the row's button flips to "Waiting for workflow…" and
+  // stays there until the pending submission arrives (or the 10-minute timeout fires).
+  // The toast title only lingers for Chakra's default duration and was flaking in CI.
+  // (Match by text — the button's accessible name comes from PopoverTrigger's aria-label
+  // which still says "Create submission and activate <sha>".)
+  await expect(githubOnlyRow.getByText("Waiting for workflow…")).toBeVisible();
+
+  expect(triggerPayload).toMatchObject({
+    repository: repositoryName,
+    sha: githubOnlySha,
+    class_id: course.id
+  });
 });
