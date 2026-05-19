@@ -32,6 +32,19 @@ export interface RubricWithHierarchy extends RubricRow {
 
 // ─── Rubric import/export structures ───────────────────────────────────────
 
+/**
+ * YAML reference entry on a rubric check, either name-keyed
+ * (review_round + part + criterion + check) or by numeric `id` fallback.
+ * Mirrors `YamlReference` in `utils/supabase/DatabaseTypes.d.ts`.
+ */
+export interface YamlReferenceYml {
+  review_round?: string;
+  part?: string;
+  criterion?: string;
+  check?: string;
+  id?: number;
+}
+
 export interface RubricExportCheck {
   name: string;
   description: string | null;
@@ -46,6 +59,7 @@ export interface RubricExportCheck {
   group: string | null;
   max_annotations: number | null;
   student_visibility: string;
+  references?: YamlReferenceYml[];
 }
 
 export interface RubricExportCriteria {
@@ -90,6 +104,7 @@ export interface RubricImportCheck {
   group?: string | null;
   max_annotations?: number | null;
   student_visibility?: string;
+  references?: YamlReferenceYml[];
 }
 
 export interface RubricImportCriteria {
