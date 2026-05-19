@@ -377,6 +377,11 @@ export type AssignmentDeleteRequest = {
 
 export type AssignmentDeleteResponse = {
   message: string;
+  github_cleanup_strategy?: "delete_synchronously" | "archive_asynchronously";
+  github_repositories_total?: number;
+  github_repositories_deleted?: number;
+  github_repositories_queued_for_archive?: number;
+  github_repositories_skipped?: number;
 };
 
 // Course Import SIS Types
