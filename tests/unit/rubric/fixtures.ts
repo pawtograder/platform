@@ -5,12 +5,12 @@ import { YmlRubricType } from "@/utils/supabase/DatabaseTypes";
 const FIXTURE_DIR = path.join(__dirname, "fixtures");
 
 /**
- * Load a fixture snapshot from rubrics.csv (`rubric_structure` JSON shape).
+ * Load a fixture snapshot in the hydrated DB shape and coerce to `YmlRubricType`.
  *
- * The CSV snapshots use YAML-style nested keys (`parts/criteria/checks`) and carry
- * extra fields like `ordinal` that the YAML schema doesn't model. We coerce to
- * `YmlRubricType` so the round-trip tests can exercise the parse/serialize pair on
- * real production data.
+ * Fixtures carry extra fields like `ordinal` that the YAML schema doesn't model;
+ * the coercion strips them so round-trip tests exercise the parse/serialize pair.
+ * Fixtures use generic placeholder names so tests don't depend on any specific
+ * course or production rubric.
  */
 export function loadFixtureAsYaml(name: string): YmlRubricType {
   const raw = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, `${name}.json`), "utf-8")) as Record<string, unknown>;
