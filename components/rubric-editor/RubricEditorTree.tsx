@@ -98,6 +98,7 @@ export function RubricEditorTree({
             renderItem={(part, idx) => (
               <PartCard
                 part={part}
+                displayIndex={idx}
                 onChange={(next) => handlePartChange(idx, next)}
                 onDelete={() => handlePartDelete(idx)}
                 validationErrors={validationErrors}

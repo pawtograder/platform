@@ -50,6 +50,9 @@ function errorFor(errors: ValidationError[], path: string): string | undefined {
 
 type PartCardProps = {
   part: HydratedRubricPart;
+  // Display position within the parent rubric (0-indexed). Used for the data-testid so tests
+  // can target parts by visible order rather than by raw DB ordinal.
+  displayIndex: number;
   onChange: (next: HydratedRubricPart) => void;
   onDelete: () => void;
   validationErrors: ValidationError[];
@@ -70,6 +73,7 @@ const TEMPLATE_LABELS: Record<CriteriaTemplateKey, string> = {
 
 export function PartCard({
   part,
+  displayIndex,
   onChange,
   onDelete,
   validationErrors,
@@ -111,7 +115,7 @@ export function PartCard({
       borderColor={nameError ? "border.error" : "border.subtle"}
       borderRadius="md"
       bg="bg.panel"
-      data-testid={`rubric-part-${part.ordinal}`}
+      data-testid={`rubric-part-${displayIndex}`}
     >
       <HStack justify="space-between" p={2}>
         <HStack gap={2} flex="1" minW="0">
