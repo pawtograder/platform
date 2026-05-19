@@ -1116,7 +1116,6 @@ function InnerRubricPage() {
     ]
   );
 
-
   if (isLoadingAssignment || (!activeRubric && isLoadingCurrentRubric && !initialActiveRubricSnapshot)) {
     return (
       <Center h="100vh">
