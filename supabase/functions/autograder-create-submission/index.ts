@@ -1186,15 +1186,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
       console.log(`Created submission ${submission_id} for repository ${repository}`);
       if (checkRun?.id && !isE2ERun && !isRegressionRerun) {
-        await adminSupabase
-          .from("repository_check_runs")
-          .update({
-            status: {
-              ...(checkRun.status as CheckRunStatus),
-              started_at: new Date().toISOString()
-            }
-          })
-          .eq("id", checkRun.id);
+        // Consume `triggered_by` once a submission has been created from this
+        // manual trigger. Without this, a future workflow run for the same
+        // (repo, sha) — e.g. a student force-pushing the sha back after the
+        // instructor triggered it — would inherit the deadline bypass via
+        // `staffTriggeredBy !== null`. An instructor re-trigger re-sets
+        // `triggered_by` via the manual trigger function, so retry still works.
+        const checkRunUpdate: {
+          status: CheckRunStatus;
+          triggered_by?: null;
+        } = {
+          status: {
+            ...(checkRun.status as CheckRunStatus),
+            started_at: new Date().toISOString()
+          }
+        };
+        if (staffTriggeredBy !== null) {
+          checkRunUpdate.triggered_by = null;
+        }
+        await adminSupabase.from("repository_check_runs").update(checkRunUpdate).eq("id", checkRun.id);
       }
 
       try {

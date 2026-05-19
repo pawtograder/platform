@@ -199,13 +199,15 @@ export function RepositoryCommitHistoryDialog({
           title: "Grading workflow triggered",
           description: `Created request ${response.repository_check_run_id} for ${sha.slice(0, 7)}. A new submission will appear when the workflow starts.`
         });
-        await checkRunsQuery.refetch();
       } catch (error) {
         toaster.error({
           title: "Could not trigger grading",
           description: error instanceof Error ? error.message : "Unknown error"
         });
       } finally {
+        // Refetch in both branches: even on error the function may have updated
+        // the check_run row (e.g. requested_at) before dispatch failed.
+        await checkRunsQuery.refetch();
         setTriggeringSha(null);
       }
     },

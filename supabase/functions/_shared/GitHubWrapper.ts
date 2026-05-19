@@ -607,6 +607,36 @@ export async function updateAutograderWorkflowHash(repoName: string) {
   }
   return hash;
 }
+export async function repoHasFileAtRef(
+  repoName: string,
+  path: string,
+  ref: string,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  scope?.setTag("github_operation", "check_file_at_ref");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", path);
+  scope?.setTag("ref", ref);
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Check file at ref failed: No octokit found for ${repoName}`);
+  }
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner: repoName.split("/")[0],
+      repo: repoName.split("/")[1],
+      path,
+      ref
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 404) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function getFileFromRepo(repoName: string, path: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_file");
   scope?.setTag("repository", repoName);
@@ -1862,14 +1892,17 @@ export async function listCommits(
     page
   });
   const page_links = commits.headers["link"];
+  // `link` header omits the `next` rel entirely on the last page, so an undefined
+  // match must be treated as "no more pages". `next_page !== null` was true for
+  // `undefined`, which made `has_more` always true.
   const next_page = page_links
     ?.split(",")
-    .find((l) => l.includes("next"))
+    .find((l) => l.includes('rel="next"'))
     ?.split(";")[0]
-    .split("=")[1];
+    .trim();
   return {
     commits: commits.data,
-    has_more: next_page !== null
+    has_more: Boolean(next_page) && commits.data.length > 0
   };
 }
 

@@ -2,11 +2,18 @@ import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AutograderTriggerGradingWorkflowRequest, CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { getCommit, triggerWorkflow } from "../_shared/GitHubWrapper.ts";
-import { assertUserIsInstructorOrGrader, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { GetCommitResponse, getCommit, repoHasFileAtRef, triggerWorkflow } from "../_shared/GitHubWrapper.ts";
+import {
+  assertUserIsInstructorOrGrader,
+  SecurityError,
+  UserVisibleError,
+  wrapRequestHandler
+} from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 type RepositoryCheckRunRow = Database["public"]["Tables"]["repository_check_runs"]["Row"];
+
+const GRADE_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
 function statusObject(status: unknown): CheckRunStatus {
   return typeof status === "object" && status !== null && !Array.isArray(status) ? (status as CheckRunStatus) : {};
@@ -44,23 +51,24 @@ async function markCheckRunRequested({
 async function upsertManualCheckRun({
   adminSupabase,
   repoData,
-  repository,
-  sha,
-  triggeredBy,
-  scope
+  commit,
+  triggeredBy
 }: {
   adminSupabase: SupabaseClient<Database>;
   repoData: Database["public"]["Tables"]["repositories"]["Row"];
-  repository: string;
-  sha: string;
+  commit: GetCommitResponse["data"];
   triggeredBy: string;
-  scope: Sentry.Scope;
 }): Promise<RepositoryCheckRunRow> {
+  // `commit.sha` is the canonical full lowercase sha returned by the GitHub API.
+  // Always key DB lookups off it so short / mixed-case input from callers does
+  // not produce duplicate rows or break race-recovery against the
+  // (repository_id, sha) unique constraint.
+  const canonicalSha = commit.sha;
   const { data: existing, error: existingError } = await adminSupabase
     .from("repository_check_runs")
     .select("*")
     .eq("repository_id", repoData.id)
-    .eq("sha", sha)
+    .eq("sha", canonicalSha)
     .maybeSingle();
   if (existingError) {
     throw new SecurityError(`Failed to load repository check run: ${existingError.message}`);
@@ -70,7 +78,6 @@ async function upsertManualCheckRun({
     return await markCheckRunRequested({ adminSupabase, checkRun: existing, triggeredBy, requestedAt: now });
   }
 
-  const commit = await getCommit(repository, sha, scope);
   const commitDate = commit.commit.author?.date ?? commit.commit.committer?.date ?? null;
   const commitAuthor = commit.commit.author?.name ?? commit.commit.committer?.name ?? null;
   const { data: inserted, error: insertError } = await adminSupabase
@@ -81,7 +88,7 @@ async function upsertManualCheckRun({
       class_id: repoData.class_id,
       assignment_group_id: repoData.assignment_group_id,
       commit_message: commit.commit.message || "No commit message",
-      sha: commit.sha,
+      sha: canonicalSha,
       profile_id: repoData.profile_id,
       triggered_by: triggeredBy,
       status: {
@@ -105,7 +112,7 @@ async function upsertManualCheckRun({
     .from("repository_check_runs")
     .select("*")
     .eq("repository_id", repoData.id)
-    .eq("sha", sha)
+    .eq("sha", canonicalSha)
     .maybeSingle();
   if (racedError || !raced) {
     throw new SecurityError(
@@ -155,16 +162,31 @@ export async function handleRequest(
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
 
+  // Resolve any abbreviated / mixed-case sha to the canonical full lowercase
+  // sha before touching the DB so SELECT/INSERT/race-recovery all key off the
+  // same value as the (repository_id, sha) unique constraint.
+  const commit = await getCommit(repository, sha, scope);
+  scope?.setTag("resolved_sha", commit.sha);
+
+  // workflow_dispatch will 422 with an unhelpful "Workflow does not have
+  // 'workflow_dispatch' trigger" message if the workflow file does not exist
+  // at the target commit. Preflight so we can surface a user-friendly error
+  // and avoid leaving the row half-updated.
+  const workflowExists = await repoHasFileAtRef(repository, GRADE_WORKFLOW_PATH, commit.sha, scope);
+  if (!workflowExists) {
+    throw new UserVisibleError(
+      `Commit ${commit.sha.slice(0, 7)} does not contain ${GRADE_WORKFLOW_PATH}; cannot trigger grading workflow.`
+    );
+  }
+
   const checkRun = await upsertManualCheckRun({
     adminSupabase,
     repoData,
-    repository,
-    sha,
-    triggeredBy: enrollment.private_profile_id,
-    scope
+    commit,
+    triggeredBy: enrollment.private_profile_id
   });
 
-  await triggerWorkflow(repository, sha, "grade.yml", scope);
+  await triggerWorkflow(repository, commit.sha, "grade.yml", scope);
 
   const triggeredAt = new Date().toISOString();
   const { data: latestCheckRun, error: latestCheckRunError } = await adminSupabase
