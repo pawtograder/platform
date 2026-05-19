@@ -148,7 +148,8 @@ async function getMonacoValue(page: Page): Promise<string> {
     const models = monaco.editor.getModels();
     const target =
       models.find((m) => m.uri.toString().includes("rubric-")) ?? models.find((m) => m.getLanguageId() === "yaml");
-    return target ? target.getValue() : "";
+    if (!target) throw new Error("could not locate rubric monaco model");
+    return target.getValue();
   });
 }
 

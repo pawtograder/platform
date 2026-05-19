@@ -49,7 +49,7 @@ export interface PawtograderConfig {
   build: BuildConfig;
   gradedParts: GradedPart[];
   submissionFiles: {
-    files?: string[];
-    testFiles?: string[];
+    files: string[];
+    testFiles: string[];
   };
 }
