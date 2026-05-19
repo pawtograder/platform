@@ -153,6 +153,10 @@ export function StaffCommitHistory({
     };
   }, []);
 
+  const activeRowRef = useRef<HTMLTableRowElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const hasAutoScrolledRef = useRef(false);
+
   const entries = useMemo(
     () =>
       mergeCommitHistory({
@@ -162,6 +166,19 @@ export function StaffCommitHistory({
       }),
     [checkRunsQuery.data?.data, githubCommits, submissionsQuery.data?.data]
   );
+
+  // Auto-scroll the active row into view once entries have loaded. Run once
+  // per mount — re-running on every entries change would fight the user's
+  // scroll if they navigate the list.
+  useEffect(() => {
+    if (hasAutoScrolledRef.current) return;
+    if (entries.length === 0) return;
+    if (!activeRowRef.current || !scrollContainerRef.current) return;
+    const container = scrollContainerRef.current;
+    const row = activeRowRef.current;
+    container.scrollTop = Math.max(0, row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2);
+    hasAutoScrolledRef.current = true;
+  }, [entries]);
 
   const clearPending = useCallback((sha: string) => {
     setPendingActivations((current) => {
@@ -300,7 +317,7 @@ export function StaffCommitHistory({
         </Box>
       )}
       {(checkRunsQuery.isLoading || submissionsQuery.isLoading) && <Skeleton height="80px" />}
-      <Box overflowX="auto" maxHeight="500px" overflowY="auto">
+      <Box overflowX="auto" maxHeight="500px" overflowY="auto" ref={scrollContainerRef}>
         <Table.Root size="sm" minW="900px">
           <Table.Header>
             <Table.Row>
@@ -326,8 +343,14 @@ export function StaffCommitHistory({
               const isCurrentSubmission = submission?.id === currentSubmissionId;
               const isPending = pendingActivations.has(entry.sha);
               const isBusy = busySha === entry.sha;
+              const isFromDatabase = entry.source !== "github";
               return (
-                <Table.Row key={entry.sha}>
+                <Table.Row
+                  key={entry.sha}
+                  ref={isCurrentSubmission ? activeRowRef : undefined}
+                  bg={isCurrentSubmission ? "bg.emphasized" : undefined}
+                  data-current={isCurrentSubmission ? "true" : undefined}
+                >
                   <Table.Cell>
                     <Link href={entry.htmlUrl ?? `https://github.com/${repositoryFullName}/commit/${entry.sha}`}>
                       <Code fontSize="xs">{entry.sha.slice(0, 7)}</Code>
@@ -335,7 +358,14 @@ export function StaffCommitHistory({
                   </Table.Cell>
                   <Table.Cell>
                     {entry.commitDate ? (
-                      <TimeZoneAwareDate date={entry.commitDate} format="Pp" />
+                      <Flex direction="column" gap={0} align="flex-start">
+                        <TimeZoneAwareDate date={entry.commitDate} format="Pp" />
+                        {isFromDatabase && entry.recordedAt && (
+                          <Text fontSize="xs" color="fg.muted">
+                            received <TimeZoneAwareDate date={entry.recordedAt} format="Pp" />
+                          </Text>
+                        )}
+                      </Flex>
                     ) : (
                       <Text color="fg.muted">Unknown</Text>
                     )}
@@ -356,14 +386,7 @@ export function StaffCommitHistory({
                   </Table.Cell>
                   <Table.Cell>
                     {submission ? (
-                      <HStack
-                        gap={1}
-                        fontSize="sm"
-                        flexWrap="wrap"
-                        bg={isCurrentSubmission ? "bg.emphasized" : undefined}
-                        px={isCurrentSubmission ? 1 : 0}
-                        borderRadius="sm"
-                      >
+                      <HStack gap={1} fontSize="sm" flexWrap="wrap">
                         <Link href={`/course/${courseId}/assignments/${assignmentId}/submissions/${submission.id}`}>
                           {submission.is_active ? <ActiveSubmissionIcon /> : null}#{submission.ordinal ?? submission.id}
                         </Link>
@@ -434,6 +457,16 @@ export function StaffCommitHistory({
           </Button>
         )}
       </HStack>
+      <Box mt={2} p={2} borderWidth="1px" borderColor="border.muted" borderRadius="md" bg="bg.subtle">
+        <Text fontSize="xs" color="fg.muted">
+          <strong>About these timestamps:</strong> the &ldquo;Date&rdquo; column shows the commit&apos;s author date,
+          which is set by git on the committer&apos;s machine and can be backdated by adjusting the local clock. For
+          commits Pawtograder recorded via a push webhook (&ldquo;Recorded by webhook&rdquo; or &ldquo;Recorded by
+          webhook + GitHub&rdquo;), the &ldquo;received&rdquo; line shows when our server first saw the commit —
+          that timestamp is trustworthy. For commits sourced only from the GitHub API (&ldquo;From GitHub&rdquo;), no
+          server-side receipt exists, so all you have is the author-supplied date.
+        </Text>
+      </Box>
     </Box>
   );
 }
