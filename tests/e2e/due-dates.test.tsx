@@ -319,7 +319,10 @@ test.describe("Due Date Exceptions & Extensions", () => {
     // The consolidated due-date exceptions table now renders rows as:
     //   Assignment | Student/Group (with "Individual exception" subtext) | Hours | Minutes | Tokens | Grantor | Note | Date | Actions
     // Use the note (unique to this row) as the anchor for substring matching.
-    const exceptionRow = page.getByRole("row").filter({ hasText: note }).filter({ hasText: student2!.private_profile_name });
+    const exceptionRow = page
+      .getByRole("row")
+      .filter({ hasText: note })
+      .filter({ hasText: student2!.private_profile_name });
     await expect(exceptionRow).toBeVisible();
     await expect(exceptionRow).toContainText(testAssignment!.title);
     await expect(exceptionRow).toContainText("Individual exception");
@@ -501,11 +504,7 @@ test.describe("Due Date Exceptions & Extensions", () => {
     // Wait for the exception to appear in the consolidated table before navigating away
     // so the in-flight insert finishes before we leave the page.
     await expect(
-      page
-        .getByRole("row")
-        .filter({ hasText: note })
-        .filter({ hasText: student2!.private_profile_name })
-        .first()
+      page.getByRole("row").filter({ hasText: note }).filter({ hasText: student2!.private_profile_name }).first()
     ).toBeVisible();
     // Navigate to the Roster Tokens tab (use goto: see note in "Student Due Date Extensions" test).
     await page.goto(`/course/${course.id}/manage/course/due-date-extensions/roster-tokens`);
