@@ -353,9 +353,9 @@ test.describe("Rubric editor GUI", () => {
     const firstPart = partAt(page, 0);
     await firstPart.scrollIntoViewIfNeeded();
     await firstPart.getByRole("button", { name: "Add criterion" }).click();
-    await page.getByRole("menuitem", { name: /^Deduction-only annotation/ }).click();
+    await page.getByRole("menuitem", { name: /^Penalty-only annotation/ }).click();
 
-    const criterion = criterionByName(firstPart, "Deduction-only annotations");
+    const criterion = criterionByName(firstPart, "Penalty-only annotations");
     await expect(criterion).toBeVisible();
 
     await clickSave(page);
@@ -366,7 +366,7 @@ test.describe("Rubric editor GUI", () => {
       .from("rubric_criteria")
       .select("name, is_additive, is_deduction_only")
       .eq("rubric_id", gradingRubricId)
-      .eq("name", "Deduction-only annotations");
+      .eq("name", "Penalty-only annotations");
     expect(criteria?.length).toBeGreaterThan(0);
     expect(criteria![0].is_additive).toBe(false);
     expect(criteria![0].is_deduction_only).toBe(true);

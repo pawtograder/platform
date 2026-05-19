@@ -38,6 +38,30 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
   const validateTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>(() => validateRubric(rubric));
 
+  // Sync the parent's rubric into our local draft when it changes externally.
+  // Parts/criteria/checks ride on separate list controllers and populate in a
+  // second render after the rubric row itself, so the initial prop can be a
+  // hydrated rubric with empty rubric_parts even though the rubric has parts
+  // in the database. Without this effect, useState would latch onto the empty
+  // first prop and the GUI would stay empty even after the data arrives.
+  // Skip the sync while a commit is pending so we don't clobber in-flight edits.
+  const lastAcceptedRubricRef = useRef(rubric);
+  useEffect(() => {
+    if (rubric === lastAcceptedRubricRef.current) return;
+    if (commitTimeoutRef.current) {
+      lastAcceptedRubricRef.current = rubric;
+      return;
+    }
+    lastAcceptedRubricRef.current = rubric;
+    draftRef.current = rubric;
+    setDraft(rubric);
+    if (validateTimeoutRef.current) {
+      clearTimeout(validateTimeoutRef.current);
+      validateTimeoutRef.current = undefined;
+    }
+    setValidationErrors(validateRubric(rubric));
+  }, [rubric]);
+
   const scheduleCommit = useCallback(
     (next: HydratedRubric) => {
       if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
