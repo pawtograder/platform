@@ -33,7 +33,8 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
       toaster.create({
         title: "Assignment Deleted",
         description: result.message,
-        type: "success"
+        type: "success",
+        duration: 10000
       });
 
       // Redirect to assignments list
@@ -45,13 +46,15 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
         toaster.create({
           title: "Delete Failed",
           description: error.details,
-          type: "error"
+          type: "error",
+          duration: 10000
         });
       } else {
         toaster.create({
           title: "Delete Failed",
           description: "An unexpected error occurred while deleting the assignment.",
-          type: "error"
+          type: "error",
+          duration: 10000
         });
       }
     } finally {
