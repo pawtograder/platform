@@ -120,7 +120,10 @@ function validatePawtograderConfig(config: unknown): { isValid: boolean; error?:
 
         if (hasBreakPoints) {
           if (!Array.isArray(unitObj["breakPoints"]) || (unitObj["breakPoints"] as unknown[]).length === 0) {
-            return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].breakPoints must be a non-empty array` };
+            return {
+              isValid: false,
+              error: `gradedParts[${i}].gradedUnits[${j}].breakPoints must be a non-empty array`
+            };
           }
 
           const firstBreakPoint = (unitObj["breakPoints"] as unknown[])[0] as Record<string, unknown>;
@@ -179,11 +182,7 @@ function safelyCalculateTotalPoints(config: PawtograderConfig): number {
         part.gradedUnits.reduce(
           (unitAcc, unit) =>
             unitAcc +
-            (isMutationTestUnit(unit)
-              ? getMutationUnitPoints(unit)
-              : isRegularTestUnit(unit)
-                ? (unit.points ?? 0)
-                : 0),
+            (isMutationTestUnit(unit) ? getMutationUnitPoints(unit) : isRegularTestUnit(unit) ? (unit.points ?? 0) : 0),
           0
         ),
       0

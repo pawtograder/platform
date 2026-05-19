@@ -1751,11 +1751,7 @@ function InnerRubricPage() {
                 p={3}
                 borderRadius="md"
                 bg={
-                  gradingRubricBreakdown?.assignToStudentUnbalanced
-                    ? "bg.warning"
-                    : addsUp
-                      ? "bg.info"
-                      : "bg.warning"
+                  gradingRubricBreakdown?.assignToStudentUnbalanced ? "bg.warning" : addsUp ? "bg.info" : "bg.warning"
                 }
               >
                 <Heading size="sm" mb={1}>
@@ -1767,8 +1763,7 @@ function InnerRubricPage() {
                   {gradingRubricPoints} points per student. {addsUp && <Icon as={FaCheck} color="fg.success" />}
                 </Text>
                 {gradingRubricBreakdown &&
-                  (gradingRubricBreakdown.individual > 0 ||
-                    gradingRubricBreakdown.assignToStudentParts.length > 0) && (
+                  (gradingRubricBreakdown.individual > 0 || gradingRubricBreakdown.assignToStudentParts.length > 0) && (
                     <Text fontSize="xs" mt={1} color="fg.muted">
                       Per-student total breakdown: {gradingRubricBreakdown.standard} from shared parts
                       {gradingRubricBreakdown.individual > 0 &&
@@ -1783,9 +1778,7 @@ function InnerRubricPage() {
                     <Text fontSize="sm">
                       Multiple <code>is_assign_to_student</code> parts have different point totals, so students will
                       have different maxes depending on which part they receive (
-                      {gradingRubricBreakdown.assignToStudentParts
-                        .map((p) => `${p.name}: ${p.max}`)
-                        .join(", ")}
+                      {gradingRubricBreakdown.assignToStudentParts.map((p) => `${p.name}: ${p.max}`).join(", ")}
                       ). Rebalance them so every student is graded against the same max.
                     </Text>
                   </Alert>

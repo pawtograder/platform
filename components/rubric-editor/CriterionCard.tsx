@@ -190,8 +190,8 @@ export function CriterionCard({
                   <VStack align="start" gap={0}>
                     <Text>Deduction only</Text>
                     <Text fontSize="xs" color="fg.muted">
-                      Students start at 0 points for the criterion and lose points for each check applied. Useful
-                      for penalty-only grading.
+                      Students start at 0 points for the criterion and lose points for each check applied. Useful for
+                      penalty-only grading.
                     </Text>
                   </VStack>
                 </Radio>

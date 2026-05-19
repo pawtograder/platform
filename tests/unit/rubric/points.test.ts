@@ -93,7 +93,12 @@ describe("maxPointsForCriterion", () => {
   it("deduction-only: returns 0 even with positive check points", () => {
     expect(
       maxPointsForCriterion(
-        criterion({ is_additive: false, is_deduction_only: true, total_points: 10, rubric_checks: [check(2), check(5)] })
+        criterion({
+          is_additive: false,
+          is_deduction_only: true,
+          total_points: 10,
+          rubric_checks: [check(2), check(5)]
+        })
       )
     ).toBe(0);
   });
