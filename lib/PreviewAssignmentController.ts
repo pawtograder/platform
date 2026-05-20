@@ -8,6 +8,12 @@ import { TablesThatHaveAnIDField } from "@/lib/TableController";
  *
  * Ensures all foreign keys are correctly set to match the parent rubric's ID,
  * which is critical for hook predicates to work correctly.
+ *
+ * Preview rubrics frequently contain items with sentinel IDs (-1, 0) for newly added
+ * elements, or transient duplicate IDs while the user is editing the YAML. Because
+ * the consuming hooks (useListTableControllerValues) key rows by `id` in a Map,
+ * collisions silently drop entries — so we remap any duplicate or non-positive IDs
+ * to fresh synthetic negative IDs and rewrite parent/child foreign keys to match.
  */
 export function flattenHydratedRubric(hydrated: HydratedRubric) {
   const rubric: Rubric = {
@@ -26,9 +32,26 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
   const criteria: RubricCriteria[] = [];
   const checks: RubricCheck[] = [];
 
+  const seenPartIds = new Set<number>();
+  const seenCriteriaIds = new Set<number>();
+  const seenCheckIds = new Set<number>();
+  // Use a counter well below any plausible real DB id so synthetic ids never collide
+  // with real ones (which are positive auto-increment ints).
+  let nextSyntheticId = -1_000_000;
+  const allocId = (id: number, seen: Set<number>) => {
+    if (id > 0 && !seen.has(id)) {
+      seen.add(id);
+      return id;
+    }
+    const synthetic = nextSyntheticId--;
+    seen.add(synthetic);
+    return synthetic;
+  };
+
   for (const part of hydrated.rubric_parts) {
+    const partId = allocId(part.id, seenPartIds);
     parts.push({
-      id: part.id,
+      id: partId,
       name: part.name,
       description: part.description,
       ordinal: part.ordinal,
@@ -42,8 +65,9 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
     });
 
     for (const crit of part.rubric_criteria) {
+      const critId = allocId(crit.id, seenCriteriaIds);
       criteria.push({
-        id: crit.id,
+        id: critId,
         name: crit.name,
         description: crit.description,
         ordinal: crit.ordinal,
@@ -54,15 +78,16 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
         max_checks_per_submission: crit.max_checks_per_submission,
         min_checks_per_submission: crit.min_checks_per_submission,
         rubric_id: hydrated.id, // Use parent rubric's ID
-        rubric_part_id: part.id,
+        rubric_part_id: partId,
         class_id: hydrated.class_id,
         assignment_id: hydrated.assignment_id,
         created_at: crit.created_at
       });
 
       for (const check of crit.rubric_checks) {
+        const checkId = allocId(check.id, seenCheckIds);
         checks.push({
-          id: check.id,
+          id: checkId,
           name: check.name,
           description: check.description,
           ordinal: check.ordinal,
@@ -78,7 +103,7 @@ export function flattenHydratedRubric(hydrated: HydratedRubric) {
           annotation_target: check.annotation_target,
           student_visibility: check.student_visibility ?? "always",
           rubric_id: hydrated.id, // Use parent rubric's ID
-          rubric_criteria_id: crit.id,
+          rubric_criteria_id: critId,
           class_id: hydrated.class_id,
           assignment_id: hydrated.assignment_id,
           kpi_category: check.kpi_category,
