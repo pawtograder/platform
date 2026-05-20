@@ -1,6 +1,7 @@
 -- Treat positive ids that do not belong to the target rubric as "insert new"
 -- (copy/paste from another rubric/assignment). Use ordinal-based map keys for
 -- placeholder ids so duplicate -1 values from the GUI do not collapse.
+-- Deletes run checks → criteria → parts before any upserts (FK-safe order).
 
 CREATE OR REPLACE FUNCTION public.update_rubric_full(p_rubric jsonb)
 RETURNS text
@@ -139,9 +140,55 @@ BEGIN
   END IF;
 
   ----------------------------------------------------------------
-  -- Phase 1: parts.
+  -- Phase 0: deletes (leaf → root). FKs on rubric_criteria→parts and
+  -- rubric_checks→criteria are NO ACTION, so we must remove checks before
+  -- criteria before parts. rubric_check_references CASCADE when checks go.
   ----------------------------------------------------------------
-  WITH input_ids AS (
+  WITH input_check_ids AS (
+    SELECT (chk->>'id')::bigint AS id
+    FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) part,
+         jsonb_array_elements(COALESCE(part->'criteria', '[]'::jsonb)) crit,
+         jsonb_array_elements(COALESCE(crit->'checks', '[]'::jsonb)) chk
+    WHERE COALESCE((chk->>'id')::bigint, 0) > 0
+      AND EXISTS (
+        SELECT 1 FROM public.rubric_checks rc
+        WHERE rc.id = (chk->>'id')::bigint AND rc.rubric_id = v_rubric_id
+      )
+  )
+  SELECT COALESCE(array_agg(id), ARRAY[]::bigint[]) INTO v_removed_check_ids
+  FROM public.rubric_checks
+  WHERE rubric_id = v_rubric_id
+    AND id NOT IN (SELECT id FROM input_check_ids);
+
+  IF array_length(v_removed_check_ids, 1) > 0 THEN
+    DELETE FROM public.rubric_checks WHERE id = ANY(v_removed_check_ids);
+    v_checks_removed := array_length(v_removed_check_ids, 1);
+    v_broad_change := true;
+  END IF;
+
+  WITH input_criteria_ids AS (
+    SELECT (crit->>'id')::bigint AS id
+    FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) part,
+         jsonb_array_elements(COALESCE(part->'criteria', '[]'::jsonb)) crit
+    WHERE COALESCE((crit->>'id')::bigint, 0) > 0
+      AND EXISTS (
+        SELECT 1 FROM public.rubric_criteria rc
+        WHERE rc.id = (crit->>'id')::bigint AND rc.rubric_id = v_rubric_id
+      )
+  ),
+  del AS (
+    DELETE FROM public.rubric_criteria
+    WHERE rubric_id = v_rubric_id
+      AND id NOT IN (SELECT id FROM input_criteria_ids)
+    RETURNING id
+  )
+  SELECT count(*) INTO v_criteria_removed FROM del;
+
+  IF v_criteria_removed > 0 THEN
+    v_broad_change := true;
+  END IF;
+
+  WITH input_part_ids AS (
     SELECT (elem->>'id')::bigint AS id
     FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) elem
     WHERE COALESCE((elem->>'id')::bigint, 0) > 0
@@ -153,7 +200,7 @@ BEGIN
   del AS (
     DELETE FROM public.rubric_parts
     WHERE rubric_id = v_rubric_id
-      AND id NOT IN (SELECT id FROM input_ids)
+      AND id NOT IN (SELECT id FROM input_part_ids)
     RETURNING id
   )
   SELECT count(*) INTO v_parts_removed FROM del;
@@ -162,6 +209,9 @@ BEGIN
     v_broad_change := true;
   END IF;
 
+  ----------------------------------------------------------------
+  -- Phase 1: upsert parts.
+  ----------------------------------------------------------------
   FOR v_part, v_part_ord IN
     SELECT elem, ord::int
     FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) WITH ORDINALITY AS t(elem, ord)
@@ -213,30 +263,8 @@ BEGIN
   END LOOP;
 
   ----------------------------------------------------------------
-  -- Phase 2: criteria.
+  -- Phase 2: upsert criteria.
   ----------------------------------------------------------------
-  WITH input_ids AS (
-    SELECT (crit->>'id')::bigint AS id
-    FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) part,
-         jsonb_array_elements(COALESCE(part->'criteria', '[]'::jsonb)) crit
-    WHERE COALESCE((crit->>'id')::bigint, 0) > 0
-      AND EXISTS (
-        SELECT 1 FROM public.rubric_criteria rc
-        WHERE rc.id = (crit->>'id')::bigint AND rc.rubric_id = v_rubric_id
-      )
-  ),
-  del AS (
-    DELETE FROM public.rubric_criteria
-    WHERE rubric_id = v_rubric_id
-      AND id NOT IN (SELECT id FROM input_ids)
-    RETURNING id
-  )
-  SELECT count(*) INTO v_criteria_removed FROM del;
-
-  IF v_criteria_removed > 0 THEN
-    v_broad_change := true;
-  END IF;
-
   FOR v_part, v_part_ord IN
     SELECT elem, ord::int
     FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) WITH ORDINALITY AS t(elem, ord)
@@ -323,30 +351,8 @@ BEGIN
   END LOOP;
 
   ----------------------------------------------------------------
-  -- Phase 3: checks.
+  -- Phase 3: upsert checks.
   ----------------------------------------------------------------
-  WITH input_ids AS (
-    SELECT (chk->>'id')::bigint AS id
-    FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) part,
-         jsonb_array_elements(COALESCE(part->'criteria', '[]'::jsonb)) crit,
-         jsonb_array_elements(COALESCE(crit->'checks', '[]'::jsonb)) chk
-    WHERE COALESCE((chk->>'id')::bigint, 0) > 0
-      AND EXISTS (
-        SELECT 1 FROM public.rubric_checks rc
-        WHERE rc.id = (chk->>'id')::bigint AND rc.rubric_id = v_rubric_id
-      )
-  )
-  SELECT COALESCE(array_agg(id), ARRAY[]::bigint[]) INTO v_removed_check_ids
-  FROM public.rubric_checks
-  WHERE rubric_id = v_rubric_id
-    AND id NOT IN (SELECT id FROM input_ids);
-
-  IF array_length(v_removed_check_ids, 1) > 0 THEN
-    DELETE FROM public.rubric_checks WHERE id = ANY(v_removed_check_ids);
-    v_checks_removed := array_length(v_removed_check_ids, 1);
-    v_broad_change := true;
-  END IF;
-
   FOR v_part, v_part_ord IN
     SELECT elem, ord::int
     FROM jsonb_array_elements(COALESCE(p_rubric->'parts', '[]'::jsonb)) WITH ORDINALITY AS t(elem, ord)
@@ -652,4 +658,4 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.update_rubric_full(jsonb) IS
-  'Atomically apply a hydrated rubric (top-level fields + parts/criteria/checks/references) in one transaction, cascade points changes to existing comments, recompute affected submission_reviews, and return a friendly summary. Positive ids not owned by the target rubric are inserted as new rows (copy/paste YAML).';
+  'Atomically apply a hydrated rubric (top-level fields + parts/criteria/checks/references) in one transaction, cascade points changes to existing comments, recompute affected submission_reviews, and return a friendly summary. Positive ids not owned by the target rubric are inserted as new rows (copy/paste YAML). Removes checks before criteria before parts to satisfy FK constraints.';
