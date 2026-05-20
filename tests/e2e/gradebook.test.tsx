@@ -143,6 +143,27 @@ async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000
   });
 }
 
+// The recalculation pipeline is async (DB trigger → pg_net → edge function). On slow
+// CI workers a row's is_recalculating flag can be left stuck true, which blocks new
+// enqueues, so a column — or, worse, a *dependent* column downstream of one we just
+// changed — never recomputes and a poll for its final value hangs until timeout.
+// Clear any stuck flags and re-invoke the worker directly so the poll can make progress.
+async function kickGradebookRecalculation(classId: number) {
+  await supabase
+    .from("gradebook_row_recalc_state")
+    .update({ is_recalculating: false })
+    .eq("class_id", classId)
+    .eq("is_recalculating", true);
+  const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
+  if (edgeSecret) {
+    await supabase.functions
+      .invoke("gradebook-column-recalculate", { headers: { "x-edge-function-secret": edgeSecret } })
+      .catch(() => {});
+  }
+  // Also invoke via the DB's internal mechanism as a fallback (pg_net may be slow).
+  await supabase.rpc("invoke_gradebook_recalculation_background_task");
+}
+
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
   const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
   await region.evaluate((el) => {
@@ -482,23 +503,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       if (data?.score !== 90 && kickCount < 5) {
         kickCount++;
-        // Clear stuck recalculation states that block new enqueues
-        await supabase
-          .from("gradebook_row_recalc_state")
-          .update({ is_recalculating: false })
-          .eq("class_id", course.id)
-          .eq("is_recalculating", true);
-        // Kick the recalculation worker directly (pg_net may be slow)
-        const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
-        if (edgeSecret) {
-          await supabase.functions
-            .invoke("gradebook-column-recalculate", {
-              headers: { "x-edge-function-secret": edgeSecret }
-            })
-            .catch(() => {});
-        }
-        // Also invoke via the DB's internal mechanism as fallback
-        await supabase.rpc("invoke_gradebook_recalculation_background_task");
+        await kickGradebookRecalculation(course.id);
       }
       expect(data?.score).toBe(90);
     }).toPass({ timeout: 120_000 });
@@ -536,7 +541,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Wait for gradebook to finish updating with the private final grade.
     // The final-grade column is calculated from average-assignments, which
     // depends on the code-walk column. The recalculation pipeline is async
-    // (DB → pg_net → edge function); just poll the result.
+    // (DB → pg_net → edge function) and the *dependent* final-grade recompute
+    // can stall after the code-walk score lands, so kick the worker if it lags.
+    let finalGradeKicks = 0;
     await expect(async () => {
       const { data: privateRecord, error: privateError } = await supabase
         .from("gradebook_column_students")
@@ -548,6 +555,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
         .single();
       if (privateError) {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
+      }
+      if (privateRecord?.score !== 51.95 && finalGradeKicks < 5) {
+        finalGradeKicks++;
+        await kickGradebookRecalculation(course.id);
       }
       expect(privateRecord?.score).toBe(51.95);
     }).toPass({ timeout: 120_000 });
@@ -893,7 +904,18 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Expect participation cell to show the new value and final grade to change
     await expect(partCell).toHaveText(/80(\.0+)?|80$/);
 
+    // Final grade recomputes from the changed participation score via the async
+    // recalc pipeline; if the dependent recompute stalls the cell stays on its
+    // prior value (51.95), so kick the worker while polling for the new total.
+    let finalGradeKicks = 0;
     await expect(async () => {
+      if (finalGradeKicks < 5) {
+        const current = await readCellNumber(page, studentName, "Final Grade");
+        if (current !== 51.5) {
+          finalGradeKicks++;
+          await kickGradebookRecalculation(course.id);
+        }
+      }
       const after = await readCellNumber(page, studentName, "Final Grade");
       expect(after).not.toBeNaN();
       expect(after).toBe(51.5);

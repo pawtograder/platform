@@ -1889,6 +1889,11 @@ export function useAssignmentDueDate(
   const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings) as LabSectionMeeting[];
   const labSectionsReady = useIsTableControllerReady(controller.labSections);
   const labSectionMeetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
+  // A student's lab_section_id lives on their user role, not on labSections/labSectionMeetings.
+  // Subscribe so this hook re-renders (and the memo below recomputes) once the role loads;
+  // otherwise the lab-based due date stays stuck on the un-adjusted original due date.
+  const userRoles = useTableControllerTableValues(controller.userRolesWithProfiles);
+  const userRolesReady = useIsTableControllerReady(controller.userRolesWithProfiles);
 
   const dueDateExceptionsFilter = useCallback(
     (e: AssignmentDueDateException) => {
@@ -1932,7 +1937,7 @@ export function useAssignmentDueDate(
     if (hasLabScheduling && labSectionsReady && labSectionMeetingsReady) {
       // Get student's lab section
       if (options?.studentPrivateProfileId) {
-        labSectionId = controller.getStudentLabSectionId(options.studentPrivateProfileId);
+        labSectionId = userRolesReady ? controller.getStudentLabSectionId(options.studentPrivateProfileId) : null;
       } else if (options?.labSectionId) {
         labSectionId = options.labSectionId;
       }
@@ -1996,6 +2001,8 @@ export function useAssignmentDueDate(
     labSectionMeetings,
     labSectionsReady,
     labSectionMeetingsReady,
+    userRoles,
+    userRolesReady,
     assignment,
     controller,
     options,
