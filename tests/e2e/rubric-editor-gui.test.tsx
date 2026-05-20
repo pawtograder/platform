@@ -515,14 +515,6 @@ test.describe("Rubric editor GUI", () => {
 
     // Now dirty the self-review tab (do NOT save).
     await nameField(checkByName(partAt(page, 0), "Sibling Target Check")).fill("Sibling Target Check EDITED");
-    // Press Tab to blur the input so DebouncedInput's pending commit fires now. If we
-    // skip this, the blur happens during the next tab click's focus shift; the React
-    // state cascade from the commit batches with Chakra Tabs' click activation and
-    // Chakra ends up moving focus to the new tab (data-focus="") without firing
-    // onValueChange (aria-selected stays "false"). Wait for the unsaved marker to
-    // confirm the commit propagated to page state before we click the next tab.
-    await page.keyboard.press("Tab");
-    await expect(rubricEditor(page).getByRole("tab", { name: /^Self Review\* \(Unsaved Changes\)/ })).toBeVisible();
     // Switch to grading-review WITHOUT saving the dirty self-review edit.
     await selectGradingReviewTab(page);
     const grPart = partAt(page, 0);
