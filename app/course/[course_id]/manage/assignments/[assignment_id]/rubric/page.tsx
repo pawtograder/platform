@@ -1362,13 +1362,23 @@ function InnerRubricPage() {
             handleReviewRoundChange(details.value as NonNullable<HydratedRubric["review_round"]>);
           }
         }}
-        lazyMount
-        unmountOnExit
         mb={0}
       >
         <Tabs.List>
           {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
-            <Tabs.Trigger key={rr || "undefined_round"} value={rr || "undefined_round_val"}>
+            <Tabs.Trigger
+              key={rr || "undefined_round"}
+              value={rr || "undefined_round_val"}
+              // Fallback in case Zag's automatic activation doesn't fire (we hit a race
+              // where dirty DebouncedInput edits flush during the click sequence and
+              // Chakra ends up moving focus to the new trigger without firing
+              // onValueChange — tab visually stays put). Calling handleReviewRoundChange
+              // here is idempotent: if Zag DOES fire onValueChange, the second call
+              // short-circuits on `newReviewRound === activeReviewRound`.
+              onClick={() =>
+                rr && handleReviewRoundChange(rr as NonNullable<HydratedRubric["review_round"]>)
+              }
+            >
               {" "}
               {rr
                 ? rr
