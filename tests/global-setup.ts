@@ -95,32 +95,6 @@ const VISUAL_TEST_CSS = `
   }
 
   /*
-   * Make Chakra/Ark overlays (dialogs, popovers, menus, tooltips) unmount
-   * deterministically. Ark's Presence keeps a closing node mounted until its
-   * exit animation's completion event fires; on webkit that event is sometimes
-   * dropped, leaving the node mounted with data-state="closed" indefinitely.
-   * Tests that wait for an overlay to disappear (e.g. getByRole("dialog")
-   * toHaveCount(0)) then hang the full timeout. Collapsing the animation /
-   * transition to a near-zero duration makes the completion event fire on the
-   * next frame, so the overlay unmounts promptly on every browser. This applies
-   * to all e2e tests (data-visual-tests is set on every page), not just visual
-   * snapshots, and only affects animation timing — never layout or assertions.
-   */
-  html[data-visual-tests] [data-scope="dialog"],
-  html[data-visual-tests] [data-scope="dialog"] *,
-  html[data-visual-tests] [data-scope="popover"],
-  html[data-visual-tests] [data-scope="popover"] *,
-  html[data-visual-tests] [data-scope="menu"],
-  html[data-visual-tests] [data-scope="menu"] *,
-  html[data-visual-tests] [data-scope="tooltip"],
-  html[data-visual-tests] [data-scope="tooltip"] * {
-    animation-duration: 0.001s !important;
-    animation-delay: 0s !important;
-    transition-duration: 0.001s !important;
-    transition-delay: 0s !important;
-  }
-
-  /*
    * Preserve accessible/text queryability while replacing volatile values with
    * stable placeholders in screenshots. Transparent text alone can still
    * change layout when a date or relative time is longer in one run than
