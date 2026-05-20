@@ -2300,10 +2300,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         display="flex"
         flexWrap="wrap"
       >
+        <NextLink href={linkToSubPage(pathname, "grade", searchParams)}>
+          <Button variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+            <Icon as={FaCheckCircle} />
+            Grade
+          </Button>
+        </NextLink>
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
-            <Icon as={FaCheckCircle} />
-            Grading Summary
+            <Icon as={FaRobot} />
+            Autograder Detail
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
