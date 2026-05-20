@@ -48,6 +48,7 @@ import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 import DiscordMessageLink from "@/components/discord/discord-message-link";
 import BareCheckResolveLocationFields, {
+  toBareCheckResolveNamedItems,
   useDefaultBareCheckResolveLocation
 } from "@/components/regrade-requests/BareCheckResolveLocationFields";
 import {
@@ -258,8 +259,8 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   const defaultResolveLocation = useDefaultBareCheckResolveLocation(
     materializationKind,
     rubricCheck ?? null,
-    submission.submission_files ?? [],
-    submission.submission_artifacts ?? []
+    toBareCheckResolveNamedItems(submission.submission_files),
+    toBareCheckResolveNamedItems(submission.submission_artifacts)
   );
   const locationIsValid = !isBareCheck || isBareCheckResolveLocationValid(materializationKind, resolveLocation);
 
@@ -483,8 +484,8 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
               <BareCheckResolveLocationFields
                 idPrefix={`resolve-${regradeRequestId}`}
                 rubricCheck={rubricCheck}
-                submissionFiles={submission.submission_files ?? []}
-                submissionArtifacts={submission.submission_artifacts ?? []}
+                submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
+                submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
                 location={resolveLocation}
                 onChange={setResolveLocation}
               />
@@ -605,8 +606,8 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   const defaultResolveLocation = useDefaultBareCheckResolveLocation(
     materializationKind,
     rubricCheck ?? null,
-    submission.submission_files ?? [],
-    submission.submission_artifacts ?? []
+    toBareCheckResolveNamedItems(submission.submission_files),
+    toBareCheckResolveNamedItems(submission.submission_artifacts)
   );
   const locationIsValid = !isBareCheck || isBareCheckResolveLocationValid(materializationKind, resolveLocation);
 
@@ -846,8 +847,8 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
               <BareCheckResolveLocationFields
                 idPrefix={`close-${regradeRequestId}`}
                 rubricCheck={rubricCheck}
-                submissionFiles={submission.submission_files ?? []}
-                submissionArtifacts={submission.submission_artifacts ?? []}
+                submissionFiles={toBareCheckResolveNamedItems(submission.submission_files)}
+                submissionArtifacts={toBareCheckResolveNamedItems(submission.submission_artifacts)}
                 location={resolveLocation}
                 onChange={setResolveLocation}
               />

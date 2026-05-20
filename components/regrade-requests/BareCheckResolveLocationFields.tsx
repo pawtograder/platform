@@ -5,11 +5,20 @@ import {
   type BareCheckMaterializationKind,
   type BareCheckResolveLocation
 } from "@/lib/regrade/bareCheckMaterialization";
-import type { RubricCheck, SubmissionFile, SubmissionArtifact } from "@/utils/supabase/DatabaseTypes";
+import type { RubricCheck } from "@/utils/supabase/DatabaseTypes";
 import { Field, Input, NativeSelectField, NativeSelectRoot, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
 
-function filterFilesForCheck(files: SubmissionFile[], check: RubricCheck): SubmissionFile[] {
+/** Minimal shape for file/artifact pickers — avoids coupling to hydrated submission artifact types. */
+export type BareCheckResolveNamedItem = { id: number; name: string };
+
+export function toBareCheckResolveNamedItems<T extends BareCheckResolveNamedItem>(
+  items: readonly T[] | null | undefined
+): BareCheckResolveNamedItem[] {
+  return (items ?? []).map(({ id, name }) => ({ id, name }));
+}
+
+function filterFilesForCheck(files: BareCheckResolveNamedItem[], check: RubricCheck): BareCheckResolveNamedItem[] {
   if (!check.file) {
     return files;
   }
@@ -17,7 +26,10 @@ function filterFilesForCheck(files: SubmissionFile[], check: RubricCheck): Submi
   return matched.length > 0 ? matched : files;
 }
 
-function filterArtifactsForCheck(artifacts: SubmissionArtifact[], check: RubricCheck): SubmissionArtifact[] {
+function filterArtifactsForCheck(
+  artifacts: BareCheckResolveNamedItem[],
+  check: RubricCheck
+): BareCheckResolveNamedItem[] {
   if (!check.artifact) {
     return artifacts;
   }
@@ -34,8 +46,8 @@ export default function BareCheckResolveLocationFields({
   idPrefix
 }: {
   rubricCheck: RubricCheck;
-  submissionFiles: SubmissionFile[];
-  submissionArtifacts: SubmissionArtifact[];
+  submissionFiles: BareCheckResolveNamedItem[];
+  submissionArtifacts: BareCheckResolveNamedItem[];
   location: BareCheckResolveLocation;
   onChange: (location: BareCheckResolveLocation) => void;
   idPrefix: string;
@@ -84,7 +96,7 @@ function FileLocationFields({
   onChange,
   idPrefix
 }: {
-  files: SubmissionFile[];
+  files: BareCheckResolveNamedItem[];
   location: BareCheckResolveLocation;
   onChange: (location: BareCheckResolveLocation) => void;
   idPrefix: string;
@@ -142,7 +154,7 @@ function ArtifactLocationFields({
   onChange,
   idPrefix
 }: {
-  artifacts: SubmissionArtifact[];
+  artifacts: BareCheckResolveNamedItem[];
   location: BareCheckResolveLocation;
   onChange: (location: BareCheckResolveLocation) => void;
   idPrefix: string;
@@ -177,8 +189,8 @@ function ArtifactLocationFields({
 export function useDefaultBareCheckResolveLocation(
   kind: BareCheckMaterializationKind,
   rubricCheck: RubricCheck | null | undefined,
-  submissionFiles: SubmissionFile[],
-  submissionArtifacts: SubmissionArtifact[]
+  submissionFiles: BareCheckResolveNamedItem[],
+  submissionArtifacts: BareCheckResolveNamedItem[]
 ): BareCheckResolveLocation {
   return useMemo(() => {
     if (!rubricCheck || kind === "submission") {
