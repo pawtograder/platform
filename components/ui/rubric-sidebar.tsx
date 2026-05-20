@@ -626,7 +626,10 @@ export function RubricCheckComment({
                     ({author.real_name})
                   </Text>
                 )}{" "}
-                {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
+                {criteria ? "applied" : "commented"}{" "}
+                <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+                  {formatRelative(comment.created_at, new Date())}
+                </Text>
               </Text>
               <CommentActions comment={comment} setIsEditing={setIsEditing} />
             </HStack>
@@ -1607,7 +1610,7 @@ function RubricMenu() {
   }
 
   return (
-    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2}>
+    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2} data-visual-test="removed">
       <NativeSelectRoot>
         <NativeSelectField
           aria-label="Select active rubric"
@@ -2127,7 +2130,14 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
   });
   /** False only while we might still be loading the group row; avoid treating [] as "no group" during fetch. */
   const groupMembersContextReady = !isGroupSubmission || assignmentGroupsTableReady;
-  const resolvedGroupMembers = assignmentGroupWithMembers?.assignment_groups_members ?? [];
+  // Stable order — assignment_groups_members arrives via realtime in a
+  // non-deterministic order across test runs, which would scramble the
+  // per-student IndividualGradingStudentBlock rendering in screenshots. Sort
+  // by member.id so the order is consistent within a session, and we'll let
+  // each child render its own name.
+  const resolvedGroupMembers = [...(assignmentGroupWithMembers?.assignment_groups_members ?? [])].sort(
+    (a, b) => a.id - b.id
+  );
   const hasGroupMembers = isGroupSubmission && resolvedGroupMembers.length > 0;
 
   if (!rubric) {

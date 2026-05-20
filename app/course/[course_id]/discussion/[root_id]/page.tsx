@@ -84,11 +84,21 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
                 <Skeleton width="100px" height="20px" />
               )}
             </Flex>
-            <Text fontSize="sm" color="text.muted">
+            <Text
+              fontSize="sm"
+              color="text.muted"
+              data-visual-test="transparent"
+              data-visual-placeholder="relative-time"
+            >
               {formatRelative(new Date(thread.created_at), new Date())}
             </Text>
             {thread.edited_at && (
-              <Text fontSize="sm" color="text.muted">
+              <Text
+                fontSize="sm"
+                color="text.muted"
+                data-visual-test="transparent"
+                data-visual-placeholder="relative-time"
+              >
                 Edited {formatRelative(new Date(thread.edited_at), new Date())}
               </Text>
             )}

@@ -155,6 +155,21 @@ const VISUAL_TEST_CSS = `
     --visual-test-placeholder-width: 28ch;
   }
 
+  html[data-visual-tests] [data-visual-placeholder="repository"] {
+    --visual-test-placeholder: "org/repo-NN";
+    --visual-test-placeholder-width: 28ch;
+  }
+
+  html[data-visual-tests] [data-visual-placeholder="request-id"] {
+    --visual-test-placeholder: "Request #NNN";
+    --visual-test-placeholder-width: 12ch;
+  }
+
+  html[data-visual-tests] [data-visual-placeholder="submission-id"] {
+    --visual-test-placeholder: "NN";
+    --visual-test-placeholder-width: 4ch;
+  }
+
   html[data-visual-tests] [data-visual-test="transparent"] svg,
   html[data-visual-tests] [data-visual-test="transparent"] img,
   html[data-visual-tests] [data-visual-test="transparent"] canvas {
@@ -167,6 +182,40 @@ const VISUAL_TEST_CSS = `
    */
   html[data-visual-tests] [data-visual-test="removed"] {
     display: none !important;
+  }
+
+  /*
+   * The grading summary aside is normally position:sticky + height:100vh +
+   * overflow:auto so the rubric stays in view while the user scrolls the
+   * code/files column. Playwright's fullPage screenshot tiles the page; that
+   * tile flow plus the sticky+overflow combination means the rubric content
+   * can be captured at an inconsistent internal scrollTop between runs (e.g.
+   * empty in run A, populated in run B). Inside visual tests we collapse all
+   * three so the aside lays out at its natural height with no internal
+   * scroll, and the rubric content lands at the same y coordinates every
+   * time.
+   */
+  html[data-visual-tests] [data-grading-summary-aside] {
+    position: static !important;
+    top: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /*
+   * The "Annotate line N with a check:" popup positions itself with
+   * position:fixed at the right-click clientY/clientX. Playwright's fullPage
+   * screenshot effectively reinterprets fixed coords as document coords, so
+   * any difference in scrollY at right-click time shifts the popup's final y
+   * between runs. Pinning the popup to top-left (with a small visible margin)
+   * during visual tests removes that source of variability without changing
+   * production layout. The screenshot still verifies the popup contents.
+   */
+  html[data-visual-tests] [data-annotation-popup] {
+    position: absolute !important;
+    top: 200px !important;
+    left: 200px !important;
   }
 `;
 

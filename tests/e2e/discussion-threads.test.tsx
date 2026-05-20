@@ -289,6 +289,11 @@ test.describe("Custom Discussion Topics", () => {
     const editButtons = page.getByRole("button", { name: "Edit" });
     await expect(editButtons).toHaveCount(4);
 
+    // The "N thread(s)" badge is rendered from realtime data and arrives slightly
+    // after the topic list itself. Without waiting on a thread badge the screenshot
+    // races realtime arrival, flipping a topic between "Delete enabled" and "Delete
+    // disabled with 1 thread badge" between runs.
+    await expect(page.getByText(/^\d+ threads?$/).first()).toBeVisible({ timeout: 10_000 });
     await visualScreenshot(page, "Discussion Topics Management Page");
   });
 
@@ -319,6 +324,10 @@ test.describe("Custom Discussion Topics", () => {
     await expect(page.getByText("Homework 1 Questions", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Ask questions about Homework 1 here")).toBeVisible();
 
+    // Same realtime-arrival race as the management page test above — wait for any
+    // thread count badge before screenshotting so the screenshot is taken with
+    // the same delete-button state in every run.
+    await expect(page.getByText(/^\d+ threads?$/).first()).toBeVisible({ timeout: 10_000 });
     await visualScreenshot(page, "After Creating Custom Topic");
 
     // ===== STEP 2: Edit the custom discussion topic =====
@@ -340,6 +349,7 @@ test.describe("Custom Discussion Topics", () => {
     // Wait for the topic update to appear (dialog may linger in webkit due to CSS animation)
     await expect(page.getByText("HW1 Discussion", { exact: true })).toBeVisible({ timeout: 30_000 });
 
+    await expect(page.getByText(/^\d+ threads?$/).first()).toBeVisible({ timeout: 10_000 });
     await visualScreenshot(page, "After Editing Custom Topic");
 
     // ===== STEP 3: Verify custom topic appears in new thread form =====
@@ -382,6 +392,7 @@ test.describe("Custom Discussion Topics", () => {
     // Verify the topic was deleted
     await expect(page.getByText("HW1 Discussion", { exact: true })).not.toBeVisible();
 
+    await expect(page.getByText(/^\d+ threads?$/).first()).toBeVisible({ timeout: 10_000 });
     await visualScreenshot(page, "After Deleting Custom Topic");
   });
 });

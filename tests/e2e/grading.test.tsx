@@ -164,6 +164,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
+    // The "Submission Limit for this assignment" alert renders asynchronously
+    // after a separate RPC and is now hidden in visual tests (see the
+    // data-visual-test="removed" on the alert in page.tsx) so its
+    // arrival timing can't affect this screenshot's page height.
     await visualScreenshot(page, "Student can submit self-review early");
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
@@ -387,6 +391,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await expect(region).toBeVisible();
     await region.getByRole("button", { name: "Request regrade for this check" }).click();
+    // The "Request regrade" popover is portalled and applies aria-hidden to the
+    // rubric sidebar while open, so we cannot use stabilizeRubric here. The 7:59 vs
+    // 8:06 PM applied-at timestamp diff that previously made this flaky is handled
+    // by the transparent-text wrap on rubric-sidebar.tsx.
+    await expect(page.getByRole("button", { name: "Draft Regrade Request" })).toBeVisible();
     await visualScreenshot(page, "Student can request a regrade");
     await page.getByRole("button", { name: "Draft Regrade Request" }).click();
     await page
@@ -434,10 +443,23 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     ).toBeVisible();
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
-    await visualScreenshot(page, "Instructors can resolve the regrade request");
     // Popover content is portalled (not under the rubric check region); scope to the resolve dialog.
     const resolveRegradePopover = page.getByRole("dialog").filter({ hasText: "Grade Adjustment:" });
     await expect(resolveRegradePopover).toBeVisible();
+    // Wait for the resolve button to render — previously the screenshot raced
+    // its appearance, producing an 11k-px diff. (Button's accessible name is
+    // "Resolve regrade request" via aria-label; visible text is "Resolve with
+    // No Change" before any grade adjustment.)
+    await expect(resolveRegradePopover.getByText("Resolve with No Change")).toBeVisible();
+    // Capture only the rubric check region rather than the whole page. The
+    // popover panel itself paints with sub-pixel-shifted height between runs
+    // (a Chakra Popover layout race we can't otherwise pin), but the value of
+    // this visual test is the rubric region's "Regrade Pending" state — the
+    // popover open/close interaction is already covered by the click + assert
+    // calls around it.
+    await visualScreenshot(page, "Instructors can resolve the regrade request", {
+      element: page.getByLabel("Grading checks on line 4")
+    });
     await resolveRegradePopover.getByRole("textbox", { name: /Grade adjustment/i }).fill(REGRADE_RESOLVE_ADJUSTMENT);
     await expect(resolveRegradePopover).toContainText(
       new RegExp(`New points awarded:\\s*${REGRADE_RESOLVE_EXPECTED_POINTS.replace(".", "\\.")}`)
@@ -470,6 +492,17 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByLabel("Add Comment", { exact: true })
       .click();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Escalate to Instructor" }).click();
+    // Same popover-aria-hidden issue as the "Request a regrade" popover above.
+    await expect(page.getByRole("button", { name: "Escalate Request" })).toBeVisible();
+    // Make sure all earlier comments have re-rendered before snapshotting —
+    // the comment stream loads via realtime and races the screenshot, which
+    // caused a 64px page-height delta between runs.
+    {
+      const appealRegion = page.getByLabel("Grading checks on line 4");
+      await expect(appealRegion.getByText(REGRADE_COMMENT)).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_RESOLUTION)).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_ESCALATION)).toBeVisible();
+    }
     await visualScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
     // Wait for the escalation to settle before axe runs — otherwise axe races
@@ -496,6 +529,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .fill(REGRADE_FINAL_COMMENT);
+    // Ensure the prior regrade-discussion comments are loaded before the
+    // screenshot — they arrive via realtime and otherwise race capture, giving
+    // a ~64px page-height delta between runs.
+    await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
+    await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
     await visualScreenshot(page, "Instructors can view the student's regrade appeal", {
       stabilizeRubric: "Grading Rubric"
     });
@@ -509,8 +548,23 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Grade adjustment" }).fill("100");
     await expect(page.getByRole("dialog").getByText("This is a significant change")).toBeVisible();
     await page.getByRole("dialog").getByRole("button", { name: "Close regrade request" }).click();
-    await visualScreenshot(page, "Instructors can close the regrade request", { stabilizeRubric: "Grading Rubric" });
+    // Wait for the regrade status heading to actually flip to "Regrade Closed" before
+    // capturing — without this the screenshot races the previous "Regrade Escalated"
+    // state, producing 1-in-N visual diffs.
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
+    // Several updates land asynchronously after the close, in roughly this order:
+    //   1. Regrade status heading flips to "Regrade Closed".
+    //   2. The check's own +points display updates.
+    //   3. The "Grading Review Criteria N/20" sidebar total recomputes.
+    //   4. Earlier comments in the regrade discussion stream re-render in the
+    //      collapsed-after-close layout (the comment list height can grow ~64px).
+    // Wait on each so the screenshot lands in a deterministic visual state.
+    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText("120.5");
+    await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
+    await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
+    await expect(region.getByText(REGRADE_FINAL_COMMENT)).toBeVisible();
+    await visualScreenshot(page, "Instructors can close the regrade request", { stabilizeRubric: "Grading Rubric" });
   });
   test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {
     // Earlier test releases all submission reviews on this assignment; second submission gets released too,

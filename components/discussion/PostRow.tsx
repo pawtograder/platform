@@ -223,7 +223,9 @@ function PostRowComponent({
                       {userProfile?.name ?? ""}
                     </Text>
                     <Text>•</Text>
-                    <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
+                    <Text data-visual-test="transparent" data-visual-placeholder="relative-time">
+                      {formatRelative(new Date(thread.created_at), new Date())}
+                    </Text>
                     <Text>•</Text>
                     <Text>
                       {thread.children_count ?? 0} replies
@@ -297,7 +299,9 @@ function PostRowComponent({
               <Text color="fg.muted" fontWeight="medium">
                 {userProfile?.name ?? ""}
               </Text>
-              <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
+              <Text data-visual-test="transparent" data-visual-placeholder="relative-time">
+                {formatRelative(new Date(thread.created_at), new Date())}
+              </Text>
               <Text>
                 {thread.children_count ?? 0} replies
                 {unreadRepliesCount > 0 && (
