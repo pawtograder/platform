@@ -5,6 +5,15 @@ export type ValidationError = {
   message: string;
 };
 
+export type ValidationWarning = {
+  path: string;
+  message: string;
+};
+
+export function warningFor(warnings: ValidationWarning[], path: string): string | undefined {
+  return warnings.find((w) => w.path === path)?.message;
+}
+
 function hasOptionsData(
   data: HydratedRubricCheck["data"]
 ): data is HydratedRubricCheck["data"] & { options: RubricChecksDataType["options"] } {

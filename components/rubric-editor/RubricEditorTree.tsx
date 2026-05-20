@@ -6,7 +6,8 @@ import { LuPlus } from "react-icons/lu";
 import { PartCard } from "@/components/rubric-editor/PartCard";
 import { RubricHeaderForm } from "@/components/rubric-editor/RubricHeaderForm";
 import { SortableList } from "@/components/rubric-editor/SortableList";
-import { ValidationError } from "@/components/rubric-editor/validation";
+import { ValidationError, ValidationWarning } from "@/components/rubric-editor/validation";
+import { Alert } from "@/components/ui/alert";
 
 /**
  * Context the references UI inside CheckRow needs. The page passes the live set
@@ -22,6 +23,7 @@ type RubricEditorTreeProps = {
   rubric: HydratedRubric;
   onChange: (next: HydratedRubric) => void;
   validationErrors: ValidationError[];
+  validationWarnings?: ValidationWarning[];
   assignmentMaxPoints: number;
   autograderPoints: number;
   referenceContext?: ReferenceEditorContext;
@@ -48,6 +50,7 @@ export function RubricEditorTree({
   rubric,
   onChange,
   validationErrors,
+  validationWarnings = [],
   assignmentMaxPoints,
   autograderPoints,
   referenceContext
@@ -76,6 +79,20 @@ export function RubricEditorTree({
 
   return (
     <Stack gap={4} p={3} w="100%" minW="0">
+      {validationWarnings.length > 0 && (
+        <Alert status="warning" variant="surface" title="Points adjusted">
+          <Stack gap={1} align="stretch">
+            {validationWarnings.map((w) => (
+              <Text key={w.path} fontSize="sm">
+                <Text as="span" fontFamily="mono" fontSize="xs" color="fg.muted">
+                  {w.path}:{" "}
+                </Text>
+                {w.message}
+              </Text>
+            ))}
+          </Stack>
+        </Alert>
+      )}
       <RubricHeaderForm rubric={rubric} onChange={handleHeaderChange} validationErrors={validationErrors} />
       {rubric.review_round === "grading-review" && (
         <Text fontSize="xs" color="fg.muted">
@@ -102,6 +119,7 @@ export function RubricEditorTree({
                 onChange={(next) => handlePartChange(idx, next)}
                 onDelete={() => handlePartDelete(idx)}
                 validationErrors={validationErrors}
+                validationWarnings={validationWarnings}
                 pathPrefix={`parts[${idx}]`}
                 currentRubricReviewRound={rubric.review_round}
                 referenceContext={referenceContext}

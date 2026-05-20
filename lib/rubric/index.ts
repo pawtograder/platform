@@ -22,3 +22,9 @@ export {
   maxPointsForCriterion
 } from "@/lib/rubric/points";
 export type { AssignToStudentPartSummary, RubricPointsBreakdown } from "@/lib/rubric/points";
+export {
+  NEGATIVE_POINTS_WARNING_MESSAGE,
+  normalizePointValue,
+  sanitizeHydratedRubricPoints,
+  type PointsValidationWarning
+} from "@/lib/rubric/pointsSanitize";

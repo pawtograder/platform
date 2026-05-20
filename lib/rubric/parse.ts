@@ -9,6 +9,7 @@ import {
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
 import { valOrNull } from "@/lib/rubric/nullish";
+import { sanitizeHydratedRubricPoints } from "@/lib/rubric/pointsSanitize";
 import { rubricCheckDataOrThrow } from "@/lib/rubric/validate";
 
 export function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubricCheck[] {
@@ -128,7 +129,7 @@ export function YamlRubricToHydratedRubric(
     review_round: NonNullable<HydratedRubric["review_round"]>;
   }
 ): HydratedRubric {
-  return {
+  const rubric: HydratedRubric = {
     id: 0,
     class_id: 0,
     created_at: "",
@@ -140,4 +141,5 @@ export function YamlRubricToHydratedRubric(
     review_round,
     cap_score_to_assignment_points: yaml.cap_score_to_assignment_points ?? false
   };
+  return sanitizeHydratedRubricPoints(rubric).rubric;
 }

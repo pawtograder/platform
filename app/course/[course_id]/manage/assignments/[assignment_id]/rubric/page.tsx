@@ -50,7 +50,9 @@ import {
   HydratedRubricToYamlRubric,
   maxPointsForCriterion,
   resolveReferences,
-  YamlRubricToHydratedRubric
+  sanitizeHydratedRubricPoints,
+  YamlRubricToHydratedRubric,
+  type PointsValidationWarning
 } from "@/lib/rubric";
 import type { RubricPointsBreakdown } from "@/lib/rubric";
 import { RubricGuiEditor, type RubricGuiEditorHandle } from "@/components/rubric-editor";
@@ -275,6 +277,7 @@ function InnerRubricPage() {
   const wasRestoredFromStashRef = useRef(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
+  const [pointsWarnings, setPointsWarnings] = useState<PointsValidationWarning[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   // Points summary state
   const gradingRubricFromDb = useRubric("grading-review");
@@ -606,6 +609,7 @@ function InnerRubricPage() {
     (yamlValue: string, currentNumErrorMarkers?: number) => {
       if (yamlValue.trim() === "") {
         setRubricForSidebar(undefined);
+        setPointsWarnings([]);
         setError(undefined);
         // setHasUnsavedChanges might need to be true if the initial state was not empty.
         // This is handled by the dedicated useEffect for hasUnsavedChanges.
@@ -641,14 +645,24 @@ function InnerRubricPage() {
             class_id: assignmentDetails.class_id
           };
 
-          setRubricForSidebar(mergedRubric);
+          const { rubric: sanitizedRubric, warnings } = sanitizeHydratedRubricPoints(mergedRubric);
+          setPointsWarnings(warnings);
+          setRubricForSidebar(sanitizedRubric);
+          if (warnings.length > 0 && viewModeRef.current === "source") {
+            skipActiveRubricYamlSyncRef.current = true;
+            setValue(
+              YAML.stringify(
+                HydratedRubricToYamlRubric(sanitizedRubric, { allRubrics: allHydratedRubrics })
+              )
+            );
+          }
           setError(undefined);
         } catch (e) {
           setError(e instanceof Error ? e.message : "Unknown YAML parsing error");
         }
       }
     },
-    [activeRubric, assignmentDetails, assignment_id, activeReviewRound, createMinimalNewHydratedRubric]
+    [activeRubric, assignmentDetails, assignment_id, activeReviewRound, createMinimalNewHydratedRubric, allHydratedRubrics]
   );
 
   const handleEditorChange = useCallback(
@@ -691,10 +705,16 @@ function InnerRubricPage() {
   const syncGuiRubricToYamlAndPreview = useCallback(
     (rubric: HydratedRubric): string => {
       skipActiveRubricYamlSyncRef.current = true;
-      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(rubric, { allRubrics: allHydratedRubrics }));
+      const { rubric: sanitized, warnings } = sanitizeHydratedRubricPoints(rubric);
+      if (viewModeRef.current === "gui") {
+        setPointsWarnings([]);
+      } else {
+        setPointsWarnings(warnings);
+      }
+      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(sanitized, { allRubrics: allHydratedRubrics }));
       setValue(yamlString);
-      setRubricForSidebar(rubric);
-      applyGuiUnsavedStatus(rubric, yamlString);
+      setRubricForSidebar(sanitized);
+      applyGuiUnsavedStatus(sanitized, yamlString);
       setUpdatePaused(false);
       return yamlString;
     },
@@ -1534,6 +1554,17 @@ function InnerRubricPage() {
           </Box>
           <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
             {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
+            {pointsWarnings.length > 0 && viewMode === "source" && (
+              <Alert status="warning" variant="surface" title="Points adjusted" mt={2}>
+                <VStack gap={1} align="stretch">
+                  {pointsWarnings.map((w) => (
+                    <Text key={w.path} fontSize="sm">
+                      {w.message}
+                    </Text>
+                  ))}
+                </VStack>
+              </Alert>
+            )}
 
             {/* Points summary for autograder vs grading rubric vs assignment total */}
             {rubric?.review_round === "grading-review" && (

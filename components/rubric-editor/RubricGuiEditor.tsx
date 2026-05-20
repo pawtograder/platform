@@ -1,12 +1,12 @@
 "use client";
 
 import { RubricEditorTree, type ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
-import { validateRubric, type ValidationError } from "@/components/rubric-editor/validation";
+import { validateRubric, type ValidationError, type ValidationWarning } from "@/components/rubric-editor/validation";
+import { sanitizeHydratedRubricPoints } from "@/lib/rubric/pointsSanitize";
 import { HydratedRubric } from "@/utils/supabase/DatabaseTypes";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 const GUI_COMMIT_DEBOUNCE_MS = 400;
-const GUI_VALIDATE_DEBOUNCE_MS = 400;
 
 export type RubricGuiEditorHandle = {
   /** Returns the current draft and cancels any pending debounced commit. */
@@ -35,8 +35,17 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
   draftRef.current = draft;
 
   const commitTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const validateTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>(() => validateRubric(rubric));
+  const [validationWarnings, setValidationWarnings] = useState<ValidationWarning[]>([]);
+
+  const applySanitizedDraft = useCallback((next: HydratedRubric) => {
+    const { rubric: sanitized, warnings } = sanitizeHydratedRubricPoints(next);
+    draftRef.current = sanitized;
+    setDraft(sanitized);
+    setValidationWarnings(warnings);
+    setValidationErrors(validateRubric(sanitized));
+    return sanitized;
+  }, []);
 
   // Sync the parent's rubric into our local draft when it changes externally.
   // Parts/criteria/checks ride on separate list controllers and populate in a
@@ -53,14 +62,8 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
       return;
     }
     lastAcceptedRubricRef.current = rubric;
-    draftRef.current = rubric;
-    setDraft(rubric);
-    if (validateTimeoutRef.current) {
-      clearTimeout(validateTimeoutRef.current);
-      validateTimeoutRef.current = undefined;
-    }
-    setValidationErrors(validateRubric(rubric));
-  }, [rubric]);
+    applySanitizedDraft(rubric);
+  }, [rubric, applySanitizedDraft]);
 
   const scheduleCommit = useCallback(
     (next: HydratedRubric) => {
@@ -75,19 +78,11 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
 
   const handleChange = useCallback(
     (next: HydratedRubric) => {
-      draftRef.current = next;
-      setDraft(next);
-      onDraftActivity?.(next);
-
-      if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
-      validateTimeoutRef.current = setTimeout(() => {
-        validateTimeoutRef.current = undefined;
-        setValidationErrors(validateRubric(next));
-      }, GUI_VALIDATE_DEBOUNCE_MS);
-
-      scheduleCommit(next);
+      const sanitized = applySanitizedDraft(next);
+      onDraftActivity?.(sanitized);
+      scheduleCommit(sanitized);
     },
-    [onDraftActivity, scheduleCommit]
+    [applySanitizedDraft, onDraftActivity, scheduleCommit]
   );
 
   useImperativeHandle(
@@ -98,15 +93,7 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
           clearTimeout(commitTimeoutRef.current);
           commitTimeoutRef.current = undefined;
         }
-        if (validateTimeoutRef.current) {
-          clearTimeout(validateTimeoutRef.current);
-          validateTimeoutRef.current = undefined;
-        }
-        const current = draftRef.current;
-        if (current) {
-          setValidationErrors(validateRubric(current));
-        }
-        return current;
+        return draftRef.current;
       }
     }),
     []
@@ -115,7 +102,6 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
   useEffect(() => {
     return () => {
       if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
-      if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
     };
   }, []);
 
@@ -124,6 +110,7 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
       rubric={draft}
       onChange={handleChange}
       validationErrors={validationErrors}
+      validationWarnings={validationWarnings}
       assignmentMaxPoints={assignmentMaxPoints}
       autograderPoints={autograderPoints}
       referenceContext={referenceContext}
