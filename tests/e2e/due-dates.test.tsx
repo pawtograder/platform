@@ -236,7 +236,11 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The extend-due-date Chakra dialog must fully unmount before the assertions below,
+    // because while mounted it holds its own copy of the (now extended) due-date text and
+    // would trip strict-mode on the getByText checks. On webkit the exit animation that
+    // drives unmount can stall well past the 20s default, so allow extra headroom.
+    await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 40_000 });
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
@@ -250,7 +254,11 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The extend-due-date Chakra dialog must fully unmount before the assertions below,
+    // because while mounted it holds its own copy of the (now extended) due-date text and
+    // would trip strict-mode on the getByText checks. On webkit the exit animation that
+    // drives unmount can stall well past the 20s default, so allow extra headroom.
+    await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 40_000 });
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
@@ -266,7 +274,11 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The extend-due-date Chakra dialog must fully unmount before the assertions below,
+    // because while mounted it holds its own copy of the (now extended) due-date text and
+    // would trip strict-mode on the getByText checks. On webkit the exit animation that
+    // drives unmount can stall well past the 20s default, so allow extra headroom.
+    await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 40_000 });
     await expect(
       page.getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
     ).toBeVisible();
