@@ -410,8 +410,12 @@ test.describe("Rubric editor GUI", () => {
     // handleViewModeChange closure that parses it) only catch up a render later, after the
     // debounced YAML parse runs. Wait for that parse to surface the mutex error before
     // clicking GUI — otherwise the click can run against the stale (empty/valid) YAML,
-    // wrongly succeed, and switch to GUI, making the source region disappear.
-    await expect(page.getByText(/cannot have both is_individual_grading and is_assign_to_student/i)).toBeVisible();
+    // wrongly succeed, and switch to GUI, making the source region disappear. Allow extra
+    // time: on webkit Monaco initialization + the debounce can push this past the 20s default
+    // (this path uses Monaco, which can't be exercised in the local sandbox — CI validates it).
+    await expect(page.getByText(/cannot have both is_individual_grading and is_assign_to_student/i)).toBeVisible({
+      timeout: 40_000
+    });
 
     // Try to toggle back to GUI - it should fail and stay in source mode.
     await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
