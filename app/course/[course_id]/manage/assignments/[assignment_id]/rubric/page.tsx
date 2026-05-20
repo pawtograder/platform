@@ -711,12 +711,14 @@ function InnerRubricPage() {
         if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: dirty }));
         return;
       }
-      const snapshotYaml = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
+      const snapshotYaml = YAML.stringify(
+        HydratedRubricToYamlRubric(initialActiveRubricSnapshot, { allRubrics: allHydratedRubrics })
+      );
       const changed = snapshotYaml !== yamlString;
       setHasUnsavedChanges(changed);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: changed }));
     },
-    [initialActiveRubricSnapshot, activeReviewRound]
+    [initialActiveRubricSnapshot, activeReviewRound, allHydratedRubrics]
   );
 
   const syncGuiRubricToYamlAndPreview = useCallback(
@@ -1078,6 +1080,22 @@ function InnerRubricPage() {
         parsedRubricFromEditor.review_round = activeReviewRound;
       } catch (e) {
         throw new Error(`Invalid YAML: ${(e as Error).message}`);
+      }
+
+      // Assign unique negative ids to every new check (id<=0). The RPC keys its
+      // input->real id map by the incoming id, so duplicate -1s would collapse
+      // and re-attach references from one new check to another.
+      {
+        let nextNewCheckId = -1;
+        for (const part of parsedRubricFromEditor.rubric_parts) {
+          for (const crit of part.rubric_criteria) {
+            for (const check of crit.rubric_checks) {
+              if (check.id <= 0) {
+                check.id = nextNewCheckId--;
+              }
+            }
+          }
+        }
       }
 
       // Identify the existing rubric (if any) for this review round; the RPC

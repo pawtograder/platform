@@ -113,7 +113,7 @@ export const CriterionCard = memo(function CriterionCard({
   const handleChecksReorder = useCallback(
     (next: HydratedRubricCheck[]) => {
       const c = criteriaRef.current;
-      emitCriteria({ ...c, rubric_checks: next });
+      emitCriteria({ ...c, rubric_checks: next.map((ch, i) => ({ ...ch, ordinal: i })) });
     },
     [emitCriteria]
   );
@@ -121,6 +121,9 @@ export const CriterionCard = memo(function CriterionCard({
   const handleAddCheck = useCallback(() => {
     const c = criteriaRef.current;
     const next = blankCheck();
+    // Assign a unique negative id so new checks don't collide when remapping after save.
+    const minId = c.rubric_checks.reduce((m, ch) => (ch.id < m ? ch.id : m), 0);
+    next.id = minId - 1;
     next.ordinal = c.rubric_checks.length;
     emitCriteria({ ...c, rubric_checks: [...c.rubric_checks, next] });
   }, [emitCriteria]);

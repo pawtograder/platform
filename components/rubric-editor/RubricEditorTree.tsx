@@ -58,7 +58,7 @@ export function RubricEditorTree({
   const handleHeaderChange = (next: HydratedRubric) => onChange(next);
 
   const handlePartsReorder = (next: HydratedRubricPart[]) => {
-    onChange({ ...rubric, rubric_parts: next });
+    onChange({ ...rubric, rubric_parts: next.map((p, i) => ({ ...p, ordinal: i })) });
   };
 
   const handlePartChange = (idx: number, next: HydratedRubricPart) => {

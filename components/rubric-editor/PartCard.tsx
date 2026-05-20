@@ -89,7 +89,7 @@ export const PartCard = memo(function PartCard({
   const handleCriteriaReorder = useCallback(
     (next: HydratedRubricCriteria[]) => {
       const p = partRef.current;
-      emitPart({ ...p, rubric_criteria: next });
+      emitPart({ ...p, rubric_criteria: next.map((c, i) => ({ ...c, ordinal: i })) });
     },
     [emitPart]
   );

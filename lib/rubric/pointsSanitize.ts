@@ -58,7 +58,9 @@ function sanitizeCheckPoints(
       return { ...opt, points };
     });
     if (optionsChanged) {
-      next = { ...next, data: { options } };
+      // hasOptionsData already narrowed check.data to a non-null object, but the
+      // generic Json type still permits primitives, so spread it via Object.assign.
+      next = { ...next, data: Object.assign({}, check.data, { options }) };
     }
   }
 
