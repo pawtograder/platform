@@ -10,20 +10,19 @@ import {
   Heading,
   HStack,
   IconButton,
-  Input,
   Menu,
   Portal,
   Stack,
   Text,
-  Textarea,
   VStack
 } from "@chakra-ui/react";
+import { DebouncedInput, DebouncedTextarea } from "@/components/rubric-editor/DebouncedInput";
 import { memo, useCallback, useRef, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
 import { CriterionCard } from "@/components/rubric-editor/CriterionCard";
 import { SortableList } from "@/components/rubric-editor/SortableList";
 import { CRITERIA_TEMPLATES, CriteriaTemplateKey } from "@/components/rubric-editor/templates";
-import { ValidationError } from "@/components/rubric-editor/validation";
+import { ValidationError, ValidationWarning } from "@/components/rubric-editor/validation";
 
 type PartMode = "standard" | "is_individual_grading" | "is_assign_to_student";
 
@@ -56,6 +55,7 @@ type PartCardProps = {
   onChange: (next: HydratedRubricPart) => void;
   onDelete: () => void;
   validationErrors: ValidationError[];
+  validationWarnings?: ValidationWarning[];
   pathPrefix: string;
   currentRubricReviewRound?: HydratedRubric["review_round"];
   referenceContext?: ReferenceEditorContext;
@@ -77,6 +77,7 @@ export const PartCard = memo(function PartCard({
   onChange,
   onDelete,
   validationErrors,
+  validationWarnings = [],
   pathPrefix,
   currentRubricReviewRound,
   referenceContext
@@ -177,15 +178,18 @@ export const PartCard = memo(function PartCard({
             errorText={nameError}
             helperText="A logical section of the rubric. Often a question, problem, or deliverable."
           >
-            <Input value={part.name ?? ""} onChange={(e) => emitPart({ ...partRef.current, name: e.target.value })} />
+            <DebouncedInput
+              value={part.name ?? ""}
+              onCommit={(next) => emitPart({ ...partRef.current, name: next })}
+            />
           </Field>
           <Field
             label="Description"
             helperText="Optional. Markdown supported. Shown to graders above this part's criteria."
           >
-            <Textarea
+            <DebouncedTextarea
               value={part.description ?? ""}
-              onChange={(e) => emitPart({ ...partRef.current, description: e.target.value || null })}
+              onCommit={(next) => emitPart({ ...partRef.current, description: next || null })}
               rows={2}
             />
           </Field>
@@ -266,6 +270,7 @@ export const PartCard = memo(function PartCard({
                     onChange={(next) => handleCriteriaChange(idx, next)}
                     onDelete={() => handleCriteriaDelete(idx)}
                     validationErrors={validationErrors}
+                    validationWarnings={validationWarnings}
                     pathPrefix={`${pathPrefix}.criteria[${idx}]`}
                     currentRubricReviewRound={currentRubricReviewRound}
                     referenceContext={referenceContext}

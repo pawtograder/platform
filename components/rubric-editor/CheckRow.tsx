@@ -16,16 +16,16 @@ import {
   Collapsible,
   HStack,
   IconButton,
-  Input,
   NativeSelect,
   Stack,
   Text,
-  Textarea,
   VStack
 } from "@chakra-ui/react";
+import { DebouncedInput, DebouncedTextarea } from "@/components/rubric-editor/DebouncedInput";
 import { memo, useMemo, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2, LuArrowUp, LuArrowDown, LuLink, LuX } from "react-icons/lu";
-import { ValidationError } from "@/components/rubric-editor/validation";
+import { ValidationError, ValidationWarning, warningFor } from "@/components/rubric-editor/validation";
+import { normalizePointValue } from "@/lib/rubric/pointsSanitize";
 import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
 
 type CheckType = "checkbox" | "options" | "annotation";
@@ -35,6 +35,7 @@ type CheckRowProps = {
   onChange: (next: HydratedRubricCheck) => void;
   onDelete: () => void;
   validationErrors: ValidationError[];
+  validationWarnings?: ValidationWarning[];
   pathPrefix: string;
   currentRubricReviewRound?: HydratedRubric["review_round"];
   referenceContext?: ReferenceEditorContext;
@@ -98,6 +99,7 @@ export const CheckRow = memo(function CheckRow({
   onChange,
   onDelete,
   validationErrors,
+  validationWarnings = [],
   pathPrefix,
   currentRubricReviewRound,
   referenceContext,
@@ -115,6 +117,7 @@ export const CheckRow = memo(function CheckRow({
   const nameError = errorFor(validationErrors, `${pathPrefix}.name`);
   const optionsErrors = errorsStartingWith(validationErrors, `${pathPrefix}.data.options`);
   const maxAnnotationsError = errorFor(validationErrors, `${pathPrefix}.max_annotations`);
+  const pointsWarning = warningFor(validationWarnings, `${pathPrefix}.points`);
 
   const existingRefs: HydratedRubricCheckReference[] = useMemo(() => check.references ?? [], [check.references]);
   const referenceCount = existingRefs.length;
@@ -208,7 +211,12 @@ export const CheckRow = memo(function CheckRow({
   };
 
   const handleOptionChange = (idx: number, patch: Partial<RubricChecksDataType["options"][number]>) => {
-    const next = options.map((opt, i) => (i === idx ? { ...opt, ...patch } : opt));
+    let resolvedPatch = patch;
+    if (patch.points !== undefined && patch.points !== null) {
+      const { points } = normalizePointValue(Number(patch.points));
+      resolvedPatch = { ...patch, points };
+    }
+    const next = options.map((opt, i) => (i === idx ? { ...opt, ...resolvedPatch } : opt));
     onChange({ ...check, data: { options: next } });
   };
 
@@ -278,9 +286,9 @@ export const CheckRow = memo(function CheckRow({
             errorText={nameError}
             helperText="Short label shown in the grading UI. Keep it concise — the description carries the details."
           >
-            <Input
+            <DebouncedInput
               value={check.name ?? ""}
-              onChange={(e) => onChange({ ...check, name: e.target.value })}
+              onCommit={(next) => onChange({ ...check, name: next })}
               placeholder="Check name"
             />
           </Field>
@@ -288,9 +296,9 @@ export const CheckRow = memo(function CheckRow({
             label="Description"
             helperText="Markdown supported. Shown to graders, and to students when student visibility allows."
           >
-            <Textarea
+            <DebouncedTextarea
               value={check.description ?? ""}
-              onChange={(e) => onChange({ ...check, description: e.target.value || null })}
+              onCommit={(next) => onChange({ ...check, description: next || null })}
               rows={2}
             />
           </Field>
@@ -298,12 +306,20 @@ export const CheckRow = memo(function CheckRow({
             <Field
               label="Points"
               maxW="32"
-              helperText="Added to the score in award-per-check criteria; subtracted in deduct-from-total or penalty-only criteria."
+              helperText={
+                pointsWarning ??
+                "Added to the score in award-per-check criteria; subtracted in deduct-from-total or penalty-only criteria."
+              }
+              invalid={!!pointsWarning}
+              errorText={pointsWarning}
             >
-              <Input
+              <DebouncedInput
                 type="number"
-                value={check.points ?? 0}
-                onChange={(e) => onChange({ ...check, points: Number(e.target.value) })}
+                value={String(check.points ?? 0)}
+                onCommit={(next) => {
+                  const { points } = normalizePointValue(Number(next));
+                  onChange({ ...check, points });
+                }}
               />
             </Field>
             <Field
@@ -412,20 +428,26 @@ export const CheckRow = memo(function CheckRow({
                 </HStack>
               )}
               <Stack gap={2}>
-                {options.map((opt, idx) => (
-                  <HStack key={idx} gap={2} align="center">
-                    <Input
+                {options.map((opt, idx) => {
+                  const optionPointsWarning = warningFor(
+                    validationWarnings,
+                    `${pathPrefix}.data.options[${idx}].points`
+                  );
+                  return (
+                  <Stack key={idx} gap={1} w="100%">
+                  <HStack gap={2} align="center" w="100%">
+                    <DebouncedInput
                       flex="1"
                       aria-label={`Option ${idx + 1} label`}
                       value={opt.label ?? ""}
-                      onChange={(e) => handleOptionChange(idx, { label: e.target.value })}
+                      onCommit={(next) => handleOptionChange(idx, { label: next })}
                     />
-                    <Input
+                    <DebouncedInput
                       maxW="24"
                       type="number"
                       aria-label={`Option ${idx + 1} points`}
-                      value={opt.points ?? 0}
-                      onChange={(e) => handleOptionChange(idx, { points: Number(e.target.value) })}
+                      value={String(opt.points ?? 0)}
+                      onCommit={(next) => handleOptionChange(idx, { points: Number(next) })}
                     />
                     <IconButton
                       aria-label="Move option up"
@@ -455,7 +477,14 @@ export const CheckRow = memo(function CheckRow({
                       <LuTrash2 />
                     </IconButton>
                   </HStack>
-                ))}
+                  {optionPointsWarning && (
+                    <Text fontSize="xs" color="fg.warning">
+                      {optionPointsWarning}
+                    </Text>
+                  )}
+                  </Stack>
+                  );
+                })}
               </Stack>
               {optionsErrors.length > 0 && (
                 <Stack gap={1} mt={2}>
@@ -478,9 +507,9 @@ export const CheckRow = memo(function CheckRow({
                   minW="60"
                   helperText="Optional. Restrict this annotation to a specific file path (e.g., 'src/main.ts'). Leave empty to allow it anywhere in the submission."
                 >
-                  <Input
+                  <DebouncedInput
                     value={check.file ?? ""}
-                    onChange={(e) => onChange({ ...check, file: e.target.value || null })}
+                    onCommit={(next) => onChange({ ...check, file: next || null })}
                     placeholder="src/path/to/File.ts"
                   />
                 </Field>
@@ -491,13 +520,13 @@ export const CheckRow = memo(function CheckRow({
                   errorText={maxAnnotationsError}
                   helperText="Max times a grader can apply this on one submission. Empty for unlimited."
                 >
-                  <Input
+                  <DebouncedInput
                     type="number"
-                    value={check.max_annotations ?? ""}
-                    onChange={(e) =>
+                    value={check.max_annotations == null ? "" : String(check.max_annotations)}
+                    onCommit={(next) =>
                       onChange({
                         ...check,
-                        max_annotations: e.target.value === "" ? null : Number(e.target.value)
+                        max_annotations: next === "" ? null : Number(next)
                       })
                     }
                   />
@@ -517,9 +546,9 @@ export const CheckRow = memo(function CheckRow({
                       minW="48"
                       helperText="Optional. Restrict this annotation to a specific build artifact instead of a file."
                     >
-                      <Input
+                      <DebouncedInput
                         value={check.artifact ?? ""}
-                        onChange={(e) => onChange({ ...check, artifact: e.target.value || null })}
+                        onCommit={(next) => onChange({ ...check, artifact: next || null })}
                       />
                     </Field>
                     <Field

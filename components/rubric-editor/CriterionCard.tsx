@@ -11,17 +11,17 @@ import {
   Heading,
   HStack,
   IconButton,
-  Input,
   Stack,
   Text,
-  Textarea,
   VStack
 } from "@chakra-ui/react";
+import { DebouncedInput, DebouncedTextarea } from "@/components/rubric-editor/DebouncedInput";
 import { memo, useCallback, useRef, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
 import { CheckRow } from "@/components/rubric-editor/CheckRow";
 import { SortableList } from "@/components/rubric-editor/SortableList";
-import { ValidationError } from "@/components/rubric-editor/validation";
+import { ValidationError, ValidationWarning, warningFor } from "@/components/rubric-editor/validation";
+import { normalizePointValue } from "@/lib/rubric/pointsSanitize";
 
 type ScoringMode = "additive" | "non-additive" | "deduction-only";
 
@@ -85,6 +85,7 @@ type CriterionCardProps = {
   onChange: (next: HydratedRubricCriteria) => void;
   onDelete: () => void;
   validationErrors: ValidationError[];
+  validationWarnings?: ValidationWarning[];
   pathPrefix: string;
   currentRubricReviewRound?: HydratedRubric["review_round"];
   referenceContext?: ReferenceEditorContext;
@@ -95,6 +96,7 @@ export const CriterionCard = memo(function CriterionCard({
   onChange,
   onDelete,
   validationErrors,
+  validationWarnings = [],
   pathPrefix,
   currentRubricReviewRound,
   referenceContext
@@ -116,6 +118,7 @@ export const CriterionCard = memo(function CriterionCard({
   const nameError = errorFor(validationErrors, `${pathPrefix}.name`);
   const checksError = errorFor(validationErrors, `${pathPrefix}.checks`);
   const minError = errorFor(validationErrors, `${pathPrefix}.min_checks_per_submission`);
+  const totalPointsWarning = warningFor(validationWarnings, `${pathPrefix}.total_points`);
 
   const handleChecksReorder = useCallback(
     (next: HydratedRubricCheck[]) => {
@@ -191,15 +194,15 @@ export const CriterionCard = memo(function CriterionCard({
             errorText={nameError}
             helperText="A single rule or quality to assess (e.g., 'Code style', 'Q1 reflection')."
           >
-            <Input
+            <DebouncedInput
               value={criteria.name ?? ""}
-              onChange={(e) => emitCriteria({ ...criteriaRef.current, name: e.target.value })}
+              onCommit={(next) => emitCriteria({ ...criteriaRef.current, name: next })}
             />
           </Field>
           <Field label="Description" helperText="Optional. Markdown supported. Shown to graders above the checks.">
-            <Textarea
+            <DebouncedTextarea
               value={criteria.description ?? ""}
-              onChange={(e) => emitCriteria({ ...criteriaRef.current, description: e.target.value || null })}
+              onCommit={(next) => emitCriteria({ ...criteriaRef.current, description: next || null })}
               rows={2}
             />
           </Field>
@@ -239,11 +242,22 @@ export const CriterionCard = memo(function CriterionCard({
               </Stack>
             </RadioGroup>
           </Field>
-          <Field label="Total points" maxW="40" helperText="The maximum points this criterion can contribute.">
-            <Input
+          <Field
+            label="Total points"
+            maxW="40"
+            helperText={
+              totalPointsWarning ?? "The maximum points this criterion can contribute."
+            }
+            invalid={!!totalPointsWarning}
+            errorText={totalPointsWarning}
+          >
+            <DebouncedInput
               type="number"
-              value={criteria.total_points ?? 0}
-              onChange={(e) => emitCriteria({ ...criteriaRef.current, total_points: Number(e.target.value) })}
+              value={String(criteria.total_points ?? 0)}
+              onCommit={(next) => {
+                const { points } = normalizePointValue(Number(next));
+                emitCriteria({ ...criteriaRef.current, total_points: points });
+              }}
             />
           </Field>
 
@@ -262,13 +276,13 @@ export const CriterionCard = memo(function CriterionCard({
                   errorText={minError}
                   helperText="Minimum number of checks a grader must apply. Set min and max both to 1 to render the checks as radio buttons in the grading UI - this is the preferred way to build a single-pick rubric like Met/Partial/Not met."
                 >
-                  <Input
+                  <DebouncedInput
                     type="number"
-                    value={criteria.min_checks_per_submission ?? ""}
-                    onChange={(e) =>
+                    value={criteria.min_checks_per_submission == null ? "" : String(criteria.min_checks_per_submission)}
+                    onCommit={(next) =>
                       emitCriteria({
                         ...criteriaRef.current,
-                        min_checks_per_submission: e.target.value === "" ? null : Number(e.target.value)
+                        min_checks_per_submission: next === "" ? null : Number(next)
                       })
                     }
                   />
@@ -278,13 +292,13 @@ export const CriterionCard = memo(function CriterionCard({
                   maxW="48"
                   helperText="Maximum number of checks a grader can apply. Leave empty for unlimited."
                 >
-                  <Input
+                  <DebouncedInput
                     type="number"
-                    value={criteria.max_checks_per_submission ?? ""}
-                    onChange={(e) =>
+                    value={criteria.max_checks_per_submission == null ? "" : String(criteria.max_checks_per_submission)}
+                    onCommit={(next) =>
                       emitCriteria({
                         ...criteriaRef.current,
-                        max_checks_per_submission: e.target.value === "" ? null : Number(e.target.value)
+                        max_checks_per_submission: next === "" ? null : Number(next)
                       })
                     }
                   />
@@ -317,6 +331,7 @@ export const CriterionCard = memo(function CriterionCard({
                     onChange={(next) => handleCheckChange(idx, next)}
                     onDelete={() => handleCheckDelete(idx)}
                     validationErrors={validationErrors}
+                    validationWarnings={validationWarnings}
                     pathPrefix={`${pathPrefix}.checks[${idx}]`}
                     currentRubricReviewRound={currentRubricReviewRound}
                     referenceContext={referenceContext}

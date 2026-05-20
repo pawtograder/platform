@@ -3,7 +3,8 @@
 import { Field } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { HydratedRubric } from "@/utils/supabase/DatabaseTypes";
-import { Heading, Input, Stack, Textarea } from "@chakra-ui/react";
+import { Heading, Stack } from "@chakra-ui/react";
+import { DebouncedInput, DebouncedTextarea } from "@/components/rubric-editor/DebouncedInput";
 import { ValidationError } from "@/components/rubric-editor/validation";
 
 type RubricHeaderFormProps = {
@@ -30,16 +31,16 @@ export function RubricHeaderForm({ rubric, onChange, validationErrors }: RubricH
         errorText={nameError}
         helperText="Shown to graders and, if visibility allows, to students."
       >
-        <Input
+        <DebouncedInput
           value={rubric.name ?? ""}
-          onChange={(e) => onChange({ ...rubric, name: e.target.value })}
+          onCommit={(next) => onChange({ ...rubric, name: next })}
           placeholder="Rubric name"
         />
       </Field>
       <Field label="Description" helperText="Optional context shown above the rubric. Markdown supported.">
-        <Textarea
+        <DebouncedTextarea
           value={rubric.description ?? ""}
-          onChange={(e) => onChange({ ...rubric, description: e.target.value || null })}
+          onCommit={(next) => onChange({ ...rubric, description: next || null })}
           placeholder="Describe what this rubric is for."
           rows={3}
         />
