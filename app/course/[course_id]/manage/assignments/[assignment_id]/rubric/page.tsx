@@ -145,7 +145,10 @@ function useHydratedRubricByReviewRound(
       ...rubric,
       rubric_parts: hydratedParts
     };
-  }, [rubric, parts, allCriteria, allChecks, allReferences]);
+    // review_round is in deps so the guard re-runs even when the inner list-controller
+    // hooks return their stale-references on a tab switch — without it useMemo would
+    // hand back the previously hydrated (wrong-round) tree.
+  }, [rubric, parts, allCriteria, allChecks, allReferences, review_round]);
 }
 
 /**
