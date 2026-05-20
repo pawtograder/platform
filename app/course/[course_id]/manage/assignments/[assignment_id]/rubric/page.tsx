@@ -32,7 +32,6 @@ import {
   Link,
   List,
   Spinner,
-  Tabs,
   Text,
   VStack
 } from "@chakra-ui/react";
@@ -1355,42 +1354,50 @@ function InnerRubricPage() {
           </Button>
         </VStack>
       </HStack>
-      <Tabs.Root
-        value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
-        onValueChange={(details) => {
-          if (details.value) {
-            handleReviewRoundChange(details.value as NonNullable<HydratedRubric["review_round"]>);
-          }
-        }}
+      <HStack
+        role="tablist"
+        aria-label="Review round"
+        gap={0}
+        borderBottom="1px solid"
+        borderColor="border.subtle"
         mb={0}
+        align="flex-end"
       >
-        <Tabs.List>
-          {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
-            <Tabs.Trigger
-              key={rr || "undefined_round"}
-              value={rr || "undefined_round_val"}
-              // Fallback in case Zag's automatic activation doesn't fire (we hit a race
-              // where dirty DebouncedInput edits flush during the click sequence and
-              // Chakra ends up moving focus to the new trigger without firing
-              // onValueChange — tab visually stays put). Calling handleReviewRoundChange
-              // here is idempotent: if Zag DOES fire onValueChange, the second call
-              // short-circuits on `newReviewRound === activeReviewRound`.
-              onClick={() =>
-                rr && handleReviewRoundChange(rr as NonNullable<HydratedRubric["review_round"]>)
-              }
+        {REVIEW_ROUNDS_AVAILABLE.map((rr) => {
+          if (!rr) return null;
+          const isActive = activeReviewRound === rr;
+          const label = rr
+            .split("-")
+            .map((w) => w[0].toUpperCase() + w.slice(1))
+            .join(" ");
+          // Plain <button> with role="tab" + manual onClick. We previously used Chakra's
+          // Tabs.Root, but Zag's tab state machine race-condition'd with mid-click
+          // DebouncedInput commits — focus moved to the new trigger but onValueChange
+          // never fired, leaving aria-selected="false" on the new tab. Owning click
+          // handling here removes that whole class of failure.
+          return (
+            <Button
+              key={rr}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              onClick={() => handleReviewRoundChange(rr)}
+              variant="ghost"
+              size="sm"
+              borderRadius={0}
+              fontWeight={isActive ? "semibold" : "normal"}
+              color={isActive ? "fg" : "fg.muted"}
+              borderBottom="2px solid"
+              borderColor={isActive ? "border.emphasized" : "transparent"}
+              mb="-1px"
+              _hover={{ color: "fg" }}
             >
-              {" "}
-              {rr
-                ? rr
-                    .split("-")
-                    .map((w) => w[0].toUpperCase() + w.slice(1))
-                    .join(" ")
-                : "Select Round"}
-              {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
-            </Tabs.Trigger>
-          ))}
-        </Tabs.List>
-      </Tabs.Root>
+              {label}
+              {unsavedStatusPerTab[rr] ? "* (Unsaved Changes)" : ""}
+            </Button>
+          );
+        })}
+      </HStack>
       <VStack w="100%" h="100%" border="1px solid" borderColor={"border.subtle"}>
         <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="space-between" px={2}>
           <HStack gap={1}>
