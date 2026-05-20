@@ -1371,24 +1371,20 @@ function InnerRubricPage() {
             .map((w) => w[0].toUpperCase() + w.slice(1))
             .join(" ");
           // Plain <button> with role="tab" + manual onClick. We previously used Chakra's
-          // Tabs.Root, but Zag's tab state machine race-condition'd with mid-click
-          // DebouncedInput commits — focus moved to the new trigger but onValueChange
-          // never fired, leaving aria-selected="false" on the new tab. Owning click
-          // handling here removes that whole class of failure.
+          // Tabs.Root, but the underlying race wasn't Zag at all: the dirty-tab marker
+          // "* (Unsaved Changes)" is appended to whichever tab is dirty, and that text
+          // widens that tab between mousedown and mouseup of an adjacent-tab click. The
+          // cursor then sits over a different tab at mouseup, so the browser doesn't
+          // generate a click event. Owning the tab activation here and reserving the
+          // dirty marker's width below (visibility: hidden when clean) keeps the layout
+          // stable across the click sequence.
           return (
             <Button
               key={rr}
               role="tab"
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
-              onPointerDown={() => console.error(`[rubric-tab-pointerdown] rr=${rr}`)}
-              onMouseDown={() => console.error(`[rubric-tab-mousedown] rr=${rr}`)}
-              onClick={(e) => {
-                console.error(
-                  `[rubric-tab-click] rr=${rr} activeReviewRound=${activeReviewRound} defaultPrevented=${e.defaultPrevented} bubbles=${e.bubbles}`
-                );
-                handleReviewRoundChange(rr);
-              }}
+              onClick={() => handleReviewRoundChange(rr)}
               variant="ghost"
               size="sm"
               borderRadius={0}
@@ -1400,7 +1396,14 @@ function InnerRubricPage() {
               _hover={{ color: "fg" }}
             >
               {label}
-              {unsavedStatusPerTab[rr] ? "* (Unsaved Changes)" : ""}
+              <Box
+                as="span"
+                ml={1}
+                visibility={unsavedStatusPerTab[rr] ? "visible" : "hidden"}
+                aria-hidden={!unsavedStatusPerTab[rr]}
+              >
+                * (Unsaved Changes)
+              </Box>
             </Button>
           );
         })}
