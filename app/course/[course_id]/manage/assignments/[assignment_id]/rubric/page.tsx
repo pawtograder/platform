@@ -99,9 +99,23 @@ function useHydratedRubricByReviewRound(
 
   return useMemo(() => {
     if (!rubric || !parts || !allCriteria || !allChecks) return undefined;
+    // The inner list-controller hooks return their previous render's array on the first
+    // render after a predicate change (state resets via useEffect, not synchronously).
+    // On a tab switch, that means we can briefly see (review_round=self-review) paired
+    // with (rubric=previous-round's-stale-rubric, parts=that-round's-parts), and emit a
+    // hybrid rubric whose review_round is right but whose parts belong to the wrong
+    // round. Save then sends a payload labeled self-review but full of grading-review
+    // parts, the RPC tries to delete the real self-review parts, and FK constraints on
+    // rubric_criteria block it.
+    //
+    // Two filters defend against that:
+    //   1. Bail if rubric.review_round doesn't match the requested round.
+    //   2. Drop any parts (and their criteria/checks) whose rubric_id doesn't match.
+    if (rubric.review_round !== review_round) return undefined;
+    const ownParts = parts.filter((p) => p.rubric_id === rubric.id);
 
     // Build the hydrated structure
-    const hydratedParts: HydratedRubricPart[] = parts.map((part) => {
+    const hydratedParts: HydratedRubricPart[] = ownParts.map((part) => {
       const partCriteria = allCriteria.filter((c) => c.rubric_part_id === part.id);
       const hydratedCriteria: HydratedRubricCriteria[] = partCriteria.map((criteria) => {
         const criteriaChecks = allChecks.filter((ch) => ch.rubric_criteria_id === criteria.id);

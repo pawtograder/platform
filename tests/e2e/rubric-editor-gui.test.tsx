@@ -164,15 +164,24 @@ async function pickReferenceTarget(check: Locator, namePattern: RegExp) {
 
 async function selectGradingReviewTab(page: Page) {
   // Anchored regex so it doesn't match "Meta Grading Review".
-  await rubricEditor(page)
-    .getByRole("tab", { name: /^\s*Grading Review(\*?\s*\(Unsaved Changes\))?\s*$/i })
-    .click();
+  const tab = rubricEditor(page).getByRole("tab", {
+    name: /^\s*Grading Review(\*?\s*\(Unsaved Changes\))?\s*$/i
+  });
+  await tab.click();
+  // Wait for the tab indicator to flip before letting the test interact with the editor.
+  // Without this, follow-up locators like partAt(0) can resolve against the previously
+  // selected tab's still-mounted DOM (the click fires React's onValueChange synchronously
+  // but the state-update + re-render cascade isn't guaranteed to complete before the next
+  // Playwright action queries the DOM).
+  await expect(tab).toHaveAttribute("aria-selected", "true");
 }
 
 async function selectSelfReviewTab(page: Page) {
-  await rubricEditor(page)
-    .getByRole("tab", { name: /^\s*Self Review(\*?\s*\(Unsaved Changes\))?\s*$/i })
-    .click();
+  const tab = rubricEditor(page).getByRole("tab", {
+    name: /^\s*Self Review(\*?\s*\(Unsaved Changes\))?\s*$/i
+  });
+  await tab.click();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
 }
 
 // Refetch the assignment's grading_rubric_id - it may be set asynchronously by a trigger
