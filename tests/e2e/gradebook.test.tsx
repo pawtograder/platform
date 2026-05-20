@@ -149,19 +149,29 @@ async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000
 // changed — never recomputes and a poll for its final value hangs until timeout.
 // Clear any stuck flags and re-invoke the worker directly so the poll can make progress.
 async function kickGradebookRecalculation(classId: number) {
-  await supabase
+  // Surface real failures: this runs inside a toPass loop, so throwing on a
+  // genuine error retries the kick (and reports the cause) instead of silently
+  // no-op'ing and letting the caller's poll flake until timeout.
+  const { error: resetError } = await supabase
     .from("gradebook_row_recalc_state")
     .update({ is_recalculating: false })
     .eq("class_id", classId)
     .eq("is_recalculating", true);
+  if (resetError) {
+    throw new Error(`Failed to clear stuck recalculation flags: ${resetError.message}`);
+  }
   const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
   if (edgeSecret) {
+    // Non-fatal: the DB RPC fallback below still runs if the edge invoke fails.
     await supabase.functions
       .invoke("gradebook-column-recalculate", { headers: { "x-edge-function-secret": edgeSecret } })
       .catch(() => {});
   }
   // Also invoke via the DB's internal mechanism as a fallback (pg_net may be slow).
-  await supabase.rpc("invoke_gradebook_recalculation_background_task");
+  const { error: rpcError } = await supabase.rpc("invoke_gradebook_recalculation_background_task");
+  if (rpcError) {
+    throw new Error(`Failed to invoke recalculation background task: ${rpcError.message}`);
+  }
 }
 
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
