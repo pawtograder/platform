@@ -529,8 +529,9 @@ $function$;
 --    actionable as pending. This is NOT terminal: the student can still escalate
 --    a 'resolved' request to an instructor if they disagree.
 --
---    Kept deliberately minimal (no notification fan-out) so it can never fail and
---    block a grader's legitimate delete/re-grade workflow.
+--    Notifies the student(s) on the submission so they know to re-check the grade and
+--    escalate if they still disagree. The notification insert is wrapped so a failure
+--    can never roll back the grader's legitimate delete/re-grade workflow.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.auto_resolve_regrade_on_comment_delete()
 RETURNS trigger
@@ -538,6 +539,8 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO 'public'
 AS $function$
+declare
+    affected record;
 begin
     if NEW.regrade_request_id is not null
        and OLD.deleted_at is null
@@ -549,7 +552,52 @@ begin
             resolution_reason = 'comment_deleted',
             last_updated_at = now()
         where id = NEW.regrade_request_id
-          and status in ('draft', 'opened', 'escalated');
+          and status in ('draft', 'opened', 'escalated')
+        returning class_id, submission_id, assignment_id, resolved_by
+        into affected;
+
+        -- Notify the submission's student(s). Best-effort: a notification failure must
+        -- never abort the comment soft-delete that triggered this.
+        if found then
+            begin
+                insert into public.notifications (class_id, subject, body, style, user_id)
+                select
+                    affected.class_id,
+                    '{}'::jsonb as subject,
+                    jsonb_build_object(
+                        'type', 'regrade_request',
+                        'action', 'auto_resolved',
+                        'regrade_request_id', NEW.regrade_request_id,
+                        'submission_id', affected.submission_id,
+                        'assignment_id', affected.assignment_id,
+                        'resolution_reason', 'comment_deleted',
+                        'resolved_by', affected.resolved_by,
+                        'resolved_by_name', (select name from public.profiles where id = affected.resolved_by)
+                    ) as body,
+                    'info' as style,
+                    ur.user_id
+                from public.user_roles ur
+                where ur.class_id = affected.class_id
+                  and ur.role = 'student'
+                  and ur.private_profile_id in (
+                    select s.profile_id
+                    from public.submissions s
+                    where s.id = affected.submission_id
+
+                    union
+
+                    select agm.profile_id
+                    from public.submissions s
+                    inner join public.assignment_groups_members agm
+                        on agm.assignment_group_id = s.assignment_group_id
+                    where s.id = affected.submission_id
+                      and s.assignment_group_id is not null
+                  );
+            exception when others then
+                -- Non-critical: swallow so the grader's delete/re-grade still succeeds.
+                null;
+            end;
+        end if;
     end if;
     return NEW;
 end;

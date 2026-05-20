@@ -57,7 +57,7 @@ type RegradeRequestBody = {
   regrade_request_id: number;
   submission_id: number;
   assignment_id: number;
-  action: "comment_challenged" | "status_change" | "escalated" | "new_comment";
+  action: "comment_challenged" | "status_change" | "escalated" | "new_comment" | "auto_resolved";
   opened_by?: string;
   opened_by_name?: string;
   updated_by?: string;
@@ -69,6 +69,9 @@ type RegradeRequestBody = {
   old_status?: string;
   new_status?: string;
   comment_id?: number;
+  resolution_reason?: string;
+  resolved_by?: string;
+  resolved_by_name?: string;
 };
 
 // Keeping getSystemField around if we later reintroduce system columns
@@ -275,6 +278,11 @@ export default function NotificationsTable() {
                     actionText = "Commented";
                     statusText = "Comment";
                     badgeColor = "blue";
+                  } else if (b.action === "auto_resolved") {
+                    actorName = b.resolved_by_name || "";
+                    actionText = "Auto-resolved";
+                    statusText = "Resolved";
+                    badgeColor = "green";
                   }
 
                   return (

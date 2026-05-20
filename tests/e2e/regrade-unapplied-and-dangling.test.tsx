@@ -296,6 +296,15 @@ test.describe("Auto-resolve dangling regrade requests on comment delete (#517)",
     expect(resolvedRow!.status).toBe("resolved");
     expect(resolvedRow!.resolution_reason).toBe("comment_deleted");
 
+    // An 'auto_resolved' notification should have been created for the submission's student.
+    const { data: notifications, error: notifError } = await supabase
+      .from("notifications")
+      .select("body")
+      .eq("class_id", course.id)
+      .contains("body", { type: "regrade_request", action: "auto_resolved", regrade_request_id: request.id });
+    expect(notifError).toBeNull();
+    expect(notifications!.length).toBeGreaterThan(0);
+
     // Auto-resolve is NOT terminal: the student can escalate.
     const { data: escalatedData, error: escalatedError } = await studentClient.rpc("update_regrade_request_status", {
       regrade_request_id: request.id,
