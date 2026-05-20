@@ -2425,6 +2425,10 @@ export type Database = {
           class_id: number;
           created_at: string;
           draft: boolean;
+          duplicate_marked_at: string | null;
+          duplicate_marked_by_display_name: string | null;
+          duplicate_marked_by_user_id: string | null;
+          duplicate_original_subject: string | null;
           edited_at: string | null;
           id: number;
           instructors_only: boolean;
@@ -2438,10 +2442,6 @@ export type Database = {
           subject: string;
           topic_id: number;
           updated_at: string;
-          duplicate_marked_at: string | null;
-          duplicate_marked_by_display_name: string | null;
-          duplicate_marked_by_user_id: string | null;
-          duplicate_original_subject: string | null;
         };
         Insert: {
           answer?: number | null;
@@ -2451,6 +2451,10 @@ export type Database = {
           class_id: number;
           created_at?: string;
           draft?: boolean;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
           edited_at?: string | null;
           id?: number;
           instructors_only?: boolean;
@@ -2464,10 +2468,6 @@ export type Database = {
           subject: string;
           topic_id: number;
           updated_at?: string;
-          duplicate_marked_at?: string | null;
-          duplicate_marked_by_display_name?: string | null;
-          duplicate_marked_by_user_id?: string | null;
-          duplicate_original_subject?: string | null;
         };
         Update: {
           answer?: number | null;
@@ -2477,6 +2477,10 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           draft?: boolean;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
           edited_at?: string | null;
           id?: number;
           instructors_only?: boolean;
@@ -2490,10 +2494,6 @@ export type Database = {
           subject?: string;
           topic_id?: number;
           updated_at?: string;
-          duplicate_marked_at?: string | null;
-          duplicate_marked_by_display_name?: string | null;
-          duplicate_marked_by_user_id?: string | null;
-          duplicate_original_subject?: string | null;
         };
         Relationships: [
           {
@@ -8491,14 +8491,17 @@ export type Database = {
           last_commented_by: string | null;
           last_updated_at: string;
           opened_at: string | null;
+          resolution_reason: string | null;
           resolved_at: string | null;
           resolved_by: string | null;
           resolved_points: number | null;
+          rubric_check_id: number | null;
           status: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id: number | null;
           submission_comment_id: number | null;
           submission_file_comment_id: number | null;
           submission_id: number;
+          submission_review_id: number | null;
           updated_at: string;
         };
         Insert: {
@@ -8518,14 +8521,17 @@ export type Database = {
           last_commented_by?: string | null;
           last_updated_at?: string;
           opened_at?: string | null;
+          resolution_reason?: string | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           resolved_points?: number | null;
+          rubric_check_id?: number | null;
           status: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id?: number | null;
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id: number;
+          submission_review_id?: number | null;
           updated_at?: string;
         };
         Update: {
@@ -8545,14 +8551,17 @@ export type Database = {
           last_commented_by?: string | null;
           last_updated_at?: string;
           opened_at?: string | null;
+          resolution_reason?: string | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           resolved_points?: number | null;
+          rubric_check_id?: number | null;
           status?: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id?: number | null;
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id?: number;
+          submission_review_id?: number | null;
           updated_at?: string;
         };
         Relationships: [
@@ -8641,6 +8650,13 @@ export type Database = {
             referencedColumns: ["student_private_profile_id"];
           },
           {
+            foreignKeyName: "submission_regrade_requests_rubric_check_id_fkey";
+            columns: ["rubric_check_id"];
+            isOneToOne: false;
+            referencedRelation: "rubric_checks";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "submission_regrade_requests_submission_artifact_comment_id_fkey";
             columns: ["submission_artifact_comment_id"];
             isOneToOne: false;
@@ -8688,6 +8704,27 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["grading_submission_review_id"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_review_id"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "submission_reviews";
+            referencedColumns: ["id"];
           },
           {
             foreignKeyName: "submission_regrade_requests_submitted_by_fkey";
@@ -11599,6 +11636,14 @@ export type Database = {
         };
         Returns: number;
       };
+      create_regrade_request_for_check: {
+        Args: {
+          p_rubric_check_id: number;
+          p_submission_review_id: number;
+          private_profile_id: string;
+        };
+        Returns: number;
+      };
       create_repos_for_student: {
         Args: { class_id?: number; p_force?: boolean; user_id: string };
         Returns: undefined;
@@ -11669,7 +11714,6 @@ export type Database = {
           metric_value: number;
         }[];
       };
-      dual_active_invariants_version: { Args: never; Returns: number };
       deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
@@ -11690,6 +11734,7 @@ export type Database = {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
+      dual_active_invariants_version: { Args: never; Returns: number };
       enqueue_autograder_reruns: {
         Args: {
           p_auto_promote?: boolean;
@@ -12345,6 +12390,10 @@ export type Database = {
         Args: { p_guild_id: string; p_user_id: string };
         Returns: undefined;
       };
+      mark_discussion_thread_duplicate: {
+        Args: { p_duplicate_root_id: number; p_original_root_id: number };
+        Returns: undefined;
+      };
       merge_class_feature: {
         Args: { p_class_id: number; p_enabled: boolean; p_name: string };
         Returns: undefined;
@@ -12515,10 +12564,6 @@ export type Database = {
       send_signup_welcome_message: {
         Args: { p_user_id: string };
         Returns: boolean;
-      };
-      mark_discussion_thread_duplicate: {
-        Args: { p_duplicate_root_id: number; p_original_root_id: number };
-        Returns: undefined;
       };
       set_discussion_thread_topic: {
         Args: { p_thread_id: number; p_topic_id: number };

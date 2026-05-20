@@ -96,6 +96,7 @@ import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
+import RequestRegradeForCheckDialog from "./RequestRegradeForCheckDialog";
 import { Tooltip } from "./tooltip";
 
 // Module-stable style — see `components/ui/markdown.tsx` for why
@@ -841,6 +842,8 @@ export function RubricCheckAnnotation({
     targetStudentProfileId
   );
   const isGrader = useIsGraderOrInstructor();
+  const assignment = useAssignmentData();
+  const isSelfReviewRubric = criteria.rubric_id === assignment.self_review_rubric_id;
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
   const submission = useSubmissionMaybe();
@@ -928,6 +931,11 @@ export function RubricCheckAnnotation({
         />
       ))}
 
+      {/* Students can request a regrade for a check that was never applied to their submission */}
+      {!isGrader && !isPreviewMode && !isApplied && isReleased && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog submissionReviewId={reviewForThisRubric.id} rubricCheckId={check.id} />
+      )}
+
       {/* Inline reference management for preview mode */}
       {isPreviewMode && assignmentId && classId && currentRubricId ? (
         <InlineReferenceManager checkId={check.id} classId={classId} currentRubricId={currentRubricId} />
@@ -993,6 +1001,8 @@ export function RubricCheckGlobal({
   const isGrader = useIsGraderOrInstructor();
   const isTaOnly = useIsGrader();
   const isInstructor = useIsInstructor();
+  const assignment = useAssignmentData();
+  const isSelfReviewRubric = criteria.rubric_id === assignment.self_review_rubric_id;
   const pathname = usePathname();
   const isPreviewMode = !submission;
   const linkedAritfactId = check.artifact
@@ -1271,6 +1281,11 @@ export function RubricCheckGlobal({
           check={check}
         />
       ))}
+
+      {/* Students can request a regrade for a check that was never applied to their submission */}
+      {!isGrader && !isPreviewMode && !isApplied && isReleased && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog submissionReviewId={reviewForThisRubric.id} rubricCheckId={check.id} />
+      )}
 
       {/* Inline reference management for preview mode */}
       {isPreviewMode && assignmentId && classId && currentRubricId && (
