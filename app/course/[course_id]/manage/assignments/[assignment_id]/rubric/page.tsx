@@ -21,20 +21,7 @@ import {
   HydratedRubricPart,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import {
-  Box,
-  Button,
-  Center,
-  Flex,
-  Heading,
-  HStack,
-  Icon,
-  Link,
-  List,
-  Spinner,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { Box, Button, Center, Flex, Heading, HStack, Icon, Link, List, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useDataProvider, useInvalidate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import dynamic from "next/dynamic";
