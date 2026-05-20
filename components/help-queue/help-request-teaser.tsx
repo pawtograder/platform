@@ -181,7 +181,9 @@ export const HelpRequestTeaser = (props: Props) => {
               {stripTrailingQueueName(queue.name)}
             </Badge>
           )}
-          <Text fontSize="xs">{formatRelative(new Date(updatedAt), new Date())}</Text>
+          <Text fontSize="xs" data-visual-test="transparent" data-visual-placeholder="relative-time">
+            {formatRelative(new Date(updatedAt), new Date())}
+          </Text>
         </HStack>
         <HStack spaceX="1" justify="space-between">
           <Box flex="1" truncate>

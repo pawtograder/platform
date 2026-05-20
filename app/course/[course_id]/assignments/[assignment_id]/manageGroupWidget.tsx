@@ -869,7 +869,11 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`} data-visual-test="blackout">
+        <Link
+          href={`https://github.com/${repositories[0].repository}`}
+          data-visual-test="transparent"
+          data-visual-placeholder="repository"
+        >
           {repositories[0].repository} {repositories[0].is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
         </Link>
       </HStack>
@@ -883,7 +887,11 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontWeight="bold" fontSize="sm">
           Current group repository:
         </Text>{" "}
-        <Link href={`https://github.com/${groupRepo?.repository}`} data-visual-test="blackout">
+        <Link
+          href={`https://github.com/${groupRepo?.repository}`}
+          data-visual-test="transparent"
+          data-visual-placeholder="repository"
+        >
           {groupRepo?.repository} {groupRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
         </Link>
       </HStack>
@@ -893,7 +901,11 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
       </Text>
       <Text>
         Individual repository (not in use, you are now in a group):{" "}
-        <Link href={`https://github.com/${personalRepo?.repository}`} data-visual-test="blackout">
+        <Link
+          href={`https://github.com/${personalRepo?.repository}`}
+          data-visual-test="transparent"
+          data-visual-placeholder="repository"
+        >
           {personalRepo?.repository} {personalRepo?.is_github_ready ? " (ready ✅)" : " (not yet ready ❌)"}
         </Link>
       </Text>

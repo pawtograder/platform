@@ -1,0 +1,53 @@
+{
+  "id": 130,
+  "name": "Individual-Grading Rubric",
+  "description": "Has a part marked is_individual_grading.",
+  "review_round": "grading-review",
+  "is_private": false,
+  "cap_score_to_assignment_points": false,
+  "parts": [
+    {
+      "id": 230,
+      "data": null,
+      "name": "Individually graded part",
+      "ordinal": 0,
+      "description": "Each group member is graded separately on this part.",
+      "is_assign_to_student": false,
+      "is_individual_grading": true,
+      "criteria": [
+        {
+          "id": 330,
+          "data": null,
+          "name": "Criterion A1",
+          "ordinal": 0,
+          "description": "Generic criterion description.",
+          "is_additive": true,
+          "is_deduction_only": false,
+          "total_points": 3,
+          "min_checks_per_submission": null,
+          "max_checks_per_submission": null,
+          "checks": [
+            {
+              "id": 430,
+              "name": "Generic check",
+              "ordinal": 0,
+              "description": "Generic check description.",
+              "points": 3,
+              "is_required": false,
+              "is_annotation": false,
+              "is_comment_required": false,
+              "student_visibility": "always",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": null,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

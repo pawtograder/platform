@@ -32,6 +32,15 @@ export interface RubricWithHierarchy extends RubricRow {
 
 // ─── Rubric import/export structures ───────────────────────────────────────
 
+import type { YamlReference } from "../_shared/FunctionTypes.d.ts";
+
+/**
+ * YAML reference entry on a rubric check. Re-exported here under the legacy
+ * `YamlReferenceYml` name; the canonical declaration lives in
+ * `_shared/FunctionTypes.d.ts` so any Edge Function can use it.
+ */
+export type YamlReferenceYml = YamlReference;
+
 export interface RubricExportCheck {
   name: string;
   description: string | null;
@@ -46,6 +55,7 @@ export interface RubricExportCheck {
   group: string | null;
   max_annotations: number | null;
   student_visibility: string;
+  references?: YamlReferenceYml[];
 }
 
 export interface RubricExportCriteria {
@@ -90,6 +100,7 @@ export interface RubricImportCheck {
   group?: string | null;
   max_annotations?: number | null;
   student_visibility?: string;
+  references?: YamlReferenceYml[];
 }
 
 export interface RubricImportCriteria {

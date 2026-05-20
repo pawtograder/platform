@@ -165,7 +165,7 @@ export default function AssignmentPage() {
             <SurveyStatusBanner assignmentId={Number(assignment_id)} courseId={Number(course_id)} />
           )}
           {submissionsPeriod && maxSubmissions ? (
-            <Box w="100%" maxW="4xl">
+            <Box w="100%" maxW="4xl" data-visual-test="removed">
               <Alert.Root
                 status={submissionsRemaining === 0 ? "warning" : submissionsRemaining <= 1 ? "warning" : "info"}
                 flexDirection="column"

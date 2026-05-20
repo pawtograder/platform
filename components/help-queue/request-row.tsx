@@ -197,7 +197,9 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
                   <HStack gap="2" fontSize="xs" color="fg.muted" wrap="wrap">
                     {renderStudentsDisplay()}
                     <Text>•</Text>
-                    <Text>{formatRelative(new Date(request.created_at), new Date())}</Text>
+                    <Text data-visual-test="transparent" data-visual-placeholder="relative-time">
+                      {formatRelative(new Date(request.created_at), new Date())}
+                    </Text>
                   </HStack>
                 </Stack>
               </HStack>
@@ -249,7 +251,9 @@ export function RequestRow({ request, href, selected, queue, students = [], vari
             <HStack gap="3" fontSize="xs" color="fg.muted" wrap="wrap">
               {renderStudentsDisplay()}
               <Text>•</Text>
-              <Text>{formatRelative(new Date(request.created_at), new Date())}</Text>
+              <Text data-visual-test="transparent" data-visual-placeholder="relative-time">
+                {formatRelative(new Date(request.created_at), new Date())}
+              </Text>
             </HStack>
 
             <Box truncate>

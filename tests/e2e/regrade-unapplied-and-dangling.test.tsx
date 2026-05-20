@@ -306,7 +306,7 @@ test.describe("Auto-resolve dangling regrade requests on comment delete (#517)",
       class_id: course.id
     });
 
-    const rubricCheckId = assignment.rubricChecks[0].id;
+    const rubricCheckId = await getCheckIdForRubric(assignment.grading_rubric_id!);
 
     // Comment-backed request in 'opened' status.
     const request = await createRegradeRequest(
@@ -378,7 +378,7 @@ test.describe("Auto-resolve dangling regrade requests on comment delete (#517)",
       class_id: course.id
     });
 
-    const rubricCheckId = assignment.rubricChecks[0].id;
+    const rubricCheckId = await getCheckIdForRubric(assignment.grading_rubric_id!);
 
     // Comment-backed request already in 'closed' status.
     const request = await createRegradeRequest(
@@ -422,7 +422,7 @@ test.describe("Auto-resolve dangling regrade requests on comment delete (#517)",
       class_id: course.id
     });
 
-    const rubricCheckId = assignment.rubricChecks[0].id;
+    const rubricCheckId = await getCheckIdForRubric(assignment.grading_rubric_id!);
 
     // Comment-backed request already escalated to an instructor.
     const request = await createRegradeRequest(

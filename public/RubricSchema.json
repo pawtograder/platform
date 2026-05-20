@@ -99,9 +99,60 @@
         "points": {
           "type": "number"
         },
+        "references": {
+          "items": {
+            "additionalProperties": false,
+            "description": "A YAML reference entry on a rubric check. Either name-keyed (review_round + part +\ncriterion + check) or by numeric `id` (fallback for paste-from-DB). See\n`lib/rubric/references.ts` for resolution semantics.",
+            "properties": {
+              "check": {
+                "type": "string"
+              },
+              "criterion": {
+                "type": "string"
+              },
+              "id": {
+                "type": "number"
+              },
+              "part": {
+                "type": "string"
+              },
+              "review_round": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
         "student_visibility": {
           "enum": ["always", "if_applied", "if_released", "never"],
           "type": "string"
+        },
+        "yaml_references": {
+          "description": "Unresolved references parsed from YAML. Resolution to numeric ids happens at\nsave time once we have hydrated trees for the other rubrics on the assignment.",
+          "items": {
+            "additionalProperties": false,
+            "description": "A YAML reference entry on a rubric check. Either name-keyed (review_round + part +\ncriterion + check) or by numeric `id` (fallback for paste-from-DB). See\n`lib/rubric/references.ts` for resolution semantics.",
+            "properties": {
+              "check": {
+                "type": "string"
+              },
+              "criterion": {
+                "type": "string"
+              },
+              "id": {
+                "type": "number"
+              },
+              "part": {
+                "type": "string"
+              },
+              "review_round": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
         }
       },
       "required": ["is_annotation", "is_comment_required", "is_required", "name", "points"],
@@ -191,13 +242,11 @@
         "id": {
           "type": "number"
         },
-        "is_individual_grading": {
-          "type": "boolean",
-          "description": "When true, this rubric part is graded per-student in a group submission"
-        },
         "is_assign_to_student": {
-          "type": "boolean",
-          "description": "When true, the grader selects which student this part applies to (or skips it)"
+          "type": "boolean"
+        },
+        "is_individual_grading": {
+          "type": "boolean"
         },
         "name": {
           "type": "string"

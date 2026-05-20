@@ -1035,6 +1035,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
       borderRadius="md"
       boxShadow="lg"
       ref={popupRef}
+      data-annotation-popup=""
     >
       <VStack gap={2} align="stretch">
         <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">

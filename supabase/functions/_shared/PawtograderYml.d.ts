@@ -15,10 +15,16 @@ export interface BreakPoint {
   pointsToAward: number;
 }
 
+export interface LinearScoring {
+  points: number;
+  total_faults: number;
+}
+
 export interface MutationTestUnit {
   name: string;
   locations: string[]; // format: "file:line-line"
-  breakPoints: BreakPoint[];
+  breakPoints?: BreakPoint[];
+  linearScoring?: LinearScoring;
 }
 
 // Regular test unit types
@@ -43,7 +49,7 @@ export interface PawtograderConfig {
   build: BuildConfig;
   gradedParts: GradedPart[];
   submissionFiles: {
-    files?: string[];
-    testFiles?: string[];
+    files: string[];
+    testFiles: string[];
   };
 }

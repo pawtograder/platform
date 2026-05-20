@@ -1,0 +1,89 @@
+{
+  "id": 110,
+  "name": "Met / Partial / Not Met Rubric",
+  "description": "Each criterion has three checkbox-style checks gated to single-pick by min/max=1/1.",
+  "review_round": "grading-review",
+  "is_private": false,
+  "cap_score_to_assignment_points": false,
+  "parts": [
+    {
+      "id": 210,
+      "data": null,
+      "name": "Part A",
+      "ordinal": 0,
+      "description": "Generic part description.",
+      "is_assign_to_student": false,
+      "is_individual_grading": false,
+      "criteria": [
+        {
+          "id": 310,
+          "data": null,
+          "name": "Criterion A1",
+          "ordinal": 0,
+          "description": "Generic criterion description.",
+          "is_additive": true,
+          "is_deduction_only": false,
+          "total_points": 2,
+          "min_checks_per_submission": 1,
+          "max_checks_per_submission": 1,
+          "checks": [
+            {
+              "id": 410,
+              "name": "Met",
+              "ordinal": 0,
+              "description": "Fully satisfies the criterion.",
+              "points": 2,
+              "is_required": false,
+              "is_annotation": false,
+              "is_comment_required": false,
+              "student_visibility": "always",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": null,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": null
+            },
+            {
+              "id": 411,
+              "name": "Partially met",
+              "ordinal": 1,
+              "description": "Partially satisfies the criterion.",
+              "points": 1,
+              "is_required": false,
+              "is_annotation": false,
+              "is_comment_required": false,
+              "student_visibility": "always",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": null,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": null
+            },
+            {
+              "id": 412,
+              "name": "Not met",
+              "ordinal": 2,
+              "description": "Does not satisfy the criterion.",
+              "points": 0,
+              "is_required": false,
+              "is_annotation": false,
+              "is_comment_required": false,
+              "student_visibility": "always",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": null,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

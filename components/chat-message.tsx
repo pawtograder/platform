@@ -550,7 +550,13 @@ export const ChatMessageItem = ({
           maxW="90%"
         >
           <Markdown>{getMessageContent(message)}</Markdown>
-          <Text fontSize="xs" color="fg.muted" mt={1}>
+          <Text
+            fontSize="xs"
+            color="fg.muted"
+            mt={1}
+            data-visual-test="transparent"
+            data-visual-placeholder="timestamp"
+          >
             {new Date(getMessageTimestamp(message)).toLocaleTimeString("en-US", {
               hour: "2-digit",
               minute: "2-digit",
@@ -584,7 +590,7 @@ export const ChatMessageItem = ({
               <Text fontWeight="medium">{getDisplayName()}</Text>
               <UserRoleBadge authorId={authorId} helpRequestStudentIds={helpRequestStudentIds} />
             </HStack>
-            <Text color="fg.muted" fontSize="xs">
+            <Text color="fg.muted" fontSize="xs" data-visual-test="transparent" data-visual-placeholder="timestamp">
               {new Date(getMessageTimestamp(message)).toLocaleTimeString("en-US", {
                 hour: "2-digit",
                 minute: "2-digit",
