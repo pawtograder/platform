@@ -47,21 +47,20 @@ export const RubricGuiEditor = forwardRef<RubricGuiEditorHandle, RubricGuiEditor
     return sanitized;
   }, []);
 
-  // Sync the parent's rubric into our local draft when it changes externally.
-  // Parts/criteria/checks ride on separate list controllers and populate in a
-  // second render after the rubric row itself, so the initial prop can be a
-  // hydrated rubric with empty rubric_parts even though the rubric has parts
-  // in the database. Without this effect, useState would latch onto the empty
-  // first prop and the GUI would stay empty even after the data arrives.
-  // Skip the sync while a commit is pending so we don't clobber in-flight edits.
-  const lastAcceptedRubricRef = useRef(rubric);
+  // Handle the "data loaded after mount" race: parts/criteria/checks ride on separate
+  // list controllers and populate one render after the rubric row itself, so on first
+  // mount the prop can be a hydrated rubric with empty rubric_parts even though the
+  // rubric has parts in the DB. Without this catch-up, useState would latch on the
+  // empty initial prop and the GUI would stay empty after the data arrives.
+  //
+  // We only fire when the local draft is still empty (the latch case). Once the user has
+  // any parts in draft (either freshly loaded or because they made edits), we leave the
+  // draft alone: user edits are king, and triggering setDraft on every parent reference
+  // change would cause spurious re-renders that detach DOM mid-action in e2e tests.
   useEffect(() => {
-    if (rubric === lastAcceptedRubricRef.current) return;
-    if (commitTimeoutRef.current) {
-      lastAcceptedRubricRef.current = rubric;
-      return;
-    }
-    lastAcceptedRubricRef.current = rubric;
+    if (draftRef.current.rubric_parts.length > 0) return;
+    if (rubric.rubric_parts.length === 0) return;
+    if (commitTimeoutRef.current) return;
     applySanitizedDraft(rubric);
   }, [rubric, applySanitizedDraft]);
 
