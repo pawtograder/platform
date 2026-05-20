@@ -356,6 +356,28 @@ export function useRegradeRequestsBySubmission(submission_id: number | null | un
 }
 
 /**
+ * Returns the active regrade request for a rubric check that was never applied
+ * (no backing submission/file/artifact comment yet).
+ */
+export function useBareCheckRegradeRequest(
+  submission_review_id: number | null | undefined,
+  rubric_check_id: number | null | undefined
+) {
+  const controller = useAssignmentController();
+  const findPredicate = useCallback(
+    (regrade_request: RegradeRequest) =>
+      regrade_request.submission_review_id === submission_review_id &&
+      regrade_request.rubric_check_id === rubric_check_id &&
+      regrade_request.submission_comment_id == null &&
+      regrade_request.submission_file_comment_id == null &&
+      regrade_request.submission_artifact_comment_id == null,
+    [submission_review_id, rubric_check_id]
+  );
+  const matches = useListTableControllerValues(controller.regradeRequests, findPredicate);
+  return matches[0];
+}
+
+/**
  * Returns all leaderboard entries for the current assignment, sorted by autograder score descending.
  * Uses the TableController for real-time updates.
  */

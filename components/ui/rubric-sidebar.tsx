@@ -713,9 +713,14 @@ export function RubricCheckAnnotation({
         />
       ))}
 
-      {/* Students can request a regrade for a check that was never applied to their submission */}
-      {!isGrader && !isPreviewMode && !isApplied && isReleased && !isSelfReviewRubric && reviewForThisRubric && (
-        <RequestRegradeForCheckDialog submissionReviewId={reviewForThisRubric.id} rubricCheckId={check.id} />
+      {/* Bare-check regrade requests render here for students (create) and staff (view/respond). */}
+      {!isPreviewMode && !isApplied && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog
+          submissionReviewId={reviewForThisRubric.id}
+          rubricCheckId={check.id}
+          check={check}
+          isReleased={isReleased}
+        />
       )}
 
       {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}
@@ -1058,9 +1063,14 @@ export function RubricCheckGlobal({
         />
       ))}
 
-      {/* Students can request a regrade for a check that was never applied to their submission */}
-      {!isGrader && !isPreviewMode && !isApplied && isReleased && !isSelfReviewRubric && reviewForThisRubric && (
-        <RequestRegradeForCheckDialog submissionReviewId={reviewForThisRubric.id} rubricCheckId={check.id} />
+      {/* Bare-check regrade requests render here for students (create) and staff (view/respond). */}
+      {!isPreviewMode && !isApplied && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog
+          submissionReviewId={reviewForThisRubric.id}
+          rubricCheckId={check.id}
+          check={check}
+          isReleased={isReleased}
+        />
       )}
 
       {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}

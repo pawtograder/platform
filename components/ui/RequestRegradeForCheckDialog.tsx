@@ -8,34 +8,61 @@ import {
   DialogTitle,
   DialogTrigger
 } from "@/components/ui/dialog";
-import { useAssignmentData } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import Markdown from "@/components/ui/markdown";
+import { useAssignmentController, useAssignmentData, useBareCheckRegradeRequest } from "@/hooks/useAssignment";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmission } from "@/hooks/useSubmission";
+import { RubricCheck as RubricCheckType } from "@/utils/supabase/DatabaseTypes";
+import { createClient } from "@/utils/supabase/client";
 import { Box, Button, Text, VStack } from "@chakra-ui/react";
-import { useCreate } from "@refinedev/core";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster } from "@/components/ui/toaster";
 import { Alert } from "@/components/ui/alert";
 import { format, formatDistanceToNow } from "date-fns";
+import RegradeRequestWrapper from "./regrade-request-wrapper";
+
+const RUBRIC_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
 export default function RequestRegradeForCheckDialog({
   submissionReviewId,
-  rubricCheckId
+  rubricCheckId,
+  check,
+  isReleased
 }: {
   submissionReviewId: number;
   rubricCheckId: number;
+  check: RubricCheckType;
+  isReleased: boolean;
 }) {
   const [isRegradeDialogOpen, setIsRegradeDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submission = useSubmission();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   const { private_profile_id } = useClassProfiles();
   const assignment = useAssignmentData();
+  const { regradeRequests } = useAssignmentController();
+  const bareCheckRegradeRequest = useBareCheckRegradeRequest(submissionReviewId, rubricCheckId);
+  const boxRef = useRef<HTMLDivElement>(null);
 
   const isGroupSubmission = submission.assignment_group_id !== null;
-  const { mutateAsync: createRegradeRequestForCheck } = useCreate({
-    resource: "rpc/create_regrade_request_for_check"
-  });
+
+  // Auto-scroll when deep-linking to this regrade request
+  useEffect(() => {
+    if (bareCheckRegradeRequest?.id && boxRef.current) {
+      const hash = window.location.hash;
+      const targetId = `#regrade-request-${bareCheckRegradeRequest.id}`;
+
+      if (hash === targetId) {
+        setTimeout(() => {
+          boxRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "center"
+          });
+        }, 100);
+      }
+    }
+  }, [bareCheckRegradeRequest?.id]);
 
   // Calculate regrade deadline status
   const regradeDeadlineInfo = useMemo(() => {
@@ -57,15 +84,21 @@ export default function RequestRegradeForCheckDialog({
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await createRegradeRequestForCheck({
-        values: {
-          private_profile_id: private_profile_id,
-          p_submission_review_id: submissionReviewId,
-          p_rubric_check_id: rubricCheckId
-        }
+      const supabase = createClient();
+      const { data: requestId, error } = await supabase.rpc("create_regrade_request_for_check", {
+        private_profile_id: private_profile_id,
+        p_submission_review_id: submissionReviewId,
+        p_rubric_check_id: rubricCheckId
       });
 
-      // Close dialog and show inline form
+      if (error) {
+        throw error;
+      }
+
+      if (requestId) {
+        await regradeRequests.invalidate(requestId);
+      }
+
       setIsRegradeDialogOpen(false);
 
       toaster.success({
@@ -80,7 +113,32 @@ export default function RequestRegradeForCheckDialog({
     } finally {
       setIsSubmitting(false);
     }
-  }, [createRegradeRequestForCheck, private_profile_id, submissionReviewId, rubricCheckId, isSubmitting]);
+  }, [isSubmitting, private_profile_id, submissionReviewId, rubricCheckId, regradeRequests]);
+
+  if (bareCheckRegradeRequest) {
+    return (
+      <Box ref={boxRef} id={`regrade-request-${bareCheckRegradeRequest.id}`} pl={2} pb={2} w="100%">
+        <RegradeRequestWrapper regradeRequestId={bareCheckRegradeRequest.id}>
+          <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%" fontSize="sm">
+            <Text fontSize="sm" fontWeight="semibold" mb={1}>
+              {check.name}
+            </Text>
+            <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+            <Text fontSize="xs" color="fg.muted" mt={1}>
+              {isGraderOrInstructor
+                ? "The student requested a regrade for this check, which was not applied to the submission."
+                : "This rubric check was not applied to your submission."}
+            </Text>
+          </Box>
+        </RegradeRequestWrapper>
+      </Box>
+    );
+  }
+
+  // Staff view existing bare-check requests on the rubric check; only students can create them.
+  if (isGraderOrInstructor || !isReleased) {
+    return null;
+  }
 
   // If deadline has passed, show a disabled button with explanation
   if (regradeDeadlineInfo.isPastDeadline && regradeDeadlineInfo.deadline) {

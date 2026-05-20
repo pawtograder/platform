@@ -12711,6 +12711,9 @@ export type Database = {
         Args: {
           closed_points?: number;
           new_status: Database["public"]["Enums"]["regrade_status"];
+          p_line?: number;
+          p_submission_artifact_id?: number;
+          p_submission_file_id?: number;
           profile_id: string;
           regrade_request_id: number;
           resolved_points?: number;

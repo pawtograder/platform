@@ -228,7 +228,184 @@ end;
 $function$;
 
 -- ---------------------------------------------------------------------------
--- 5. Update update_regrade_request_status so that resolving/closing a bare-check
+-- 5. Helper: materialize the backing comment for a bare-check regrade request.
+--    Creates submission_comments, submission_file_comments, or submission_artifact_comments
+--    depending on the rubric check's annotation configuration.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public._materialize_bare_check_regrade_comment(
+    p_request public.submission_regrade_requests,
+    p_author uuid,
+    p_points numeric,
+    p_regrade_request_id bigint,
+    p_submission_file_id bigint,
+    p_line integer,
+    p_submission_artifact_id bigint,
+    OUT o_submission_comment_id bigint,
+    OUT o_submission_file_comment_id bigint,
+    OUT o_submission_artifact_comment_id bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+declare
+    v_check record;
+    v_target_student_profile_id uuid;
+    v_comment_text constant text := 'Added via regrade request for a rubric check that was not originally applied.';
+    v_file_name text;
+    v_artifact_name text;
+begin
+    o_submission_comment_id := null;
+    o_submission_file_comment_id := null;
+    o_submission_artifact_comment_id := null;
+
+    select rc.id, rc.is_annotation, rc.annotation_target, rc.file, rc.artifact,
+           rp.is_individual_grading
+    into v_check
+    from public.rubric_checks rc
+    inner join public.rubric_criteria rcr on rcr.id = rc.rubric_criteria_id
+    inner join public.rubric_parts rp on rp.id = rcr.rubric_part_id
+    where rc.id = p_request.rubric_check_id;
+
+    if not found then
+        raise exception 'Rubric check not found for bare-check regrade request';
+    end if;
+
+    v_target_student_profile_id := case
+        when v_check.is_individual_grading then p_request.created_by
+        else null
+    end;
+
+    if v_check.is_annotation and coalesce(v_check.annotation_target, 'file') = 'artifact' then
+        if p_submission_artifact_id is null then
+            raise exception 'submission_artifact_id is required to resolve this rubric check regrade request';
+        end if;
+
+        select sa.name
+        into v_artifact_name
+        from public.submission_artifacts sa
+        where sa.id = p_submission_artifact_id
+          and sa.submission_id = p_request.submission_id;
+
+        if not found then
+            raise exception 'Artifact does not belong to this submission';
+        end if;
+
+        if v_check.artifact is not null and v_check.artifact is distinct from v_artifact_name then
+            raise exception 'Artifact must match rubric check artifact %', v_check.artifact;
+        end if;
+
+        insert into public.submission_artifact_comments (
+            submission_id,
+            submission_artifact_id,
+            author,
+            comment,
+            points,
+            class_id,
+            rubric_check_id,
+            submission_review_id,
+            released,
+            regrade_request_id,
+            target_student_profile_id
+        ) values (
+            p_request.submission_id,
+            p_submission_artifact_id,
+            p_author,
+            v_comment_text,
+            p_points,
+            p_request.class_id,
+            p_request.rubric_check_id,
+            p_request.submission_review_id,
+            true,
+            p_regrade_request_id,
+            v_target_student_profile_id
+        ) returning id into o_submission_artifact_comment_id;
+
+    elsif v_check.is_annotation then
+        if p_submission_file_id is null or p_line is null then
+            raise exception 'submission_file_id and line are required to resolve this rubric check regrade request';
+        end if;
+
+        if p_line < 1 then
+            raise exception 'line must be a positive integer';
+        end if;
+
+        select sf.name
+        into v_file_name
+        from public.submission_files sf
+        where sf.id = p_submission_file_id
+          and sf.submission_id = p_request.submission_id;
+
+        if not found then
+            raise exception 'File does not belong to this submission';
+        end if;
+
+        if v_check.file is not null and v_check.file is distinct from v_file_name then
+            raise exception 'File must match rubric check file %', v_check.file;
+        end if;
+
+        insert into public.submission_file_comments (
+            submission_id,
+            submission_file_id,
+            author,
+            comment,
+            line,
+            points,
+            class_id,
+            rubric_check_id,
+            submission_review_id,
+            released,
+            regrade_request_id,
+            target_student_profile_id
+        ) values (
+            p_request.submission_id,
+            p_submission_file_id,
+            p_author,
+            v_comment_text,
+            p_line,
+            p_points,
+            p_request.class_id,
+            p_request.rubric_check_id,
+            p_request.submission_review_id,
+            true,
+            p_regrade_request_id,
+            v_target_student_profile_id
+        ) returning id into o_submission_file_comment_id;
+
+    else
+        if p_submission_file_id is not null or p_line is not null or p_submission_artifact_id is not null then
+            raise exception 'Global rubric checks do not accept file or artifact location parameters';
+        end if;
+
+        insert into public.submission_comments (
+            submission_id,
+            author,
+            comment,
+            points,
+            class_id,
+            rubric_check_id,
+            submission_review_id,
+            released,
+            regrade_request_id,
+            target_student_profile_id
+        ) values (
+            p_request.submission_id,
+            p_author,
+            v_comment_text,
+            p_points,
+            p_request.class_id,
+            p_request.rubric_check_id,
+            p_request.submission_review_id,
+            true,
+            p_regrade_request_id,
+            v_target_student_profile_id
+        ) returning id into o_submission_comment_id;
+    end if;
+end;
+$function$;
+
+-- ---------------------------------------------------------------------------
+-- 6. Update update_regrade_request_status so that resolving/closing a bare-check
 --    request (no comment yet) creates the real submission_comment, then proceeds
 --    exactly as the comment-backed path. Otherwise unchanged from the prior version.
 -- ---------------------------------------------------------------------------
@@ -237,7 +414,10 @@ CREATE OR REPLACE FUNCTION public.update_regrade_request_status(
     new_status regrade_status,
     profile_id uuid,
     resolved_points numeric DEFAULT NULL,
-    closed_points numeric DEFAULT NULL
+    closed_points numeric DEFAULT NULL,
+    p_submission_file_id bigint DEFAULT NULL,
+    p_line integer DEFAULT NULL,
+    p_submission_artifact_id bigint DEFAULT NULL
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -245,10 +425,12 @@ SECURITY DEFINER
 SET search_path TO 'public'
 AS $function$
 declare
-    current_request record;
+    current_request public.submission_regrade_requests%ROWTYPE;
     param_resolved_points numeric;
     param_closed_points numeric;
-    new_comment_id bigint;
+    new_submission_comment_id bigint;
+    new_submission_file_comment_id bigint;
+    new_submission_artifact_comment_id bigint;
     is_bare_check boolean;
 begin
     param_resolved_points := resolved_points;
@@ -342,34 +524,32 @@ begin
             -- For a bare-check request, materialize the real comment now so the score
             -- recompute (which sums comment points by rubric_check_id) picks it up.
             if is_bare_check then
-                insert into public.submission_comments (
-                    submission_id,
-                    author,
-                    comment,
-                    points,
-                    class_id,
-                    rubric_check_id,
-                    submission_review_id,
-                    released,
-                    regrade_request_id
-                ) values (
-                    current_request.submission_id,
+                select
+                    m.o_submission_comment_id,
+                    m.o_submission_file_comment_id,
+                    m.o_submission_artifact_comment_id
+                into
+                    new_submission_comment_id,
+                    new_submission_file_comment_id,
+                    new_submission_artifact_comment_id
+                from public._materialize_bare_check_regrade_comment(
+                    current_request,
                     profile_id,
-                    'Added via regrade request for a rubric check that was not originally applied.',
                     param_resolved_points,
-                    current_request.class_id,
-                    current_request.rubric_check_id,
-                    current_request.submission_review_id,
-                    true,
-                    regrade_request_id
-                ) returning id into new_comment_id;
+                    regrade_request_id,
+                    p_submission_file_id,
+                    p_line,
+                    p_submission_artifact_id
+                ) as m;
 
                 update public.submission_regrade_requests
                 set status = new_status,
                     resolved_by = profile_id,
                     resolved_at = now(),
                     resolved_points = param_resolved_points,
-                    submission_comment_id = new_comment_id,
+                    submission_comment_id = new_submission_comment_id,
+                    submission_file_comment_id = new_submission_file_comment_id,
+                    submission_artifact_comment_id = new_submission_artifact_comment_id,
                     resolution_reason = 'grader',
                     last_updated_at = now()
                 where id = regrade_request_id;
@@ -426,35 +606,35 @@ begin
 
             -- A bare-check request can be closed directly from 'opened' without a grader
             -- having resolved it; materialize the comment in that case too.
-            if is_bare_check and current_request.submission_comment_id is null then
-                insert into public.submission_comments (
-                    submission_id,
-                    author,
-                    comment,
-                    points,
-                    class_id,
-                    rubric_check_id,
-                    submission_review_id,
-                    released,
-                    regrade_request_id
-                ) values (
-                    current_request.submission_id,
+            if is_bare_check and current_request.submission_comment_id is null
+               and current_request.submission_file_comment_id is null
+               and current_request.submission_artifact_comment_id is null then
+                select
+                    m.o_submission_comment_id,
+                    m.o_submission_file_comment_id,
+                    m.o_submission_artifact_comment_id
+                into
+                    new_submission_comment_id,
+                    new_submission_file_comment_id,
+                    new_submission_artifact_comment_id
+                from public._materialize_bare_check_regrade_comment(
+                    current_request,
                     profile_id,
-                    'Added via regrade request for a rubric check that was not originally applied.',
                     param_closed_points,
-                    current_request.class_id,
-                    current_request.rubric_check_id,
-                    current_request.submission_review_id,
-                    true,
-                    regrade_request_id
-                ) returning id into new_comment_id;
+                    regrade_request_id,
+                    p_submission_file_id,
+                    p_line,
+                    p_submission_artifact_id
+                ) as m;
 
                 update public.submission_regrade_requests
                 set status = new_status,
                     closed_by = profile_id,
                     closed_at = now(),
                     closed_points = param_closed_points,
-                    submission_comment_id = new_comment_id,
+                    submission_comment_id = new_submission_comment_id,
+                    submission_file_comment_id = new_submission_file_comment_id,
+                    submission_artifact_comment_id = new_submission_artifact_comment_id,
                     resolution_reason = 'instructor',
                     last_updated_at = now()
                 where id = regrade_request_id;
@@ -585,6 +765,7 @@ begin
         set status = 'resolved',
             resolved_by = coalesce(NEW.edited_by, assignee),
             resolved_at = now(),
+            resolved_points = initial_points,
             resolution_reason = 'comment_deleted',
             last_updated_at = now()
         where id = NEW.regrade_request_id
@@ -652,3 +833,12 @@ create trigger auto_resolve_regrade_on_artifact_comment_delete
     for each row execute function public.auto_resolve_regrade_on_comment_delete();
 
 grant execute on function public.create_regrade_request_for_check(uuid, bigint, bigint) to authenticated;
+grant execute on function public._materialize_bare_check_regrade_comment(
+    public.submission_regrade_requests,
+    uuid,
+    numeric,
+    bigint,
+    bigint,
+    integer,
+    bigint
+) to authenticated;
