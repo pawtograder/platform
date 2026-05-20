@@ -1556,7 +1556,11 @@ function InnerRubricPage() {
             </VStack>
           </Box>
           <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
-            {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
+            {updatePaused && (
+              <Alert variant="surface" position="sticky" top={0} zIndex={2}>
+                Preview paused while typing
+              </Alert>
+            )}
             {pointsWarnings.length > 0 && viewMode === "source" && (
               <Alert status="warning" variant="surface" title="Points adjusted" mt={2}>
                 <VStack gap={1} align="stretch">
