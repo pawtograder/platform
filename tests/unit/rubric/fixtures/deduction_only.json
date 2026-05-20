@@ -1,0 +1,71 @@
+{
+  "id": 120,
+  "name": "Deduction-Only Rubric",
+  "description": "A criterion that starts at full points and only loses them.",
+  "review_round": "grading-review",
+  "is_private": false,
+  "cap_score_to_assignment_points": false,
+  "parts": [
+    {
+      "id": 220,
+      "data": null,
+      "name": "Part A",
+      "ordinal": 0,
+      "description": "Generic part description.",
+      "is_assign_to_student": false,
+      "is_individual_grading": false,
+      "criteria": [
+        {
+          "id": 320,
+          "data": null,
+          "name": "Criterion A1",
+          "ordinal": 0,
+          "description": "Apply deductions where the rule is broken.",
+          "is_additive": false,
+          "is_deduction_only": true,
+          "total_points": 4,
+          "min_checks_per_submission": 0,
+          "max_checks_per_submission": 1,
+          "checks": [
+            {
+              "id": 420,
+              "name": "Generic violation A",
+              "ordinal": 0,
+              "description": "Deduct when violation A is observed.",
+              "points": 2,
+              "is_required": false,
+              "is_annotation": true,
+              "is_comment_required": true,
+              "student_visibility": "if_applied",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": 2,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": null
+            },
+            {
+              "id": 421,
+              "name": "Generic violation B",
+              "ordinal": 1,
+              "description": "Deduct when violation B is observed.",
+              "points": 2,
+              "is_required": false,
+              "is_annotation": true,
+              "is_comment_required": true,
+              "student_visibility": "if_applied",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": 2,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -9,36 +9,20 @@ import {
   useRubric,
   useRubricChecksByRubric,
   useRubricCriteriaByRubric,
-  useRubricParts
+  useRubricParts,
+  useRubrics
 } from "@/hooks/useAssignment";
+import { useListTableControllerValues } from "@/lib/TableController";
+import type { RubricCheckReference } from "@/utils/supabase/DatabaseTypes";
 import {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
-  Json,
-  RubricChecksDataType,
-  YmlRubricChecksType,
-  YmlRubricCriteriaType,
-  YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import {
-  Box,
-  Button,
-  Center,
-  Flex,
-  Heading,
-  HStack,
-  Icon,
-  Link,
-  List,
-  Spinner,
-  Tabs,
-  Text,
-  VStack
-} from "@chakra-ui/react";
-import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
+import { Box, Button, Center, Flex, Heading, HStack, Icon, Link, List, Spinner, Text, VStack } from "@chakra-ui/react";
+import { useDataProvider, useInvalidate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -47,6 +31,18 @@ import {
   RUBRIC_UNSAVED_CHANGES_WARNING_MESSAGE,
   setRubricUnsavedChangesFlag
 } from "@/lib/rubricUnsavedChanges";
+import {
+  computeRubricPointsBreakdown,
+  HydratedRubricToYamlRubric,
+  maxPointsForCriterion,
+  resolveReferences,
+  sanitizeHydratedRubricPoints,
+  YamlRubricToHydratedRubric,
+  type PointsValidationWarning
+} from "@/lib/rubric";
+import type { RubricPointsBreakdown } from "@/lib/rubric";
+import { RubricGuiEditor, type RubricGuiEditorHandle } from "@/components/rubric-editor";
+import { createClient } from "@/utils/supabase/client";
 
 // Dynamic import of Monaco Editor to reduce build memory usage
 const Editor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
@@ -67,9 +63,17 @@ const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>
   "code-walk"
 ];
 
+const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
+
 /**
  * Custom hook to get a fully hydrated rubric by review round
  */
+function useReferencesForRubric(rubric_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const predicate = useCallback((row: RubricCheckReference) => row.rubric_id === rubric_id, [rubric_id]);
+  return useListTableControllerValues(controller.rubricCheckReferencesController, predicate);
+}
+
 function useHydratedRubricByReviewRound(
   review_round: NonNullable<HydratedRubric["review_round"]>
 ): HydratedRubric | undefined {
@@ -77,18 +81,39 @@ function useHydratedRubricByReviewRound(
   const parts = useRubricParts(rubric?.id);
   const allCriteria = useRubricCriteriaByRubric(rubric?.id);
   const allChecks = useRubricChecksByRubric(rubric?.id);
+  const allReferences = useReferencesForRubric(rubric?.id);
 
   return useMemo(() => {
     if (!rubric || !parts || !allCriteria || !allChecks) return undefined;
+    // The inner list-controller hooks return their previous render's array on the first
+    // render after a predicate change (state resets via useEffect, not synchronously).
+    // On a tab switch, that means we can briefly see (review_round=self-review) paired
+    // with (rubric=previous-round's-stale-rubric, parts=that-round's-parts), and emit a
+    // hybrid rubric whose review_round is right but whose parts belong to the wrong
+    // round. Save then sends a payload labeled self-review but full of grading-review
+    // parts, the RPC tries to delete the real self-review parts, and FK constraints on
+    // rubric_criteria block it.
+    //
+    // Two filters defend against that:
+    //   1. Bail if rubric.review_round doesn't match the requested round.
+    //   2. Drop any parts (and their criteria/checks) whose rubric_id doesn't match.
+    if (rubric.review_round !== review_round) return undefined;
+    const ownParts = parts.filter((p) => p.rubric_id === rubric.id);
 
     // Build the hydrated structure
-    const hydratedParts: HydratedRubricPart[] = parts.map((part) => {
+    const hydratedParts: HydratedRubricPart[] = ownParts.map((part) => {
       const partCriteria = allCriteria.filter((c) => c.rubric_part_id === part.id);
       const hydratedCriteria: HydratedRubricCriteria[] = partCriteria.map((criteria) => {
         const criteriaChecks = allChecks.filter((ch) => ch.rubric_criteria_id === criteria.id);
-        const hydratedChecks: HydratedRubricCheck[] = criteriaChecks.map((check) => ({
-          ...check
-        }));
+        const hydratedChecks: HydratedRubricCheck[] = criteriaChecks.map((check) => {
+          const refs = (allReferences ?? [])
+            .filter((r) => r.referencing_rubric_check_id === check.id)
+            .map((r) => ({ id: r.id, referenced_rubric_check_id: r.referenced_rubric_check_id }));
+          return {
+            ...check,
+            references: refs
+          };
+        });
 
         return {
           ...criteria,
@@ -106,302 +131,51 @@ function useHydratedRubricByReviewRound(
       ...rubric,
       rubric_parts: hydratedParts
     };
-  }, [rubric, parts, allCriteria, allChecks]);
-}
-
-function findChanges<T extends { id: number | undefined | null }>(
-  newItems: T[],
-  existingItems: T[]
-): {
-  toCreate: T[];
-  toUpdate: T[];
-  toDelete: number[];
-  numItemsWithBadIDs: number;
-} {
-  const existingItemMap = new Map(existingItems.map((item) => [item.id, item]));
-
-  const toCreate: T[] = [];
-  const toUpdate: T[] = [];
-
-  let numItemsWithBadIDs = 0;
-  for (const newItem of newItems) {
-    if (newItem.id === undefined || newItem.id === null || newItem.id <= 0) {
-      toCreate.push(newItem);
-    } else {
-      const existingItem = existingItemMap.get(newItem.id);
-      if (existingItem) {
-        if (JSON.stringify(newItem) !== JSON.stringify(existingItem)) {
-          toUpdate.push(newItem);
-        }
-        existingItemMap.delete(newItem.id);
-      } else {
-        numItemsWithBadIDs++;
-        toCreate.push(newItem);
-      }
-    }
-  }
-
-  const toDelete: number[] = Array.from(existingItemMap.keys()).filter(
-    (id): id is number => id !== undefined && id !== null && id > 0
-  );
-
-  return { toCreate, toUpdate, toDelete, numItemsWithBadIDs };
-}
-
-function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataType | undefined {
-  if (!check.data) {
-    return undefined;
-  }
-
-  // Type guard for check.data
-  if (
-    typeof check.data === "object" &&
-    check.data !== null &&
-    "options" in check.data &&
-    Array.isArray((check.data as { options?: unknown }).options)
-  ) {
-    const specificData = check.data as RubricChecksDataType;
-
-    if (specificData.options?.length === 1) {
-      throw new Error("Checks may not have only one option - they must have at least two options, or can have none");
-    }
-    for (const option of specificData.options) {
-      if (option.points === undefined || option.points === null) {
-        throw new Error("Option points are required");
-      }
-      if (!option.label) {
-        throw new Error("Option label is required");
-      }
-    }
-    return specificData;
-  } else if (typeof check.data === "object" && check.data !== null && !("options" in check.data)) {
-    return undefined;
-  }
-
-  return undefined;
-}
-
-function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRubricChecksType[] {
-  return checks
-    .sort((a, b) => a.ordinal - b.ordinal)
-    .map((check) => {
-      const yamlCheck: Omit<YmlRubricChecksType, "data"> & { data?: Json | null } = {
-        id: check.id,
-        name: check.name,
-        kpi_category: valOrUndefined(check.kpi_category) || null,
-        description: valOrUndefined(check.description),
-        file: valOrUndefined(check.file),
-        is_annotation: check.is_annotation,
-        is_required: check.is_required,
-        is_comment_required: check.is_comment_required,
-        artifact: valOrUndefined(check.artifact),
-        max_annotations: valOrUndefined(check.max_annotations),
-        points: check.points,
-        annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined,
-        student_visibility: valOrUndefined(check.student_visibility)
-      };
-      if (check.data !== null && check.data !== undefined) {
-        yamlCheck.data = check.data;
-      }
-      return yamlCheck as YmlRubricChecksType;
-    });
-}
-
-function valOrUndefined<T>(value: T | null | undefined): T | undefined {
-  return value === null ? undefined : value;
-}
-
-function hydratedRubricCriteriaToYamlRubric(criteria: HydratedRubricCriteria[]): YmlRubricCriteriaType[] {
-  criteria.sort((a, b) => a.ordinal - b.ordinal);
-  return criteria.map((criteria) => ({
-    id: criteria.id,
-    data: criteria.data,
-    description: valOrUndefined(criteria.description),
-    is_additive: criteria.is_additive,
-    is_deduction_only: criteria.is_deduction_only,
-    name: criteria.name,
-    total_points: criteria.total_points,
-    max_checks_per_submission: valOrUndefined(criteria.max_checks_per_submission),
-    min_checks_per_submission: valOrUndefined(criteria.min_checks_per_submission),
-    checks: hydratedRubricChecksToYamlRubric(criteria.rubric_checks)
-  }));
-}
-
-function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): YmlRubricPartType[] {
-  parts.sort((a, b) => a.ordinal - b.ordinal);
-  return parts.map((part) => ({
-    id: part.id,
-    data: valOrUndefined(part.data),
-    description: valOrUndefined(part.description),
-    name: part.name,
-    is_individual_grading: part.is_individual_grading || undefined,
-    is_assign_to_student: part.is_assign_to_student || undefined,
-    criteria: hydratedRubricCriteriaToYamlRubric(part.rubric_criteria)
-  }));
-}
-
-function HydratedRubricToYamlRubric(rubric: HydratedRubric): YmlRubricType {
-  return {
-    name: rubric.name,
-    description: valOrUndefined(rubric.description),
-    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts),
-    cap_score_to_assignment_points: rubric.cap_score_to_assignment_points ?? undefined
-  };
-}
-
-function valOrNull<T>(value: T | null | undefined): T | null {
-  return value === undefined ? null : value;
-}
-
-function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubricCheck[] {
-  if (!checks || checks.length === 0) {
-    throw new Error("Criteria must have at least one check");
-  }
-  return checks.map((check, index) => ({
-    id: check.id || -1,
-    name: check.name,
-    kpi_category: valOrNull(check.kpi_category),
-    description: valOrNull(check.description),
-    ordinal: index,
-    rubric_id: 0,
-    assignment_id: 0,
-    class_id: 0,
-    created_at: "",
-    data: rubricCheckDataOrThrow(check) ?? null,
-    rubric_criteria_id: 0,
-    file: valOrNull(check.file),
-    artifact: valOrNull(check.artifact),
-    group: valOrNull(null),
-    is_annotation: check.is_annotation,
-    is_comment_required: check.is_comment_required,
-    max_annotations: valOrNull(check.max_annotations),
-    points: check.points,
-    is_required: check.is_required,
-    annotation_target: valOrNull(check.annotation_target),
-    student_visibility: check.student_visibility || "always"
-  }));
-}
-
-function YamlCriteriaToHydratedCriteria(part_id: number, criteria: YmlRubricCriteriaType[]): HydratedRubricCriteria[] {
-  return criteria.map((criteria, index) => ({
-    id: criteria.id || -1,
-    name: criteria.name,
-    description: valOrNull(criteria.description),
-    is_deduction_only: criteria.is_deduction_only || false,
-    ordinal: index,
-    rubric_id: 0,
-    assignment_id: 0,
-    class_id: 0,
-    created_at: "",
-    data: criteria.data,
-    rubric_part_id: part_id,
-    is_additive: criteria.is_additive || false,
-    total_points: criteria.total_points || 0,
-    max_checks_per_submission: valOrNull(criteria.max_checks_per_submission),
-    min_checks_per_submission: valOrNull(criteria.min_checks_per_submission),
-    rubric_checks: YamlChecksToHydratedChecks(criteria.checks)
-  }));
-}
-
-function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPart[] {
-  const partsWithIds = parts.filter((part) => part.id);
-  const partIds = new Set(partsWithIds.map((part) => part.id));
-  if (partIds.size !== partsWithIds.length) {
-    throw new Error(
-      "Duplicate part ids in YAML. If you intend to copy a part, simply remove the ID on the copy, and a new ID will be generated for the new part upon saving."
-    );
-  }
-  const criteriaWithIds = parts.flatMap((part) => part.criteria.filter((criteria) => criteria.id));
-  const criteriaIds = new Set(criteriaWithIds.map((criteria) => criteria.id));
-  if (criteriaIds.size !== criteriaWithIds.length) {
-    throw new Error(
-      "Duplicate criteria ids in YAML. If you intend to copy a criteria, simply remove the ID on the copy, and a new ID will be generated for the new criteria upon saving."
-    );
-  }
-  const checksWithIds = parts.flatMap((part) =>
-    part.criteria.flatMap((criteria) => criteria.checks.filter((check) => check.id))
-  );
-  const checkIds = new Set(checksWithIds.map((check) => check.id));
-  if (checkIds.size !== checksWithIds.length) {
-    throw new Error(
-      "Duplicate check ids in YAML. If you intend to copy a check, simply remove the ID on the copy, and a new ID will be generated for the new check upon saving."
-    );
-  }
-  for (const part of parts) {
-    if (part.is_individual_grading && part.is_assign_to_student) {
-      throw new Error(
-        `Part "${part.name}" cannot have both is_individual_grading and is_assign_to_student enabled. Choose one mode.`
-      );
-    }
-  }
-  return parts.map((part, index) => ({
-    id: part.id || -1,
-    name: part.name,
-    description: valOrNull(part.description),
-    ordinal: index,
-    rubric_id: 0,
-    class_id: 0,
-    created_at: "",
-    data: part.data,
-    assignment_id: 0,
-    is_individual_grading: part.is_individual_grading ?? false,
-    is_assign_to_student: part.is_assign_to_student ?? false,
-    rubric_criteria: YamlCriteriaToHydratedCriteria(part.id || -1, part.criteria)
-  }));
-}
-
-function YamlRubricToHydratedRubric(
-  yaml: YmlRubricType,
-  {
-    assignment_id,
-    is_private,
-    review_round
-  }: {
-    assignment_id: number;
-    is_private: boolean;
-    review_round: NonNullable<HydratedRubric["review_round"]>;
-  }
-): HydratedRubric {
-  return {
-    id: 0,
-    class_id: 0,
-    created_at: "",
-    name: yaml.name,
-    assignment_id,
-    description: valOrNull(yaml.description),
-    rubric_parts: YamlPartsToHydratedParts(yaml.parts),
-    is_private,
-    review_round,
-    cap_score_to_assignment_points: yaml.cap_score_to_assignment_points ?? false
-  };
+    // review_round is in deps so the guard re-runs even when the inner list-controller
+    // hooks return their stale-references on a tab switch — without it useMemo would
+    // hand back the previously hydrated (wrong-round) tree.
+  }, [rubric, parts, allCriteria, allChecks, allReferences, review_round]);
 }
 
 /**
- * Returns the property names of an object that have changed compared to another object, excluding arrays and certain metadata fields.
- *
- * Compares two objects of the same type and identifies which non-array, non-metadata properties have different values. For the `data` property, a deep comparison is performed using JSON stringification.
- *
- * @param newItem - The updated object to compare.
- * @param existingItem - The original object to compare against.
- * @returns An array of property names that have changed.
+ * Hydrate all rubrics on this assignment (parts + criteria + checks) without
+ * loading references. Used at save time to resolve cross-round references and
+ * by the GUI typeahead to enumerate candidate targets.
  */
-function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T): (keyof T)[] {
-  return Object.keys(newItem)
-    .filter(
-      (key) =>
-        !Array.isArray(newItem[key as keyof T]) &&
-        key !== "rubric_id" &&
-        key !== "class_id" &&
-        key !== "created_at" &&
-        key !== "assignment_id"
-    )
-    .filter(
-      (key) =>
-        (key === "data" &&
-          newItem[key as keyof T] != existingItem[key as keyof T] &&
-          JSON.stringify(newItem[key as keyof T]) != JSON.stringify(existingItem[key as keyof T])) ||
-        newItem[key as keyof T] != existingItem[key as keyof T]
-    ) as (keyof T)[];
+function useAllHydratedRubrics(): HydratedRubric[] {
+  const controller = useAssignmentController();
+  const rubrics = useRubrics();
+  const parts = useListTableControllerValues(
+    controller.rubricPartsController,
+    useCallback(() => true, [])
+  );
+  const criteria = useListTableControllerValues(
+    controller.rubricCriteriaController,
+    useCallback(() => true, [])
+  );
+  const checks = useListTableControllerValues(
+    controller.rubricChecksController,
+    useCallback(() => true, [])
+  );
+  return useMemo(() => {
+    if (!rubrics) return [];
+    return rubrics.map((r) => {
+      const rParts = (parts ?? [])
+        .filter((p) => p.rubric_id === r.id)
+        .map((part) => {
+          const rCrits = (criteria ?? [])
+            .filter((c) => c.rubric_part_id === part.id)
+            .map((crit) => {
+              const rChecks = (checks ?? [])
+                .filter((ch) => ch.rubric_criteria_id === crit.id)
+                .map((ch) => ({ ...ch }) as HydratedRubricCheck);
+              return { ...crit, rubric_checks: rChecks } as HydratedRubricCriteria;
+            });
+          return { ...part, rubric_criteria: rCrits } as HydratedRubricPart;
+        });
+      return { ...r, rubric_parts: rParts } as HydratedRubric;
+    });
+  }, [rubrics, parts, criteria, checks]);
 }
 /**
  * Renders the main rubric editing page for managing and editing handgrading rubrics.
@@ -477,14 +251,36 @@ function InnerRubricPage() {
   const [rubricForSidebar, setRubricForSidebar] = useState<HydratedRubric | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [errorMarkers, setErrorMarkers] = useState<{ message: string; startLineNumber: number }[]>([]);
+  const [viewMode, setViewMode] = useState<"gui" | "source">("gui");
+  useEffect(() => {
+    try {
+      const stored = window.sessionStorage.getItem(VIEW_MODE_STORAGE_KEY);
+      if (stored === "gui" || stored === "source") setViewMode(stored);
+    } catch {
+      // sessionStorage may be unavailable; default stands.
+    }
+  }, []);
+  const persistViewMode = useCallback((next: "gui" | "source") => {
+    setViewMode(next);
+    try {
+      window.sessionStorage.setItem(VIEW_MODE_STORAGE_KEY, next);
+    } catch {
+      // Ignore restricted storage environments.
+    }
+  }, []);
 
-  const { mutateAsync: updateResource } = useUpdate({});
-  const { mutateAsync: deleteResource } = useDelete({});
-  const { mutateAsync: createResource } = useCreate({});
   const debounceTimeoutRef = useRef<NodeJS.Timeout>();
+  const guiEditorRef = useRef<RubricGuiEditorHandle>(null);
+  const pendingGuiRubricRef = useRef<HydratedRubric | null>(null);
+  const [guiEditorEpoch, setGuiEditorEpoch] = useState(0);
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  /** Set by handleGuiChange so the activeRubric→YAML sync effect does not fight GUI edits. */
+  const skipActiveRubricYamlSyncRef = useRef(false);
   const wasRestoredFromStashRef = useRef(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
+  const [pointsWarnings, setPointsWarnings] = useState<PointsValidationWarning[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   // Points summary state
   const gradingRubricFromDb = useRubric("grading-review");
@@ -495,52 +291,57 @@ function InnerRubricPage() {
 
   const assignmentMaxPoints = assignmentDetails?.total_points ?? 0;
   const autograderPoints = assignmentDetails?.autograder_points ?? 0;
-  const gradingRubricPoints = useMemo(() => {
-    // If we're previewing the grading-review, calculate from preview data
+
+  // Breakdown reflects whichever source is the freshest: live editor state when
+  // we're on the grading-review tab, else the DB-derived rubric. Both editors
+  // (GUI + YAML) feed `rubricForSidebar` so the comparison updates in real time
+  // when points, scoring mode, cap, or part mode changes.
+  const gradingRubricBreakdown = useMemo<RubricPointsBreakdown | undefined>(() => {
     if (activeReviewRound === "grading-review" && rubricForSidebar) {
-      let total = 0;
-      for (const part of rubricForSidebar.rubric_parts) {
-        for (const criteria of part.rubric_criteria) {
-          const criteriaTotal = criteria.total_points ?? 0;
-          const sumCheckPoints = criteria.rubric_checks.reduce((acc: number, check) => acc + (check.points ?? 0), 0);
-
-          if (criteria.is_additive) {
-            total += Math.min(sumCheckPoints, criteriaTotal);
-          } else {
-            total += criteriaTotal;
-          }
-        }
-      }
-      return total;
+      return computeRubricPointsBreakdown(rubricForSidebar);
     }
 
-    // Otherwise calculate from database data
-    if (!gradingRubricFromDb) return 0;
-    let total = 0;
-
+    if (!gradingRubricFromDb) {
+      return { total: 0 } as RubricPointsBreakdown & { total: 0 };
+    }
     if (!gradingRubricCriteria || !gradingRubricChecks) return undefined;
+
+    // The DB controllers expose flat lists; the part list isn't memoized here so
+    // we approximate the breakdown from criteria + checks alone (i.e. without
+    // per-part split-grading info). That's fine because the editor-side
+    // breakdown above is what users actually interact with — this branch only
+    // covers the initial render before `rubricForSidebar` is populated.
+    let total = 0;
     for (const criteria of gradingRubricCriteria) {
-      const criteriaTotal = criteria.total_points ?? 0;
       const checksForCriteria = gradingRubricChecks.filter((check) => check.rubric_criteria_id === criteria.id);
-      const sumCheckPoints = checksForCriteria.reduce((acc: number, check) => acc + (check.points ?? 0), 0);
-
-      if (criteria.is_additive) {
-        total += Math.min(sumCheckPoints, criteriaTotal);
-      } else {
-        total += criteriaTotal;
-      }
+      total += maxPointsForCriterion({ ...criteria, rubric_checks: checksForCriteria });
     }
-
-    return total;
+    return {
+      total,
+      standard: total,
+      individual: 0,
+      assignToStudentPerStudent: 0,
+      assignToStudentTotal: 0,
+      assignToStudentParts: [],
+      assignToStudentUnbalanced: false
+    };
   }, [activeReviewRound, rubricForSidebar, gradingRubricFromDb, gradingRubricCriteria, gradingRubricChecks]);
 
-  const isCapped = gradingRubricFromDb?.cap_score_to_assignment_points ?? false;
+  const gradingRubricPoints = gradingRubricBreakdown?.total;
+
+  // `cap_score_to_assignment_points` is editable in the rubric header, so prefer
+  // the live edited rubric over the saved DB value when we have it.
+  const isCapped =
+    activeReviewRound === "grading-review" && rubricForSidebar
+      ? (rubricForSidebar.cap_score_to_assignment_points ?? false)
+      : (gradingRubricFromDb?.cap_score_to_assignment_points ?? false);
   const addsUp =
     gradingRubricPoints !== undefined &&
     (isCapped
       ? Math.max(autograderPoints, gradingRubricPoints) <= assignmentMaxPoints
       : assignmentMaxPoints === autograderPoints + gradingRubricPoints);
 
+  const allHydratedRubrics = useAllHydratedRubrics();
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
       (acc, round) => {
@@ -780,6 +581,9 @@ function InnerRubricPage() {
   );
 
   function handleEditorWillMount(monaco: Monaco) {
+    // Expose the Monaco namespace for e2e tests that need to read/write YAML directly.
+    // No-op in normal use - just a property on window.
+    (window as Window & { monaco?: Monaco }).monaco = monaco;
     window.MonacoEnvironment = {
       getWorker(_module_id, label) {
         switch (label) {
@@ -808,6 +612,7 @@ function InnerRubricPage() {
     (yamlValue: string, currentNumErrorMarkers?: number) => {
       if (yamlValue.trim() === "") {
         setRubricForSidebar(undefined);
+        setPointsWarnings([]);
         setError(undefined);
         // setHasUnsavedChanges might need to be true if the initial state was not empty.
         // This is handled by the dedicated useEffect for hasUnsavedChanges.
@@ -843,19 +648,35 @@ function InnerRubricPage() {
             class_id: assignmentDetails.class_id
           };
 
-          setRubricForSidebar(mergedRubric);
+          const { rubric: sanitizedRubric, warnings } = sanitizeHydratedRubricPoints(mergedRubric);
+          setPointsWarnings(warnings);
+          setRubricForSidebar(sanitizedRubric);
+          if (warnings.length > 0 && viewModeRef.current === "source") {
+            skipActiveRubricYamlSyncRef.current = true;
+            setValue(YAML.stringify(HydratedRubricToYamlRubric(sanitizedRubric, { allRubrics: allHydratedRubrics })));
+          }
           setError(undefined);
         } catch (e) {
           setError(e instanceof Error ? e.message : "Unknown YAML parsing error");
         }
       }
     },
-    [activeRubric, assignmentDetails, assignment_id, activeReviewRound, createMinimalNewHydratedRubric]
+    [
+      activeRubric,
+      assignmentDetails,
+      assignment_id,
+      activeReviewRound,
+      createMinimalNewHydratedRubric,
+      allHydratedRubrics
+    ]
   );
 
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value) {
+        // Monaco stays mounted while hidden; programmatic setValue from GUI sync must not
+        // drive YAML debounce / "preview paused" state.
+        if (viewModeRef.current === "gui") return;
         setValue(value);
         if (debounceTimeoutRef.current) {
           clearTimeout(debounceTimeoutRef.current);
@@ -871,6 +692,136 @@ function InnerRubricPage() {
     [debouncedParseYaml, errorMarkers.length]
   );
 
+  const applyGuiUnsavedStatus = useCallback(
+    (_rubric: HydratedRubric, yamlString: string) => {
+      if (!initialActiveRubricSnapshot) {
+        const dirty = yamlString.trim() !== "";
+        setHasUnsavedChanges(dirty);
+        if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: dirty }));
+        return;
+      }
+      const snapshotYaml = YAML.stringify(
+        HydratedRubricToYamlRubric(initialActiveRubricSnapshot, { allRubrics: allHydratedRubrics })
+      );
+      const changed = snapshotYaml !== yamlString;
+      setHasUnsavedChanges(changed);
+      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: changed }));
+    },
+    [initialActiveRubricSnapshot, activeReviewRound, allHydratedRubrics]
+  );
+
+  const syncGuiRubricToYamlAndPreview = useCallback(
+    (rubric: HydratedRubric): string => {
+      skipActiveRubricYamlSyncRef.current = true;
+      const { rubric: sanitized, warnings } = sanitizeHydratedRubricPoints(rubric);
+      if (viewModeRef.current === "gui") {
+        setPointsWarnings([]);
+      } else {
+        setPointsWarnings(warnings);
+      }
+      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(sanitized, { allRubrics: allHydratedRubrics }));
+      setValue(yamlString);
+      setRubricForSidebar(sanitized);
+      applyGuiUnsavedStatus(sanitized, yamlString);
+      setUpdatePaused(false);
+      return yamlString;
+    },
+    [allHydratedRubrics, applyGuiUnsavedStatus]
+  );
+
+  const flushPendingGuiSync = useCallback((): string => {
+    const rubric = guiEditorRef.current?.flushDraft() ?? pendingGuiRubricRef.current ?? activeRubric;
+    if (!rubric) return value;
+    pendingGuiRubricRef.current = rubric;
+    setActiveRubric(rubric);
+    return syncGuiRubricToYamlAndPreview(rubric);
+  }, [activeRubric, value, syncGuiRubricToYamlAndPreview]);
+
+  const handleGuiDraftActivity = useCallback(
+    (rubric: HydratedRubric) => {
+      pendingGuiRubricRef.current = rubric;
+      setUpdatePaused(true);
+      setHasUnsavedChanges(true);
+      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
+      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+    },
+    [activeReviewRound]
+  );
+
+  const handleGuiCommit = useCallback(
+    (rubric: HydratedRubric) => {
+      skipActiveRubricYamlSyncRef.current = true;
+      pendingGuiRubricRef.current = rubric;
+      setActiveRubric(rubric);
+      setError(undefined);
+      syncGuiRubricToYamlAndPreview(rubric);
+    },
+    [syncGuiRubricToYamlAndPreview]
+  );
+
+  const guiReferenceContext = useMemo(
+    () => ({
+      otherRubrics: allHydratedRubrics.filter((r) => r.review_round !== activeReviewRound),
+      unsavedRoundTabs: unsavedStatusPerTab
+    }),
+    [allHydratedRubrics, activeReviewRound, unsavedStatusPerTab]
+  );
+
+  const handleViewModeChange = useCallback(
+    (next: "gui" | "source") => {
+      if (next === viewMode) return;
+      if (next === "gui") {
+        if (!value || value.trim() === "") {
+          // Empty YAML means the rubric was wiped. Clear the hydrated state too so the GUI
+          // doesn't resurrect whatever was previously in activeRubric / rubricForSidebar.
+          setActiveRubric(undefined);
+          setRubricForSidebar(undefined);
+          setError(undefined);
+          persistViewMode("gui");
+          return;
+        }
+        try {
+          const parsed = YAML.parse(value) as YmlRubricType;
+          const hydrated = YamlRubricToHydratedRubric(parsed, {
+            assignment_id: Number(assignment_id),
+            is_private: false,
+            review_round: activeReviewRound
+          });
+          if (assignmentDetails) {
+            hydrated.assignment_id = Number(assignment_id);
+            hydrated.class_id = assignmentDetails.class_id;
+          }
+          hydrated.review_round = activeReviewRound;
+          if (activeRubric && activeRubric.id > 0) hydrated.id = activeRubric.id;
+          setActiveRubric(hydrated);
+          setGuiEditorEpoch((e) => e + 1);
+          setRubricForSidebar(hydrated);
+          setError(undefined);
+          persistViewMode("gui");
+        } catch (e) {
+          toaster.error({
+            title: "Cannot switch to GUI",
+            description: `YAML must be valid before switching: ${(e as Error).message}`
+          });
+        }
+      } else {
+        // GUI -> Source: flush debounced YAML so the editor shows the latest GUI edits.
+        flushPendingGuiSync();
+        persistViewMode("source");
+      }
+    },
+    [
+      viewMode,
+      value,
+      persistViewMode,
+      assignment_id,
+      activeReviewRound,
+      assignmentDetails,
+      activeRubric,
+      flushPendingGuiSync
+    ]
+  );
+
   useEffect(() => {
     if (wasRestoredFromStashRef.current) {
       // Content was from stash, value is already set. Debounced parse might still be needed for sidebar.
@@ -880,14 +831,22 @@ function InnerRubricPage() {
       return;
     }
 
-    if (activeRubric) {
-      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(activeRubric));
+    if (activeRubric && !(viewMode === "source" && hasUnsavedChanges)) {
+      // In source mode with unsaved YAML edits, activeRubric is stale relative to what the
+      // user is typing. Re-serializing it (e.g. on a sibling-rubric refetch) would wipe their
+      // in-flight edits.
+      if (skipActiveRubricYamlSyncRef.current) {
+        skipActiveRubricYamlSyncRef.current = false;
+        return;
+      }
+      const yamlString = YAML.stringify(HydratedRubricToYamlRubric(activeRubric, { allRubrics: allHydratedRubrics }));
+      if (yamlString === value) return;
       setValue(yamlString);
       if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
       // Pass 0 for error markers, as this is a trusted source or new template
       debouncedParseYaml(yamlString, 0);
       setUpdatePaused(false);
-    } else {
+    } else if (!activeRubric) {
       // activeRubric is undefined.
       // This typically means no rubric from DB for this tab, or a reset to a non-existent state.
       if (initialActiveRubricSnapshot === undefined) {
@@ -913,10 +872,15 @@ function InnerRubricPage() {
     assignment_id,
     createMinimalNewHydratedRubric,
     initialActiveRubricSnapshot,
-    wasRestoredFromStashRef
+    wasRestoredFromStashRef,
+    allHydratedRubrics,
+    viewMode,
+    hasUnsavedChanges
   ]);
 
   useEffect(() => {
+    if (viewMode === "gui") return;
+
     if (!initialActiveRubricSnapshot && !value) {
       setHasUnsavedChanges(false);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
@@ -959,7 +923,7 @@ function InnerRubricPage() {
     } else {
       setHasUnsavedChanges(!!value);
     }
-  }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id]);
+  }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id, viewMode]);
 
   useEffect(() => {
     if (!rubricPageRootElement) return;
@@ -1087,87 +1051,10 @@ function InnerRubricPage() {
     };
   }, [isRubricPageInstanceVisible]);
 
-  const updatePartIfChanged = useCallback(
-    async (part: HydratedRubricPart, existingPart: HydratedRubricPart) => {
-      if (part.id !== existingPart.id) {
-        return { toCreate: [], toUpdate: [], toDelete: [] };
-      }
-      const updatedPropertyNames = findUpdatedPropertyNames(part, existingPart);
-      if (updatedPropertyNames.length === 0) {
-        return;
-      }
-      const values = updatedPropertyNames.reduce(
-        (acc, curr) => ({
-          ...acc,
-          [curr]: part[curr]
-        }),
-        {}
-      );
-      await updateResource({
-        id: part.id,
-        resource: "rubric_parts",
-        values
-      });
-    },
-    [updateResource]
-  );
-  const updateCriteriaIfChanged = useCallback(
-    async (criteria: HydratedRubricCriteria, existingCriteria: HydratedRubricCriteria) => {
-      if (criteria.id !== existingCriteria.id) {
-        return { toCreate: [], toUpdate: [], toDelete: [] };
-      }
-      const updatedPropertyNames = findUpdatedPropertyNames(criteria, existingCriteria);
-      if (updatedPropertyNames.length === 0) {
-        return;
-      }
-      const values = updatedPropertyNames.reduce(
-        (acc, curr) => ({
-          ...acc,
-          [curr]: criteria[curr]
-        }),
-        {}
-      );
-      await updateResource({
-        id: criteria.id,
-        resource: "rubric_criteria",
-        values
-      });
-    },
-    [updateResource]
-  );
-  const updateCheckIfChanged = useCallback(
-    async (check: HydratedRubricCheck, existingCheck: HydratedRubricCheck) => {
-      if (check.id !== existingCheck.id) {
-        return { toCreate: [], toUpdate: [], toDelete: [] };
-      }
-      const updatedPropertyNames = findUpdatedPropertyNames(check, existingCheck);
-      if (updatedPropertyNames.length === 0) {
-        return;
-      }
-      const values = updatedPropertyNames.reduce(
-        (acc, curr) => ({
-          ...acc,
-          [curr]: check[curr]
-        }),
-        {}
-      );
-      await updateResource({
-        id: check.id,
-        resource: "rubric_checks",
-        values
-      });
-    },
-    [updateResource]
-  );
   const saveRubric = useCallback(
-    async (yamlStringValue: string) => {
+    async (yamlStringValue: string): Promise<string> => {
       if (!assignmentDetails || !activeReviewRound) {
-        toaster.create({
-          title: "Error",
-          description: "Cannot save: Missing assignment details or active review round.",
-          type: "error"
-        });
-        return;
+        throw new Error("Cannot save: Missing assignment details or active review round.");
       }
 
       let parsedRubricFromEditor: HydratedRubric;
@@ -1181,15 +1068,27 @@ function InnerRubricPage() {
         parsedRubricFromEditor.class_id = assignmentDetails.class_id;
         parsedRubricFromEditor.review_round = activeReviewRound;
       } catch (e) {
-        toaster.error({ title: "YAML Error", description: `Invalid YAML: ${(e as Error).message}` });
-        setIsSaving(false);
-        return;
+        throw new Error(`Invalid YAML: ${(e as Error).message}`);
       }
 
-      let currentEffectiveRubricId: number;
-      let isNewRubricCreationFlow: boolean;
-      let actualBaselineForDiff: HydratedRubric;
+      // Assign unique negative ids to every new check (id<=0). The RPC keys its
+      // input->real id map by the incoming id, so duplicate -1s would collapse
+      // and re-attach references from one new check to another.
+      {
+        let nextNewCheckId = -1;
+        for (const part of parsedRubricFromEditor.rubric_parts) {
+          for (const crit of part.rubric_criteria) {
+            for (const check of crit.rubric_checks) {
+              if (check.id <= 0) {
+                check.id = nextNewCheckId--;
+              }
+            }
+          }
+        }
+      }
 
+      // Identify the existing rubric (if any) for this review round; the RPC
+      // distinguishes update-vs-create from the `id` field in the payload.
       const { getList } = dataProviderHook();
       const { data: existingRubricQuery } = await getList<HydratedRubric>({
         resource: "rubrics",
@@ -1197,309 +1096,190 @@ function InnerRubricPage() {
           { field: "assignment_id", operator: "eq", value: Number(assignment_id) },
           { field: "review_round", operator: "eq", value: activeReviewRound }
         ],
-        pagination: { current: 1, pageSize: 1 },
-        meta: { select: "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))" }
+        pagination: { current: 1, pageSize: 1 }
       });
 
       const dbRubricForThisRound =
         existingRubricQuery && existingRubricQuery.length > 0 ? existingRubricQuery[0] : undefined;
+      const rubricId = dbRubricForThisRound && dbRubricForThisRound.id > 0 ? dbRubricForThisRound.id : 0;
 
-      if (dbRubricForThisRound && dbRubricForThisRound.id > 0) {
-        isNewRubricCreationFlow = false;
-        currentEffectiveRubricId = dbRubricForThisRound.id;
-        actualBaselineForDiff = dbRubricForThisRound;
-        parsedRubricFromEditor.id = currentEffectiveRubricId;
+      // Resolve cross-rubric YAML references against the live set of sibling
+      // rubrics. We pass the resolved (referencing, referenced) pairs in the
+      // payload; the RPC diffs them against existing rows owned by this rubric.
+      const otherHydratedRubrics = allHydratedRubrics.filter((r) => r.id !== rubricId);
+      const referencesUnsavedNotice: string[] = [];
+      const referenceErrors: string[] = [];
+      type DesiredRef = { referenced_rubric_check_id: number };
+      const refsByPath = new Map<string, DesiredRef[]>();
+      const pathKey = (p: number, c: number, k: number) => `${p}.${c}.${k}`;
 
-        if (!initialActiveRubricSnapshot || initialActiveRubricSnapshot.id <= 0) {
-          toaster.create({
-            title: "Notice",
-            description: "Updating existing rubric for this review round.",
-            type: "info"
-          });
-        }
-      } else {
-        isNewRubricCreationFlow = true;
-        currentEffectiveRubricId = 0;
-        actualBaselineForDiff =
-          initialActiveRubricSnapshot && initialActiveRubricSnapshot.id <= 0
-            ? JSON.parse(JSON.stringify(initialActiveRubricSnapshot))
-            : createMinimalNewHydratedRubric(assignment_id as string, assignmentDetails.class_id, activeReviewRound);
-        if (actualBaselineForDiff.id !== 0) actualBaselineForDiff.id = 0;
-        parsedRubricFromEditor.id = 0;
-      }
-
-      if (isNewRubricCreationFlow) {
-        const newRubricPayload: Omit<HydratedRubric, "id" | "created_at" | "class_id" | "rubric_parts"> & {
-          class_id: number;
-          assignment_id: number;
-        } = {
-          name: parsedRubricFromEditor.name,
-          description: parsedRubricFromEditor.description,
-          assignment_id: Number(assignment_id),
-          class_id: assignmentDetails.class_id,
-          is_private: parsedRubricFromEditor.is_private,
-          review_round: activeReviewRound,
-          cap_score_to_assignment_points: parsedRubricFromEditor.cap_score_to_assignment_points ?? false
-        };
-        try {
-          const createdTopLevelRubric = await createResource({
-            resource: "rubrics",
-            values: newRubricPayload
-          });
-          invalidate({ resource: "assignments", invalidates: ["all"] });
-          currentEffectiveRubricId = createdTopLevelRubric.data.id as number;
-          if (!currentEffectiveRubricId) throw new Error("Failed to create rubric shell.");
-
-          parsedRubricFromEditor.id = currentEffectiveRubricId;
-        } catch (e) {
-          toaster.create({ title: "Error Creating Rubric", description: (e as Error).message, type: "error" });
-          setIsSaving(false);
-          return;
-        }
-      } else {
-        const topLevelRubricChanges: Partial<HydratedRubric> = {};
-        if (parsedRubricFromEditor.name !== actualBaselineForDiff.name)
-          topLevelRubricChanges.name = parsedRubricFromEditor.name;
-        if (parsedRubricFromEditor.description !== actualBaselineForDiff.description)
-          topLevelRubricChanges.description = parsedRubricFromEditor.description;
-        if (parsedRubricFromEditor.is_private !== actualBaselineForDiff.is_private)
-          topLevelRubricChanges.is_private = parsedRubricFromEditor.is_private;
-        if (
-          parsedRubricFromEditor.cap_score_to_assignment_points !== actualBaselineForDiff.cap_score_to_assignment_points
-        )
-          topLevelRubricChanges.cap_score_to_assignment_points =
-            parsedRubricFromEditor.cap_score_to_assignment_points ?? false;
-        if (Object.keys(topLevelRubricChanges).length > 0) {
-          await updateResource({
-            id: currentEffectiveRubricId,
-            resource: "rubrics",
-            values: topLevelRubricChanges
-          });
-        }
-      }
-
-      parsedRubricFromEditor.rubric_parts.forEach((part) => {
-        part.rubric_id = currentEffectiveRubricId;
-        part.class_id = assignmentDetails.class_id;
-        part.rubric_criteria.forEach((criteria) => {
-          criteria.rubric_id = currentEffectiveRubricId;
-          criteria.class_id = assignmentDetails.class_id;
-        });
-      });
-
-      const partsToCompareAgainst = actualBaselineForDiff.rubric_parts;
-      const partChanges = findChanges(parsedRubricFromEditor.rubric_parts, partsToCompareAgainst);
-
-      const allNewCriteriaFromEditor = parsedRubricFromEditor.rubric_parts.flatMap((part) => part.rubric_criteria);
-      const checksToCompareAgainst = actualBaselineForDiff.rubric_parts.flatMap((part) =>
-        part.rubric_criteria.flatMap((c) => c.rubric_checks)
-      );
-      const allNewChecksFromEditor = allNewCriteriaFromEditor.flatMap(
-        (criteria: HydratedRubricCriteria) => criteria.rubric_checks
-      );
-      const checkChanges = findChanges(allNewChecksFromEditor, checksToCompareAgainst);
-
-      await Promise.all(checkChanges.toDelete.map((id: number) => deleteResource({ id, resource: "rubric_checks" })));
-
-      const criteriaToCompareAgainst = actualBaselineForDiff.rubric_parts.flatMap((part) => part.rubric_criteria);
-      const criteriaChanges = findChanges(allNewCriteriaFromEditor, criteriaToCompareAgainst);
-      const totalItemsWithBadIDs =
-        partChanges.numItemsWithBadIDs + criteriaChanges.numItemsWithBadIDs + checkChanges.numItemsWithBadIDs;
-      if (totalItemsWithBadIDs > 0) {
-        toaster.create({
-          title: "Items in yml had invalid IDs",
-          description: `${totalItemsWithBadIDs} items found with an "id" that appears to be a copy/paste from elsewhere. Treating as new items.`,
-          type: "warning"
-        });
-      }
-
-      await Promise.all(
-        criteriaChanges.toDelete.map((id: number) => deleteResource({ id, resource: "rubric_criteria" }))
-      );
-
-      await Promise.all(partChanges.toDelete.map((id: number) => deleteResource({ id, resource: "rubric_parts" })));
-
-      for (const partData of partChanges.toCreate) {
-        const partCopy: Omit<HydratedRubricPart, "id" | "created_at" | "rubric_criteria"> = {
-          name: partData.name,
-          description: partData.description,
-          ordinal: partData.ordinal,
-          data: partData.data,
-          class_id: assignmentDetails.class_id,
-          rubric_id: currentEffectiveRubricId,
-          assignment_id: assignmentDetails.id,
-          is_individual_grading: partData.is_individual_grading ?? false,
-          is_assign_to_student: partData.is_assign_to_student ?? false
-        };
-        const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
-        if (!createdPart.data.id) throw new Error("Failed to create part");
-        const editorPart = parsedRubricFromEditor.rubric_parts.find(
-          (p) => p.id === partData.id || (p.name === partData.name && p.ordinal === partData.ordinal)
-        );
-        if (editorPart) editorPart.id = createdPart.data.id as number;
-      }
-      await Promise.all(
-        partChanges.toUpdate.map((part: HydratedRubricPart) =>
-          updatePartIfChanged(
-            part,
-            actualBaselineForDiff.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart
-          )
-        )
-      );
-
-      parsedRubricFromEditor.rubric_parts.forEach((part) => {
-        part.rubric_criteria.forEach((criteria) => {
-          if (part.id && part.id > 0) {
-            criteria.rubric_part_id = part.id;
-          } else {
-            const matchedNewPart = parsedRubricFromEditor.rubric_parts.find(
-              (p) => p.name === part.name && p.ordinal === part.ordinal && p.id && p.id > 0
-            );
-            if (matchedNewPart && matchedNewPart.id) {
-              criteria.rubric_part_id = matchedNewPart.id;
-            } else {
-              throw new Error(
-                `Cannot save criteria '${criteria.name}': Its parent part does not have a valid database ID.`
-              );
+      // Build a lookup: referenced check id -> its rubric review_round, so we can tell which
+      // already-persisted references point at a dirty sibling tab and need to be preserved
+      // verbatim (since we can't resolve them against unsaved YAML).
+      const roundByCheckId = new Map<number, string | null>();
+      for (const rubric of allHydratedRubrics) {
+        for (const p of rubric.rubric_parts) {
+          for (const cr of p.rubric_criteria) {
+            for (const ck of cr.rubric_checks) {
+              if (ck.id > 0) roundByCheckId.set(ck.id, rubric.review_round);
             }
           }
-        });
-      });
-
-      const finalAllNewCriteriaFromEditor = parsedRubricFromEditor.rubric_parts.flatMap((part) => part.rubric_criteria);
-      const finalCriteriaChanges = findChanges(finalAllNewCriteriaFromEditor, criteriaToCompareAgainst);
-
-      for (const criteriaData of finalCriteriaChanges.toCreate) {
-        if (!criteriaData.rubric_part_id || criteriaData.rubric_part_id <= 0) {
-          throw new Error(`Cannot create criteria '${criteriaData.name}': Missing or invalid parent part ID.`);
         }
-        const criteriaCopy: Omit<HydratedRubricCriteria, "id" | "created_at" | "rubric_checks"> = {
-          name: criteriaData.name,
-          is_deduction_only: criteriaData.is_deduction_only || false,
-          description: criteriaData.description,
-          ordinal: criteriaData.ordinal,
-          data: criteriaData.data,
-          is_additive: criteriaData.is_additive,
-          total_points: criteriaData.total_points,
-          max_checks_per_submission: criteriaData.max_checks_per_submission,
-          min_checks_per_submission: criteriaData.min_checks_per_submission,
-          class_id: assignmentDetails.class_id,
-          rubric_id: currentEffectiveRubricId,
-          rubric_part_id: criteriaData.rubric_part_id,
-          assignment_id: assignmentDetails.id
-        };
-        const createdCriteria = await createResource({ resource: "rubric_criteria", values: criteriaCopy });
-        if (!createdCriteria.data.id) throw new Error("Failed to create criteria");
-        const editorCriteria = finalAllNewCriteriaFromEditor.find(
-          (c) =>
-            c.id === criteriaData.id ||
-            (c.name === criteriaData.name &&
-              c.ordinal === criteriaData.ordinal &&
-              c.rubric_part_id === criteriaData.rubric_part_id)
-        );
-        if (editorCriteria) editorCriteria.id = createdCriteria.data.id as number;
       }
-      await Promise.all(
-        finalCriteriaChanges.toUpdate.map((criteria: HydratedRubricCriteria) => {
-          const existingCrit = criteriaToCompareAgainst.find((c) => c.id === criteria.id);
-          if (existingCrit) return updateCriteriaIfChanged(criteria, existingCrit);
-          return Promise.resolve();
-        })
-      );
 
-      finalAllNewCriteriaFromEditor.forEach((criteria) => {
-        criteria.rubric_checks.forEach((check) => {
-          if (criteria.id && criteria.id > 0) {
-            check.rubric_criteria_id = criteria.id;
-          } else {
-            const matchedNewCriteria = finalAllNewCriteriaFromEditor.find(
-              (c) =>
-                c.name === criteria.name &&
-                c.ordinal === criteria.ordinal &&
-                c.rubric_part_id === criteria.rubric_part_id &&
-                c.id &&
-                c.id > 0
-            );
-            if (matchedNewCriteria && matchedNewCriteria.id) {
-              check.rubric_criteria_id = matchedNewCriteria.id;
-            } else {
-              throw new Error(
-                `Cannot save check '${check.name}': Its parent criteria does not have a valid database ID.`
+      parsedRubricFromEditor.rubric_parts.forEach((part, partIdx) => {
+        part.rubric_criteria.forEach((crit, critIdx) => {
+          crit.rubric_checks.forEach((check, checkIdx) => {
+            const yamlRefs = check.yaml_references;
+            const persistedRefs = check.references ?? [];
+            // Persisted references whose target lives in a dirty sibling round must survive
+            // the save even though we can't re-resolve them from the (stale) YAML.
+            const preservedFromDirty: DesiredRef[] = persistedRefs
+              .filter((r) => {
+                const targetRound = roundByCheckId.get(r.referenced_rubric_check_id);
+                return !!targetRound && !!unsavedStatusPerTab[targetRound];
+              })
+              .map((r) => ({ referenced_rubric_check_id: r.referenced_rubric_check_id }));
+
+            if (yamlRefs && yamlRefs.length > 0) {
+              const filteredYamlRefs = yamlRefs.filter((ref) => {
+                const targetRound = ref.review_round;
+                if (targetRound && unsavedStatusPerTab[targetRound]) {
+                  referencesUnsavedNotice.push(targetRound);
+                  return false;
+                }
+                return true;
+              });
+              const { resolved, errors } = resolveReferences(filteredYamlRefs, {
+                otherRubrics: otherHydratedRubrics,
+                currentReviewRound: activeReviewRound,
+                existingReferences: persistedRefs.map((r) => ({
+                  id: r.id,
+                  referenced_rubric_check_id: r.referenced_rubric_check_id
+                }))
+              });
+              for (const e of errors) referenceErrors.push(`${check.name}: ${e}`);
+              // Merge: resolved refs from YAML + any persisted refs pointing at dirty tabs.
+              // Dedupe on referenced_rubric_check_id so we don't double-list the same target.
+              const merged: DesiredRef[] = [];
+              const seen = new Set<number>();
+              for (const r of resolved) {
+                if (!seen.has(r.referenced_rubric_check_id)) {
+                  merged.push({ referenced_rubric_check_id: r.referenced_rubric_check_id });
+                  seen.add(r.referenced_rubric_check_id);
+                }
+              }
+              for (const r of preservedFromDirty) {
+                if (!seen.has(r.referenced_rubric_check_id)) {
+                  merged.push(r);
+                  seen.add(r.referenced_rubric_check_id);
+                }
+              }
+              refsByPath.set(pathKey(partIdx, critIdx, checkIdx), merged);
+            } else if (persistedRefs.length > 0) {
+              // No fresh YAML refs — preserve the already-resolved DB references.
+              refsByPath.set(
+                pathKey(partIdx, critIdx, checkIdx),
+                persistedRefs.map((r) => ({ referenced_rubric_check_id: r.referenced_rubric_check_id }))
               );
             }
-          }
+          });
         });
       });
 
-      const finalAllNewChecksFromEditor = finalAllNewCriteriaFromEditor.flatMap((c) => c.rubric_checks);
-      const finalCheckChanges = findChanges(finalAllNewChecksFromEditor, checksToCompareAgainst);
-
-      for (const checkData of finalCheckChanges.toCreate) {
-        if (!checkData.rubric_criteria_id || checkData.rubric_criteria_id <= 0) {
-          throw new Error(`Cannot create check '${checkData.name}': Missing or invalid parent criteria ID.`);
-        }
-        const checkCopy: Omit<HydratedRubricCheck, "id" | "created_at"> = {
-          name: checkData.name,
-          description: checkData.description,
-          ordinal: checkData.ordinal,
-          data: checkData.data,
-          file: checkData.file,
-          artifact: checkData.artifact,
-          group: checkData.group,
-          is_annotation: checkData.is_annotation,
-          is_comment_required: checkData.is_comment_required,
-          max_annotations: checkData.max_annotations,
-          points: checkData.points,
-          is_required: checkData.is_required,
-          annotation_target: checkData.annotation_target,
-          class_id: assignmentDetails.class_id,
-          rubric_criteria_id: checkData.rubric_criteria_id,
-          student_visibility: checkData.student_visibility || "always",
-          assignment_id: assignmentDetails.id,
-          rubric_id: currentEffectiveRubricId,
-          kpi_category: checkData.kpi_category
-        };
-        const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
-        if (!createdCheck.data.id) throw new Error("Failed to create check");
-        checkData.id = createdCheck.data.id as number;
+      for (const round of Array.from(new Set(referencesUnsavedNotice))) {
+        toaster.warning({
+          title: "Reference target unsaved",
+          description: `Save '${round}' first to finalize the cross-round reference(s).`
+        });
       }
-      await Promise.all(
-        finalCheckChanges.toUpdate.map((check: HydratedRubricCheck) => {
-          const existingChk = checksToCompareAgainst.find((ch) => ch.id === check.id);
-          if (existingChk) return updateCheckIfChanged(check, existingChk);
-          return Promise.resolve();
-        })
-      );
+      for (const err of referenceErrors) {
+        toaster.warning({ title: "Reference not saved", description: err });
+      }
 
-      const finalSavedRubricState = JSON.parse(JSON.stringify(parsedRubricFromEditor));
-      setActiveRubric(finalSavedRubricState);
-      setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(finalSavedRubricState))); // Update state
-      setHasUnsavedChanges(false); // Saved, so no unsaved changes
+      // Build the JSON payload. Keys match `update_rubric_atomic`'s expectations
+      // (parts/criteria/checks rather than rubric_parts/rubric_criteria/rubric_checks).
+      const payload = {
+        id: rubricId,
+        class_id: assignmentDetails.class_id,
+        assignment_id: Number(assignment_id),
+        review_round: activeReviewRound,
+        name: parsedRubricFromEditor.name,
+        description: parsedRubricFromEditor.description,
+        is_private: parsedRubricFromEditor.is_private ?? false,
+        cap_score_to_assignment_points: parsedRubricFromEditor.cap_score_to_assignment_points ?? false,
+        parts: parsedRubricFromEditor.rubric_parts.map((part, partIdx) => ({
+          id: part.id,
+          name: part.name,
+          description: part.description,
+          ordinal: part.ordinal,
+          data: part.data,
+          is_individual_grading: part.is_individual_grading ?? false,
+          is_assign_to_student: part.is_assign_to_student ?? false,
+          criteria: part.rubric_criteria.map((crit, critIdx) => ({
+            id: crit.id,
+            name: crit.name,
+            description: crit.description,
+            ordinal: crit.ordinal,
+            data: crit.data,
+            is_additive: crit.is_additive ?? false,
+            is_deduction_only: crit.is_deduction_only ?? false,
+            total_points: crit.total_points ?? 0,
+            max_checks_per_submission: crit.max_checks_per_submission,
+            min_checks_per_submission: crit.min_checks_per_submission,
+            checks: crit.rubric_checks.map((check, checkIdx) => ({
+              id: check.id,
+              name: check.name,
+              description: check.description,
+              ordinal: check.ordinal,
+              data: check.data,
+              file: check.file,
+              artifact: check.artifact,
+              group: check.group,
+              is_annotation: check.is_annotation,
+              is_comment_required: check.is_comment_required,
+              is_required: check.is_required,
+              max_annotations: check.max_annotations,
+              points: check.points,
+              annotation_target: check.annotation_target,
+              student_visibility: check.student_visibility ?? "always",
+              kpi_category: check.kpi_category,
+              references: refsByPath.get(pathKey(partIdx, critIdx, checkIdx)) ?? []
+            }))
+          }))
+        }))
+      };
+
+      const supabase = createClient();
+      const { data, error } = await supabase.rpc("update_rubric_full", {
+        p_rubric: payload as never
+      });
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setHasUnsavedChanges(false);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
-      // Clear any stashed state for this tab as it's now saved
       setStashedEditorStates((prev) => {
         const newState = { ...prev };
         if (activeReviewRound) delete newState[activeReviewRound];
         return newState;
       });
 
+      invalidate({ resource: "assignments", invalidates: ["all"] });
       await refetchCurrentRubric();
+
+      return typeof data === "string" ? data : "Saved rubric.";
     },
     [
       assignmentDetails,
       activeReviewRound,
       dataProviderHook,
-      createResource,
-      updateResource,
-      deleteResource,
       assignment_id,
-      updatePartIfChanged,
-      updateCriteriaIfChanged,
-      updateCheckIfChanged,
       refetchCurrentRubric,
-      createMinimalNewHydratedRubric,
-      initialActiveRubricSnapshot,
-      invalidate
+      invalidate,
+      allHydratedRubrics,
+      unsavedStatusPerTab
     ]
   );
 
@@ -1516,7 +1296,7 @@ function InnerRubricPage() {
   }
 
   return (
-    <Flex ref={setRubricPageRootElement} w="100%" minW="0" direction="column">
+    <Flex ref={setRubricPageRootElement} w="100%" minW="0" direction="column" role="region" aria-label="Rubric Editor">
       <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
         <Toaster />
         <VStack align="start">
@@ -1542,6 +1322,7 @@ function InnerRubricPage() {
                   activeReviewRound
                 );
                 setActiveRubric(demoTemplate);
+                setGuiEditorEpoch((e) => e + 1);
                 setValue(YAML.stringify(HydratedRubricToYamlRubric(demoTemplate)));
                 setStashedEditorStates((prev) => {
                   const newState = { ...prev };
@@ -1560,113 +1341,167 @@ function InnerRubricPage() {
           </Button>
         </VStack>
       </HStack>
-      <Tabs.Root
-        value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
-        onValueChange={(details) => {
-          if (details.value) {
-            handleReviewRoundChange(details.value as NonNullable<HydratedRubric["review_round"]>);
-          }
-        }}
-        lazyMount
-        unmountOnExit
+      <HStack
+        role="tablist"
+        aria-label="Review round"
+        gap={0}
+        borderBottom="1px solid"
+        borderColor="border.subtle"
         mb={0}
+        align="flex-end"
       >
-        <Tabs.List>
-          {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
-            <Tabs.Trigger key={rr || "undefined_round"} value={rr || "undefined_round_val"}>
-              {" "}
-              {rr
-                ? rr
-                    .split("-")
-                    .map((w) => w[0].toUpperCase() + w.slice(1))
-                    .join(" ")
-                : "Select Round"}
-              {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
-            </Tabs.Trigger>
-          ))}
-        </Tabs.List>
-      </Tabs.Root>
+        {REVIEW_ROUNDS_AVAILABLE.map((rr) => {
+          if (!rr) return null;
+          const isActive = activeReviewRound === rr;
+          const label = rr
+            .split("-")
+            .map((w) => w[0].toUpperCase() + w.slice(1))
+            .join(" ");
+          // Plain <button> with role="tab" + manual onClick. We previously used Chakra's
+          // Tabs.Root, but the underlying race wasn't Zag at all: the dirty-tab marker
+          // "* (Unsaved Changes)" is appended to whichever tab is dirty, and that text
+          // widens that tab between mousedown and mouseup of an adjacent-tab click. The
+          // cursor then sits over a different tab at mouseup, so the browser doesn't
+          // generate a click event. Owning the tab activation here and reserving the
+          // dirty marker's width below (visibility: hidden when clean) keeps the layout
+          // stable across the click sequence.
+          return (
+            <Button
+              key={rr}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              onClick={() => handleReviewRoundChange(rr)}
+              variant="ghost"
+              size="sm"
+              borderRadius={0}
+              fontWeight={isActive ? "semibold" : "normal"}
+              color={isActive ? "fg" : "fg.muted"}
+              borderBottom="2px solid"
+              borderColor={isActive ? "border.emphasized" : "transparent"}
+              mb="-1px"
+              _hover={{ color: "fg" }}
+            >
+              {label}
+              <Box
+                as="span"
+                ml={1}
+                visibility={unsavedStatusPerTab[rr] ? "visible" : "hidden"}
+                aria-hidden={!unsavedStatusPerTab[rr]}
+              >
+                * (Unsaved Changes)
+              </Box>
+            </Button>
+          );
+        })}
+      </HStack>
       <VStack w="100%" h="100%" border="1px solid" borderColor={"border.subtle"}>
-        <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="end">
-          <Button
-            variant="ghost"
-            colorPalette="red"
-            size="xs"
-            onClick={() => {
-              if (initialActiveRubricSnapshot) {
-                setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
-                setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
-                toaster.create({
-                  title: "Reset",
-                  description: "Editor reset to last saved state for this tab.",
-                  type: "info"
-                });
-              } else {
-                if (assignmentDetails && activeReviewRound) {
-                  const minimal = createMinimalNewHydratedRubric(
-                    assignment_id as string,
-                    assignmentDetails.class_id,
-                    activeReviewRound
-                  );
-                  setActiveRubric(minimal);
-                  setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
-                  setValue("");
-                } else {
-                  setActiveRubric(undefined);
-                  setInitialActiveRubricSnapshot(undefined);
-                  setValue("");
-                }
-                toaster.create({
-                  title: "Reset",
-                  description: "Editor reset to an empty state for this tab.",
-                  type: "info"
-                });
-              }
-              setHasUnsavedChanges(false);
-              if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
-              setStashedEditorStates((prev) => {
-                const newState = { ...prev };
-                if (activeReviewRound) delete newState[activeReviewRound];
-                return newState;
-              });
-            }}
-          >
-            Reset
-          </Button>
-          <Button
-            colorPalette="green"
-            loadingText="Saving..."
-            loading={isSaving}
-            disabled={isSaving || !hasUnsavedChanges}
-            onClick={async () => {
-              try {
-                setIsSaving(true);
-                await saveRubric(value);
-                toaster.success({
-                  title: "Rubric Saved",
-                  description: "The rubric has been saved successfully."
-                });
-              } catch (error) {
-                Sentry.captureException(error);
-                console.error(error);
-                if (error instanceof Error) {
-                  toaster.error({
-                    title: "Failed to save rubric",
-                    description: `An unexpected error occurred: ${error.message}`
+        <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="space-between" px={2}>
+          <HStack gap={1}>
+            <Button
+              size="xs"
+              variant={viewMode === "gui" ? "solid" : "ghost"}
+              onClick={() => handleViewModeChange("gui")}
+            >
+              GUI
+            </Button>
+            <Button
+              size="xs"
+              variant={viewMode === "source" ? "solid" : "ghost"}
+              onClick={() => handleViewModeChange("source")}
+            >
+              YAML source
+            </Button>
+          </HStack>
+          <HStack>
+            <Button
+              variant="ghost"
+              colorPalette="red"
+              size="xs"
+              onClick={() => {
+                if (initialActiveRubricSnapshot) {
+                  setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
+                  setGuiEditorEpoch((e) => e + 1);
+                  setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
+                  toaster.create({
+                    title: "Reset",
+                    description: "Editor reset to last saved state for this tab.",
+                    type: "info"
                   });
                 } else {
-                  toaster.error({
-                    title: "Failed to save rubric",
-                    description: "An unknown error occurred during the save process."
+                  if (assignmentDetails && activeReviewRound) {
+                    const minimal = createMinimalNewHydratedRubric(
+                      assignment_id as string,
+                      assignmentDetails.class_id,
+                      activeReviewRound
+                    );
+                    setActiveRubric(minimal);
+                    setGuiEditorEpoch((e) => e + 1);
+                    setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
+                    setValue("");
+                  } else {
+                    setActiveRubric(undefined);
+                    setGuiEditorEpoch((e) => e + 1);
+                    setInitialActiveRubricSnapshot(undefined);
+                    setValue("");
+                  }
+                  toaster.create({
+                    title: "Reset",
+                    description: "Editor reset to an empty state for this tab.",
+                    type: "info"
                   });
                 }
-              } finally {
-                setIsSaving(false);
-              }
-            }}
-          >
-            Save
-          </Button>
+                setHasUnsavedChanges(false);
+                if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+                setStashedEditorStates((prev) => {
+                  const newState = { ...prev };
+                  if (activeReviewRound) delete newState[activeReviewRound];
+                  return newState;
+                });
+              }}
+            >
+              Reset
+            </Button>
+            <Button
+              colorPalette="green"
+              loadingText="Saving..."
+              loading={isSaving}
+              disabled={isSaving || !hasUnsavedChanges}
+              onClick={async () => {
+                try {
+                  setIsSaving(true);
+                  const yamlToSave = viewMode === "gui" ? flushPendingGuiSync() : value;
+                  const summary = await saveRubric(yamlToSave);
+                  // Long-lived toast so the instructor has time to read what
+                  // changed (including how many submission reviews were
+                  // recomputed). The closable meta flag adds an X button so
+                  // they can dismiss before the timer expires.
+                  toaster.success({
+                    title: "Rubric Saved",
+                    description: summary,
+                    duration: 15000,
+                    meta: { closable: true }
+                  });
+                } catch (error) {
+                  Sentry.captureException(error);
+                  console.error(error);
+                  toaster.error({
+                    title: "Failed to save rubric",
+                    description:
+                      error instanceof Error
+                        ? `An unexpected error occurred: ${error.message}`
+                        : "An unknown error occurred during the save process.",
+                    duration: 15000,
+                    meta: { closable: true }
+                  });
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+            >
+              Save
+            </Button>
+          </HStack>
         </HStack>
         <Flex w="100%" minW="0" flexGrow={1}>
           <Box w="100%" minW="0">
@@ -1676,8 +1511,39 @@ function InnerRubricPage() {
                   <Spinner size="xl" />
                 </Center>
               )}
+              {viewMode === "gui" && activeRubric && (
+                <Box w="100%" h="calc(100vh - 150px)" overflowY="auto" role="region" aria-label="Rubric GUI">
+                  <RubricGuiEditor
+                    key={`${activeReviewRound}-${activeRubric.id}-${guiEditorEpoch}`}
+                    ref={guiEditorRef}
+                    rubric={activeRubric}
+                    onCommit={handleGuiCommit}
+                    onDraftActivity={handleGuiDraftActivity}
+                    assignmentMaxPoints={assignmentMaxPoints}
+                    autograderPoints={autograderPoints}
+                    referenceContext={guiReferenceContext}
+                  />
+                </Box>
+              )}
+              {viewMode === "gui" && !activeRubric && (
+                <Center h="calc(100vh - 150px)" w="100%">
+                  <VStack>
+                    <Text>No rubric configured for this review round.</Text>
+                    <Text fontSize="sm" color="fg.muted">
+                      Load a demo template or switch to YAML to paste one in.
+                    </Text>
+                  </VStack>
+                </Center>
+              )}
               {/* keep the editor mounted at all times when it is doing work, otherwise there will be a runtime error */}
-              <Box position="relative" w="100%" h="calc(100vh - 150px)">
+              <Box
+                position="relative"
+                w="100%"
+                h="calc(100vh - 150px)"
+                display={viewMode === "source" ? "block" : "none"}
+                role="region"
+                aria-label="Rubric YAML Source"
+              >
                 <Editor
                   height="calc(100vh - 150px)"
                   width="100%"
@@ -1739,7 +1605,22 @@ function InnerRubricPage() {
             </VStack>
           </Box>
           <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
-            {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
+            {updatePaused && (
+              <Alert variant="surface" position="sticky" top={0} zIndex={2}>
+                Preview paused while typing
+              </Alert>
+            )}
+            {pointsWarnings.length > 0 && viewMode === "source" && (
+              <Alert status="warning" variant="surface" title="Points adjusted" mt={2}>
+                <VStack gap={1} align="stretch">
+                  {pointsWarnings.map((w) => (
+                    <Text key={w.path} fontSize="sm">
+                      {w.message}
+                    </Text>
+                  ))}
+                </VStack>
+              </Alert>
+            )}
 
             {/* Points summary for autograder vs grading rubric vs assignment total */}
             {rubric?.review_round === "grading-review" && (
@@ -1752,7 +1633,9 @@ function InnerRubricPage() {
                 mb={4}
                 p={3}
                 borderRadius="md"
-                bg={addsUp ? "bg.info" : "bg.warning"}
+                bg={
+                  gradingRubricBreakdown?.assignToStudentUnbalanced ? "bg.warning" : addsUp ? "bg.info" : "bg.warning"
+                }
               >
                 <Heading size="sm" mb={1}>
                   Grading Rubric Points Summary
@@ -1760,8 +1643,29 @@ function InnerRubricPage() {
                 <Text fontSize="sm" color="fg.muted">
                   The assignment&apos;s max points is set to {assignmentMaxPoints}, and the autograder is currently
                   configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
-                  {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
+                  {gradingRubricPoints} points per student. {addsUp && <Icon as={FaCheck} color="fg.success" />}
                 </Text>
+                {gradingRubricBreakdown &&
+                  (gradingRubricBreakdown.individual > 0 || gradingRubricBreakdown.assignToStudentParts.length > 0) && (
+                    <Text fontSize="xs" mt={1} color="fg.muted">
+                      Per-student total breakdown: {gradingRubricBreakdown.standard} from shared parts
+                      {gradingRubricBreakdown.individual > 0 &&
+                        ` + ${gradingRubricBreakdown.individual} from individual-grading parts (each student earns independently)`}
+                      {gradingRubricBreakdown.assignToStudentParts.length > 0 &&
+                        ` + up to ${gradingRubricBreakdown.assignToStudentPerStudent} from assign-to-student parts (assuming each student is assigned at most one of the ${gradingRubricBreakdown.assignToStudentParts.length} such part${gradingRubricBreakdown.assignToStudentParts.length === 1 ? "" : "s"}, ${gradingRubricBreakdown.assignToStudentTotal} points total distributed across the group)`}
+                      .
+                    </Text>
+                  )}
+                {gradingRubricBreakdown?.assignToStudentUnbalanced && (
+                  <Alert status="warning" variant="surface" mt={2} title="Assign-to-student parts are unbalanced">
+                    <Text fontSize="sm">
+                      Multiple <code>is_assign_to_student</code> parts have different point totals, so students will
+                      have different maxes depending on which part they receive (
+                      {gradingRubricBreakdown.assignToStudentParts.map((p) => `${p.name}: ${p.max}`).join(", ")}
+                      ). Rebalance them so every student is graded against the same max.
+                    </Text>
+                  </Alert>
+                )}
                 {isCapped && (
                   <Text fontSize="sm" mt={1} color="fg.muted">
                     Score capping is enabled. Manual grading can be used as a fallback when autograder fails, with the
@@ -1919,8 +1823,8 @@ parts:
             max_annotations: 1
             points: 5
             student_visibility: always
-      - description: This is additive scoring with multiple checks. Each check has
-          multiple options. Graders must select one option for each check.
+      - description: This is award-per-check scoring with multiple checks. Each check
+          has multiple options. Graders must select one option for each check.
         is_additive: true
         name: Test case quality
         total_points: 10
@@ -2056,12 +1960,12 @@ parts:
             is_comment_required: true
             points: 2
             student_visibility: if_applied
-      - description: This is an example of deduction-only scoring. Students start at 0 points
+      - description: This is an example of penalty-only scoring. Students start at 0 points
           and can only lose points (down to -total_points). No positive points are ever
-          awarded. This is useful for penalty-only grading schemes.
+          awarded. This is useful for pure-penalty grading schemes.
         is_additive: false
         is_deduction_only: true
-        name: Deduction-only penalties
+        name: Penalty-only deductions
         total_points: 20
         checks:
           - name: Late submission

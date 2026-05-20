@@ -2425,6 +2425,10 @@ export type Database = {
           class_id: number;
           created_at: string;
           draft: boolean;
+          duplicate_marked_at: string | null;
+          duplicate_marked_by_display_name: string | null;
+          duplicate_marked_by_user_id: string | null;
+          duplicate_original_subject: string | null;
           edited_at: string | null;
           id: number;
           instructors_only: boolean;
@@ -2438,10 +2442,6 @@ export type Database = {
           subject: string;
           topic_id: number;
           updated_at: string;
-          duplicate_marked_at: string | null;
-          duplicate_marked_by_display_name: string | null;
-          duplicate_marked_by_user_id: string | null;
-          duplicate_original_subject: string | null;
         };
         Insert: {
           answer?: number | null;
@@ -2451,6 +2451,10 @@ export type Database = {
           class_id: number;
           created_at?: string;
           draft?: boolean;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
           edited_at?: string | null;
           id?: number;
           instructors_only?: boolean;
@@ -2464,10 +2468,6 @@ export type Database = {
           subject: string;
           topic_id: number;
           updated_at?: string;
-          duplicate_marked_at?: string | null;
-          duplicate_marked_by_display_name?: string | null;
-          duplicate_marked_by_user_id?: string | null;
-          duplicate_original_subject?: string | null;
         };
         Update: {
           answer?: number | null;
@@ -2477,6 +2477,10 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           draft?: boolean;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
           edited_at?: string | null;
           id?: number;
           instructors_only?: boolean;
@@ -2490,10 +2494,6 @@ export type Database = {
           subject?: string;
           topic_id?: number;
           updated_at?: string;
-          duplicate_marked_at?: string | null;
-          duplicate_marked_by_display_name?: string | null;
-          duplicate_marked_by_user_id?: string | null;
-          duplicate_original_subject?: string | null;
         };
         Relationships: [
           {
@@ -11669,7 +11669,6 @@ export type Database = {
           metric_value: number;
         }[];
       };
-      dual_active_invariants_version: { Args: never; Returns: number };
       deactivate_expired_polls: { Args: never; Returns: undefined };
       delete_assignment_with_all_data: {
         Args: { p_assignment_id: number; p_class_id: number };
@@ -11690,6 +11689,7 @@ export type Database = {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
+      dual_active_invariants_version: { Args: never; Returns: number };
       enqueue_autograder_reruns: {
         Args: {
           p_auto_promote?: boolean;
@@ -12345,6 +12345,10 @@ export type Database = {
         Args: { p_guild_id: string; p_user_id: string };
         Returns: undefined;
       };
+      mark_discussion_thread_duplicate: {
+        Args: { p_duplicate_root_id: number; p_original_root_id: number };
+        Returns: undefined;
+      };
       merge_class_feature: {
         Args: { p_class_id: number; p_enabled: boolean; p_name: string };
         Returns: undefined;
@@ -12516,10 +12520,6 @@ export type Database = {
         Args: { p_user_id: string };
         Returns: boolean;
       };
-      mark_discussion_thread_duplicate: {
-        Args: { p_duplicate_root_id: number; p_original_root_id: number };
-        Returns: undefined;
-      };
       set_discussion_thread_topic: {
         Args: { p_thread_id: number; p_topic_id: number };
         Returns: undefined;
@@ -12672,6 +12672,7 @@ export type Database = {
         };
         Returns: boolean;
       };
+      update_rubric_full: { Args: { p_rubric: Json }; Returns: string };
       update_sis_sync_status: {
         Args: {
           p_course_id: number;
