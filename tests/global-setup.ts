@@ -221,23 +221,33 @@ const VISUAL_TEST_CSS = `
 
 // Function to inject visual test setup
 const injectVisualTestSetup = async (page: Page) => {
-  await page.evaluate((visualTestCss) => {
-    // Set the data-visual-tests attribute on the html element
-    if (document.documentElement) {
-      document.documentElement.setAttribute("data-visual-tests", "");
-    }
-
-    // Check if our style is already injected to avoid duplicates
-    if (!document.getElementById("visual-test-style")) {
-      // Create and inject CSS that removes all border-radius
-      const style = document.createElement("style");
-      style.id = "visual-test-style";
-      style.textContent = visualTestCss;
-      if (document.head) {
-        document.head.appendChild(style);
+  // Best-effort: this fires from a `domcontentloaded` handler, so an in-flight
+  // client-side navigation can destroy the execution context mid-evaluate
+  // ("Execution context was destroyed, most likely because of a navigation").
+  // The next domcontentloaded re-injects, and addInitScript covers fresh loads,
+  // so a single lost injection is harmless — swallow it rather than letting it
+  // surface as a spurious test failure on whatever step happened to be running.
+  await page
+    .evaluate((visualTestCss) => {
+      // Set the data-visual-tests attribute on the html element
+      if (document.documentElement) {
+        document.documentElement.setAttribute("data-visual-tests", "");
       }
-    }
-  }, VISUAL_TEST_CSS);
+
+      // Check if our style is already injected to avoid duplicates
+      if (!document.getElementById("visual-test-style")) {
+        // Create and inject CSS that removes all border-radius
+        const style = document.createElement("style");
+        style.id = "visual-test-style";
+        style.textContent = visualTestCss;
+        if (document.head) {
+          document.head.appendChild(style);
+        }
+      }
+    }, VISUAL_TEST_CSS)
+    .catch(() => {
+      /* navigation destroyed the context — the next domcontentloaded re-injects */
+    });
 };
 
 type E2EFixtures = {

@@ -191,6 +191,10 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
   });
 
   test("Instructors can grade the submission with pseudonymous mode enabled", async ({ page }) => {
+    // Login + submission nav + file render + two grading-check flows + screenshots.
+    // Under CI contention this can exceed the 60s default (notably the file content
+    // taking longer to render before the right-click below), so allow headroom.
+    test.slow();
     await loginAsUser(page, instructor!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
@@ -202,7 +206,12 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
       el.scrollIntoView({ block: "start", behavior: "instant" });
     });
 
-    await page.getByText("public static void main(").click({
+    // Wait for the submission's source to render before right-clicking it — under load
+    // the file view can lag, and clicking a not-yet-rendered line otherwise burns the
+    // whole-test budget on the click's actionability wait.
+    const codeLine = page.getByText("public static void main(");
+    await expect(codeLine).toBeVisible({ timeout: 30_000 });
+    await codeLine.click({
       button: "right"
     });
     await page.getByRole("option", { name: "Grading Review Check 1 (+10)" }).click();
