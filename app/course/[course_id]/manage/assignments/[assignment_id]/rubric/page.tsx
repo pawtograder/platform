@@ -5,6 +5,7 @@ import { PreviewRubricProvider } from "@/components/ui/preview-rubric-provider";
 import { RubricSidebar } from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import {
+  AssignmentController,
   useAssignmentController,
   useRubric,
   useRubricChecksByRubric,
@@ -22,7 +23,7 @@ import {
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Center, Flex, Heading, HStack, Icon, Link, List, Spinner, Text, VStack } from "@chakra-ui/react";
-import { useDataProvider, useInvalidate } from "@refinedev/core";
+import { useInvalidate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -65,6 +66,66 @@ const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>
 
 const VIEW_MODE_STORAGE_KEY = "pawtograder:rubric-editor:viewMode";
 
+function hydrateRubricTree(
+  rubric: Omit<HydratedRubric, "rubric_parts">,
+  parts: HydratedRubricPart[],
+  allCriteria: HydratedRubricCriteria[],
+  allChecks: HydratedRubricCheck[],
+  allReferences?: RubricCheckReference[]
+): HydratedRubric {
+  const ownParts = parts.filter((p) => p.rubric_id === rubric.id);
+  const hydratedParts: HydratedRubricPart[] = ownParts.map((part) => {
+    const partCriteria = allCriteria.filter((c) => c.rubric_part_id === part.id);
+    const hydratedCriteria: HydratedRubricCriteria[] = partCriteria.map((criteria) => {
+      const criteriaChecks = allChecks.filter((ch) => ch.rubric_criteria_id === criteria.id);
+      const hydratedChecks: HydratedRubricCheck[] = criteriaChecks.map((check) => {
+        const refs = (allReferences ?? [])
+          .filter((r) => r.referencing_rubric_check_id === check.id)
+          .map((r) => ({ id: r.id, referenced_rubric_check_id: r.referenced_rubric_check_id }));
+        return {
+          ...check,
+          references: refs
+        };
+      });
+      return {
+        ...criteria,
+        rubric_checks: hydratedChecks
+      };
+    });
+    return {
+      ...part,
+      rubric_criteria: hydratedCriteria
+    };
+  });
+  return {
+    ...rubric,
+    rubric_parts: hydratedParts
+  };
+}
+
+function hydrateAllRubricsFromController(controller: AssignmentController): HydratedRubric[] {
+  const rubrics = controller.rubricsController.rows;
+  const parts = controller.rubricPartsController.rows as HydratedRubricPart[];
+  const criteria = controller.rubricCriteriaController.rows as HydratedRubricCriteria[];
+  const checks = controller.rubricChecksController.rows as HydratedRubricCheck[];
+  return rubrics.map((r) => hydrateRubricTree(r as Omit<HydratedRubric, "rubric_parts">, parts, criteria, checks));
+}
+
+function hydrateRubricForReviewRoundFromController(
+  controller: AssignmentController,
+  reviewRound: NonNullable<HydratedRubric["review_round"]>
+): HydratedRubric | undefined {
+  const rubric = controller.rubricsController.rows.find((r) => r.review_round === reviewRound);
+  if (!rubric || rubric.review_round !== reviewRound) return undefined;
+  return hydrateRubricTree(
+    rubric as Omit<HydratedRubric, "rubric_parts">,
+    controller.rubricPartsController.rows as HydratedRubricPart[],
+    controller.rubricCriteriaController.rows as HydratedRubricCriteria[],
+    controller.rubricChecksController.rows as HydratedRubricCheck[],
+    controller.rubricCheckReferencesController.rows
+  );
+}
+
 /**
  * Custom hook to get a fully hydrated rubric by review round
  */
@@ -98,39 +159,13 @@ function useHydratedRubricByReviewRound(
     //   1. Bail if rubric.review_round doesn't match the requested round.
     //   2. Drop any parts (and their criteria/checks) whose rubric_id doesn't match.
     if (rubric.review_round !== review_round) return undefined;
-    const ownParts = parts.filter((p) => p.rubric_id === rubric.id);
-
-    // Build the hydrated structure
-    const hydratedParts: HydratedRubricPart[] = ownParts.map((part) => {
-      const partCriteria = allCriteria.filter((c) => c.rubric_part_id === part.id);
-      const hydratedCriteria: HydratedRubricCriteria[] = partCriteria.map((criteria) => {
-        const criteriaChecks = allChecks.filter((ch) => ch.rubric_criteria_id === criteria.id);
-        const hydratedChecks: HydratedRubricCheck[] = criteriaChecks.map((check) => {
-          const refs = (allReferences ?? [])
-            .filter((r) => r.referencing_rubric_check_id === check.id)
-            .map((r) => ({ id: r.id, referenced_rubric_check_id: r.referenced_rubric_check_id }));
-          return {
-            ...check,
-            references: refs
-          };
-        });
-
-        return {
-          ...criteria,
-          rubric_checks: hydratedChecks
-        };
-      });
-
-      return {
-        ...part,
-        rubric_criteria: hydratedCriteria
-      };
-    });
-
-    return {
-      ...rubric,
-      rubric_parts: hydratedParts
-    };
+    return hydrateRubricTree(
+      rubric as Omit<HydratedRubric, "rubric_parts">,
+      parts as HydratedRubricPart[],
+      allCriteria as HydratedRubricCriteria[],
+      allChecks as HydratedRubricCheck[],
+      allReferences ?? undefined
+    );
     // review_round is in deps so the guard re-runs even when the inner list-controller
     // hooks return their stale-references on a tab switch — without it useMemo would
     // hand back the previously hydrated (wrong-round) tree.
@@ -159,23 +194,8 @@ function useAllHydratedRubrics(): HydratedRubric[] {
   );
   return useMemo(() => {
     if (!rubrics) return [];
-    return rubrics.map((r) => {
-      const rParts = (parts ?? [])
-        .filter((p) => p.rubric_id === r.id)
-        .map((part) => {
-          const rCrits = (criteria ?? [])
-            .filter((c) => c.rubric_part_id === part.id)
-            .map((crit) => {
-              const rChecks = (checks ?? [])
-                .filter((ch) => ch.rubric_criteria_id === crit.id)
-                .map((ch) => ({ ...ch }) as HydratedRubricCheck);
-              return { ...crit, rubric_checks: rChecks } as HydratedRubricCriteria;
-            });
-          return { ...part, rubric_criteria: rCrits } as HydratedRubricPart;
-        });
-      return { ...r, rubric_parts: rParts } as HydratedRubric;
-    });
-  }, [rubrics, parts, criteria, checks]);
+    return hydrateAllRubricsFromController(controller);
+  }, [controller, rubrics, parts, criteria, checks]);
 }
 /**
  * Renders the main rubric editing page for managing and editing handgrading rubrics.
@@ -233,7 +253,6 @@ function InnerRubricPage() {
   const assignmentController = useAssignmentController();
   const assignment_id = String(assignmentController.assignment?.id || "");
   const { colorMode } = useColorMode();
-  const dataProviderHook = useDataProvider();
 
   const invalidate = useInvalidate();
 
@@ -435,10 +454,33 @@ function InnerRubricPage() {
     setIsLoadingCurrentRubric(false);
   }, [rubric]);
 
-  const refetchCurrentRubric = useCallback(() => {
+  const refetchCurrentRubric = useCallback(async () => {
+    await Promise.all([
+      assignmentController.rubricsController.refetchAll(),
+      assignmentController.rubricPartsController.refetchAll(),
+      assignmentController.rubricCriteriaController.refetchAll(),
+      assignmentController.rubricChecksController.refetchAll(),
+      assignmentController.rubricCheckReferencesController.refetchAll()
+    ]);
     invalidate({ resource: "rubrics", invalidates: ["all"] });
     invalidate({ resource: "rubric_check_references", invalidates: ["all"] });
-  }, [invalidate]);
+  }, [assignmentController, invalidate]);
+
+  const syncEditorFromSavedRubric = useCallback(
+    (freshRubric: HydratedRubric) => {
+      const snapshot = JSON.parse(JSON.stringify(freshRubric)) as HydratedRubric;
+      skipActiveRubricYamlSyncRef.current = true;
+      setActiveRubric(snapshot);
+      setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(snapshot)));
+      setRubricForSidebar(snapshot);
+      const allFreshRubrics = hydrateAllRubricsFromController(assignmentController);
+      setValue(YAML.stringify(HydratedRubricToYamlRubric(snapshot, { allRubrics: allFreshRubrics })));
+      setPointsWarnings([]);
+      setUpdatePaused(false);
+      setGuiEditorEpoch((e) => e + 1);
+    },
+    [assignmentController]
+  );
 
   const createMinimalNewHydratedRubric = useCallback(
     (
@@ -1071,37 +1113,10 @@ function InnerRubricPage() {
         throw new Error(`Invalid YAML: ${(e as Error).message}`);
       }
 
-      // Assign unique negative ids to every new check (id<=0). The RPC keys its
-      // input->real id map by the incoming id, so duplicate -1s would collapse
-      // and re-attach references from one new check to another.
-      {
-        let nextNewCheckId = -1;
-        for (const part of parsedRubricFromEditor.rubric_parts) {
-          for (const crit of part.rubric_criteria) {
-            for (const check of crit.rubric_checks) {
-              if (check.id <= 0) {
-                check.id = nextNewCheckId--;
-              }
-            }
-          }
-        }
-      }
-
       // Identify the existing rubric (if any) for this review round; the RPC
       // distinguishes update-vs-create from the `id` field in the payload.
-      const { getList } = dataProviderHook();
-      const { data: existingRubricQuery } = await getList<HydratedRubric>({
-        resource: "rubrics",
-        filters: [
-          { field: "assignment_id", operator: "eq", value: Number(assignment_id) },
-          { field: "review_round", operator: "eq", value: activeReviewRound }
-        ],
-        pagination: { current: 1, pageSize: 1 }
-      });
-
-      const dbRubricForThisRound =
-        existingRubricQuery && existingRubricQuery.length > 0 ? existingRubricQuery[0] : undefined;
-      const rubricId = dbRubricForThisRound && dbRubricForThisRound.id > 0 ? dbRubricForThisRound.id : 0;
+      const existingRubricForRound = allHydratedRubrics.find((r) => r.review_round === activeReviewRound && r.id > 0);
+      const rubricId = existingRubricForRound?.id ?? 0;
 
       // Resolve cross-rubric YAML references against the live set of sibling
       // rubrics. We pass the resolved (referencing, referenced) pairs in the
@@ -1269,14 +1284,20 @@ function InnerRubricPage() {
       invalidate({ resource: "assignments", invalidates: ["all"] });
       await refetchCurrentRubric();
 
+      const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, activeReviewRound);
+      if (freshRubric) {
+        syncEditorFromSavedRubric(freshRubric);
+      }
+
       return typeof data === "string" ? data : "Saved rubric.";
     },
     [
       assignmentDetails,
       activeReviewRound,
-      dataProviderHook,
       assignment_id,
+      assignmentController,
       refetchCurrentRubric,
+      syncEditorFromSavedRubric,
       invalidate,
       allHydratedRubrics,
       unsavedStatusPerTab
