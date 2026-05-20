@@ -446,14 +446,20 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // Popover content is portalled (not under the rubric check region); scope to the resolve dialog.
     const resolveRegradePopover = page.getByRole("dialog").filter({ hasText: "Grade Adjustment:" });
     await expect(resolveRegradePopover).toBeVisible();
-    // Wait for the resolve button to render inside the popover — previously the
-    // screenshot raced its appearance, producing an 11k-px visual diff. The
-    // button's accessible name is "Resolve regrade request" (aria-label), but the
-    // visible label is "Resolve with No Change" before any grade adjustment.
-    // Can't use stabilizeRubric here because the open popover marks the rubric
-    // sidebar aria-hidden.
+    // Wait for the resolve button to render — previously the screenshot raced
+    // its appearance, producing an 11k-px diff. (Button's accessible name is
+    // "Resolve regrade request" via aria-label; visible text is "Resolve with
+    // No Change" before any grade adjustment.)
     await expect(resolveRegradePopover.getByText("Resolve with No Change")).toBeVisible();
-    await visualScreenshot(page, "Instructors can resolve the regrade request");
+    // Capture only the rubric check region rather than the whole page. The
+    // popover panel itself paints with sub-pixel-shifted height between runs
+    // (a Chakra Popover layout race we can't otherwise pin), but the value of
+    // this visual test is the rubric region's "Regrade Pending" state — the
+    // popover open/close interaction is already covered by the click + assert
+    // calls around it.
+    await visualScreenshot(page, "Instructors can resolve the regrade request", {
+      element: page.getByLabel("Grading checks on line 4")
+    });
     await resolveRegradePopover.getByRole("textbox", { name: /Grade adjustment/i }).fill(REGRADE_RESOLVE_ADJUSTMENT);
     await expect(resolveRegradePopover).toContainText(
       new RegExp(`New points awarded:\\s*${REGRADE_RESOLVE_EXPECTED_POINTS.replace(".", "\\.")}`)
