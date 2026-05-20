@@ -1320,12 +1320,14 @@ export default class TableController<
           // Optimization opportunity: we should fix it so that no subscriber depends on this behavior
           this._rows = newRows;
           this._rebuildRowsById();
+          this._rebuildIndexesAndNotifyListeners();
           this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
         }
       } else {
         // Membership changed: replace rows and notify list + item listeners accordingly
         this._rows = newRows;
         this._rebuildRowsById();
+        this._rebuildIndexesAndNotifyListeners();
 
         // Notify list listeners
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
@@ -1807,6 +1809,10 @@ export default class TableController<
           __db_pending: false
         }));
         this._rebuildRowsById();
+        // Bring any indexes built before the initial fetch resolved in sync,
+        // and notify subscribers (e.g. `useIndexedTableControllerValue`) that
+        // were registered against the previously-empty controller.
+        this._rebuildIndexesAndNotifyListeners();
 
         // Initialize watermark
         for (const r of this._rows) {
@@ -2804,6 +2810,46 @@ export default class TableController<
     for (const row of this._rows) {
       if ("id" in (row as object)) {
         this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
+      }
+    }
+  }
+
+  /**
+   * After a wholesale `_rows` reassignment (initial fetch, full refetch),
+   * rebuild every existing index's forward map from the new `_rows` and
+   * re-notify every registered indexed listener with its fresh value.
+   *
+   * Per-row mutations go through `_notifyIndexedListeners`, which keeps the
+   * forward map and listeners in sync incrementally. Bulk reassignments
+   * bypass that path, so a subscriber that registered against an empty
+   * controller (e.g. `useIndexedTableControllerValue` mounted before the
+   * initial fetch resolves) would otherwise never receive an update.
+   */
+  private _rebuildIndexesAndNotifyListeners() {
+    if (this._indexes.size === 0) return;
+    for (const [field, entry] of this._indexes) {
+      entry.rowIdsByValue.clear();
+      for (const row of this._rows) {
+        const value = (row as unknown as Record<string, unknown>)[field];
+        if (value === undefined || value === null) continue;
+        const id = (row as ResultOne & { id: IDType }).id;
+        let rowIds = entry.rowIdsByValue.get(value);
+        if (!rowIds) {
+          rowIds = new Set();
+          entry.rowIdsByValue.set(value, rowIds);
+        }
+        rowIds.add(id);
+      }
+      for (const [value, listeners] of entry.singleListenersByValue) {
+        if (listeners.size === 0) continue;
+        const matched = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+        const single = matched.length > 0 ? matched[0] : undefined;
+        for (const l of listeners) l(single);
+      }
+      for (const [value, listeners] of entry.listListenersByValue) {
+        if (listeners.size === 0) continue;
+        const matched = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+        for (const l of listeners) l(matched);
       }
     }
   }

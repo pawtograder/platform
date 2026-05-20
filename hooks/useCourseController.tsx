@@ -602,42 +602,31 @@ export class CourseController {
   get userId() {
     return this._userId;
   }
+
+  /** Move one SSR-hydration slice out of `_initialData` so TableController owns it. */
+  private _takeInitialDataSlice<K extends keyof CourseControllerInitialData>(key: K): CourseControllerInitialData[K] {
+    const data = this._initialData;
+    if (!data) {
+      return undefined;
+    }
+    const slice = data[key];
+    if (slice !== undefined) {
+      (data as Partial<CourseControllerInitialData>)[key] = undefined;
+    }
+    return slice;
+  }
+
   /**
    * Initialize critical TableControllers immediately after construction
    * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
    */
   initializeEagerControllers() {
-    // Create profiles and userRolesWithProfiles immediately
-    // These are accessed frequently and should be ready
-    void this.profiles; // Triggers lazy creation
+    // Keep eager initialization minimal so large staff courses can stream quickly.
+    void this.profiles;
     if (this.canViewFullClassUserRoles) {
-      void this.userRolesWithProfiles; // Triggers lazy creation
+      void this.userRolesWithProfiles;
     }
-    // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
-    void this.assignmentDueDateExceptions; // Triggers lazy creation
-    void this.studentDeadlineExtensions; // Triggers lazy creation
-    void this.assignments; // Triggers lazy creation
-    void this.assignmentGroupsWithMembers; // Triggers lazy creation
-    void this.notifications; // Triggers lazy creation
-    void this.discussionThreadTeasers; // Triggers lazy creation
-    void this.tags; // Triggers lazy creation
-    void this.labSections; // Triggers lazy creation
-    void this.labSectionMeetings; // Triggers lazy creation
-    void this.labSectionLeaders; // Triggers lazy creation
-    void this.classSections; // Triggers lazy creation
-    void this.discussionTopics; // Triggers lazy creation
-    void this.repositories; // Triggers lazy creation
-    void this.gradebookColumns; // Triggers lazy creation
-    if (this.isStaff) {
-      void this.discordChannels; // Triggers lazy creation (staff only)
-      void this.discordMessages; // Triggers lazy creation (staff only)
-    }
-    void this.livePolls; // Triggers lazy creation
-    void this.surveys; // Triggers lazy creation
-    void this.surveySeries; // Triggers lazy creation
-
-    // Clear initialData to free memory after all eager controllers are initialized
-    this._initialData = undefined;
+    void this.notifications;
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -714,7 +703,7 @@ export class CourseController {
         table: "profiles",
         query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.profiles
+        initialData: this._takeInitialDataSlice("profiles")
       });
     }
     return this._profiles;
@@ -923,7 +912,7 @@ export class CourseController {
         query,
         selectForSingleRow: staffSelect,
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.userRolesWithProfiles,
+        initialData: this._takeInitialDataSlice("userRolesWithProfiles"),
         autoFetchMissingRows: this.canViewFullClassUserRoles
       });
     }
