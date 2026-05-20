@@ -1381,10 +1381,12 @@ function InnerRubricPage() {
               role="tab"
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
-              onClick={() => {
-                // DEBUG: record click via console.error so the trace's console buffer
-                // captures it. Remove once cross-round e2e is green.
-                console.error(`[rubric-tab-click] rr=${rr} activeReviewRound=${activeReviewRound}`);
+              onPointerDown={() => console.error(`[rubric-tab-pointerdown] rr=${rr}`)}
+              onMouseDown={() => console.error(`[rubric-tab-mousedown] rr=${rr}`)}
+              onClick={(e) => {
+                console.error(
+                  `[rubric-tab-click] rr=${rr} activeReviewRound=${activeReviewRound} defaultPrevented=${e.defaultPrevented} bubbles=${e.bubbles}`
+                );
                 handleReviewRoundChange(rr);
               }}
               variant="ghost"
