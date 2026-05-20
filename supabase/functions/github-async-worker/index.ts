@@ -965,12 +965,17 @@ export async function processEnvelope(
             if (updateError) throw updateError;
           }
         } catch (e) {
+          // The GitHub repo exists at this point, but we failed to mark it ready in the DB.
+          // Re-throw so the outer handler requeues: nothing else re-enqueues a repo whose row
+          // already exists (create_repos_for_student dedups on row existence, not is_github_ready),
+          // so swallowing here would strand the repo at is_github_ready=false forever. The retry is
+          // idempotent — createRepo handles the pre-existing repo and returns the head SHA.
           scope.setContext("repo_ready_update_error", {
             error_message: e instanceof Error ? e.message : String(e),
             repo_id: envelope.repo_id,
             class_id: envelope.class_id
           });
-          Sentry.captureException(e, scope);
+          throw e;
         }
         recordMetric(
           adminSupabase,
