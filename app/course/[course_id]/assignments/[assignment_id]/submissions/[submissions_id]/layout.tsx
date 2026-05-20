@@ -1130,6 +1130,40 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
       pageSize: 1000
     }
   });
+  const courseController = useCourseController();
+
+  // Refresh the history when a submission_review changes — e.g. when grading is
+  // completed on the active (or a reactivated older) submission. Issue #598: the
+  // "Total Score" column reflects submission_reviews data, but the only realtime
+  // listener here fires on `submissions` is_active changes, not on review
+  // completion, so the manually-graded total stayed stale until a manual reload.
+  // We listen on each listed submission's review channel and invalidate the list.
+  const submissionIds = useMemo(() => (data?.data ?? []).map((s) => s.id), [data?.data]);
+  const submissionIdsKey = submissionIds.join(",");
+  useEffect(() => {
+    const realtime = courseController?.classRealTimeController;
+    if (!realtime || submissionIds.length === 0) return;
+
+    const unsubscribers = submissionIds.map((id) =>
+      realtime.subscribeToTableForSubmission(
+        "submission_reviews",
+        id,
+        (message: import("@/lib/TableController").BroadcastMessage) => {
+          if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "BULK_UPDATE") {
+            invalidate({ resource: "submissions", invalidates: ["list"] });
+          }
+        }
+      )
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+    // submissionIdsKey is a stable string derived from submissionIds; depending on
+    // the array directly would re-subscribe on every refetch even when ids are equal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseController, submissionIdsKey, invalidate]);
+
   const router = useRouter();
   const { time_zone } = useCourse();
   const [isActivating, setIsActivating] = useState(false);
