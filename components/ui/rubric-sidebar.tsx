@@ -96,7 +96,7 @@ import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
-import RequestRegradeForCheckDialog from "./RequestRegradeForCheckDialog";
+import RequestRegradeForCheckDialog from "@/components/ui/RequestRegradeForCheckDialog";
 import { Tooltip } from "./tooltip";
 
 // Module-stable style — see `components/ui/markdown.tsx` for why

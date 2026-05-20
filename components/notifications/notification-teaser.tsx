@@ -494,15 +494,17 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
 
   const actor = useUserProfile(actorProfileId);
 
-  if (!actor) {
+  // For auto_resolved the message is self-contained, so a missing/unloaded resolver
+  // profile must not leave the teaser stuck on a skeleton.
+  if (!actor && body.action !== "auto_resolved") {
     return <Skeleton height="40px" width="100%" />;
   }
 
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={actor.avatar_url} alt="" />
-        <Avatar.Fallback fontSize="xs">{actor.name?.charAt(0)}</Avatar.Fallback>
+        <Avatar.Image src={actor?.avatar_url} alt="" />
+        <Avatar.Fallback fontSize="xs">{actor?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
         {message}

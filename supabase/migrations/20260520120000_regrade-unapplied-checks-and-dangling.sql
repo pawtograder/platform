@@ -36,6 +36,18 @@ create index if not exists submission_regrade_requests_rubric_check_id_idx
 create index if not exists submission_regrade_requests_submission_review_id_idx
     on public.submission_regrade_requests using btree (submission_review_id);
 
+-- Enforce at most one ACTIVE bare-check request per (review, check) at the DB level,
+-- so a read-then-insert race in create_regrade_request_for_check cannot create
+-- duplicate active requests. Comment-backed requests have a comment FK set and are
+-- excluded; once a bare-check request is resolved it gets a comment FK and leaves
+-- this partial index.
+create unique index if not exists submission_regrade_requests_active_bare_check_uniq
+    on public.submission_regrade_requests (submission_review_id, rubric_check_id)
+    where submission_file_comment_id is null
+      and submission_comment_id is null
+      and submission_artifact_comment_id is null
+      and status in ('draft', 'opened', 'escalated');
+
 -- ---------------------------------------------------------------------------
 -- 2. Backfill rubric_check_id + submission_review_id from existing comment-backed
 --    requests so every request can be grouped/displayed uniformly.
@@ -156,7 +168,24 @@ begin
             to_char(assignment_regrade_deadline, 'Mon DD, YYYY at HH12:MI AM TZ');
     end if;
 
+    -- Reject if the check is actually already applied (a live grading comment exists).
+    -- Those disputes should go through the comment-based regrade flow instead.
+    if exists (
+        select 1 from public.submission_comments
+        where submission_review_id = p_submission_review_id and rubric_check_id = p_rubric_check_id and deleted_at is null
+        union all
+        select 1 from public.submission_file_comments
+        where submission_review_id = p_submission_review_id and rubric_check_id = p_rubric_check_id and deleted_at is null
+        union all
+        select 1 from public.submission_artifact_comments
+        where submission_review_id = p_submission_review_id and rubric_check_id = p_rubric_check_id and deleted_at is null
+    ) then
+        raise exception 'This rubric check is already applied; request a regrade on the existing grade instead';
+    end if;
+
     -- Prevent duplicate open requests for the same un-applied check on this review.
+    -- (The partial unique index submission_regrade_requests_active_bare_check_uniq is the
+    -- atomic backstop; this check just produces a friendlier error in the common case.)
     select id
     into existing_request_id
     from public.submission_regrade_requests
@@ -225,10 +254,14 @@ begin
     param_resolved_points := resolved_points;
     param_closed_points := closed_points;
 
+    -- Lock the request row so two concurrent transitions cannot both observe the same
+    -- pre-transition state and (for bare-check requests) both materialize a backing
+    -- comment, which would double-count points in grade recomputation.
     select *
     into current_request
     from public.submission_regrade_requests
-    where id = regrade_request_id;
+    where id = regrade_request_id
+    for update;
 
     if not found then
         raise exception 'Regrade request not found';
@@ -545,6 +578,9 @@ begin
     if NEW.regrade_request_id is not null
        and OLD.deleted_at is null
        and NEW.deleted_at is not null then
+        -- Only auto-resolve requests that have NOT yet reached an instructor. An
+        -- 'escalated' request is in the instructor queue awaiting final review; deleting
+        -- the backing comment must not silently pull it back out of that queue.
         update public.submission_regrade_requests
         set status = 'resolved',
             resolved_by = coalesce(NEW.edited_by, assignee),
@@ -552,7 +588,7 @@ begin
             resolution_reason = 'comment_deleted',
             last_updated_at = now()
         where id = NEW.regrade_request_id
-          and status in ('draft', 'opened', 'escalated')
+          and status in ('draft', 'opened')
         returning class_id, submission_id, assignment_id, resolved_by
         into affected;
 

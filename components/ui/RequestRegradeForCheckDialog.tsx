@@ -15,7 +15,7 @@ import { Box, Button, Text, VStack } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { useCallback, useMemo, useState } from "react";
 import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
-import { toaster } from "./toaster";
+import { toaster } from "@/components/ui/toaster";
 import { Alert } from "@/components/ui/alert";
 import { format, formatDistanceToNow } from "date-fns";
 
@@ -27,6 +27,7 @@ export default function RequestRegradeForCheckDialog({
   rubricCheckId: number;
 }) {
   const [isRegradeDialogOpen, setIsRegradeDialogOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const submission = useSubmission();
   const { private_profile_id } = useClassProfiles();
   const assignment = useAssignmentData();
@@ -53,6 +54,8 @@ export default function RequestRegradeForCheckDialog({
   }, [assignment.regrade_deadline]);
 
   const handleConfirmCreateRegradeRequest = useCallback(async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await createRegradeRequestForCheck({
         values: {
@@ -74,8 +77,10 @@ export default function RequestRegradeForCheckDialog({
         title: "Error Creating Regrade Request",
         description: getStudentFacingErrorMessage(error)
       });
+    } finally {
+      setIsSubmitting(false);
     }
-  }, [createRegradeRequestForCheck, private_profile_id, submissionReviewId, rubricCheckId]);
+  }, [createRegradeRequestForCheck, private_profile_id, submissionReviewId, rubricCheckId, isSubmitting]);
 
   // If deadline has passed, show a disabled button with explanation
   if (regradeDeadlineInfo.isPastDeadline && regradeDeadlineInfo.deadline) {
@@ -152,7 +157,12 @@ export default function RequestRegradeForCheckDialog({
             <DialogActionTrigger asChild>
               <Button variant="outline">Cancel</Button>
             </DialogActionTrigger>
-            <Button colorPalette="orange" onClick={handleConfirmCreateRegradeRequest}>
+            <Button
+              colorPalette="orange"
+              onClick={handleConfirmCreateRegradeRequest}
+              loading={isSubmitting}
+              disabled={isSubmitting}
+            >
               Draft Regrade Request
             </Button>
           </DialogFooter>

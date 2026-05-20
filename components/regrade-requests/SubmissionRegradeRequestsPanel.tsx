@@ -40,7 +40,10 @@ function RegradeRequestRow({ request }: { request: RegradeRequest }) {
 
   return (
     <Box
-      id={`regrade-request-${request.id}`}
+      // Dangling requests have no backing comment in the rubric sidebar, so this panel row
+      // is the canonical anchor for them. Non-dangling requests are anchored on their
+      // sidebar comment (same id), so we must not duplicate that id here.
+      id={isDangling ? `regrade-request-${request.id}` : undefined}
       borderWidth="1px"
       borderColor={isDangling ? "border.warning" : "border.subtle"}
       borderRadius="md"
@@ -79,9 +82,11 @@ function RegradeRequestRow({ request }: { request: RegradeRequest }) {
             <Text>Updated {formatRelative(new Date(request.last_updated_at), new Date())}</Text>
           </HStack>
         </VStack>
-        <ChakraLink href={`#regrade-request-${request.id}`} fontSize="sm" colorPalette="blue">
-          View
-        </ChakraLink>
+        {!isDangling && (
+          <ChakraLink href={`#regrade-request-${request.id}`} fontSize="sm" colorPalette="blue">
+            View
+          </ChakraLink>
+        )}
       </HStack>
       {isDangling && (
         <Box mt={2}>

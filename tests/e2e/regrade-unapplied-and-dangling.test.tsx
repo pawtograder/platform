@@ -246,6 +246,47 @@ test.describe("Regrade requests for un-applied checks (#457)", () => {
     expect(error!.message).toContain("regrade request deadline has passed");
     expect(data).toBeNull();
   });
+
+  test("Rejects a check that is already applied (a live comment exists)", async () => {
+    const assignment = await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: course.id,
+      name: "Unapplied Check Already-Applied Assignment",
+      regrade_deadline: addDays(new Date(), 7).toISOString()
+    });
+
+    const submission_res = await insertPreBakedSubmission({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: course.id
+    });
+
+    const reviewId = await getGradingReviewId(submission_res.submission_id, assignment.grading_rubric_id!);
+    const rubricCheckId = await getCheckIdForRubric(assignment.grading_rubric_id!);
+
+    // Apply the check with a live grading comment.
+    const { error: commentError } = await supabase.from("submission_comments").insert({
+      submission_id: submission_res.submission_id,
+      author: grader!.private_profile_id,
+      comment: "Applied check",
+      points: 2,
+      class_id: course.id,
+      rubric_check_id: rubricCheckId,
+      submission_review_id: reviewId,
+      released: true
+    });
+    expect(commentError).toBeNull();
+
+    const { data, error } = await studentClient.rpc("create_regrade_request_for_check", {
+      private_profile_id: student!.private_profile_id,
+      p_submission_review_id: reviewId,
+      p_rubric_check_id: rubricCheckId
+    });
+
+    expect(error).not.toBeNull();
+    expect(error!.message).toContain("already applied");
+    expect(data).toBeNull();
+  });
 });
 
 test.describe("Auto-resolve dangling regrade requests on comment delete (#517)", () => {
@@ -364,6 +405,51 @@ test.describe("Auto-resolve dangling regrade requests on comment delete (#517)",
       .single();
     expect(rowError).toBeNull();
     expect(row!.status).toBe("closed");
+    expect(row!.resolution_reason).not.toBe("comment_deleted");
+  });
+
+  test("Does not de-escalate an escalated request when its comment is soft-deleted", async () => {
+    const assignment = await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: course.id,
+      name: "Dangling Escalated Assignment",
+      regrade_deadline: addDays(new Date(), 7).toISOString()
+    });
+
+    const submission_res = await insertPreBakedSubmission({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: assignment.id,
+      class_id: course.id
+    });
+
+    const rubricCheckId = assignment.rubricChecks[0].id;
+
+    // Comment-backed request already escalated to an instructor.
+    const request = await createRegradeRequest(
+      submission_res.submission_id,
+      assignment.id,
+      student!.private_profile_id,
+      grader!.private_profile_id,
+      rubricCheckId,
+      course.id,
+      "escalated"
+    );
+    expect(request.submission_comment_id).not.toBeNull();
+
+    const { error: deleteError } = await supabase
+      .from("submission_comments")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", request.submission_comment_id!);
+    expect(deleteError).toBeNull();
+
+    // It must stay in the instructor queue, not get pulled back to 'resolved'.
+    const { data: row, error: rowError } = await supabase
+      .from("submission_regrade_requests")
+      .select("status, resolution_reason")
+      .eq("id", request.id)
+      .single();
+    expect(rowError).toBeNull();
+    expect(row!.status).toBe("escalated");
     expect(row!.resolution_reason).not.toBe("comment_deleted");
   });
 });
