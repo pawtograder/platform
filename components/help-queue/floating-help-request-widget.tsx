@@ -184,7 +184,7 @@ export function FloatingHelpRequestWidget() {
   if (!activeRequest) {
     return (
       <>
-        <Box position="fixed" bottom={4} right={4} zIndex={1000}>
+        <Box position="fixed" bottom={4} right={4} zIndex={1000} data-visual-test="removed">
           <Tooltip content={tooltipText} positioning={{ placement: "left" }}>
             <Button
               size="md"
@@ -231,6 +231,7 @@ export function FloatingHelpRequestWidget() {
       zIndex={1000}
       maxW={{ base: "calc(100vw - 2rem)", md: "400px" }}
       w="100%"
+      data-visual-test="removed"
     >
       <Card.Root>
         <Card.Body p={0}>

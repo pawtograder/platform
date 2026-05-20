@@ -65,6 +65,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useTableControllerTableValues } from "@/lib/TableController";
 import { StaffCommitHistory } from "@/components/submissions/staff-commit-history";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatGradingReviewScoreLines } from "@/lib/formatGradingReviewForMarkdown";
@@ -1817,12 +1818,32 @@ function PerStudentGradingTotalsDisplay({
 }) {
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const courseController = useCourseController();
+  const allProfiles = useTableControllerTableValues(courseController.profiles);
+  const profileNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of allProfiles) map.set(p.id, (p as { name?: string }).name ?? "");
+    return map;
+  }, [allProfiles]);
   const entries = Object.entries(totals).filter((entry): entry is [string, number] => typeof entry[1] === "number");
   if (entries.length === 0) return null;
+
+  // Sort by user name. Profile_ids are random UUIDs that differ between test
+  // runs, so sorting by id produces a different order each run. Name is the
+  // only stable cross-run signal we have. Logged-in user stays first when
+  // present. If any name hasn't loaded yet, hold off rendering to avoid a
+  // mixed-loaded partial sort (which would show a non-deterministic order in
+  // visual tests until realtime catches up).
+  const allNamesLoaded = entries.every(([id]) => (profileNamesById.get(id) ?? "").length > 0);
+  if (!allNamesLoaded) return null;
 
   entries.sort(([a], [b]) => {
     if (a === private_profile_id) return -1;
     if (b === private_profile_id) return 1;
+    const nameA = profileNamesById.get(a) ?? a;
+    const nameB = profileNamesById.get(b) ?? b;
+    const byName = nameA.localeCompare(nameB);
+    if (byName !== 0) return byName;
     return a.localeCompare(b);
   });
 
@@ -1894,8 +1915,33 @@ function PerStudentGradingTotalsDisplay({
 function IndividualScoresDisplay({ individualScores }: { individualScores: IndividualScores }) {
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const courseController = useCourseController();
+  const allProfiles = useTableControllerTableValues(courseController.profiles);
+  const profileNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of allProfiles) map.set(p.id, (p as { name?: string }).name ?? "");
+    return map;
+  }, [allProfiles]);
   const entries = Object.entries(individualScores).filter((entry): entry is [string, number] => entry[1] !== undefined);
   if (entries.length === 0) return null;
+
+  // Sort by user name (logged-in user first when present). See sort comment in
+  // PerStudentGradingTotalsDisplay above — profile_ids are non-deterministic
+  // across test runs, names are the only stable cross-run signal. Hold off on
+  // rendering until every entry's name has loaded so a partially-loaded sort
+  // doesn't show a non-deterministic mixed order.
+  const allNamesLoaded = entries.every(([id]) => (profileNamesById.get(id) ?? "").length > 0);
+  if (!allNamesLoaded) return null;
+
+  entries.sort(([a], [b]) => {
+    if (a === private_profile_id) return -1;
+    if (b === private_profile_id) return 1;
+    const nameA = profileNamesById.get(a) ?? a;
+    const nameB = profileNamesById.get(b) ?? b;
+    const byName = nameA.localeCompare(nameB);
+    if (byName !== 0) return byName;
+    return a.localeCompare(b);
+  });
 
   const myEntry = entries.find(([profileId]) => profileId === private_profile_id);
   const sortedEntries = isGraderOrInstructor ? entries : myEntry ? [myEntry] : [];
@@ -1960,6 +2006,7 @@ function RubricView() {
     <Box
       as="aside"
       aria-label="Grading summary"
+      data-grading-summary-aside=""
       position={{ base: "static", lg: "sticky" }}
       top={{ base: "auto", lg: "0" }}
       borderTopWidth={{ base: "1px", lg: "0" }}
@@ -2114,15 +2161,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 <HStack gap={1} flexWrap="wrap" alignItems="baseline">
                   <HStack gap={1}>
                     Group {assignmentGroupWithMembers.name} (
-                    {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                      <HStack key={member.id} gap={1}>
-                        <PersonName uid={member.profile_id} showAvatar={false} />
-                        <StudentSummaryTrigger
-                          student_id={member.profile_id}
-                          course_id={parseInt(course_id as string, 10)}
-                        />
-                      </HStack>
-                    ))}
+                    {[...assignmentGroupWithMembers.assignment_groups_members]
+                      .sort((a, b) => a.id - b.id)
+                      .map((member) => (
+                        <HStack key={member.id} gap={1}>
+                          <PersonName uid={member.profile_id} showAvatar={false} />
+                          <StudentSummaryTrigger
+                            student_id={member.profile_id}
+                            course_id={parseInt(course_id as string, 10)}
+                          />
+                        </HStack>
+                      ))}
                     )
                   </HStack>
                   {assignmentGroupWithMembers.mentor_profile_id && (

@@ -48,7 +48,9 @@ async function addComment({
       rubric_check_id: check_id,
       class_id,
       author: author_id,
-      comment: `Grading comment for check ${check_id}`,
+      // Stable comment text — embedding the autoincrement check_id makes
+      // screenshots vary across runs (1001 vs 1543 etc.).
+      comment: `Grading comment for this check`,
       points,
       released: false,
       eventually_visible: true,

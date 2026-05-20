@@ -111,7 +111,7 @@ export function NormalizedStackedChart({
             {barKeys.map((key, idx) => {
               const rawVal = allValues[idx] ?? 0;
               const color = getLikertColor(rawVal, allValues);
-              return <Bar key={key} dataKey={key} stackId="stack" fill={color} radius={0} />;
+              return <Bar isAnimationActive={false} key={key} dataKey={key} stackId="stack" fill={color} radius={0} />;
             })}
           </BarChart>
         </ResponsiveContainer>
