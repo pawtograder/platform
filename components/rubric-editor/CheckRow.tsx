@@ -434,55 +434,55 @@ export const CheckRow = memo(function CheckRow({
                     `${pathPrefix}.data.options[${idx}].points`
                   );
                   return (
-                  <Stack key={idx} gap={1} w="100%">
-                  <HStack gap={2} align="center" w="100%">
-                    <DebouncedInput
-                      flex="1"
-                      aria-label={`Option ${idx + 1} label`}
-                      value={opt.label ?? ""}
-                      onCommit={(next) => handleOptionChange(idx, { label: next })}
-                    />
-                    <DebouncedInput
-                      maxW="24"
-                      type="number"
-                      aria-label={`Option ${idx + 1} points`}
-                      value={String(opt.points ?? 0)}
-                      onCommit={(next) => handleOptionChange(idx, { points: Number(next) })}
-                    />
-                    <IconButton
-                      aria-label="Move option up"
-                      size="2xs"
-                      variant="ghost"
-                      disabled={idx === 0}
-                      onClick={() => handleMoveOption(idx, -1)}
-                    >
-                      <LuArrowUp />
-                    </IconButton>
-                    <IconButton
-                      aria-label="Move option down"
-                      size="2xs"
-                      variant="ghost"
-                      disabled={idx === options.length - 1}
-                      onClick={() => handleMoveOption(idx, 1)}
-                    >
-                      <LuArrowDown />
-                    </IconButton>
-                    <IconButton
-                      aria-label="Remove option"
-                      size="2xs"
-                      variant="ghost"
-                      colorPalette="red"
-                      onClick={() => handleRemoveOption(idx)}
-                    >
-                      <LuTrash2 />
-                    </IconButton>
-                  </HStack>
-                  {optionPointsWarning && (
-                    <Text fontSize="xs" color="fg.warning">
-                      {optionPointsWarning}
-                    </Text>
-                  )}
-                  </Stack>
+                    <Stack key={idx} gap={1} w="100%">
+                      <HStack gap={2} align="center" w="100%">
+                        <DebouncedInput
+                          flex="1"
+                          aria-label={`Option ${idx + 1} label`}
+                          value={opt.label ?? ""}
+                          onCommit={(next) => handleOptionChange(idx, { label: next })}
+                        />
+                        <DebouncedInput
+                          maxW="24"
+                          type="number"
+                          aria-label={`Option ${idx + 1} points`}
+                          value={String(opt.points ?? 0)}
+                          onCommit={(next) => handleOptionChange(idx, { points: Number(next) })}
+                        />
+                        <IconButton
+                          aria-label="Move option up"
+                          size="2xs"
+                          variant="ghost"
+                          disabled={idx === 0}
+                          onClick={() => handleMoveOption(idx, -1)}
+                        >
+                          <LuArrowUp />
+                        </IconButton>
+                        <IconButton
+                          aria-label="Move option down"
+                          size="2xs"
+                          variant="ghost"
+                          disabled={idx === options.length - 1}
+                          onClick={() => handleMoveOption(idx, 1)}
+                        >
+                          <LuArrowDown />
+                        </IconButton>
+                        <IconButton
+                          aria-label="Remove option"
+                          size="2xs"
+                          variant="ghost"
+                          colorPalette="red"
+                          onClick={() => handleRemoveOption(idx)}
+                        >
+                          <LuTrash2 />
+                        </IconButton>
+                      </HStack>
+                      {optionPointsWarning && (
+                        <Text fontSize="xs" color="fg.warning">
+                          {optionPointsWarning}
+                        </Text>
+                      )}
+                    </Stack>
                   );
                 })}
               </Stack>

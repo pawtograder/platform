@@ -87,26 +87,12 @@ type DebouncedInputProps = Omit<InputProps, "value" | "onChange" | "onBlur"> & C
 
 export function DebouncedInput({ value, onCommit, commitDelayMs, ...props }: DebouncedInputProps) {
   const { local, handleChange, handleBlur } = useDebouncedInputBuffer({ value, onCommit, commitDelayMs });
-  return (
-    <Input
-      {...props}
-      value={local}
-      onChange={(e) => handleChange(e.target.value)}
-      onBlur={handleBlur}
-    />
-  );
+  return <Input {...props} value={local} onChange={(e) => handleChange(e.target.value)} onBlur={handleBlur} />;
 }
 
 type DebouncedTextareaProps = Omit<TextareaProps, "value" | "onChange" | "onBlur"> & CommonBufferProps;
 
 export function DebouncedTextarea({ value, onCommit, commitDelayMs, ...props }: DebouncedTextareaProps) {
   const { local, handleChange, handleBlur } = useDebouncedInputBuffer({ value, onCommit, commitDelayMs });
-  return (
-    <Textarea
-      {...props}
-      value={local}
-      onChange={(e) => handleChange(e.target.value)}
-      onBlur={handleBlur}
-    />
-  );
+  return <Textarea {...props} value={local} onChange={(e) => handleChange(e.target.value)} onBlur={handleBlur} />;
 }

@@ -650,11 +650,7 @@ function InnerRubricPage() {
           setRubricForSidebar(sanitizedRubric);
           if (warnings.length > 0 && viewModeRef.current === "source") {
             skipActiveRubricYamlSyncRef.current = true;
-            setValue(
-              YAML.stringify(
-                HydratedRubricToYamlRubric(sanitizedRubric, { allRubrics: allHydratedRubrics })
-              )
-            );
+            setValue(YAML.stringify(HydratedRubricToYamlRubric(sanitizedRubric, { allRubrics: allHydratedRubrics })));
           }
           setError(undefined);
         } catch (e) {
@@ -662,7 +658,14 @@ function InnerRubricPage() {
         }
       }
     },
-    [activeRubric, assignmentDetails, assignment_id, activeReviewRound, createMinimalNewHydratedRubric, allHydratedRubrics]
+    [
+      activeRubric,
+      assignmentDetails,
+      assignment_id,
+      activeReviewRound,
+      createMinimalNewHydratedRubric,
+      allHydratedRubrics
+    ]
   );
 
   const handleEditorChange = useCallback(

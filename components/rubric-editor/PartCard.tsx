@@ -4,18 +4,7 @@ import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { HydratedRubric, HydratedRubricCriteria, HydratedRubricPart } from "@/utils/supabase/DatabaseTypes";
 import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
-import {
-  Box,
-  Button,
-  Heading,
-  HStack,
-  IconButton,
-  Menu,
-  Portal,
-  Stack,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { Box, Button, Heading, HStack, IconButton, Menu, Portal, Stack, Text, VStack } from "@chakra-ui/react";
 import { DebouncedInput, DebouncedTextarea } from "@/components/rubric-editor/DebouncedInput";
 import { memo, useCallback, useRef, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
@@ -178,10 +167,7 @@ export const PartCard = memo(function PartCard({
             errorText={nameError}
             helperText="A logical section of the rubric. Often a question, problem, or deliverable."
           >
-            <DebouncedInput
-              value={part.name ?? ""}
-              onCommit={(next) => emitPart({ ...partRef.current, name: next })}
-            />
+            <DebouncedInput value={part.name ?? ""} onCommit={(next) => emitPart({ ...partRef.current, name: next })} />
           </Field>
           <Field
             label="Description"

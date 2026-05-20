@@ -4,17 +4,7 @@ import { Field } from "@/components/ui/field";
 import { Radio, RadioGroup } from "@/components/ui/radio";
 import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria } from "@/utils/supabase/DatabaseTypes";
 import type { ReferenceEditorContext } from "@/components/rubric-editor/RubricEditorTree";
-import {
-  Box,
-  Button,
-  Collapsible,
-  Heading,
-  HStack,
-  IconButton,
-  Stack,
-  Text,
-  VStack
-} from "@chakra-ui/react";
+import { Box, Button, Collapsible, Heading, HStack, IconButton, Stack, Text, VStack } from "@chakra-ui/react";
 import { DebouncedInput, DebouncedTextarea } from "@/components/rubric-editor/DebouncedInput";
 import { memo, useCallback, useRef, useState } from "react";
 import { LuChevronDown, LuChevronRight, LuPlus, LuTrash2 } from "react-icons/lu";
@@ -245,9 +235,7 @@ export const CriterionCard = memo(function CriterionCard({
           <Field
             label="Total points"
             maxW="40"
-            helperText={
-              totalPointsWarning ?? "The maximum points this criterion can contribute."
-            }
+            helperText={totalPointsWarning ?? "The maximum points this criterion can contribute."}
             invalid={!!totalPointsWarning}
             errorText={totalPointsWarning}
           >
