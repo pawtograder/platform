@@ -21,10 +21,13 @@ import { format, formatDistanceToNow } from "date-fns";
 
 export default function RequestRegradeForCheckDialog({
   submissionReviewId,
-  rubricCheckId
+  rubricCheckId,
+  compact = false
 }: {
   submissionReviewId: number;
   rubricCheckId: number;
+  /** Render a low-emphasis trigger (small ghost link) instead of the full-width button. */
+  compact?: boolean;
 }) {
   const [isRegradeDialogOpen, setIsRegradeDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -84,6 +87,13 @@ export default function RequestRegradeForCheckDialog({
 
   // If deadline has passed, show a disabled button with explanation
   if (regradeDeadlineInfo.isPastDeadline && regradeDeadlineInfo.deadline) {
+    if (compact) {
+      return (
+        <Text fontSize="xs" color="fg.subtle" title="Regrade deadline has passed">
+          Regrade deadline passed
+        </Text>
+      );
+    }
     return (
       <Box pl={2} pb={2} w="100%">
         <Button size="sm" colorPalette="gray" variant="outline" w="100%" disabled title="Regrade deadline has passed">
@@ -97,12 +107,18 @@ export default function RequestRegradeForCheckDialog({
   }
 
   return (
-    <Box pl={2} pb={2} w="100%">
+    <Box pl={compact ? 0 : 2} pb={compact ? 0 : 2} w={compact ? "auto" : "100%"}>
       <DialogRoot open={isRegradeDialogOpen} onOpenChange={(e) => setIsRegradeDialogOpen(e.open)}>
         <DialogTrigger asChild>
-          <Button size="sm" colorPalette="orange" variant="outline" w="100%">
-            Request regrade — check not applied
-          </Button>
+          {compact ? (
+            <Button size="xs" variant="ghost" colorPalette="gray" color="fg.muted" px={1} h="auto" py={0.5}>
+              Request regrade
+            </Button>
+          ) : (
+            <Button size="sm" colorPalette="orange" variant="outline" w="100%">
+              Request regrade — check not applied
+            </Button>
+          )}
         </DialogTrigger>
         <DialogContent>
           <DialogHeader>

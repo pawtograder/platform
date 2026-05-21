@@ -50,6 +50,7 @@ type CheckComment = {
   rubric_check_id: number | null;
   released: boolean;
   regrade_request_id?: number | null;
+  target_student_profile_id?: string | null;
 };
 
 // What a CheckRow reports up to its CriterionBlock.
@@ -110,6 +111,7 @@ function AppliedCheckRow({
         ) : canRequestRegrade ? (
           <RequestRegradeDialog
             comment={comment as unknown as SubmissionFileComment | SubmissionComments | SubmissionArtifactComment}
+            compact
           />
         ) : null}
       </HStack>
@@ -149,7 +151,7 @@ function UnappliedCheckRow({
             {existingStatus.label}
           </Badge>
         ) : !isGrader ? (
-          <RequestRegradeForCheckDialog submissionReviewId={reviewId} rubricCheckId={check.id} />
+          <RequestRegradeForCheckDialog submissionReviewId={reviewId} rubricCheckId={check.id} compact />
         ) : null}
       </HStack>
     </Box>
@@ -178,7 +180,17 @@ function CheckRow({
   onResolved: (checkId: number, resolution: CheckResolution) => void;
 }) {
   const review = useSubmissionReviewOrGradingReview(reviewId);
-  const comments = useRubricCheckInstances(check, reviewId, targetStudentProfileId) as unknown as CheckComment[];
+  // Don't filter by student in the hook: whole-submission comments carry a null
+  // target_student_profile_id and would be dropped. Instead include comments that apply to
+  // everyone (null target) OR are targeted at this student (split/group per-student grading).
+  const allComments = useRubricCheckInstances(check, reviewId) as unknown as CheckComment[];
+  const comments = useMemo(
+    () =>
+      allComments.filter(
+        (c) => c.target_student_profile_id == null || c.target_student_profile_id === targetStudentProfileId
+      ),
+    [allComments, targetStudentProfileId]
+  );
   const isGrader = useIsGraderOrInstructor();
 
   const visible = useShouldShowRubricCheck({

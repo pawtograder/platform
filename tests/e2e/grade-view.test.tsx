@@ -16,6 +16,7 @@ import {
 dotenv.config({ path: ".env.local", quiet: true });
 
 const ASSIGN_TITLE = "Grade View Smoke Assignment";
+const APPLIED_COMMENT_TEXT = "Solid solution overall (applied-check marker)";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -56,14 +57,37 @@ test.beforeAll(async () => {
   });
   submissionId = sub.submission_id;
 
-  // Hand-grade and complete the review, then release it so the student can see the grade.
+  // Hand-grade and complete the review.
   await gradeSubmission(sub.grading_review_id, instructor!.private_profile_id, true, {
     totalScoreOverride: 85,
     totalAutogradeScoreOverride: 0
   });
+
+  // Insert a deterministic, whole-submission (null target) grading comment so the test can
+  // assert it renders as an APPLIED check (regression guard: the section used to mis-label
+  // applied checks as "not applied" by filtering out null-target comments).
+  const { data: gradingCheck } = await supabase
+    .from("rubric_checks")
+    .select("id, rubric_criteria!inner(rubric_id)")
+    .eq("rubric_criteria.rubric_id", assignment.grading_rubric_id!)
+    .limit(1)
+    .single();
+  const { error: commentError } = await supabase.from("submission_comments").insert({
+    submission_id: sub.submission_id,
+    author: instructor!.private_profile_id,
+    comment: APPLIED_COMMENT_TEXT,
+    points: 4,
+    class_id: course.id,
+    rubric_check_id: gradingCheck!.id,
+    submission_review_id: sub.grading_review_id,
+    released: true
+  });
+  expect(commentError).toBeNull();
+
+  // Release the review (and pin the displayed total after the comment's recompute).
   const { error } = await supabase
     .from("submission_reviews")
-    .update({ released: true })
+    .update({ released: true, total_score: 85 })
     .eq("id", sub.grading_review_id);
   expect(error).toBeNull();
 });
@@ -103,8 +127,10 @@ test.describe("Student grade view", () => {
     await expect(page.getByRole("heading", { name: ASSIGN_TITLE }).first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("85", { exact: false }).first()).toBeVisible();
 
-    // The hand-grading section renders (the submission was hand-graded).
+    // The hand-grading section renders the APPLIED comment text (only applied rows show the
+    // comment body — proves applied checks are not mis-labeled "not applied").
     await expect(page.getByText("Hand grading", { exact: false }).first()).toBeVisible();
+    await expect(page.getByText(APPLIED_COMMENT_TEXT, { exact: false })).toBeVisible();
 
     // The autograder section renders too (pre-baked submissions carry grader results).
     await expect(page.getByRole("heading", { name: "Autograder", exact: true })).toBeVisible();
