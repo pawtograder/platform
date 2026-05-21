@@ -352,8 +352,6 @@ function CriterionBlock({
     />
   ));
 
-  const modeLabel = criteria.is_deduction_only ? "deduction only" : criteria.is_additive ? "additive" : "deductive";
-
   // Keep a STABLE tree regardless of visibility — toggle `display`, never swap the structure.
   // Swapping the returned shape would unmount/remount the check rows, resetting their state and
   // causing an infinite visibility-report loop.
@@ -370,9 +368,6 @@ function CriterionBlock({
         <VStack align="start" gap={0} minW="0">
           <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
             {criteria.name}
-          </Text>
-          <Text fontSize="xs" color="fg.muted">
-            {modeLabel}
           </Text>
         </VStack>
         <Text fontWeight="semibold" flexShrink={0}>
