@@ -174,6 +174,30 @@ async function kickGradebookRecalculation(classId: number) {
   }
 }
 
+// Poll a gradebook UI cell until it shows the expected value, kicking the async recalc
+// worker between attempts. Calculated columns (Final Grade, Average Assignments, …) are
+// recomputed by the DB→pg_net→edge-function pipeline, which can stall under CI load — so
+// without a kick the poll just times out on the stale value. Use this for calculated
+// columns; manual columns and autograder/assignment scores don't go through this pipeline.
+async function expectCalculatedCell(
+  page: Page,
+  studentName: string,
+  column: string,
+  expected: number,
+  opts: { classId: number; timeout?: number }
+) {
+  let kicks = 0;
+  await expect(async () => {
+    if (kicks < 6 && (await readCellNumber(page, studentName, column)) !== expected) {
+      kicks++;
+      await kickGradebookRecalculation(opts.classId);
+    }
+    const after = await readCellNumber(page, studentName, column);
+    expect(after).not.toBeNaN();
+    expect(after).toBe(expected);
+  }).toPass({ timeout: opts.timeout ?? 60_000 });
+}
+
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
   const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
   await region.evaluate((el) => {
@@ -891,11 +915,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(after).toBe(84.5);
     }).toPass({ timeout: 60_000 });
 
-    await expect(async () => {
-      const after = await readCellNumber(page, students[0].private_profile_name, "Final Grade");
-      expect(after).not.toBeNaN();
-      expect(after).toBe(51.95);
-    }).toPass({ timeout: 60_000 });
+    await expectCalculatedCell(page, students[0].private_profile_name, "Final Grade", 51.95, { classId: course.id });
 
     // Take screenshot for visual regression testing
     await visualScreenshot(page, "Gradebook Page - Full Data");
@@ -914,22 +934,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Expect participation cell to show the new value and final grade to change
     await expect(partCell).toHaveText(/80(\.0+)?|80$/);
 
-    // Final grade recomputes from the changed participation score via the async
-    // recalc pipeline; if the dependent recompute stalls the cell stays on its
-    // prior value (51.95), so kick the worker while polling for the new total.
-    let finalGradeKicks = 0;
-    await expect(async () => {
-      if (finalGradeKicks < 5) {
-        const current = await readCellNumber(page, studentName, "Final Grade");
-        if (current !== 51.5) {
-          finalGradeKicks++;
-          await kickGradebookRecalculation(course.id);
-        }
-      }
-      const after = await readCellNumber(page, studentName, "Final Grade");
-      expect(after).not.toBeNaN();
-      expect(after).toBe(51.5);
-    }).toPass({ timeout: 60_000 });
+    // Final grade recomputes from the changed participation score via the async recalc
+    // pipeline; if the dependent recompute stalls the cell stays on its prior value (51.95),
+    // so kick the worker while polling for the new total.
+    await expectCalculatedCell(page, studentName, "Final Grade", 51.5, { classId: course.id });
   });
 
   test("Overriding a calculated column (Average Assignments) persists and displays the override", async ({ page }) => {
@@ -944,20 +952,23 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await page.locator('input[name="score_override"]').fill("92");
     await page.getByRole("button", { name: /^Override$/ }).click();
 
-    // Value should update to the override
+    // Value should update to the override. The override write recomputes the column via the
+    // async recalc pipeline, so kick the worker between attempts to avoid timing out on the
+    // pre-override value.
+    let overrideKicks = 0;
     await expect(async () => {
+      if (overrideKicks < 6 && (await readCellNumber(page, studentName, "Average Assignments")) !== 92) {
+        overrideKicks++;
+        await kickGradebookRecalculation(course.id);
+      }
       const after = await readCellNumber(page, studentName, "Average Assignments");
       expect(after).not.toBeNaN();
       expect(after).toBe(92);
       expect(after).not.toBe(before);
     }).toPass({ timeout: 60_000 });
 
-    // Final Grade should update
-    await expect(async () => {
-      const after = await readCellNumber(page, studentName, "Final Grade");
-      expect(after).not.toBeNaN();
-      expect(after).toBe(90.8);
-    }).toPass({ timeout: 60_000 });
+    // Final Grade should update (depends on the overridden Average Assignments).
+    await expectCalculatedCell(page, studentName, "Final Grade", 90.8, { classId: course.id });
   });
 
   test("Import Columns workflow creates a new column and populates scores", async ({ page }) => {
@@ -1490,6 +1501,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
       throw new Error(`Failed to set render export score for export test: ${setRenderExportScoreError.message}`);
     }
 
+    let renderKicks = 0;
     await expect(async () => {
       const { data: renderRecord, error: renderError } = await supabase
         .from("gradebook_column_students")
@@ -1501,6 +1513,12 @@ test.describe("Gradebook Page - CSV Render Export", () => {
         .single();
       if (renderError) {
         throw new Error(`Failed to read stabilized render export record: ${renderError.message}`);
+      }
+      // is_recalculating settles to false only once the async recalc pipeline drains; kick
+      // the worker between attempts so a stalled flag doesn't time the poll out.
+      if (renderKicks < 6 && renderRecord?.is_recalculating !== false) {
+        renderKicks++;
+        await kickGradebookRecalculation(exportCourse.id);
       }
       expect(renderRecord?.is_recalculating).toBe(false);
       expect(renderRecord?.score_override ?? renderRecord?.score).toBe(92);
