@@ -1,6 +1,6 @@
 "use client";
 import { Button, Icon } from "@chakra-ui/react";
-import { useFeatureEnabled } from "@/hooks/useClassProfiles";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { FaQuestionCircle } from "react-icons/fa";
 export default function AskForHelpButton() {

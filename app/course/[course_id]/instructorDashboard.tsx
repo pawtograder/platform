@@ -1,4 +1,5 @@
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { AssignedLabSections } from "@/components/discussion/AssignedLabSections";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
@@ -33,6 +34,7 @@ import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -572,43 +574,45 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
       {!githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
 
-      {showSurveysDashboard && (
-        <Box mb={2} borderWidth="1px" borderColor="border.subtle" borderRadius="md" overflowX="auto">
-          <HStack
-            justify="space-between"
-            align="center"
-            px={2}
-            py={1.5}
-            borderBottomWidth="1px"
-            borderColor="border.subtle"
-          >
-            <Heading size="md">Surveys</Heading>
-            <Link href={`/course/${course_id}/manage/surveys`}>
-              <Text fontSize="sm" color="blue.600">
-                All
-              </Text>
-            </Link>
-          </HStack>
-          <Box px={1} py={1}>
-            {surveysOpenCollecting.length > 0 && (
-              <Box mb={surveysRecentThree.length > 0 ? 1 : 0}>
-                <Text fontSize="sm" color="fg.muted" fontWeight="semibold" px={1} mb={1}>
-                  Open
+      <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
+        {showSurveysDashboard && (
+          <Box mb={2} borderWidth="1px" borderColor="border.subtle" borderRadius="md" overflowX="auto">
+            <HStack
+              justify="space-between"
+              align="center"
+              px={2}
+              py={1.5}
+              borderBottomWidth="1px"
+              borderColor="border.subtle"
+            >
+              <Heading size="md">Surveys</Heading>
+              <Link href={`/course/${course_id}/manage/surveys`}>
+                <Text fontSize="sm" color="blue.600">
+                  All
                 </Text>
-                {renderSurveyMiniTable(surveysOpenCollecting, { showClosedHint: false })}
-              </Box>
-            )}
-            {surveysRecentThree.length > 0 && (
-              <Box>
-                <Text fontSize="sm" color="fg.muted" fontWeight="semibold" px={1} mb={1}>
-                  Recent
-                </Text>
-                {renderSurveyMiniTable(surveysRecentThree, { showClosedHint: true })}
-              </Box>
-            )}
+              </Link>
+            </HStack>
+            <Box px={1} py={1}>
+              {surveysOpenCollecting.length > 0 && (
+                <Box mb={surveysRecentThree.length > 0 ? 1 : 0}>
+                  <Text fontSize="sm" color="fg.muted" fontWeight="semibold" px={1} mb={1}>
+                    Open
+                  </Text>
+                  {renderSurveyMiniTable(surveysOpenCollecting, { showClosedHint: false })}
+                </Box>
+              )}
+              {surveysRecentThree.length > 0 && (
+                <Box>
+                  <Text fontSize="sm" color="fg.muted" fontWeight="semibold" px={1} mb={1}>
+                    Recent
+                  </Text>
+                  {renderSurveyMiniTable(surveysRecentThree, { showClosedHint: true })}
+                </Box>
+              )}
+            </Box>
           </Box>
-        </Box>
-      )}
+        )}
+      </CourseFeatureGate>
 
       {/* Calendar Schedule Section */}
       {hasCalendar && (
@@ -722,25 +726,29 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
       </Box>
 
       {/* Discussion Activity Summary */}
-      {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+      <CourseFeatureGate feature={COURSE_FEATURES.DISCUSSION}>
+        {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+      </CourseFeatureGate>
 
-      <Box>
-        <Heading size="lg" mb={4}>
-          Open Office Hours Requests
-        </Heading>
-        <Stack spaceY={4}>
-          {helpRequests?.map((request) => (
-            <CardRoot key={request.id}>
-              <CardHeader>
-                <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
-              </CardHeader>
-              <CardBody>
-                Requested: <TimeZoneAwareDate date={request.created_at} format="compact" />
-              </CardBody>
-            </CardRoot>
-          ))}
-        </Stack>
-      </Box>
+      <CourseFeatureGate feature={COURSE_FEATURES.OFFICE_HOURS}>
+        <Box>
+          <Heading size="lg" mb={4}>
+            Open Office Hours Requests
+          </Heading>
+          <Stack spaceY={4}>
+            {helpRequests?.map((request) => (
+              <CardRoot key={request.id}>
+                <CardHeader>
+                  <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
+                </CardHeader>
+                <CardBody>
+                  Requested: <TimeZoneAwareDate date={request.created_at} format="compact" />
+                </CardBody>
+              </CardRoot>
+            ))}
+          </Stack>
+        </Box>
+      </CourseFeatureGate>
 
       <Box>
         <Heading size="lg" mb={4}>

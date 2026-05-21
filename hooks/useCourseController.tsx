@@ -42,6 +42,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRouter } from "next/navigation";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
+
+const CourseContext = createContext<Course | null>(null);
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
 export function useAssignmentGroupWithMembers({
@@ -1674,13 +1676,37 @@ export class CourseController {
   }
 }
 
-function CourseControllerProviderImpl({ controller }: { controller: CourseController }) {
-  const { user } = useAuthState();
-  const course = useCourse();
+function CourseProvider({
+  controller,
+  initialCourse,
+  children
+}: {
+  controller: CourseController;
+  initialCourse: Course;
+  children: React.ReactNode;
+}) {
+  const [course, setCourse] = useState(initialCourse);
+
+  useEffect(() => {
+    setCourse(initialCourse);
+  }, [initialCourse]);
+
+  useEffect(() => {
+    const unsubscribe = controller.classRealTimeController.subscribeToClassesUpdate((updatedCourse) => {
+      setCourse((current) => ({ ...current, ...updatedCourse }));
+    });
+    return unsubscribe;
+  }, [controller]);
 
   useEffect(() => {
     controller.course = course;
   }, [course, controller]);
+
+  return <CourseContext.Provider value={course}>{children}</CourseContext.Provider>;
+}
+
+function CourseControllerProviderImpl({ controller }: { controller: CourseController }) {
+  const { user } = useAuthState();
 
   const { data: notifications } = useList<Notification>({
     resource: "notifications",
@@ -1793,6 +1819,7 @@ export function CourseControllerProvider({
   const [courseController, setCourseController] = useState<CourseController | null>(null);
   const { user } = useAuthState();
   const userId = user?.id;
+  const { role: enrollment } = useClassProfiles();
 
   // Use ref for initialData so it doesn't trigger effect re-runs.
   // initialData is SSR-provided and gets a new object reference on every server render,
@@ -1861,8 +1888,10 @@ export function CourseControllerProvider({
 
   return (
     <CourseControllerContext.Provider value={courseController}>
-      <CourseControllerProviderImpl controller={courseController} />
-      {children}
+      <CourseProvider controller={courseController} initialCourse={enrollment.classes}>
+        <CourseControllerProviderImpl controller={courseController} />
+        {children}
+      </CourseProvider>
     </CourseControllerContext.Provider>
   );
 }
@@ -2028,8 +2057,11 @@ export function useLateTokens() {
 }
 
 export function useCourse() {
-  const { role } = useClassProfiles();
-  return role.classes;
+  const course = useContext(CourseContext);
+  if (!course) {
+    throw new Error("useCourse must be used within CourseControllerProvider");
+  }
+  return course;
 }
 
 export function useCourseController() {
