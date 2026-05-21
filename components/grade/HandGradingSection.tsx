@@ -466,20 +466,32 @@ export default function HandGradingSection({ reviewId, appliedOnly }: HandGradin
     />
   ));
 
-  // Stable tree regardless of visibility — toggle `display` only. Swapping the returned shape
-  // when `anyVisible` flips would unmount/remount the criterion blocks (and their check rows),
-  // resetting their state and triggering an infinite visibility-report loop.
+  // When the review is released but nothing is visible for hand grading (no applied checks and no
+  // available checks to show), say so explicitly instead of rendering an empty void.
+  const showEmptyNote = !anyVisible && Boolean(review?.released);
+
+  // Stable tree regardless of visibility — toggle `display` only, and keep the criterion blocks
+  // mounted at a fixed position. Swapping the returned shape when `anyVisible` flips would
+  // unmount/remount the check rows, resetting their state and triggering an infinite
+  // visibility-report loop.
   return (
-    <Box display={anyVisible ? "block" : "none"} borderWidth="1px" borderRadius="md" p={4} w="100%">
-      <HStack justify="space-between" align="center" mb={3} flexWrap="wrap" gap={2}>
+    <Box display={anyVisible || showEmptyNote ? "block" : "none"} borderWidth="1px" borderRadius="md" p={4} w="100%">
+      <HStack justify="space-between" align="center" mb={anyVisible ? 3 : 2} flexWrap="wrap" gap={2}>
         <Heading as="h2" size="sm">
           Hand grading
         </Heading>
-        <Text fontWeight="semibold">
-          {totalEarned} / {totalMax}
-        </Text>
+        {anyVisible && (
+          <Text fontWeight="semibold">
+            {totalEarned} / {totalMax}
+          </Text>
+        )}
       </HStack>
-      <VStack align="stretch" gap={3}>
+      {showEmptyNote && (
+        <Text fontSize="sm" color="fg.muted">
+          No rubric checks were applied to your submission.
+        </Text>
+      )}
+      <VStack align="stretch" gap={3} display={anyVisible ? "flex" : "none"}>
         {criterionBlocks}
       </VStack>
     </Box>
