@@ -75,14 +75,32 @@ test.afterEach(async ({ logMagicLinksOnFailure }) => {
 test.describe("Student grade view", () => {
   test("renders the grade ledger for a released submission", async ({ page }) => {
     test.setTimeout(120_000);
+
+    // Catch render loops (e.g. the hand-grading section flickering on/off): React throws
+    // "Maximum update depth exceeded" when a component setStates without settling — in production
+    // builds this surfaces as "Minified React error #185". Match both.
+    const updateDepthErrors: string[] = [];
+    page.on("console", (msg) => {
+      const text = msg.text();
+      if (msg.type() === "error" && (text.includes("Maximum update depth exceeded") || text.includes("#185"))) {
+        updateDepthErrors.push(text);
+      }
+    });
+    page.on("pageerror", (err) => {
+      if (err.message.includes("Maximum update depth exceeded") || err.message.includes("#185")) {
+        updateDepthErrors.push(err.message);
+      }
+    });
+
     await loginAsUser(page, student!, course);
 
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submissionId}/grade`, {
       waitUntil: "domcontentloaded"
     });
 
-    // Ledger header: assignment title + the released total.
-    await expect(page.getByRole("heading", { name: ASSIGN_TITLE })).toBeVisible({ timeout: 30_000 });
+    // Ledger header: assignment title + the released total. (The title also appears in the
+    // submission layout header, so scope to the first match.)
+    await expect(page.getByRole("heading", { name: ASSIGN_TITLE }).first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("85", { exact: false }).first()).toBeVisible();
 
     // The hand-grading section renders (the submission was hand-graded).
@@ -93,5 +111,8 @@ test.describe("Student grade view", () => {
 
     // The "Grade" tab is active in the sub-nav.
     await expect(page.getByRole("button", { name: "Grade", exact: true })).toBeVisible();
+
+    // No render loop while the page settled.
+    expect(updateDepthErrors).toEqual([]);
   });
 });

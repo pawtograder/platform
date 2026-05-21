@@ -295,16 +295,20 @@ function CriterionBlock({
     />
   ));
 
-  if (!anyVisible) {
-    // Keep the (null-rendering) check rows mounted so their hooks run and report visibility,
-    // but show no UI for this criterion.
-    return <Box display="none">{checkRows}</Box>;
-  }
-
   const modeLabel = criteria.is_deduction_only ? "deduction only" : criteria.is_additive ? "additive" : "deductive";
 
+  // Keep a STABLE tree regardless of visibility — toggle `display`, never swap the structure.
+  // Swapping the returned shape would unmount/remount the check rows, resetting their state and
+  // causing an infinite visibility-report loop.
   return (
-    <Box borderWidth="1px" borderColor="border.subtle" borderRadius="md" p={3} w="100%">
+    <Box
+      display={anyVisible ? "block" : "none"}
+      borderWidth="1px"
+      borderColor="border.subtle"
+      borderRadius="md"
+      p={3}
+      w="100%"
+    >
       <HStack justify="space-between" align="start" gap={2} flexWrap="wrap" mb={2}>
         <VStack align="start" gap={0} minW="0">
           <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
@@ -404,14 +408,11 @@ export default function HandGradingSection({ reviewId }: HandGradingSectionProps
     />
   ));
 
-  // Nothing visible after applying per-check visibility rules: render nothing, but keep the
-  // (hidden) blocks mounted so their hooks can report visibility and flip this on if it changes.
-  if (!anyVisible) {
-    return <Box display="none">{criterionBlocks}</Box>;
-  }
-
+  // Stable tree regardless of visibility — toggle `display` only. Swapping the returned shape
+  // when `anyVisible` flips would unmount/remount the criterion blocks (and their check rows),
+  // resetting their state and triggering an infinite visibility-report loop.
   return (
-    <Box borderWidth="1px" borderRadius="md" p={4} w="100%">
+    <Box display={anyVisible ? "block" : "none"} borderWidth="1px" borderRadius="md" p={4} w="100%">
       <HStack justify="space-between" align="center" mb={3} flexWrap="wrap" gap={2}>
         <Heading as="h2" size="sm">
           Hand grading
