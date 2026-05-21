@@ -101,6 +101,11 @@ function AppliedCheckRow({
           {signedPoints}
         </Text>
       </HStack>
+      {check.description && (
+        <Box color="fg.subtle" fontSize="xs" mt={1}>
+          <Markdown>{check.description}</Markdown>
+        </Box>
+      )}
       <Box color="fg.muted" mt={1}>
         <Markdown>{comment.comment}</Markdown>
       </Box>
@@ -374,6 +379,11 @@ function CriterionBlock({
           {earned} / {max}
         </Text>
       </HStack>
+      {criteria.description && (
+        <Box color="fg.muted" fontSize="xs" mb={2}>
+          <Markdown>{criteria.description}</Markdown>
+        </Box>
+      )}
       <VStack align="stretch" gap={2}>
         {checkRows}
       </VStack>

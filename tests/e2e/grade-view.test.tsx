@@ -134,6 +134,9 @@ test.describe("Student grade view", () => {
     // Available rubric checks that are visible but not applied are shown (Grade tab only).
     await expect(page.getByText("Not applied", { exact: true }).first()).toBeVisible();
 
+    // Criteria/check descriptions are shown inline on the grade detail page.
+    await expect(page.getByText("Criteria for grading review evaluation", { exact: false }).first()).toBeVisible();
+
     // The autograder section renders too (pre-baked submissions carry grader results).
     await expect(page.getByRole("heading", { name: "Autograder", exact: true })).toBeVisible();
 
