@@ -3,8 +3,8 @@ import { signOutAction } from "@/app/actions";
 import Logo from "@/components/ui/logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/utils/supabase/client";
-import type { CourseFeatureName } from "@/lib/courseFeatures";
-import { CourseWithFeatures, UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
+import { courseFeatureEnabled, type CourseFeatureName } from "@/lib/courseFeatures";
+import { Course, CourseWithFeatures, UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
@@ -33,9 +33,7 @@ export function useClassProfiles() {
 export function useFeatureEnabled(feature: CourseFeatureName) {
   const { role } = useClassProfiles();
   const course = role.classes as CourseWithFeatures;
-  const featureFlag = course.features?.find((f) => f.name === feature);
-  // Default to true if feature flag doesn't exist
-  return featureFlag?.enabled ?? true;
+  return courseFeatureEnabled(course.features, feature);
 }
 
 export function useIsGrader() {
@@ -144,6 +142,37 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       cleanedUp = true;
     };
   }, [userId, retryNonce]);
+
+  useEffect(() => {
+    if (!userId || isLoading || loadError) {
+      return;
+    }
+    const courseId = typeof course_id === "string" ? Number.parseInt(course_id, 10) : undefined;
+    if (!courseId || Number.isNaN(courseId)) {
+      return;
+    }
+
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`class-profile-course-${courseId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "classes", filter: `id=eq.${courseId}` },
+        (payload) => {
+          const updatedCourse = payload.new as Course;
+          setRoles((currentRoles) =>
+            currentRoles.map((role) =>
+              role.class_id === updatedCourse.id ? { ...role, classes: { ...role.classes, ...updatedCourse } } : role
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [course_id, isLoading, loadError, userId]);
 
   if (isLoading) {
     return <Skeleton height="100px" width="100%" />;

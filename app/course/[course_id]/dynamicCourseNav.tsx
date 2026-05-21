@@ -15,7 +15,7 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
 import Image from "next/image";
@@ -274,9 +274,9 @@ export default function DynamicCourseNav() {
         (!link.instructor_only || isInstructor)
     )
     .filter((link) => {
-      if (!("feature_flag" in link)) return true;
-      const feature = course.features?.find((f) => f.name === link.feature_flag);
-      return feature ? feature.enabled : true; // Default to enabled if feature not found
+      const featureFlag = "feature_flag" in link ? link.feature_flag : undefined;
+      if (!featureFlag) return true;
+      return courseFeatureEnabled(course.features, featureFlag);
     });
 
   return (
@@ -364,9 +364,9 @@ export default function DynamicCourseNav() {
                                     (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                                 )
                                 .filter((submenu) => {
-                                  if (!("feature_flag" in submenu)) return true;
-                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
-                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
+                                  const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
+                                  if (!featureFlag) return true;
+                                  return courseFeatureEnabled(course.features, featureFlag);
                                 })
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
@@ -486,9 +486,9 @@ export default function DynamicCourseNav() {
                                   (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                               )
                               .filter((submenu) => {
-                                if (!("feature_flag" in submenu)) return true;
-                                const feature = course.features?.find((f) => f.name === submenu.feature_flag);
-                                return feature ? feature.enabled : true; // Default to enabled if feature not found
+                                const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
+                                if (!featureFlag) return true;
+                                return courseFeatureEnabled(course.features, featureFlag);
                               })
                               .map((submenu) => (
                                 <Menu.Item key={submenu.name} value={submenu.name} asChild>
