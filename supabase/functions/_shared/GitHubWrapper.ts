@@ -206,7 +206,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   const existing = createContentLimiters.get(key);
   if (existing) return existing;
   const id = `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
-  const opts = { reservoir: 50, maxConcurrent: 50, reservoirRefreshAmount: 50, reservoirRefreshInterval: 60_000 };
+  const opts = { reservoir: 40, maxConcurrent: 40, reservoirRefreshAmount: 40, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
   if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
     limiter = buildRedisBottleneck(id, opts, false);
