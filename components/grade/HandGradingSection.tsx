@@ -122,39 +122,62 @@ function AppliedCheckRow({
 }
 
 /**
- * Renders a single visible-but-not-applied check: greyed out, labeled "not applied", with the
- * un-applied regrade affordance (or a status badge if a request already exists for it).
+ * Renders an available rubric check that the student is allowed to see but that was NOT applied to
+ * their submission. Shows what the check assesses (description) and what it was worth, so the
+ * grading summary conveys the full rubric — not just the checks that happened to be applied. Also
+ * carries the un-applied regrade affordance (or a status badge if a request already exists).
  */
 function UnappliedCheckRow({
   check,
   reviewId,
+  isAdditive,
   existingRequest
 }: {
   check: RubricChecks;
   reviewId: number;
+  isAdditive: boolean;
   existingRequest?: RegradeRequest;
 }) {
   const isGrader = useIsGraderOrInstructor();
   const existingStatus = existingRequest ? statusConfig[existingRequest.status as RegradeStatus] : undefined;
 
+  // What this check would be worth if applied: additive checks add points; deduction checks would
+  // subtract them (so "not applied" is good news for the student).
+  const points = check.points ?? 0;
+  const potentialLabel = points === 0 ? null : isAdditive ? `+${points} available` : `−${points} if applied`;
+
   return (
-    <Box borderWidth="1px" borderColor="border.muted" borderRadius="md" p={2} w="100%" fontSize="sm" opacity={0.7}>
-      <HStack justify="space-between" align="center" gap={2} flexWrap="wrap">
-        <HStack gap={2} flexWrap="wrap">
-          <Text fontWeight="semibold" color="fg.muted" wordBreak="break-word">
-            {check.name}
-          </Text>
-          <Text fontSize="xs" color="fg.subtle">
-            not applied
-          </Text>
-        </HStack>
-        {existingStatus ? (
-          <Badge colorPalette={existingStatus.colorPalette} size="sm">
-            {existingStatus.label}
-          </Badge>
-        ) : !isGrader ? (
-          <RequestRegradeForCheckDialog submissionReviewId={reviewId} rubricCheckId={check.id} compact />
-        ) : null}
+    <Box borderWidth="1px" borderColor="border.muted" borderRadius="md" p={2} w="100%" fontSize="sm" bg="bg.subtle">
+      <HStack justify="space-between" align="start" gap={2} flexWrap="wrap">
+        <VStack align="start" gap={0} minW="0">
+          <HStack gap={2} flexWrap="wrap">
+            <Text fontWeight="semibold" color="fg.default" wordBreak="break-word">
+              {check.name}
+            </Text>
+            <Badge size="sm" variant="surface" colorPalette="gray">
+              Not applied
+            </Badge>
+          </HStack>
+          {check.description && (
+            <Box color="fg.muted" fontSize="xs" mt={1}>
+              <Markdown>{check.description}</Markdown>
+            </Box>
+          )}
+        </VStack>
+        <VStack align="end" gap={1} flexShrink={0}>
+          {potentialLabel && (
+            <Text fontSize="xs" color="fg.subtle">
+              {potentialLabel}
+            </Text>
+          )}
+          {existingStatus ? (
+            <Badge colorPalette={existingStatus.colorPalette} size="sm">
+              {existingStatus.label}
+            </Badge>
+          ) : !isGrader ? (
+            <RequestRegradeForCheckDialog submissionReviewId={reviewId} rubricCheckId={check.id} compact />
+          ) : null}
+        </VStack>
       </HStack>
     </Box>
   );
@@ -237,7 +260,14 @@ function CheckRow({
     );
   }
 
-  return <UnappliedCheckRow check={check} reviewId={reviewId} existingRequest={existingRequest} />;
+  return (
+    <UnappliedCheckRow
+      check={check}
+      reviewId={reviewId}
+      isAdditive={!!criteria.is_additive}
+      existingRequest={existingRequest}
+    />
+  );
 }
 
 /**

@@ -5,7 +5,6 @@ import dotenv from "dotenv";
 import {
   createClass,
   createUsersInClass,
-  gradeSubmission,
   insertAssignment,
   insertPreBakedSubmission,
   loginAsUser,
@@ -57,15 +56,10 @@ test.beforeAll(async () => {
   });
   submissionId = sub.submission_id;
 
-  // Hand-grade and complete the review.
-  await gradeSubmission(sub.grading_review_id, instructor!.private_profile_id, true, {
-    totalScoreOverride: 85,
-    totalAutogradeScoreOverride: 0
-  });
-
-  // Insert a deterministic, whole-submission (null target) grading comment so the test can
-  // assert it renders as an APPLIED check (regression guard: the section used to mis-label
-  // applied checks as "not applied" by filtering out null-target comments).
+  // Apply exactly ONE rubric check ourselves (a whole-submission, null-target grading comment),
+  // leaving the other student-visible checks un-applied. We don't use gradeSubmission here because
+  // it always applies REQUIRED checks (and the fixture's checks are all required), which would
+  // leave nothing "not applied" to assert on.
   const { data: gradingCheck } = await supabase
     .from("rubric_checks")
     .select("id, rubric_criteria!inner(rubric_id)")
@@ -84,10 +78,15 @@ test.beforeAll(async () => {
   });
   expect(commentError).toBeNull();
 
-  // Release the review (and pin the displayed total after the comment's recompute).
+  // Complete + release the review, pinning the displayed total (after the comment's recompute).
   const { error } = await supabase
     .from("submission_reviews")
-    .update({ released: true, total_score: 85 })
+    .update({
+      released: true,
+      total_score: 85,
+      completed_at: new Date().toISOString(),
+      completed_by: instructor!.private_profile_id
+    })
     .eq("id", sub.grading_review_id);
   expect(error).toBeNull();
 });
@@ -131,6 +130,9 @@ test.describe("Student grade view", () => {
     // comment body — proves applied checks are not mis-labeled "not applied").
     await expect(page.getByText("Hand grading", { exact: false }).first()).toBeVisible();
     await expect(page.getByText(APPLIED_COMMENT_TEXT, { exact: false })).toBeVisible();
+
+    // Available rubric checks that are visible but not applied are shown (Grade tab only).
+    await expect(page.getByText("Not applied", { exact: true }).first()).toBeVisible();
 
     // The autograder section renders too (pre-baked submissions carry grader results).
     await expect(page.getByRole("heading", { name: "Autograder", exact: true })).toBeVisible();
