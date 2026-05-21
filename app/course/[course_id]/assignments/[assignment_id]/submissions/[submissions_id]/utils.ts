@@ -1,12 +1,12 @@
 "use client";
 
-/** Files, results, or repo-analytics after /submissions/:id/ — avoids false positives from .includes("/files") elsewhere. */
-const SUBMISSION_SUB_PAGE_RE = /\/submissions\/[^/]+\/(?:files|results|repo-analytics)(?:\/|$|\?|#)/;
+/** grade, files, results, or repo-analytics after /submissions/:id/ — avoids false positives from .includes("/files") elsewhere. */
+const SUBMISSION_SUB_PAGE_RE = /\/submissions\/[^/]+\/(?:grade|files|results|repo-analytics)(?:\/|$|\?|#)/;
 
-/** Last path segment after /submissions/:id/ for files vs results — used for default active tab. */
-export function getSubmissionFilesOrResultsTab(pathname: string): "files" | "results" | null {
-  const m = pathname.match(/\/submissions\/[^/]+\/(files|results)(?:\/|$|\?|#)/);
-  if (m?.[1] === "files" || m?.[1] === "results") {
+/** Last path segment after /submissions/:id/ (grade/files/results) — used for default active tab. */
+export function getSubmissionFilesOrResultsTab(pathname: string): "grade" | "files" | "results" | null {
+  const m = pathname.match(/\/submissions\/[^/]+\/(grade|files|results)(?:\/|$|\?|#)/);
+  if (m?.[1] === "grade" || m?.[1] === "files" || m?.[1] === "results") {
     return m[1];
   }
   return null;

@@ -28,12 +28,16 @@ export default function RequestRegradeForCheckDialog({
   submissionReviewId,
   rubricCheckId,
   check,
-  isReleased
+  isReleased = true,
+  compact = false
 }: {
   submissionReviewId: number;
   rubricCheckId: number;
-  check: RubricCheckType;
-  isReleased: boolean;
+  /** Required for the rubric sidebar; omitted in compact grade-view rows that already show check details. */
+  check?: RubricCheckType;
+  isReleased?: boolean;
+  /** Render a low-emphasis trigger (small ghost link) instead of the full-width button. */
+  compact?: boolean;
 }) {
   const [isRegradeDialogOpen, setIsRegradeDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -120,10 +124,14 @@ export default function RequestRegradeForCheckDialog({
       <Box ref={boxRef} id={`regrade-request-${bareCheckRegradeRequest.id}`} pl={2} pb={2} w="100%">
         <RegradeRequestWrapper regradeRequestId={bareCheckRegradeRequest.id}>
           <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%" fontSize="sm">
-            <Text fontSize="sm" fontWeight="semibold" mb={1}>
-              {check.name}
-            </Text>
-            <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+            {check && (
+              <>
+                <Text fontSize="sm" fontWeight="semibold" mb={1}>
+                  {check.name}
+                </Text>
+                <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+              </>
+            )}
             <Text fontSize="xs" color="fg.muted" mt={1}>
               {isGraderOrInstructor
                 ? "The student requested a regrade for this check, which was not applied to the submission."
@@ -142,6 +150,13 @@ export default function RequestRegradeForCheckDialog({
 
   // If deadline has passed, show a disabled button with explanation
   if (regradeDeadlineInfo.isPastDeadline && regradeDeadlineInfo.deadline) {
+    if (compact) {
+      return (
+        <Text fontSize="xs" color="fg.subtle" title="Regrade deadline has passed">
+          Regrade deadline passed
+        </Text>
+      );
+    }
     return (
       <Box pl={2} pb={2} w="100%">
         <Button size="sm" colorPalette="gray" variant="outline" w="100%" disabled title="Regrade deadline has passed">
@@ -155,12 +170,18 @@ export default function RequestRegradeForCheckDialog({
   }
 
   return (
-    <Box pl={2} pb={2} w="100%">
+    <Box pl={compact ? 0 : 2} pb={compact ? 0 : 2} w={compact ? "auto" : "100%"}>
       <DialogRoot open={isRegradeDialogOpen} onOpenChange={(e) => setIsRegradeDialogOpen(e.open)}>
         <DialogTrigger asChild>
-          <Button size="sm" colorPalette="orange" variant="outline" w="100%">
-            Request regrade — check not applied
-          </Button>
+          {compact ? (
+            <Button size="xs" variant="ghost" colorPalette="gray" color="fg.muted" px={1} h="auto" py={0.5}>
+              Request regrade
+            </Button>
+          ) : (
+            <Button size="sm" colorPalette="orange" variant="outline" w="100%">
+              Request regrade — check not applied
+            </Button>
+          )}
         </DialogTrigger>
         <DialogContent>
           <DialogHeader>

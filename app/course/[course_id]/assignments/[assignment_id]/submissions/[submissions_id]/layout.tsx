@@ -34,6 +34,7 @@ import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/SubmissionRegradeRequestsPanel";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
+import HandGradingSection from "@/components/grade/HandGradingSection";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { toaster, Toaster } from "@/components/ui/toaster";
@@ -2012,7 +2013,7 @@ function IndividualScoresDisplay({ individualScores }: { individualScores: Indiv
   );
 }
 
-function RubricView() {
+function RubricView({ appliedOnly = false }: { appliedOnly?: boolean }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
@@ -2112,7 +2113,12 @@ function RubricView() {
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
         <SubmissionRegradeRequestsPanel submissionId={submission.id} />
-        <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />
+        {/* Students browsing files see only the applied feedback; graders keep the full rubric to grade. */}
+        {appliedOnly ? (
+          <HandGradingSection reviewId={reviewId} released={Boolean(gradingReview?.released)} appliedOnly />
+        ) : (
+          <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />
+        )}
         <Comments />
       </VStack>
     </Box>
@@ -2145,7 +2151,11 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submission = useSubmission();
   const hasGraderOutput = submissionHasGraderOutput(submission.grader_results);
   const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
-  const activeSubPage = explicitSubPage ?? (hasGraderOutput ? "results" : "files");
+  const gradingReviewForDefault = useSubmissionReviewOrGradingReview(submission.grading_review_id ?? undefined);
+  // Default tab: the released grade summary if it's available, otherwise autograder feedback (which
+  // students can see before release), otherwise the files.
+  const defaultSubPage = gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
+  const activeSubPage = explicitSubPage ?? defaultSubPage;
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
@@ -2300,10 +2310,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         display="flex"
         flexWrap="wrap"
       >
+        <NextLink href={linkToSubPage(pathname, "grade", searchParams)}>
+          <Button variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+            <Icon as={FaCheckCircle} />
+            Grade
+          </Button>
+        </NextLink>
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
-            <Icon as={FaCheckCircle} />
-            Grading Summary
+            <Icon as={FaRobot} />
+            Autograder Detail
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
@@ -2325,9 +2341,12 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
           {children}
         </Box>
-        <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
-          <RubricView />
-        </Box>
+        {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there. */}
+        {activeSubPage !== "grade" && (
+          <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
+            <RubricView appliedOnly={!isGraderOrInstructor && activeSubPage === "files"} />
+          </Box>
+        )}
       </Flex>
     </Flex>
   );
