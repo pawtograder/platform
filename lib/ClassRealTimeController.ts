@@ -415,15 +415,13 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
 
-    void this._channelManager
-      .subscribeToClassesUpdate(this._classId, this._client, callback)
-      .then((unsub) => {
-        if (cancelled) {
-          unsub();
-        } else {
-          unsubscribe = unsub;
-        }
-      });
+    void this._channelManager.subscribeToClassesUpdate(this._classId, this._client, callback).then((unsub) => {
+      if (cancelled) {
+        unsub();
+      } else {
+        unsubscribe = unsub;
+      }
+    });
 
     return () => {
       cancelled = true;
