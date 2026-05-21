@@ -160,4 +160,47 @@ test.describe("Student grade view", () => {
     });
     await expect(page).toHaveURL(/\/grade(\?|#|$)/, { timeout: 30_000 });
   });
+
+  test("shows a note for hand grading when released with no applied checks", async ({ page }) => {
+    test.setTimeout(120_000);
+
+    const emptyAssignment = await insertAssignment({
+      due_date: addDays(new Date(), 1).toUTCString(),
+      class_id: course.id,
+      name: "Grade View Empty Hand Grading",
+      assignment_slug: `e2e-grade-empty-${course.id}`
+    });
+    const emptySub = await insertPreBakedSubmission({
+      student_profile_id: student!.private_profile_id,
+      assignment_id: emptyAssignment.id,
+      class_id: course.id
+    });
+
+    // Make the grading checks hidden-unless-applied and apply none, so nothing is visible for
+    // hand grading — then release. The student should see the explanatory note, not an empty void.
+    const { error: visError } = await supabase
+      .from("rubric_checks")
+      .update({ student_visibility: "if_applied" })
+      .eq("rubric_id", emptyAssignment.grading_rubric_id!);
+    expect(visError).toBeNull();
+    const { error: relError } = await supabase
+      .from("submission_reviews")
+      .update({
+        released: true,
+        total_score: 0,
+        completed_at: new Date().toISOString(),
+        completed_by: instructor!.private_profile_id
+      })
+      .eq("id", emptySub.grading_review_id);
+    expect(relError).toBeNull();
+
+    await loginAsUser(page, student!, course);
+    await page.goto(
+      `/course/${course.id}/assignments/${emptyAssignment.id}/submissions/${emptySub.submission_id}/grade`,
+      { waitUntil: "domcontentloaded" }
+    );
+
+    await expect(page.getByText("Hand grading", { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("No rubric checks were applied to your submission", { exact: false })).toBeVisible();
+  });
 });
