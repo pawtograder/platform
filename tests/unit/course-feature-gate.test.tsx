@@ -2,25 +2,21 @@ import { render, screen } from "@testing-library/react";
 import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 
-const mockUseClassProfiles = jest.fn();
+const mockUseCourse = jest.fn();
 
-jest.mock("@/hooks/useClassProfiles", () => ({
-  useClassProfiles: () => mockUseClassProfiles()
+jest.mock("@/hooks/useCourseController", () => ({
+  useCourse: () => mockUseCourse()
 }));
 
 function mockFeatures(features: { name: string; enabled: boolean }[] | null) {
-  mockUseClassProfiles.mockReturnValue({
-    role: {
-      classes: {
-        features
-      }
-    }
+  mockUseCourse.mockReturnValue({
+    features
   });
 }
 
 describe("CourseFeatureGate", () => {
   beforeEach(() => {
-    mockUseClassProfiles.mockReset();
+    mockUseCourse.mockReset();
   });
 
   it("renders dashboard content when a course feature is enabled", () => {

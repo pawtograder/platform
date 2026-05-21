@@ -3,6 +3,7 @@
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useAssignments,
+  useCourse,
   useDiscussionThreadTeasers,
   useDiscussionTopics,
   usePublishedSurveys
@@ -133,10 +134,11 @@ const ASSIGNMENT_STAFF_SUBPAGES: { label: string; path: string; graderOk?: boole
  */
 export function useGlobalSearchIndex(): SearchHit[] {
   const { role } = useClassProfiles();
+  const course = useCourse();
   const courseId = role?.class_id ?? 0;
   const isInstructor = role?.role === "instructor";
   const isStaff = isInstructor || role?.role === "grader";
-  const rawFeatures = (role?.classes as Partial<CourseWithFeatures> | undefined)?.features;
+  const rawFeatures = (course as Partial<CourseWithFeatures> | undefined)?.features;
   const features = React.useMemo(() => (Array.isArray(rawFeatures) ? rawFeatures : []), [rawFeatures]);
 
   const assignments = useAssignments();

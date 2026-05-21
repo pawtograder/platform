@@ -2,7 +2,7 @@ import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import * as Sentry from "@sentry/nextjs";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import { RealtimeChannelManager } from "./RealtimeChannelManager";
+import { RealtimeChannelManager, type ClassesRealtimeUpdate } from "./RealtimeChannelManager";
 import { PawtograderRealTimeController, ConnectionStatus, ChannelStatus } from "./PawtograderRealTimeController";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
@@ -401,6 +401,34 @@ export class ClassRealTimeController implements PawtograderRealTimeController {
     }
 
     return true;
+  }
+
+  /**
+   * Subscribe to UPDATE events on this controller's course row in `public.classes`.
+   * Uses postgres_changes (classes has no broadcast trigger); managed by RealtimeChannelManager.
+   */
+  subscribeToClassesUpdate(callback: (updatedCourse: ClassesRealtimeUpdate) => void): () => void {
+    if (this._closed) {
+      throw new Error("Cannot subscribe to channels after they have been closed");
+    }
+
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    void this._channelManager
+      .subscribeToClassesUpdate(this._classId, this._client, callback)
+      .then((unsub) => {
+        if (cancelled) {
+          unsub();
+        } else {
+          unsubscribe = unsub;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }
 
   /**

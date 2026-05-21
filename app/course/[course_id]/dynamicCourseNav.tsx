@@ -15,6 +15,7 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
@@ -247,6 +248,7 @@ export default function DynamicCourseNav() {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
   const { role: enrollment } = useClassProfiles();
+  const course = useCourse() as CourseWithFeatures;
   const { colorMode } = useColorMode();
 
   const isInstructor = enrollment.role === "instructor";
@@ -265,7 +267,6 @@ export default function DynamicCourseNav() {
     return <Skeleton height="40" width="100%" />;
   }
 
-  const course = enrollment.classes as CourseWithFeatures;
   const filteredLinks = LinkItems(enrollment.class_id)
     .filter(
       (link) =>
