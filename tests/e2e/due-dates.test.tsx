@@ -230,9 +230,12 @@ test.describe("Assignment due dates", () => {
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
     // Wait for the assignment detail page to fully load and the due date component to render
     await expect(page.locator("text=/Due:/")).toBeVisible({ timeout: 10000 });
+    // The lab-adjusted due date only resolves once the student's user role (lab_section_id),
+    // lab sections, and lab-section meetings have all loaded and the memo recomputes. Under
+    // webkit + CI contention that chain can take longer than the 20s default, so give it room.
     await expect(
       page.getByText(formatDateForTest(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 35_000 });
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
