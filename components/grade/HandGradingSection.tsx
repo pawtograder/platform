@@ -29,6 +29,8 @@ import { useEffect, useMemo, useState } from "react";
 export type HandGradingSectionProps = {
   reviewId: number | undefined;
   released: boolean;
+  /** Show only criteria that have applied checks (used in the Files-tab sidebar for students). */
+  appliedOnly?: boolean;
 };
 
 // Mirror of statusConfig used in app/course/[course_id]/RegradeRequestsTable.tsx so the
@@ -170,6 +172,7 @@ function CheckRow({
   reviewId,
   targetStudentProfileId,
   requestsByCheckId,
+  appliedOnly,
   onResolved
 }: {
   check: RubricChecks;
@@ -177,6 +180,7 @@ function CheckRow({
   reviewId: number;
   targetStudentProfileId?: string | null;
   requestsByCheckId: Map<number, RegradeRequest>;
+  appliedOnly?: boolean;
   onResolved: (checkId: number, resolution: CheckResolution) => void;
 }) {
   const review = useSubmissionReviewOrGradingReview(reviewId);
@@ -193,13 +197,16 @@ function CheckRow({
   );
   const isGrader = useIsGraderOrInstructor();
 
-  const visible = useShouldShowRubricCheck({
+  const baseVisible = useShouldShowRubricCheck({
     check: check as HydratedRubricCheck,
     rubricCheckComments: comments,
     reviewForThisRubric: review,
     isGrader,
     isPreviewMode: false
   });
+  // In applied-only mode (the Files-tab sidebar for students) hide un-applied checks entirely,
+  // so empty criteria drop out too.
+  const visible = baseVisible && (!appliedOnly || comments.length > 0);
 
   const appliedSum = useMemo(() => comments.reduce((acc, c) => acc + (c.points ?? 0), 0), [comments]);
 
@@ -246,12 +253,14 @@ function CriterionBlock({
   reviewId,
   targetStudentProfileId,
   requestsByCheckId,
+  appliedOnly,
   onResolved
 }: {
   criteria: RubricCriteria;
   reviewId: number;
   targetStudentProfileId?: string | null;
   requestsByCheckId: Map<number, RegradeRequest>;
+  appliedOnly?: boolean;
   onResolved: (criterionId: number, resolution: CriterionResolution) => void;
 }) {
   const checks = useRubricChecksByCriteria(criteria.id);
@@ -303,6 +312,7 @@ function CriterionBlock({
       reviewId={reviewId}
       targetStudentProfileId={targetStudentProfileId}
       requestsByCheckId={requestsByCheckId}
+      appliedOnly={appliedOnly}
       onResolved={handleCheckResolved}
     />
   ));
@@ -347,7 +357,7 @@ function CriterionBlock({
  * checks, plus regrade affordances. Visibility (including release gating) is delegated to
  * useShouldShowRubricCheck; if nothing is visible after filtering, renders null.
  */
-export default function HandGradingSection({ reviewId }: HandGradingSectionProps) {
+export default function HandGradingSection({ reviewId, appliedOnly }: HandGradingSectionProps) {
   const review = useSubmissionReviewOrGradingReview(reviewId);
   const submission = useSubmission();
   const { private_profile_id } = useClassProfiles();
@@ -416,6 +426,7 @@ export default function HandGradingSection({ reviewId }: HandGradingSectionProps
       reviewId={reviewId}
       targetStudentProfileId={private_profile_id}
       requestsByCheckId={requestsByCheckId}
+      appliedOnly={appliedOnly}
       onResolved={handleCriterionResolved}
     />
   ));

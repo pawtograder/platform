@@ -138,7 +138,21 @@ test.describe("Student grade view", () => {
     // The "Grade" tab is active in the sub-nav.
     await expect(page.getByRole("button", { name: "Grade", exact: true })).toBeVisible();
 
+    // The grading sidebar is dropped on the Grade tab (the ledger replaces it).
+    await expect(page.locator("[data-grading-summary-aside]")).toHaveCount(0);
+
     // No render loop while the page settled.
     expect(updateDepthErrors).toEqual([]);
+  });
+
+  test("defaults to the grade tab once the review is released", async ({ page }) => {
+    test.setTimeout(120_000);
+    await loginAsUser(page, student!, course);
+
+    // Visiting the submission root should redirect to the grade tab when released.
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submissionId}`, {
+      waitUntil: "domcontentloaded"
+    });
+    await expect(page).toHaveURL(/\/grade(\?|#|$)/, { timeout: 30_000 });
   });
 });
