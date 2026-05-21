@@ -7,7 +7,6 @@ import { LuChevronDown, LuChevronRight } from "react-icons/lu";
 import Link from "next/link";
 import { useMemo } from "react";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
-import { useRubricCheck } from "@/hooks/useAssignment";
 
 const statusConfig = {
   draft: { label: "Draft", colorPalette: "gray", icon: Clock },
@@ -46,17 +45,17 @@ type SubmissionGroup = {
 function RequestRow({ request, courseId }: { request: RegradeRequestWithDetails; courseId: number }) {
   const config = statusConfig[request.status as keyof typeof statusConfig];
   const StatusIcon = config?.icon;
-  const rubricCheckFromId = useRubricCheck(request.rubric_check_id);
 
   const finalPoints =
     request.status === "closed" && request.closed_points !== null ? request.closed_points : request.resolved_points;
 
-  // Get rubric check name from the first available comment, or fall back to rubric_check_id on the request row.
+  // Rubric check name from the first available comment. (We deliberately avoid useRubricCheck here:
+  // this table renders on the student dashboard, which is not inside an AssignmentController, so
+  // calling that hook would crash. Bare-check requests with no comment yet show "-".)
   const rubricCheckName =
     request.submission_file_comments?.[0]?.rubric_checks?.name ||
     request.submission_artifact_comments?.[0]?.rubric_checks?.name ||
     request.submission_comments?.[0]?.rubric_checks?.name ||
-    rubricCheckFromId?.name ||
     "-";
 
   const isDangling = request.resolution_reason === "comment_deleted";

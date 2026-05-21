@@ -1451,8 +1451,10 @@ function RubricMenu() {
 }
 export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
   const unsortedRubrics = useRubrics();
-  // Rubric descriptions are collapsed by default to keep the sidebar scannable; this reveals them.
-  const [showDescriptions, setShowDescriptions] = useState(false);
+  // Descriptions are collapsed by default for students (keeps the sidebar scannable) but shown for
+  // graders/instructors, who rely on them while grading. Either role can toggle.
+  const isGraderOrInstructorForDescriptions = useIsGraderOrInstructor();
+  const [showDescriptions, setShowDescriptions] = useState(isGraderOrInstructorForDescriptions);
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
   const activeReviewAssignment = useActiveReviewAssignment();
   const rubrics = useMemo(() => {

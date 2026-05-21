@@ -264,13 +264,17 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   );
   const locationIsValid = !isBareCheck || isBareCheckResolveLocationValid(materializationKind, resolveLocation);
 
-  // Reset adjustment and annotation location when popover opens
+  // Reset the adjustment and resolve location ONLY when the popover opens. defaultResolveLocation is
+  // a fresh reference on every render (it derives from arrays rebuilt each render), so it must NOT
+  // be a dependency here: including it re-fires this effect on every render, which both wipes the
+  // user's just-typed adjustment back to "0" and spins a setState/render update loop.
   useEffect(() => {
     if (isOpen) {
       setPointsAdjustment("0");
       setResolveLocation(defaultResolveLocation);
     }
-  }, [isOpen, defaultResolveLocation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const isAdditive = rubricCriteria?.is_additive ?? true;
   const changeDescription = isAdditive ? "points awarded" : "deduction";
@@ -611,13 +615,17 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   );
   const locationIsValid = !isBareCheck || isBareCheckResolveLocationValid(materializationKind, resolveLocation);
 
-  // Reset adjustment and annotation location when popover opens
+  // Reset the adjustment and resolve location ONLY when the popover opens. defaultResolveLocation is
+  // a fresh reference on every render (it derives from arrays rebuilt each render), so it must NOT
+  // be a dependency here: including it re-fires this effect on every render, which both wipes the
+  // user's just-typed adjustment back to "0" and spins a setState/render update loop.
   useEffect(() => {
     if (isOpen) {
       setPointsAdjustment("0");
       setResolveLocation(defaultResolveLocation);
     }
-  }, [isOpen, defaultResolveLocation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const isAdditive = rubricCriteria?.is_additive ?? true;
   const changeDescription = isAdditive ? "points awarded" : "deduction";
