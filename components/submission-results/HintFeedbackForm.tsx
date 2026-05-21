@@ -63,11 +63,11 @@ export function HintFeedbackForm({
 
   // Auto-save function
   const saveFeedback = useCallback(
-    async (newUseful?: boolean | null, newComment?: string) => {
+    async (newUseful?: boolean | null, newComment?: string): Promise<boolean> => {
       const usefulToSave = newUseful !== undefined ? newUseful : useful;
       const commentToSave = newComment !== undefined ? newComment : comment;
 
-      if (usefulToSave === null) return; // Don't save if no useful rating
+      if (usefulToSave === null) return false; // Don't save if no useful rating
 
       setIsSaving(true);
       setError(null);
@@ -89,7 +89,7 @@ export function HintFeedbackForm({
 
           if (updateError) {
             setError("Failed to save feedback: " + updateError.message);
-            return;
+            return false;
           }
 
           if (updatedFeedback) {
@@ -113,16 +113,18 @@ export function HintFeedbackForm({
 
           if (insertError) {
             setError("Failed to save feedback: " + insertError.message);
-            return;
+            return false;
           }
 
           if (newFeedback) {
             setExistingFeedback(newFeedback as unknown as GraderResultTestsHintFeedback);
           }
         }
+        return true;
       } catch (err) {
         Sentry.captureException(err);
         setError("An error occurred while saving feedback");
+        return false;
       } finally {
         setIsSaving(false);
       }
@@ -179,12 +181,14 @@ export function HintFeedbackForm({
       clearTimeout(debounceTimeoutRef.current);
     }
 
-    // Save immediately
-    await saveFeedback();
+    // Save immediately, and only mark as submitted if the save actually succeeded.
+    const saved = await saveFeedback();
 
-    setHasSubmitted(true);
-    setIsEditing(false);
-    onFeedbackSubmitted?.();
+    if (saved) {
+      setHasSubmitted(true);
+      setIsEditing(false);
+      onFeedbackSubmitted?.();
+    }
     setIsSubmitting(false);
   };
 

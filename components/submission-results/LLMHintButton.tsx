@@ -84,8 +84,9 @@ export function LLMHintButton({
       console.error("LLM Hint Error:", err);
       setError(errorMessage);
 
-      // Do NOT log 429 errors to Sentry
-      if (err instanceof Error && err.message.startsWith("Rate limit:")) {
+      // Do NOT log rate-limit (429) errors to Sentry — the message is "Rate limit exceeded."
+      // (or a server-provided "Rate limit: ..."), so match case-insensitively on "rate limit".
+      if (err instanceof Error && /rate limit/i.test(err.message)) {
         return;
       }
 

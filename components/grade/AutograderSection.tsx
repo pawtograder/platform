@@ -65,6 +65,18 @@ function TestRow({
       _hover={hasDetail ? { bg: "bg.muted" } : undefined}
       onClick={hasDetail ? () => setOpen((o) => !o) : undefined}
       role={hasDetail ? "button" : undefined}
+      tabIndex={hasDetail ? 0 : undefined}
+      aria-expanded={hasDetail ? open : undefined}
+      onKeyDown={
+        hasDetail
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setOpen((o) => !o);
+              }
+            }
+          : undefined
+      }
     >
       <HStack gap={2} minW={0}>
         {hasDetail ? (

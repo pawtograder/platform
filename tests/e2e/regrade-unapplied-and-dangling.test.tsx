@@ -76,10 +76,15 @@ async function getGradingReviewId(submission_id: number, grading_rubric_id: numb
 // creates self-review checks first and grading checks after, so we must look the check
 // up by rubric rather than relying on rubricChecks[0].
 async function getCheckIdForRubric(grading_rubric_id: number): Promise<number> {
+  // Use a non-annotation (global) check: resolving a bare-check regrade for an annotation check
+  // requires a submission_file_id + line to place the materialized comment, which these
+  // lifecycle tests don't supply.
   const { data, error } = await supabase
     .from("rubric_checks")
-    .select("id, rubric_criteria!inner(rubric_id)")
-    .eq("rubric_criteria.rubric_id", grading_rubric_id);
+    .select("id, is_annotation, rubric_criteria!inner(rubric_id)")
+    .eq("rubric_criteria.rubric_id", grading_rubric_id)
+    .eq("is_annotation", false)
+    .order("id", { ascending: true });
   expect(error).toBeNull();
   expect(data).not.toBeNull();
   expect(data!.length).toBeGreaterThan(0);

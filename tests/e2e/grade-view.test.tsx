@@ -64,6 +64,7 @@ test.beforeAll(async () => {
     .from("rubric_checks")
     .select("id, rubric_criteria!inner(rubric_id)")
     .eq("rubric_criteria.rubric_id", assignment.grading_rubric_id!)
+    .order("id", { ascending: true })
     .limit(1)
     .single();
   const { error: commentError } = await supabase.from("submission_comments").insert({

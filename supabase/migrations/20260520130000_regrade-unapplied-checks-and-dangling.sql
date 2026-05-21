@@ -409,6 +409,12 @@ $function$;
 --    request (no comment yet) creates the real submission_comment, then proceeds
 --    exactly as the comment-backed path. Otherwise unchanged from the prior version.
 -- ---------------------------------------------------------------------------
+-- This adds optional p_submission_file_id / p_line / p_submission_artifact_id params, changing the
+-- signature. Drop the prior 5-arg version first, otherwise BOTH overloads coexist and PostgREST
+-- can't disambiguate a 5-arg call (PGRST203). The new 8-arg version still accepts 5 named args
+-- (the extras default to NULL), so existing callers keep working.
+DROP FUNCTION IF EXISTS public.update_regrade_request_status(bigint, regrade_status, uuid, numeric, numeric);
+
 CREATE OR REPLACE FUNCTION public.update_regrade_request_status(
     regrade_request_id bigint,
     new_status regrade_status,
@@ -833,7 +839,13 @@ create trigger auto_resolve_regrade_on_artifact_comment_delete
     for each row execute function public.auto_resolve_regrade_on_comment_delete();
 
 grant execute on function public.create_regrade_request_for_check(uuid, bigint, bigint) to authenticated;
-grant execute on function public._materialize_bare_check_regrade_comment(
+
+-- _materialize_bare_check_regrade_comment is a SECURITY DEFINER internal helper that inserts
+-- released grading comments straight from caller-supplied parameters without authorizing the
+-- caller. It must NOT be directly callable by clients — it is only invoked by other SECURITY
+-- DEFINER functions (which run as the owner). Revoke EXECUTE from PUBLIC/authenticated so a
+-- logged-in user can't fabricate a request row and call it to inject arbitrary grades.
+revoke all on function public._materialize_bare_check_regrade_comment(
     public.submission_regrade_requests,
     uuid,
     numeric,
@@ -841,4 +853,4 @@ grant execute on function public._materialize_bare_check_regrade_comment(
     bigint,
     integer,
     bigint
-) to authenticated;
+) from public, authenticated;

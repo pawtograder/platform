@@ -20,7 +20,7 @@ import { getStudentFacingErrorMessage } from "@/lib/studentFacingErrorMessages";
 import { toaster } from "@/components/ui/toaster";
 import { Alert } from "@/components/ui/alert";
 import { format, formatDistanceToNow } from "date-fns";
-import RegradeRequestWrapper from "./regrade-request-wrapper";
+import RegradeRequestWrapper from "@/components/ui/regrade-request-wrapper";
 
 const RUBRIC_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 

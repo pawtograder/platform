@@ -2,6 +2,7 @@
 import {
   AssignmentWithRubricsAndReferences,
   RegradeRequest,
+  RegradeStatus,
   ReviewAssignmentParts,
   ReviewAssignments,
   Rubric,
@@ -374,7 +375,16 @@ export function useBareCheckRegradeRequest(
     [submission_review_id, rubric_check_id]
   );
   const matches = useListTableControllerValues(controller.regradeRequests, findPredicate);
-  return matches[0];
+  // Only surface an ACTIVE bare-check request, and pick deterministically (most recently updated)
+  // so the UI never latches onto a stale/non-actionable row when several exist.
+  return useMemo(() => {
+    const ACTIVE_STATUSES: RegradeStatus[] = ["draft", "opened", "escalated"];
+    const active = matches.filter((r) => ACTIVE_STATUSES.includes(r.status as RegradeStatus));
+    if (active.length === 0) {
+      return undefined;
+    }
+    return [...active].sort((a, b) => new Date(b.last_updated_at).getTime() - new Date(a.last_updated_at).getTime())[0];
+  }, [matches]);
 }
 
 /**
