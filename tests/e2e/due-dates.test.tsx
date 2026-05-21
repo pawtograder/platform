@@ -230,15 +230,26 @@ test.describe("Assignment due dates", () => {
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
     // Wait for the assignment detail page to fully load and the due date component to render
     await expect(page.locator("text=/Due:/")).toBeVisible({ timeout: 10000 });
+    // The lab-adjusted due date only resolves once the student's user role (lab_section_id),
+    // lab sections, and lab-section meetings have all loaded and the memo recomputes. Under
+    // webkit + CI contention that chain can take longer than the 20s default, so give it room.
     await expect(
       page.getByText(formatDateForTest(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 35_000 });
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The dialog closes only after assignmentDueDateExceptions.create() resolves — an insert
+    // whose response waits on DB triggers (gradebook recalc, etc.) and can stall badly under
+    // CI load, especially on webkit. Rather than asserting on the incidental dialog teardown
+    // (which then hangs the timeout), wait for the page's applied-extension indicator, which
+    // confirms the write landed and the due date recomputed. This also leaves the dialog gone
+    // before the date assertion below, avoiding a strict-mode clash with the dialog's preview.
+    await expect(page.getByText(/extension applied/i).first()).toBeVisible({ timeout: 45_000 });
     await expect(
-      page.getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
+      page
+        .getByText(formatDateForTest(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
+        .and(page.locator(':not([role="dialog"] *)'))
     ).toBeVisible();
 
     //Test with the non-lab section assignment
@@ -250,9 +261,17 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The dialog closes only after assignmentDueDateExceptions.create() resolves — an insert
+    // whose response waits on DB triggers (gradebook recalc, etc.) and can stall badly under
+    // CI load, especially on webkit. Rather than asserting on the incidental dialog teardown
+    // (which then hangs the timeout), wait for the page's applied-extension indicator, which
+    // confirms the write landed and the due date recomputed. This also leaves the dialog gone
+    // before the date assertion below, avoiding a strict-mode clash with the dialog's preview.
+    await expect(page.getByText(/extension applied/i).first()).toBeVisible({ timeout: 45_000 });
     await expect(
-      page.getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
+      page
+        .getByText(formatDateForTest(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
+        .and(page.locator(':not([role="dialog"] *)'))
     ).toBeVisible();
 
     //Test with the group assignment
@@ -266,9 +285,17 @@ test.describe("Assignment due dates", () => {
     await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
     await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The dialog closes only after assignmentDueDateExceptions.create() resolves — an insert
+    // whose response waits on DB triggers (gradebook recalc, etc.) and can stall badly under
+    // CI load, especially on webkit. Rather than asserting on the incidental dialog teardown
+    // (which then hangs the timeout), wait for the page's applied-extension indicator, which
+    // confirms the write landed and the due date recomputed. This also leaves the dialog gone
+    // before the date assertion below, avoiding a strict-mode clash with the dialog's preview.
+    await expect(page.getByText(/extension applied/i).first()).toBeVisible({ timeout: 45_000 });
     await expect(
-      page.getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
+      page
+        .getByText(formatDateForTest(addHours(new TZDate(groupAssignmentDueDate, "America/New_York"), 24)))
+        .and(page.locator(':not([role="dialog"] *)'))
     ).toBeVisible();
     await assertStudentPageAccessible(page, "due dates after token extensions");
   });

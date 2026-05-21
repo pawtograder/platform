@@ -31,3 +31,16 @@ jobs:
         run: npm install
       - name: Run linting check
         run: npm run lint
+
+  # Fast, deterministic unit tests for the gradebook recalc computation (the math the
+  # gradebook-calculations e2e fixtures exercise end-to-end through the async pipeline).
+  # These run the real edge-function expression functions directly — no DB, no pipeline.
+  deno-unit-tests:
+    runs-on: pawtograder-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Run Deno unit tests
+        run: npm run test:functions

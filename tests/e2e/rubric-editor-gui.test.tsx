@@ -127,8 +127,29 @@ async function waitForMonaco(page: Page) {
     .toBe(true);
 }
 
-async function setMonacoValue(page: Page, text: string) {
+// `window.monaco` is exposed before the rubric editor has created its model, so a
+// getModels() lookup immediately after waitForMonaco can intermittently find nothing
+// ("could not locate rubric monaco model"). Poll until the rubric/YAML model exists.
+async function waitForRubricModel(page: Page) {
   await waitForMonaco(page);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const monaco = (window as { monaco?: typeof import("monaco-editor") }).monaco;
+          if (!monaco) return false;
+          const models = monaco.editor.getModels();
+          return Boolean(
+            models.find((m) => m.uri.toString().includes("rubric-")) ?? models.find((m) => m.getLanguageId() === "yaml")
+          );
+        }),
+      { timeout: 15_000 }
+    )
+    .toBe(true);
+}
+
+async function setMonacoValue(page: Page, text: string) {
+  await waitForRubricModel(page);
   await page.evaluate((value) => {
     const monaco = (window as { monaco?: typeof import("monaco-editor") }).monaco;
     if (!monaco) throw new Error("monaco is not exposed on window");
@@ -405,6 +426,14 @@ test.describe("Rubric editor GUI", () => {
       "            student_visibility: always"
     ].join("\n");
     await setMonacoValue(page, invalidYaml);
+
+    // setMonacoValue already waited for Monaco and wrote the model. The editor's onChange
+    // then commits that text to React state (rebuilding the handleViewModeChange closure the
+    // GUI button reads) and debounces a parse 1s later. Clicking GUI before that settles runs
+    // against the stale (empty/valid) YAML, wrongly succeeds, and switches to GUI — making the
+    // source region disappear. Wait out the 1s change-debounce so the click sees the committed
+    // mutex-violating YAML and correctly refuses to switch.
+    await page.waitForTimeout(1500);
 
     // Try to toggle back to GUI - it should fail and stay in source mode.
     await rubricEditor(page).getByRole("button", { name: "GUI" }).click();

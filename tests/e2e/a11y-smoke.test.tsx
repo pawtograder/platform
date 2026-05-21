@@ -61,12 +61,18 @@ test.describe("a11y smoke — global landmarks, skip nav, titles, keyboard short
     // Send Esc *into* the dialog itself — on WebKit a top-level page.keyboard.press
     // races Chakra's exit animation; sending it on the focused dialog reliably closes it.
     await dialog.press("Escape");
-    await expect(dialog).toBeHidden();
+    // Escape sets data-state="closed" synchronously, but Ark's Presence only unmounts
+    // the node after the exit animation's completion event — which is dropped under
+    // headless load, leaving the node mounted+visible and hanging toBeHidden(). Assert
+    // instead that no *open* dialog remains, which holds whether it unmounts or stalls.
+    await expect(page.locator('[role="dialog"][data-state="open"]')).toHaveCount(0);
 
     // Discoverable via the Support & Documentation menu.
     await page.getByRole("button", { name: /support & documentation/i }).click();
     await page.getByRole("menuitem", { name: /keyboard shortcuts/i }).click();
-    await expect(dialog).toBeVisible();
+    await expect(
+      page.locator('[role="dialog"][data-state="open"]').filter({ hasText: /keyboard shortcuts/i })
+    ).toBeVisible();
   });
 
   test("student `g a` chord navigates to assignments and updates the title", async ({ page }) => {

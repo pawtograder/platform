@@ -232,16 +232,30 @@ export async function assertStudentPageAccessible(
   // intermediate opacity-blended values and flag color-contrast on text that
   // is fine once the animation settles. Snap everything to its final state
   // so the scan is deterministic.
-  const animationFreezeStyle = await page.addStyleTag({
-    content: `
-      *, *::before, *::after {
-        animation-duration: 0s !important;
-        animation-delay: 0s !important;
-        transition-duration: 0s !important;
-        transition-delay: 0s !important;
-      }
-    `
-  });
+  // Inject via evaluate rather than page.addStyleTag: addStyleTag awaits the injected
+  // <style>'s load/error events, which reject when the app's nonce-based CSP blocks the
+  // (un-nonced) inline style, or when the execution context churns during a post-login
+  // settle — surfacing as a spurious "page.addStyleTag: ... Content Security Policy ..."
+  // failure. This appends synchronously, resolves immediately, and is non-fatal: if it
+  // can't run, axe still scans (the freeze is only a determinism aid).
+  const FREEZE_STYLE_ID = "axe-a11y-animation-freeze";
+  await page
+    .evaluate((id) => {
+      const style = document.createElement("style");
+      style.id = id;
+      style.textContent = `
+        *, *::before, *::after {
+          animation-duration: 0s !important;
+          animation-delay: 0s !important;
+          transition-duration: 0s !important;
+          transition-delay: 0s !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }, FREEZE_STYLE_ID)
+    .catch(() => {
+      /* navigation/context race — proceed without the freeze */
+    });
 
   const excludes = [...DEFAULT_EXCLUDES, ...(options.exclude ?? [])];
   const applyCommonConfig = (b: AxeBuilder) => {
@@ -270,8 +284,7 @@ export async function assertStudentPageAccessible(
     );
     ruleResults = await ruleBuilder.analyze();
   } finally {
-    await animationFreezeStyle.evaluate((el) => (el as Element).remove()).catch(() => {});
-    await animationFreezeStyle.dispose().catch(() => {});
+    await page.evaluate((id) => document.getElementById(id)?.remove(), FREEZE_STYLE_ID).catch(() => {});
   }
 
   const violations = [...(tagResults.violations ?? []), ...(ruleResults.violations ?? [])];

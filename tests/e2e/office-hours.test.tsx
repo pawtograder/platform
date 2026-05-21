@@ -104,6 +104,12 @@ const HELP_REQUEST_OTHER_STUDENT_MESSAGE_1 = "Same boat here! Would love to lear
 test.describe("Office Hours", () => {
   test.describe.configure({ mode: "serial" });
   test("Student can request help", async ({ page }) => {
+    // This test does a magic-link login plus two full request flows and two axe
+    // scans. Under CI parallelism the login retry loop can spend up to ~5×15s
+    // recovering from transient GoTrue contention, which alone can exceed the
+    // default 60s budget and time the test out mid-login. Allow extra headroom so
+    // a slow-but-successful login doesn't surface as a flake.
+    test.slow();
     await loginAsUser(page, student!, course);
     const navRegion = page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
