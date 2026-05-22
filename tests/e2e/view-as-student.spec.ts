@@ -55,7 +55,8 @@ test.describe("Instructor view-as-student (read-only)", () => {
 
     const studentRow = page.getByRole("row", { name: new RegExp(STUDENT_NAME) });
     await expect(studentRow).toBeVisible();
-    await studentRow.getByRole("button", { name: "View as this student" }).click();
+    // The roster action is a clickable icon (svg with aria-label), not a <button>.
+    await studentRow.getByLabel("View as this student", { exact: true }).click();
 
     // The read-only banner should appear, naming the student.
     const banner = page.getByRole("alert", { name: "Viewing as student" });
