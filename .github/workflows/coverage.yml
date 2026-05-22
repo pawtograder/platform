@@ -146,12 +146,45 @@ jobs:
       - name: Set up plpgsql_check + profiler
         run: npm run coverage:setup-pg
 
-      - name: Write .env.local from supabase status
+      - name: Resolve Supabase env (status → SUPABASE_* / NEXT_PUBLIC_*)
         run: |
           set -euo pipefail
-          # Get keys from supabase CLI. Append our coverage knobs.
-          npx supabase status -o env >> .env.local
+          # `supabase status -o env` emits API_URL=, ANON_KEY=,
+          # SERVICE_ROLE_KEY=, DB_URL= etc. Translate to the names
+          # Next.js + our code expect (SUPABASE_URL,
+          # NEXT_PUBLIC_SUPABASE_URL, SUPABASE_ANON_KEY,
+          # NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
+          # SUPABASE_DB_URL).
+          npx supabase status -o env 2>/dev/null > /tmp/supabase.env
+          # shellcheck disable=SC1091
+          set -a; . /tmp/supabase.env; set +a
           {
+            echo "SUPABASE_URL=$API_URL"
+            echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL"
+            echo "SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY"
+            echo "SUPABASE_DB_URL=$DB_URL"
+          } >> "$GITHUB_ENV"
+
+      - name: Write .env.local
+        env:
+          # These are needed inside the heredoc below; they are already
+          # in $GITHUB_ENV from the previous step.
+          SUPABASE_URL: ${{ env.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          # .env.local is read by Next.js (during build + at runtime)
+          # and by Deno --env-file= for the edge bootstrap. Keep it
+          # in sync with $GITHUB_ENV.
+          {
+            echo "SUPABASE_URL=$SUPABASE_URL"
+            echo "NEXT_PUBLIC_SUPABASE_URL=$SUPABASE_URL"
+            echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
             echo "NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001"
             echo "E2E_ENABLE=true"
             echo "END_TO_END_SECRET=not-a-secret"
@@ -159,13 +192,13 @@ jobs:
             echo "GITHUB_APP_ID=1"
             echo "ENABLE_SIGNUPS=true"
             echo "NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL=http://127.0.0.1:9998"
-          } >> .env.local
+          } > .env.local
           # GitHub App private key: GitHubWrapper.ts initializes octokit
           # at module load time, which requires a valid-shaped RSA PEM
-          # (E2E_ENABLE bypasses the actual GitHub calls). We write it
-          # as a multi-line quoted value because Deno's --env-file
-          # supports that, and a single-line \n-escaped form would be
-          # passed literally to octokit and rejected as malformed PEM.
+          # (E2E_ENABLE bypasses the actual GitHub calls). Multi-line
+          # quoted form: Deno's --env-file and Next.js dotenv both
+          # support it; the \n-escaped single-line form is passed to
+          # octokit literally and rejected as malformed PEM.
           PRIVKEY=$(openssl genrsa 2048 2>/dev/null)
           {
             echo "GITHUB_PRIVATE_KEY_STRING=\"$PRIVKEY\""
