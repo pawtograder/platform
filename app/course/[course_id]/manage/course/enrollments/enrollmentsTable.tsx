@@ -7,7 +7,6 @@ import PersonTags from "@/components/ui/person-tags";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useClassSections, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
@@ -23,7 +22,6 @@ import {
   Flex,
   HStack,
   Icon,
-  IconButton,
   Input,
   NativeSelect,
   NativeSelectField,
@@ -45,7 +43,7 @@ import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaEye, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport, FaGithub } from "react-icons/fa";
+import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport, FaGithub } from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
@@ -85,7 +83,6 @@ type EnrollmentTableRow = (UserRoleWithPrivateProfileAndUser & { type: "enrollme
 export default function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
-  const { realRole, enterViewAs } = useClassProfiles();
   const supabase = createClient();
   const labSections = useLabSections();
   const classSections = useClassSections();
@@ -807,25 +804,6 @@ export default function EnrollmentsTable() {
               {profile && studentProfileId && (
                 <StudentSummaryTrigger student_id={studentProfileId} course_id={Number(course_id)} />
               )}
-              {realRole === "instructor" &&
-                userRoleEntry.role === "student" &&
-                !userRoleEntry.disabled &&
-                studentProfileId && (
-                  <Tooltip content="View as this student (read-only)">
-                    <IconButton
-                      aria-label="View as this student"
-                      variant="ghost"
-                      size="xs"
-                      color="blue.500"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        enterViewAs(studentProfileId);
-                      }}
-                    >
-                      <FaEye />
-                    </IconButton>
-                  </Tooltip>
-                )}
               {canDiagnoseGitHub && (
                 <Tooltip content="Diagnose GitHub errors">
                   <Icon
@@ -900,8 +878,6 @@ export default function EnrollmentsTable() {
     [
       currentUser,
       course_id,
-      realRole,
-      enterViewAs,
       openEditProfileModal,
       openEditUserRoleModal,
       openGitHubDiagnosticsModal,

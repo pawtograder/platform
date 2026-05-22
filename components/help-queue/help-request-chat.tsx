@@ -922,9 +922,12 @@ const HelpRequestStudents = ({
       {students.map((student) => (
         <HStack key={student.id} gap={1}>
           <PersonAvatar uid={student.id} size="2xs" />
-          <Text fontSize="sm">{student.name}</Text>
-          {isInstructorOrGrader && (
-            <StudentSummaryTrigger student_id={student.id} course_id={parseInt(course_id as string, 10)} />
+          {isInstructorOrGrader ? (
+            <StudentSummaryTrigger student_id={student.id} course_id={parseInt(course_id as string, 10)}>
+              <Text fontSize="sm">{student.name}</Text>
+            </StudentSummaryTrigger>
+          ) : (
+            <Text fontSize="sm">{student.name}</Text>
           )}
         </HStack>
       ))}

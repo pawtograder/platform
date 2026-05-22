@@ -63,17 +63,23 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
             <Flex wrap="wrap" gap="1" align="center">
               {userProfile ? (
                 <HStack gap="1">
-                  <Heading size="sm">
-                    {userProfile?.name}
-                    {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
-                  </Heading>
+                  {isGraderOrInstructor && userProfile?.private_profile_id ? (
+                    <StudentSummaryTrigger student_id={userProfile.private_profile_id} course_id={Number(course_id)}>
+                      <Heading size="sm">
+                        {userProfile?.name}
+                        {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
+                      </Heading>
+                    </StudentSummaryTrigger>
+                  ) : (
+                    <Heading size="sm">
+                      {userProfile?.name}
+                      {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
+                    </Heading>
+                  )}
                   {userProfile && <KarmaBadge karma={userProfile.discussion_karma ?? 0} />}
                 </HStack>
               ) : (
                 <Skeleton width="100px" />
-              )}
-              {isGraderOrInstructor && userProfile?.private_profile_id && (
-                <StudentSummaryTrigger student_id={userProfile.private_profile_id} course_id={Number(course_id)} />
               )}
               <Text fontSize="sm" color="text.muted" px="1">
                 {thread.is_question ? "Asked question" : "Posted note"} #{thread.ordinal} to{" "}

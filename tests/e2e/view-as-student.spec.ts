@@ -62,14 +62,13 @@ test.describe("Instructor view-as-student (read-only)", () => {
 
     await loginAsUser(page, instructor!, course);
 
-    // Go to the enrollments roster and launch view-as for our student.
-    await page.goto(`/course/${course.id}/manage/course/enrollments`);
-    await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
+    // The view-as entry point now lives on the per-student summary page. Navigate there
+    // directly using the student's private profile id.
+    await page.goto(`/course/${course.id}/manage/student/${student!.private_profile_id}`);
+    await expect(page.getByRole("region", { name: "Student Summary" })).toBeVisible();
 
-    const studentRow = page.getByRole("row", { name: new RegExp(STUDENT_NAME) });
-    await expect(studentRow).toBeVisible();
-    // The roster action is a clickable icon (svg with aria-label), not a <button>.
-    await studentRow.getByLabel("View as this student", { exact: true }).click();
+    // The prominent labeled button on the summary page launches view-as.
+    await page.getByRole("button", { name: "View as this student", exact: true }).click();
 
     // The read-only banner should appear, naming the student.
     const banner = page.getByRole("alert", { name: "Viewing as student" });
