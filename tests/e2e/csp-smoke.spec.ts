@@ -1,4 +1,5 @@
-import { expect, test, type Response } from "@playwright/test";
+import { expect, test } from "../global-setup";
+import { type Response } from "@playwright/test";
 
 // Regression guard for the CSP middleware. Logging in / walking pages requires
 // per-CI seeded users, but the header itself is served on every response — so

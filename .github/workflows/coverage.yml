@@ -1,0 +1,239 @@
+name: Coverage
+
+permissions:
+  contents: read
+  pull-requests: write # codecov needs this to post PR comments
+
+on:
+  push:
+    branches:
+      - staging
+      - main
+  pull_request:
+    branches:
+      - "**"
+
+# Cancel in-flight runs when a PR is pushed again.
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jest:
+    name: Jest coverage
+    runs-on: pawtograder-ci
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # codecov needs base commit for diff
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node-22-
+      - run: npm ci
+      - run: npm run test:coverage
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/jest/lcov.info
+          flags: jest
+          fail_ci_if_error: false # v1: informational
+          disable_search: true
+
+  e2e:
+    name: E2E coverage (Next server + client + edge + postgres)
+    runs-on: pawtograder-ci
+    timeout-minutes: 90
+    env:
+      # Coverage activation flags read by Next, Playwright, edge bootstrap.
+      COVERAGE: "1"
+      NODE_V8_COVERAGE: ${{ github.workspace }}/coverage/server
+      COVERAGE_FUNCTIONS_URL: http://127.0.0.1:9998
+      NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL: http://127.0.0.1:9998
+      COVERAGE_FUNCTIONS_PORT: "9998"
+      # Match the prod-E2E-mode pattern from AGENTS.md.
+      NEXT_PUBLIC_PAWTOGRADER_WEB_URL: http://localhost:3001
+      BASE_URL: http://localhost:3001
+      PORT: "3001"
+      # E2E test bypass for edge functions.
+      E2E_ENABLE: "true"
+      END_TO_END_SECRET: not-a-secret
+      EDGE_FUNCTION_SECRET: some-secret-value
+      GITHUB_APP_ID: "1"
+      ENABLE_SIGNUPS: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v1.x # match the version the edge runtime targets
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node-22-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-node-22-
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # AGENTS.md: must NOT restore from backup — start fresh, then deal
+      # with the binary-submission-files migration that can't run via
+      # supabase start, then create today's audit partition.
+      - name: Start Supabase (fresh)
+        run: |
+          set -euo pipefail
+          # Move the storage-owner-blocked migration aside.
+          mv supabase/migrations/20260217000000_binary_submission_files.sql /tmp/binmig.sql
+          npx supabase start --ignore-health-check
+          # Apply as superuser.
+          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres < /tmp/binmig.sql
+          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
+            -c "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20260217000000', 'binary_submission_files') ON CONFLICT DO NOTHING;"
+          mv /tmp/binmig.sql supabase/migrations/20260217000000_binary_submission_files.sql
+          # Create today's audit partition.
+          docker exec -i supabase_db_pawtograder-platform psql -U postgres -d postgres \
+            -c "SELECT public.audit_maintain_partitions();"
+
+      - name: Set up plpgsql_check + profiler
+        run: npm run coverage:setup-pg
+
+      - name: Write .env.local from supabase status
+        run: |
+          set -euo pipefail
+          # Get keys from supabase CLI. Append our coverage knobs.
+          npx supabase status -o env >> .env.local
+          {
+            echo "NEXT_PUBLIC_PAWTOGRADER_WEB_URL=http://localhost:3001"
+            echo "E2E_ENABLE=true"
+            echo "END_TO_END_SECRET=not-a-secret"
+            echo "EDGE_FUNCTION_SECRET=some-secret-value"
+            echo "GITHUB_APP_ID=1"
+            echo "ENABLE_SIGNUPS=true"
+            # Dummy RSA key — Edge Functions just need *some* key at boot.
+            echo "GITHUB_PRIVATE_KEY_STRING=${GITHUB_PRIVATE_KEY_STRING:-$(openssl genrsa 2048 2>/dev/null | tr '\n' '|')}"
+            echo "NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL=http://127.0.0.1:9998"
+          } >> .env.local
+          # Normalize the multiline RSA key.
+          sed -i 's/|/\\n/g' .env.local
+
+      - name: Build Next.js (with sourcemaps for client coverage)
+        env:
+          # We don't disable Sentry sourcemaps — V8 client coverage needs
+          # them to resolve compiled chunks back to .ts/.tsx files.
+          NEXT_DISABLE_SENTRY: "1"
+        run: npm run build
+
+      - name: Start Next.js (with NODE_V8_COVERAGE)
+        run: |
+          mkdir -p coverage/server coverage/edge coverage/client
+          npm run start > /tmp/next.log 2>&1 &
+          echo $! > /tmp/next.pid
+          # Wait for it to listen on 3001.
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:3001/ >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+      - name: Start edge function coverage bootstrap
+        run: |
+          npm run coverage:edge > /tmp/edge.log 2>&1 &
+          echo $! > /tmp/edge.pid
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9998/__health__ >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9998/__functions__ | head -c 2000
+
+      - name: Run Playwright
+        run: npx playwright test
+        env:
+          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+
+      - name: Stop Next.js so V8 coverage flushes
+        if: always()
+        run: |
+          # Send SIGINT so v8 dumps NODE_V8_COVERAGE on exit.
+          if [[ -f /tmp/next.pid ]]; then kill -INT "$(cat /tmp/next.pid)" || true; fi
+          if [[ -f /tmp/edge.pid ]]; then kill -INT "$(cat /tmp/edge.pid)" || true; fi
+          sleep 3
+
+      - name: Collect per-layer coverage
+        if: always()
+        run: npm run coverage:collect
+
+      - name: Upload coverage artifact (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: |
+            coverage/*.lcov
+            coverage/jest/lcov.info
+            coverage/postgres.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload to Codecov (next-server)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/server.lcov
+          flags: next-server
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Upload to Codecov (next-client)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/client.lcov
+          flags: next-client
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Upload to Codecov (edge-functions)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/edge.lcov
+          flags: edge-functions
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Upload to Codecov (postgres)
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/postgres.lcov
+          flags: postgres
+          fail_ci_if_error: false
+          disable_search: true
+
+      - name: Capture logs on failure
+        if: failure()
+        run: |
+          echo "===== next.log ====="; tail -c 50000 /tmp/next.log || true
+          echo "===== edge.log ====="; tail -c 50000 /tmp/edge.log || true
+          docker logs --tail 200 supabase_db_pawtograder-platform 2>&1 || true

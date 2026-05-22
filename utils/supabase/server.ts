@@ -2,10 +2,12 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { Database } from "./SupabaseTypes";
 
+const FUNCTIONS_URL_OVERRIDE = process.env.NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL ?? process.env.COVERAGE_FUNCTIONS_URL;
+
 export const createClient = async () => {
   const cookieStore = await cookies();
 
-  return createServerClient<Database>(
+  const client = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -27,4 +29,15 @@ export const createClient = async () => {
       }
     }
   );
+
+  if (FUNCTIONS_URL_OVERRIDE) {
+    try {
+      (client as unknown as { functionsUrl?: URL }).functionsUrl = new URL(FUNCTIONS_URL_OVERRIDE);
+      (client.functions as unknown as { url?: string }).url = FUNCTIONS_URL_OVERRIDE;
+    } catch (err) {
+      console.warn("[coverage] failed to override server-side functions URL:", err);
+    }
+  }
+
+  return client;
 };

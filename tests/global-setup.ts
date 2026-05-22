@@ -1,8 +1,36 @@
-import { test as base, Page } from "@playwright/test";
+import { test as base, Page, type BrowserContext } from "@playwright/test";
 import { logMagicLink, supabase, TestingUser } from "@/tests/e2e/TestingUtils";
 import { writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+
+// Coverage instrumentation. Active only when COVERAGE=1 is exported in the
+// process running Playwright. In that mode:
+//   - We start V8 JS coverage on the page before each test (Chromium only).
+//   - After each test we stop coverage and dump the V8 inspector blob to
+//     `coverage/client/<testId>.json` for later conversion to lcov.
+//   - We POST /api/__coverage__ on the Next server to ask it to flush its
+//     own NODE_V8_COVERAGE dump (so we get per-test attribution there too).
+// When COVERAGE !== "1" all of this is a no-op so the default test path is
+// untouched.
+const COVERAGE_ENABLED = process.env.COVERAGE === "1";
+const COVERAGE_CLIENT_DIR = path.resolve(process.cwd(), "coverage", "client");
+
+async function flushServerCoverage(baseURL: string | undefined, context: BrowserContext) {
+  if (!baseURL) return;
+  try {
+    const r = await context.request.post(`${baseURL}/api/__coverage__`, { failOnStatusCode: false });
+    if (!r.ok() && r.status() !== 404) {
+      console.warn(`[coverage] server flush ${baseURL}/api/__coverage__ returned ${r.status()}`);
+    }
+  } catch (err) {
+    console.warn(`[coverage] server flush failed:`, err);
+  }
+}
+
+function sanitizeForFs(s: string): string {
+  return s.replace(/[^a-zA-Z0-9._-]+/g, "_");
+}
 
 // On failure, dump DB state relevant to the failing test so CI artifacts
 // carry enough context to root-cause data-state flakes that don't reproduce
@@ -253,6 +281,7 @@ const injectVisualTestSetup = async (page: Page) => {
 type E2EFixtures = {
   logMagicLinksOnFailure: (users: (TestingUser | undefined)[]) => Promise<void>;
   _autoFailureDiagnostics: void;
+  _autoCoverage: void;
 };
 
 // Extend the base test to include visual test setup
@@ -297,6 +326,34 @@ export const test = base.extend<E2EFixtures>({
           })
           .catch(() => {});
       }
+    },
+    { auto: true }
+  ],
+  _autoCoverage: [
+    async ({ page, context, baseURL, browserName }, use, testInfo) => {
+      if (!COVERAGE_ENABLED || browserName !== "chromium") {
+        await use();
+        return;
+      }
+      // `resetOnNavigation: false` accumulates across navigations within a
+      // single test so client coverage covers the whole test, not just the
+      // last page.
+      await page.coverage.startJSCoverage({ resetOnNavigation: false }).catch((err) => {
+        console.warn(`[coverage] startJSCoverage failed:`, err);
+      });
+      await use();
+      try {
+        const entries = await page.coverage.stopJSCoverage();
+        mkdirSync(COVERAGE_CLIENT_DIR, { recursive: true });
+        // Shape matches what `v8-to-istanbul` and `c8` consume: { result: [...] }.
+        writeFileSync(
+          path.join(COVERAGE_CLIENT_DIR, `${sanitizeForFs(testInfo.testId)}.json`),
+          JSON.stringify({ result: entries })
+        );
+      } catch (err) {
+        console.warn(`[coverage] stopJSCoverage failed for ${testInfo.title}:`, err);
+      }
+      await flushServerCoverage(baseURL, context);
     },
     { auto: true }
   ],
