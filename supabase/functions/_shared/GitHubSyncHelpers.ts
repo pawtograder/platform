@@ -259,6 +259,33 @@ function isBinaryPath(path: string): boolean {
 }
 
 /**
+ * True when a unified diff removes all content and adds nothing (`@@ -1,N +0,0 @@`).
+ * GitHub sometimes emits this for a handout file deletion while still listing the
+ * change as "modified" rather than "removed".
+ */
+function patchDeletesEntireFile(patch: string): boolean {
+  let sawZeroAddHunk = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@") && /\+0,0(?:\s|$)/.test(line)) {
+      sawZeroAddHunk = true;
+    }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      return false;
+    }
+  }
+  return sawZeroAddHunk;
+}
+
+function isGitHubNotFound(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "status" in error &&
+    (error as { status: number }).status === 404
+  );
+}
+
+/**
  * Fetch the recursive blob tree for a template at a specific SHA and return a map
  * of path → size in bytes. Used to populate per-file sizes on FileChange entries so
  * the sync can make size-aware concurrency decisions BEFORE downloading any content.
@@ -630,6 +657,108 @@ async function copyBlobBetweenRepos(
   return json.sha;
 }
 
+type ContentsFileMeta = {
+  sha?: string;
+  content?: string;
+  download_url?: string;
+  encoding?: string;
+};
+
+/**
+ * Fetch decoded text from a git blob SHA via the raw blob endpoint.
+ * Used when the Contents API omits inline content (files >1MB) or for compare SHAs.
+ */
+async function fetchTextBlobFromRepo(
+  repoFullName: string,
+  blobSha: string,
+  filePath: string,
+  scope?: Sentry.Scope
+): Promise<string> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+  const auth = (await octokit.auth({ type: "installation" })) as { token: string };
+  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+    repo
+  )}/git/blobs/${encodeURIComponent(blobSha)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/vnd.github.v3.raw",
+      Authorization: `token ${auth.token}`,
+      "User-Agent": "pawtograder-sync",
+      "X-GitHub-Api-Version": "2022-11-28"
+    }
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Failed to fetch blob ${blobSha} for ${filePath} from ${repoFullName}: ${response.status}: ${body.slice(0, 200)}`
+    );
+  }
+  const contentLengthHeader = response.headers.get("content-length");
+  const contentLength = contentLengthHeader ? Number(contentLengthHeader) : NaN;
+  if (Number.isFinite(contentLength) && contentLength > MAX_SYNC_FILE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    const mb = (contentLength / (1024 * 1024)).toFixed(1);
+    const limitMb = (MAX_SYNC_FILE_BYTES / (1024 * 1024)).toFixed(0);
+    throw new Error(`File '${filePath}' is ${mb}MB which exceeds the per-file sync limit of ${limitMb}MB`);
+  }
+  return await response.text();
+}
+
+/**
+ * Fetch a text file's content at a specific ref. Uses inline Contents API data for
+ * small files and falls back to the git blob API when GitHub omits content (>1MB).
+ */
+async function fetchTextFileAtRef(
+  repoFullName: string,
+  path: string,
+  ref: string,
+  scope?: Sentry.Scope
+): Promise<{ content: string; sha?: string }> {
+  const octokit = await github.getOctoKit(repoFullName, scope);
+  if (!octokit) throw new Error(`No octokit available for ${repoFullName}`);
+  const [owner, repo] = repoFullName.split("/");
+
+  const { data: fileData } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+    owner,
+    repo,
+    path,
+    ref
+  });
+
+  if (Array.isArray(fileData)) {
+    throw new Error(`Path '${path}' is a directory, not a file`);
+  }
+
+  const meta = fileData as ContentsFileMeta;
+
+  if (meta.encoding === "base64" && typeof meta.content === "string") {
+    return { content: atob(meta.content.replace(/\n/g, "")), sha: meta.sha };
+  }
+
+  if (meta.sha) {
+    return {
+      content: await fetchTextBlobFromRepo(repoFullName, meta.sha, path, scope),
+      sha: meta.sha
+    };
+  }
+
+  if (meta.download_url) {
+    const auth = (await octokit.auth({ type: "installation" })) as { token: string };
+    const response = await fetch(meta.download_url, {
+      headers: { Authorization: `token ${auth.token}`, "User-Agent": "pawtograder-sync" }
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to download '${path}' from ${repoFullName}: ${response.status}`);
+    }
+    return { content: await response.text() };
+  }
+
+  throw new Error(`No content available for '${path}' at ${ref} in ${repoFullName}`);
+}
+
 /**
  * Create a branch and commit changes to a target repository
  * For text files with patches, applies the patch to the content at baseSha
@@ -770,6 +899,60 @@ export async function createBranchAndCommit(
 
     // Handle files with patches (text files that need to be merged)
     if (file.patch && !file.isBinary) {
+      // GitHub may express a handout file deletion as a delete-only patch (`+0,0` hunk)
+      // with status "modified". Don't try to apply that patch against the student copy —
+      // either mirror the template's current file (if it still exists) or delete it.
+      if (patchDeletesEntireFile(file.patch)) {
+        scope?.addBreadcrumb({
+          message: `Patch for ${file.path} deletes entire file; mirroring template at ${templateSha}`,
+          category: "patch",
+          level: "info"
+        });
+
+        if (!templateRepo || !templateSha) {
+          throw new Error(`File ${file.path} has delete-only patch but no template repo/sha provided`);
+        }
+
+        try {
+          const { content: templateContent } = await fetchTextFileAtRef(
+            templateRepo,
+            file.path,
+            templateSha,
+            scope
+          );
+          const encoded = btoa(templateContent);
+          const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
+            owner,
+            repo,
+            content: encoded,
+            encoding: "base64"
+          });
+          treeItems.push({
+            path: file.path,
+            mode: "100644" as const,
+            type: "blob" as const,
+            sha: blob.sha
+          });
+        } catch (fetchError: unknown) {
+          if (isGitHubNotFound(fetchError)) {
+            scope?.addBreadcrumb({
+              message: `Template deleted ${file.path}; removing from student repo`,
+              category: "patch",
+              level: "info"
+            });
+            treeItems.push({
+              path: file.path,
+              mode: "100644" as const,
+              type: "blob" as const,
+              sha: null
+            });
+          } else {
+            throw fetchError;
+          }
+        }
+        continue;
+      }
+
       scope?.addBreadcrumb({
         message: `Applying patch to ${file.path}`,
         category: "patch",
@@ -779,23 +962,18 @@ export async function createBranchAndCommit(
       // Fetch the current content from the student repo at baseSha
       let baseContent = "";
       try {
-        const { data: fileData } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-          owner,
-          repo,
-          path: file.path,
-          ref: baseSha
-        });
-
-        if ("content" in fileData && fileData.content) {
-          baseContent = atob(fileData.content);
+        ({ content: baseContent } = await fetchTextFileAtRef(repoFullName, file.path, baseSha, scope));
+      } catch (fetchError: unknown) {
+        if (isGitHubNotFound(fetchError)) {
+          // File doesn't exist in student repo (new file), use empty content
+          scope?.addBreadcrumb({
+            message: `File ${file.path} doesn't exist at baseSha, treating as new file`,
+            category: "patch",
+            level: "info"
+          });
+        } else {
+          throw fetchError;
         }
-      } catch {
-        // File doesn't exist in student repo (new file), use empty content
-        scope?.addBreadcrumb({
-          message: `File ${file.path} doesn't exist at baseSha, treating as new file`,
-          category: "patch",
-          level: "info"
-        });
       }
 
       let patchedContent: string;
@@ -834,33 +1012,34 @@ export async function createBranchAndCommit(
           });
 
           try {
-            const templateOctokit = await github.getOctoKit(templateRepo, scope);
-            if (templateOctokit) {
-              const [templateOwner, templateRepoName] = templateRepo.split("/");
-              const { data: templateFileData } = await templateOctokit.request(
-                "GET /repos/{owner}/{repo}/contents/{path}",
-                {
-                  owner: templateOwner,
-                  repo: templateRepoName,
-                  path: file.path,
-                  ref: templateSha
-                }
-              );
-
-              if ("content" in templateFileData && templateFileData.content) {
-                patchedContent = atob(templateFileData.content);
-                scope?.addBreadcrumb({
-                  message: `Successfully fetched full content from template repo for ${file.path}`,
-                  category: "patch",
-                  level: "info"
-                });
-              } else {
-                throw new Error("Template file content not available");
-              }
+            // Prefer the compare blob SHA — avoids the Contents API 1MB inline limit.
+            if (file.sha) {
+              patchedContent = await fetchTextBlobFromRepo(templateRepo, file.sha, file.path, scope);
             } else {
-              throw new Error("Could not get octokit for template repo");
+              ({ content: patchedContent } = await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope));
             }
+            scope?.addBreadcrumb({
+              message: `Successfully fetched full content from template repo for ${file.path}`,
+              category: "patch",
+              level: "info"
+            });
           } catch (fallbackError) {
+            // Handout removed the file entirely — delete it from the student repo.
+            if (isGitHubNotFound(fallbackError) && patchDeletesEntireFile(file.patch)) {
+              scope?.addBreadcrumb({
+                message: `Template deleted ${file.path} after patch failure; removing from student repo`,
+                category: "patch",
+                level: "info"
+              });
+              treeItems.push({
+                path: file.path,
+                mode: "100644" as const,
+                type: "blob" as const,
+                sha: null
+              });
+              continue;
+            }
+
             scope?.addBreadcrumb({
               message: `Fallback failed for ${file.path}: ${fallbackError}`,
               category: "patch",
@@ -868,7 +1047,7 @@ export async function createBranchAndCommit(
             });
             console.error(`Fallback failed for ${file.path}:`, fallbackError);
             throw new Error(
-              `Patch application failed and fallback failed: ${patchError}. Fallback error: ${fallbackError}`
+              `Patch application failed for '${file.path}' and fallback failed: ${patchError}. Fallback error: ${fallbackError}`
             );
           }
         } else {
@@ -1129,20 +1308,12 @@ export async function isRepoAlreadyInSync(
       let studentContent: string;
       let studentBlobSha: string | undefined;
       try {
-        const { data: studentFile } = await studentOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-          owner: studentOwner,
-          repo: studentRepo,
-          path: file.path,
-          ref: "main"
-        });
-        if (!Array.isArray(studentFile) && "sha" in studentFile && typeof studentFile.sha === "string") {
-          studentBlobSha = studentFile.sha;
-        }
-        if ("content" in studentFile && studentFile.content) {
-          studentContent = atob(studentFile.content);
-        } else {
-          return false;
-        }
+        ({ content: studentContent, sha: studentBlobSha } = await fetchTextFileAtRef(
+          repoFullName,
+          file.path,
+          "main",
+          scope
+        ));
       } catch (error: unknown) {
         const status =
           error && typeof error === "object" && "status" in error ? (error as { status: number }).status : undefined;
@@ -1170,18 +1341,15 @@ export async function isRepoAlreadyInSync(
           if (patchedContent === false) {
             // Patch failed to apply - could mean conflicts or already applied differently.
             // Compare student's file to expected template content as a loose secondary check.
-            const { data: templateFile } = await templateOctokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-              owner: templateOwner,
-              repo: templateRepoName,
-              path: file.path,
-              ref: templateToSha
-            });
-
-            if ("content" in templateFile && templateFile.content) {
-              const expectedContent = atob(templateFile.content);
+            try {
+              const expectedContent = file.sha
+                ? await fetchTextBlobFromRepo(templateRepo, file.sha, file.path, scope)
+                : (await fetchTextFileAtRef(templateRepo, file.path, templateToSha, scope)).content;
               if (studentContent.includes(expectedContent) || expectedContent === studentContent) {
                 continue;
               }
+            } catch {
+              // Couldn't fetch template content for comparison — treat as not in sync.
             }
 
             scope?.addBreadcrumb({
