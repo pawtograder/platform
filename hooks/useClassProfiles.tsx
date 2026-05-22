@@ -100,8 +100,19 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
-  const [viewAsProfileId, setViewAsProfileId] = useState<string | null>(null);
+  // Initialize the per-course view-as cookie synchronously so the very first render
+  // already knows whether a view-as session is active. Without this the provider
+  // would briefly publish the real instructor identity on the first paint before the
+  // effect ran and re-rendered with the student override.
+  const [viewAsProfileId, setViewAsProfileId] = useState<string | null>(() =>
+    typeof course_id === "string" ? getViewAsCookie(course_id) : null
+  );
   const [viewAsRole, setViewAsRole] = useState<UserRoleWithClassAndUser | null>(null);
+  // True while the (instructor, viewAsProfileId) → student role lookup is in flight.
+  // We must not publish the real instructor identity during that window, or read-only
+  // gates would briefly re-enable instructor write UI. Initialized to true when a
+  // cookie target is present on mount so the very first render already blocks.
+  const [isResolvingViewAs, setIsResolvingViewAs] = useState<boolean>(() => !!viewAsProfileId);
   useEffect(() => {
     if (!userId) {
       setIsLoading(false);
@@ -167,7 +178,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     (r) => r.user_id === user?.id && (!course_id || r.class_id === Number(course_id as string))
   );
 
-  // Initialize the view-as target from the per-course cookie.
+  // Re-read the per-course view-as cookie if course_id changes (e.g. navigating
+  // between courses inside this provider).
   useEffect(() => {
     if (!course_id) {
       setViewAsProfileId(null);
@@ -177,14 +189,18 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   }, [course_id]);
 
   // When an instructor has an active view-as target, fetch that student's role + profiles.
+  // Until the lookup resolves we MUST keep the provider in a loading state — see
+  // isResolvingViewAs below — otherwise consumers briefly see the real instructor role.
   useEffect(() => {
     const isInstructor = realMyRole?.role === "instructor";
     if (!isInstructor || !viewAsProfileId || !course_id) {
       setViewAsRole(null);
+      setIsResolvingViewAs(false);
       return;
     }
     let cancelled = false;
     const supabase = createClient();
+    setIsResolvingViewAs(true);
     (async () => {
       const { data, error } = await supabase
         .from("user_roles")
@@ -198,6 +214,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         .single();
       if (cancelled) return;
       setViewAsRole(error || !data ? null : (data as UserRoleWithClassAndUser));
+      setIsResolvingViewAs(false);
     })();
     return () => {
       cancelled = true;
@@ -227,7 +244,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     window.location.assign(`/course/${course_id}`);
   }, [course_id]);
 
-  if (isLoading) {
+  if (isLoading || isResolvingViewAs) {
     return <Skeleton height="100px" width="100%" />;
   }
   if (loadError) {

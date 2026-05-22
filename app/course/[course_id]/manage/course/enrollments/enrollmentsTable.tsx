@@ -807,22 +807,25 @@ export default function EnrollmentsTable() {
               {profile && studentProfileId && (
                 <StudentSummaryTrigger student_id={studentProfileId} course_id={Number(course_id)} />
               )}
-              {realRole === "instructor" && userRoleEntry.role === "student" && studentProfileId && (
-                <Tooltip content="View as this student (read-only)">
-                  <IconButton
-                    aria-label="View as this student"
-                    variant="ghost"
-                    size="xs"
-                    color="blue.500"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      enterViewAs(studentProfileId);
-                    }}
-                  >
-                    <FaEye />
-                  </IconButton>
-                </Tooltip>
-              )}
+              {realRole === "instructor" &&
+                userRoleEntry.role === "student" &&
+                !userRoleEntry.disabled &&
+                studentProfileId && (
+                  <Tooltip content="View as this student (read-only)">
+                    <IconButton
+                      aria-label="View as this student"
+                      variant="ghost"
+                      size="xs"
+                      color="blue.500"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        enterViewAs(studentProfileId);
+                      }}
+                    >
+                      <FaEye />
+                    </IconButton>
+                  </Tooltip>
+                )}
               {canDiagnoseGitHub && (
                 <Tooltip content="Diagnose GitHub errors">
                   <Icon

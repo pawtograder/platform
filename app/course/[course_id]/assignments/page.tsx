@@ -100,12 +100,12 @@ export default function StudentPage() {
     const supabase = createClient();
     let cancelled = false;
     setIsLoading(true);
-    supabase
-      .rpc("get_assignments_for_student_dashboard", {
-        p_class_id: Number(course_id),
-        p_student_profile_id: private_profile_id
-      })
-      .then(({ data, error }) => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc("get_assignments_for_student_dashboard", {
+          p_class_id: Number(course_id),
+          p_student_profile_id: private_profile_id
+        });
         if (cancelled) return;
         if (error) {
           // eslint-disable-next-line no-console
@@ -114,8 +114,17 @@ export default function StudentPage() {
         } else {
           setAssignments(data ?? []);
         }
-        setIsLoading(false);
-      });
+      } catch (error) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error("Failed to load assignments dashboard:", error);
+        setAssignments(null);
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    })();
     return () => {
       cancelled = true;
     };

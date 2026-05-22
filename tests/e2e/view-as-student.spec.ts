@@ -1,8 +1,8 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
-import { visualScreenshot } from "./VisualTestUtils";
+import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "@/tests/e2e/TestingUtils";
+import { visualScreenshot } from "@/tests/e2e/VisualTestUtils";
 import { viewAsCookieName } from "@/lib/viewAs";
 import { addDays } from "date-fns";
 dotenv.config({ path: ".env.local", quiet: true });
@@ -161,10 +161,11 @@ test.describe("Instructor view-as-student (read-only)", () => {
   test("instructor in view-as sees the student's assignments list populated", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
 
-    // Activate view-as via the per-course cookie. The dashboard view
-    // `assignments_for_student_dashboard` is security_invoker, so seeing the student's row
-    // requires the instructor branch of the broadened ur_students CTE + the
-    // user_privileges RLS policy added alongside it. Without those, the list is empty.
+    // Activate view-as via the per-course cookie. The dashboard data path is the
+    // SECURITY DEFINER RPC `get_assignments_for_student_dashboard`, which authorizes
+    // the caller at the top (student themselves, or an instructor/grader of the class).
+    // Without that authorization branch, an instructor would get a permission error
+    // and the list would be empty.
     await page
       .context()
       .addCookies([{ name: viewAsCookieName(course.id), value: student!.private_profile_id, url: BASE_URL }]);

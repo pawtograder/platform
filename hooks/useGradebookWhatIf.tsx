@@ -84,8 +84,17 @@ class GradebookWhatIfController {
         p_class_id: this.gradebookController.class_id,
         p_student_profile_id: this.private_profile_id
       })
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to load assignments for what-if dashboard:", error);
+          return;
+        }
         this._assignments = data ?? [];
+        // Formulas using assignments(...) evaluated against [] before this resolved;
+        // rerun the dependency pass and notify subscribers so the UI catches up.
+        this.recalculateDependentColumns();
+        this.notify();
       });
     // Initialize with current grades from the gradebook
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
