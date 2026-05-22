@@ -2,6 +2,7 @@ import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { visualScreenshot } from "./VisualTestUtils";
 import { viewAsCookieName } from "@/lib/viewAs";
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -124,6 +125,9 @@ test.describe("Instructor view-as-student (read-only)", () => {
     const submit = page.getByRole("button", { name: /Read-only \(viewing as student\)/i });
     await expect(submit).toBeVisible();
     await expect(submit).toBeDisabled();
+
+    // Visual snapshot of the read-only state (banner + disabled "New Discussion Thread" form).
+    await visualScreenshot(page, "View as student - read-only discussion form");
   });
 
   test("a non-instructor cannot activate view-as with a forged cookie", async ({ page }) => {
@@ -140,5 +144,8 @@ test.describe("Instructor view-as-student (read-only)", () => {
     // No read-only banner appears, and the student keeps a normal, enabled submit button.
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Submit" })).toBeEnabled();
+
+    // Visual snapshot of the result (no view-as banner; normal enabled student form).
+    await visualScreenshot(page, "View as student - forged cookie ignored for non-instructor");
   });
 });
