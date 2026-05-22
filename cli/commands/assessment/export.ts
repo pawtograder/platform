@@ -230,7 +230,7 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         const totals = await streamAssignmentToDir(args, salt, mode, dumpId, a.id as number, slug, dir);
         logger.info(
-          `  ${slug}: ${totals.submissions} submissions, ${totals.scores} scores, ${totals.grader_tests} tests, ${totals.hints} hints`
+          `  ${slug}: ${totals.submissions} submissions, ${totals.scores} scores, ${totals.grader_tests} tests, ${totals.hints} hints, ${totals.error_pin_engagement} error-pin engagement rows`
         );
         return totals;
       }),
@@ -248,7 +248,7 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     writeJson(path.join(outputDir, "manifest.json"), enrichedManifest);
 
     logger.success(
-      `Done. ${assignments.length} assignment(s), ${grand.submissions} submissions, ${grand.scores} scores, ${grand.grader_tests} tests, ${grand.hints} hints, ${grand.gradebook_scores} gradebook cells in ${outputDir}`
+      `Done. ${assignments.length} assignment(s), ${grand.submissions} submissions, ${grand.scores} scores, ${grand.grader_tests} tests, ${grand.hints} hints, ${grand.error_pin_engagement} error-pin engagement rows, ${grand.gradebook_scores} gradebook cells in ${outputDir}`
     );
   } catch (error) {
     handleError(error);
@@ -332,6 +332,7 @@ interface AssignmentTotals {
   scores: number;
   grader_tests: number;
   hints: number;
+  error_pin_engagement: number;
 }
 
 interface GradebookTotals {
@@ -383,7 +384,8 @@ async function streamAssignmentToDir(
         submission: [],
         score: [],
         grader_test: [],
-        hint: []
+        hint: [],
+        error_pin_engagement: []
       };
       let manifest: Record<string, unknown> | null = null;
       let endRecord: Record<string, unknown> | null = null;
@@ -421,6 +423,7 @@ async function streamAssignmentToDir(
   assertExpectedCount(endRecord, "submissions", buckets.submission!.length);
   assertExpectedCount(endRecord, "grader_tests", buckets.grader_test!.length);
   assertExpectedCount(endRecord, "hints", buckets.hint!.length);
+  assertExpectedCount(endRecord, "error_pin_engagement", buckets.error_pin_engagement!.length);
 
   writeJson(path.join(dir, "manifest.json"), manifest);
   writeJson(path.join(dir, "rubric.json"), {
@@ -439,6 +442,7 @@ async function streamAssignmentToDir(
   writeJson(path.join(dir, "scores.json"), buckets.score);
   writeJson(path.join(dir, "tests.json"), buckets.grader_test);
   writeJson(path.join(dir, "hints.json"), buckets.hint);
+  writeJson(path.join(dir, "error-pin-engagement.json"), buckets.error_pin_engagement);
 
   const counts = (endRecord.counts as Record<string, number>) ?? {};
   return {
@@ -448,7 +452,8 @@ async function streamAssignmentToDir(
     submissions: counts.submissions ?? buckets.submission!.length,
     scores: counts.scores ?? buckets.score!.length,
     grader_tests: counts.grader_tests ?? buckets.grader_test!.length,
-    hints: counts.hints ?? buckets.hint!.length
+    hints: counts.hints ?? buckets.hint!.length,
+    error_pin_engagement: counts.error_pin_engagement ?? buckets.error_pin_engagement!.length
   };
 }
 
@@ -537,6 +542,7 @@ function aggregateTotals(
     scores: sum("scores"),
     grader_tests: sum("grader_tests"),
     hints: sum("hints"),
+    error_pin_engagement: sum("error_pin_engagement"),
     gradebook_scores: gradebook.gradebook_scores
   };
 }

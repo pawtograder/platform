@@ -480,6 +480,14 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
       testOutputMax
     );
     const hintCount = await streamHints(supabase, graderTestIds, mode, tokenizer, writer);
+    const errorPinEngagementCount = await streamErrorPinEngagement(
+      supabase,
+      classData.id,
+      submissionIds,
+      mode,
+      tokenizer,
+      writer
+    );
 
     await writer.write({
       kind: "end",
@@ -490,7 +498,8 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
         submissions: submissionCount,
         scores: scoreCount,
         grader_tests: testCount,
-        hints: hintCount
+        hints: hintCount,
+        error_pin_engagement: errorPinEngagementCount
       }
     });
   });
@@ -1117,6 +1126,260 @@ async function streamHints(
     }
   }
   return total;
+}
+
+/**
+ * Student engagement with discussion posts pinned to errors on exported
+ * submissions. Emits one row per submission × pinned discussion post × student
+ * participant so group submissions retain per-student read/like state.
+ */
+async function streamErrorPinEngagement(
+  supabase: ReturnType<typeof getAdminClient>,
+  classId: number,
+  submissionIds: number[],
+  mode: IdentityMode,
+  tokenizer: Tokenizer | null,
+  writer: { write: (record: Record<string, unknown>) => Promise<void> }
+): Promise<number> {
+  if (submissionIds.length === 0) return 0;
+
+  const participants = await loadSubmissionParticipants(supabase, classId, submissionIds);
+  const matches = await loadErrorPinMatches(supabase, submissionIds);
+  if (matches.length === 0) return 0;
+
+  const discussionThreadIds = unique(matches.map((m) => m.discussion_thread_id));
+  const profileIds = unique(Array.from(participants.values()).flatMap((profiles) => Array.from(profiles)));
+  const userIdByProfileId = await loadUserIdsByProfileId(supabase, classId, profileIds);
+  const readAtByUserAndThread = await loadReadStatusByUserAndThread(
+    supabase,
+    discussionThreadIds,
+    unique(Array.from(userIdByProfileId.values()))
+  );
+  const likedByProfileAndThread = await loadLikesByProfileAndThread(supabase, discussionThreadIds, profileIds);
+
+  let total = 0;
+  for (const match of matches) {
+    const submissionParticipants = participants.get(match.submission_id) ?? new Set<string>();
+    for (const profileId of submissionParticipants) {
+      const userId = userIdByProfileId.get(profileId) ?? null;
+      const submissionRef =
+        tokenizer === null
+          ? { id: match.submission_id }
+          : { token: await tokenizer.token("submission", match.submission_id) };
+      const subjectRef =
+        tokenizer === null ? { id: profileId } : { token: await tokenizer.token("subject", profileId) };
+      const graderTestRef =
+        match.grader_result_test_id === null
+          ? null
+          : tokenizer === null
+            ? { id: match.grader_result_test_id }
+            : { token: await tokenizer.token("grader_test", match.grader_result_test_id) };
+
+      await writer.write({
+        kind: "error_pin_engagement",
+        submission: submissionRef,
+        subject: subjectRef,
+        discussion_thread_id: match.discussion_thread_id,
+        error_pin_id: match.error_pin_id,
+        grader_test: graderTestRef,
+        read_at:
+          userId === null ? null : (readAtByUserAndThread.get(compoundKey(userId, match.discussion_thread_id)) ?? null),
+        liked: likedByProfileAndThread.has(compoundKey(profileId, match.discussion_thread_id))
+      });
+      total += 1;
+    }
+  }
+  return total;
+}
+
+async function loadSubmissionParticipants(
+  supabase: ReturnType<typeof getAdminClient>,
+  classId: number,
+  submissionIds: number[]
+): Promise<Map<number, Set<string>>> {
+  const participants = new Map<number, Set<string>>();
+  const groupIdsBySubmissionId = new Map<number, number>();
+
+  for (const batch of chunked(submissionIds, 500)) {
+    const { data, error } = await supabase
+      .from("submissions")
+      .select("id, profile_id, assignment_group_id")
+      .in("id", batch);
+    if (error) throw new CLICommandError(`Failed to load submission participants: ${error.message}`, 500);
+
+    for (const row of data ?? []) {
+      const profiles = participants.get(row.id) ?? new Set<string>();
+      if (row.profile_id !== null) profiles.add(row.profile_id);
+      if (row.assignment_group_id !== null) groupIdsBySubmissionId.set(row.id, row.assignment_group_id);
+      participants.set(row.id, profiles);
+    }
+  }
+
+  const groupIds = unique(Array.from(groupIdsBySubmissionId.values()));
+  const membersByGroupId = new Map<number, string[]>();
+  for (const batch of chunked(groupIds, 500)) {
+    const { data, error } = await supabase
+      .from("assignment_groups_members")
+      .select("assignment_group_id, profile_id")
+      .in("assignment_group_id", batch);
+    if (error) throw new CLICommandError(`Failed to load assignment group members: ${error.message}`, 500);
+    for (const row of data ?? []) {
+      const profiles = membersByGroupId.get(row.assignment_group_id) ?? [];
+      profiles.push(row.profile_id);
+      membersByGroupId.set(row.assignment_group_id, profiles);
+    }
+  }
+
+  for (const [submissionId, groupId] of groupIdsBySubmissionId.entries()) {
+    const profiles = participants.get(submissionId) ?? new Set<string>();
+    for (const profileId of membersByGroupId.get(groupId) ?? []) profiles.add(profileId);
+    participants.set(submissionId, profiles);
+  }
+
+  const profileIds = unique(Array.from(participants.values()).flatMap((profiles) => Array.from(profiles)));
+  const enrolledProfiles = new Set((await loadUserIdsByProfileId(supabase, classId, profileIds)).keys());
+  for (const [submissionId, profiles] of participants.entries()) {
+    participants.set(
+      submissionId,
+      new Set(Array.from(profiles).filter((profileId) => enrolledProfiles.has(profileId)))
+    );
+  }
+
+  return participants;
+}
+
+type ErrorPinMatchForExport = {
+  error_pin_id: number;
+  submission_id: number;
+  grader_result_test_id: number | null;
+  discussion_thread_id: number;
+};
+
+async function loadErrorPinMatches(
+  supabase: ReturnType<typeof getAdminClient>,
+  submissionIds: number[]
+): Promise<ErrorPinMatchForExport[]> {
+  const rawMatches: Array<Omit<ErrorPinMatchForExport, "discussion_thread_id">> = [];
+
+  for (const batch of chunked(submissionIds, 500)) {
+    let cursor = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("error_pin_submission_matches")
+        .select("id, error_pin_id, submission_id, grader_result_test_id")
+        .in("submission_id", batch)
+        .gt("id", cursor)
+        .order("id", { ascending: true })
+        .limit(FACT_PAGE_SIZE);
+      if (error) throw new CLICommandError(`Failed to load error pin matches: ${error.message}`, 500);
+      if (!data || data.length === 0) break;
+
+      for (const row of data) {
+        rawMatches.push({
+          error_pin_id: row.error_pin_id,
+          submission_id: row.submission_id,
+          grader_result_test_id: row.grader_result_test_id
+        });
+      }
+
+      if (data.length < FACT_PAGE_SIZE) break;
+      cursor = data[data.length - 1]!.id;
+    }
+  }
+
+  if (rawMatches.length === 0) return [];
+
+  const pinById = new Map<number, { discussion_thread_id: number }>();
+  for (const batch of chunked(unique(rawMatches.map((m) => m.error_pin_id)), 500)) {
+    const { data, error } = await supabase
+      .from("error_pins")
+      .select("id, discussion_thread_id")
+      .eq("enabled", true)
+      .in("id", batch);
+    if (error) throw new CLICommandError(`Failed to load error pins: ${error.message}`, 500);
+    for (const pin of data ?? []) {
+      pinById.set(pin.id, { discussion_thread_id: pin.discussion_thread_id });
+    }
+  }
+
+  return rawMatches.flatMap((match) => {
+    const pin = pinById.get(match.error_pin_id);
+    return pin ? [{ ...match, discussion_thread_id: pin.discussion_thread_id }] : [];
+  });
+}
+
+async function loadUserIdsByProfileId(
+  supabase: ReturnType<typeof getAdminClient>,
+  classId: number,
+  profileIds: string[]
+): Promise<Map<string, string>> {
+  const userIdByProfileId = new Map<string, string>();
+  for (const batch of chunked(profileIds, 500)) {
+    const { data, error } = await supabase
+      .from("user_roles")
+      .select("private_profile_id, user_id")
+      .eq("class_id", classId)
+      .eq("role", "student")
+      .eq("disabled", false)
+      .in("private_profile_id", batch);
+    if (error) throw new CLICommandError(`Failed to load student user ids: ${error.message}`, 500);
+    for (const row of data ?? []) {
+      if (row.private_profile_id !== null) userIdByProfileId.set(row.private_profile_id, row.user_id);
+    }
+  }
+  return userIdByProfileId;
+}
+
+async function loadReadStatusByUserAndThread(
+  supabase: ReturnType<typeof getAdminClient>,
+  discussionThreadIds: number[],
+  userIds: string[]
+): Promise<Map<string, string | null>> {
+  const readAtByUserAndThread = new Map<string, string | null>();
+  for (const threadBatch of chunked(discussionThreadIds, 200)) {
+    for (const userBatch of chunked(userIds, 200)) {
+      const { data, error } = await supabase
+        .from("discussion_thread_read_status")
+        .select("user_id, discussion_thread_id, read_at")
+        .in("discussion_thread_id", threadBatch)
+        .in("user_id", userBatch);
+      if (error) throw new CLICommandError(`Failed to load discussion read status: ${error.message}`, 500);
+      for (const row of data ?? []) {
+        readAtByUserAndThread.set(compoundKey(row.user_id, row.discussion_thread_id), row.read_at);
+      }
+    }
+  }
+  return readAtByUserAndThread;
+}
+
+async function loadLikesByProfileAndThread(
+  supabase: ReturnType<typeof getAdminClient>,
+  discussionThreadIds: number[],
+  profileIds: string[]
+): Promise<Set<string>> {
+  const likedByProfileAndThread = new Set<string>();
+  for (const threadBatch of chunked(discussionThreadIds, 200)) {
+    for (const profileBatch of chunked(profileIds, 200)) {
+      const { data, error } = await supabase
+        .from("discussion_thread_likes")
+        .select("creator, discussion_thread")
+        .in("discussion_thread", threadBatch)
+        .in("creator", profileBatch);
+      if (error) throw new CLICommandError(`Failed to load discussion likes: ${error.message}`, 500);
+      for (const row of data ?? []) {
+        likedByProfileAndThread.add(compoundKey(row.creator, row.discussion_thread));
+      }
+    }
+  }
+  return likedByProfileAndThread;
+}
+
+function unique<T>(values: T[]): T[] {
+  return Array.from(new Set(values));
+}
+
+function compoundKey(left: string | number, right: string | number): string {
+  return `${left}:${right}`;
 }
 
 function* chunked<T>(arr: T[], size: number): Generator<T[]> {
