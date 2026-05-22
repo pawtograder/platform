@@ -215,7 +215,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p coverage/server coverage/edge coverage/client
-          npm run start > /tmp/next.log 2>&1 &
+          # setsid puts the process in its own process group so we can
+          # SIGINT the whole group (npm → next → workers) cleanly.
+          setsid npm run start > /tmp/next.log 2>&1 < /dev/null &
           echo $! > /tmp/next.pid
           ready=0
           for _ in $(seq 1 60); do
@@ -231,7 +233,9 @@ jobs:
       - name: Start edge function coverage bootstrap
         run: |
           set -euo pipefail
-          npm run coverage:edge > /tmp/edge.log 2>&1 &
+          # setsid → own process group so SIGINT propagates to deno
+          # (which needs to flush V8 coverage on exit).
+          setsid npm run coverage:edge > /tmp/edge.log 2>&1 < /dev/null &
           echo $! > /tmp/edge.pid
           ready=0
           for _ in $(seq 1 60); do
@@ -248,16 +252,36 @@ jobs:
           echo
 
       - name: Run Playwright
-        run: npx playwright test
+        # Chromium only: we only install --with-deps chromium, and V8
+        # client coverage is Chromium-only anyway. Without --project
+        # the webkit project's tests get scheduled and all fail with
+        # "did not run" because the webkit binary is missing.
+        run: npx playwright test --project=chromium
         env:
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
 
       - name: Stop Next.js so V8 coverage flushes
         if: always()
         run: |
-          # Send SIGINT so v8 dumps NODE_V8_COVERAGE on exit.
-          if [[ -f /tmp/next.pid ]]; then kill -INT "$(cat /tmp/next.pid)" || true; fi
-          if [[ -f /tmp/edge.pid ]]; then kill -INT "$(cat /tmp/edge.pid)" || true; fi
+          # SIGINT to the entire process group so the inner deno/next
+          # processes get the signal (npm doesn't always forward
+          # signals to its descendants). `kill -INT -- -$PGID` sends to
+          # the group with the negative-PID convention.
+          for pidfile in /tmp/next.pid /tmp/edge.pid; do
+            if [[ -f "$pidfile" ]]; then
+              pid=$(cat "$pidfile")
+              pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+              if [[ -n "$pgid" ]]; then
+                kill -INT -- "-$pgid" 2>/dev/null || true
+              fi
+            fi
+          done
+          # Give V8 time to flush NODE_V8_COVERAGE / coverage/edge.
+          sleep 5
+          # Belt-and-suspenders: pkill any stragglers that didn't see
+          # the group signal.
+          pkill -INT -f "supabase/functions/_coverage/serve.ts" || true
+          pkill -INT -f "next-server" || true
           sleep 3
 
       - name: Collect per-layer coverage
