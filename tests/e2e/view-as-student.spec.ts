@@ -2,7 +2,10 @@ import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { viewAsCookieName } from "@/lib/viewAs";
 dotenv.config({ path: ".env.local", quiet: true });
+
+const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
 test.setTimeout(120_000);
 
@@ -94,7 +97,48 @@ test.describe("Instructor view-as-student (read-only)", () => {
     // Exit restores the instructor view.
     await banner.getByRole("button", { name: "Exit student view" }).click();
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+    // Wait for the RSC refresh triggered by exitViewAs to settle — instructor-only nav
+    // (Course Settings) returns — before navigating away. Otherwise the in-flight refresh of
+    // the current route can interrupt the next goto (observed flaky on WebKit).
+    await expect(page.getByRole("group").filter({ hasText: "Course Settings" })).toHaveCount(1);
     await page.goto(`/course/${course.id}/manage/course/enrollments`);
     await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
+  });
+
+  test("student write surfaces are read-only while viewing as a student", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    // Activate view-as via the per-course cookie (equivalent to clicking the roster
+    // "View as this student" button exercised above).
+    await page
+      .context()
+      .addCookies([{ name: viewAsCookieName(course.id), value: student!.private_profile_id, url: BASE_URL }]);
+
+    await page.goto(`/course/${course.id}/discussion/new`);
+
+    // The read-only banner confirms view-as actually engaged on this page.
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+
+    // The "New Discussion Thread" submit is disabled and relabeled while read-only, so an
+    // instructor cannot post a thread authored as the student.
+    const submit = page.getByRole("button", { name: /Read-only \(viewing as student\)/i });
+    await expect(submit).toBeVisible();
+    await expect(submit).toBeDisabled();
+  });
+
+  test("a non-instructor cannot activate view-as with a forged cookie", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    // A student forges the instructor-only cookie. Both the server (getEffectiveCourseIdentity)
+    // and the client (ClassProfileProvider) only honor it for real instructors, so it is ignored.
+    await page
+      .context()
+      .addCookies([{ name: viewAsCookieName(course.id), value: student!.private_profile_id, url: BASE_URL }]);
+
+    await page.goto(`/course/${course.id}/discussion/new`);
+
+    // No read-only banner appears, and the student keeps a normal, enabled submit button.
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Submit" })).toBeEnabled();
   });
 });

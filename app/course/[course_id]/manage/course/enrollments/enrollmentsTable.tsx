@@ -23,6 +23,7 @@ import {
   Flex,
   HStack,
   Icon,
+  IconButton,
   Input,
   NativeSelect,
   NativeSelectField,
@@ -808,16 +809,18 @@ export default function EnrollmentsTable() {
               )}
               {realRole === "instructor" && userRoleEntry.role === "student" && studentProfileId && (
                 <Tooltip content="View as this student (read-only)">
-                  <Icon
-                    as={FaEye}
+                  <IconButton
                     aria-label="View as this student"
-                    cursor="pointer"
+                    variant="ghost"
+                    size="xs"
                     color="blue.500"
                     onClick={(event) => {
                       event.stopPropagation();
                       enterViewAs(studentProfileId);
                     }}
-                  />
+                  >
+                    <FaEye />
+                  </IconButton>
                 </Tooltip>
               )}
               {canDiagnoseGitHub && (
