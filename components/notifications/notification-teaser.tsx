@@ -248,6 +248,12 @@ export type RegradeRequestNotification = NotificationEnvelope & {
         comment_author_name: string;
         comment_id: number;
       }
+    | {
+        action: "auto_resolved";
+        resolution_reason: string;
+        resolved_by: string;
+        resolved_by_name: string;
+      }
   );
 
 // function truncateString(str: string, maxLength: number) {
@@ -471,6 +477,14 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
     actorProfileId = body.escalated_by;
     actorName = body.escalated_by_name;
     message = <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${actorName}** escalated a regrade request`}</Markdown>;
+  } else if (body.action === "auto_resolved") {
+    actorProfileId = body.resolved_by;
+    actorName = body.resolved_by_name;
+    message = (
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
+        {`Your regrade request was automatically resolved because the grade it referenced was changed. Re-check your grade and escalate if you still disagree.`}
+      </Markdown>
+    );
   } else {
     // action === "new_comment"
     actorProfileId = body.comment_author;
@@ -480,15 +494,17 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
 
   const actor = useUserProfile(actorProfileId);
 
-  if (!actor) {
+  // For auto_resolved the message is self-contained, so a missing/unloaded resolver
+  // profile must not leave the teaser stuck on a skeleton.
+  if (!actor && body.action !== "auto_resolved") {
     return <Skeleton height="40px" width="100%" />;
   }
 
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={actor.avatar_url} alt="" />
-        <Avatar.Fallback fontSize="xs">{actor.name?.charAt(0)}</Avatar.Fallback>
+        <Avatar.Image src={actor?.avatar_url} alt="" />
+        <Avatar.Fallback fontSize="xs">{actor?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
         {message}

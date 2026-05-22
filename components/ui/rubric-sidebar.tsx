@@ -85,7 +85,18 @@ import { Icon } from "@chakra-ui/react";
 import { formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode
+} from "react";
+import { Switch } from "@/components/ui/switch";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaChartLine, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
@@ -93,11 +104,25 @@ import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
+import RequestRegradeForCheckDialog from "@/components/ui/RequestRegradeForCheckDialog";
 import { Tooltip } from "./tooltip";
 
 // Module-stable style — see `components/ui/markdown.tsx` for why
 // `<Markdown style={{...}}>` literals defeat its `memo` wrapper.
 const RUBRIC_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
+
+// Whether rubric part/criteria/check descriptions are shown in the sidebar. Defaults to true so
+// any non-sidebar use is unaffected; the sidebar provides `false` (collapsed) with a toggle.
+const RubricDescriptionsContext = createContext<boolean>(true);
+
+/** A rubric description that the sidebar can collapse behind its "Show descriptions" toggle. */
+function RubricDescription({ text }: { text: string | null | undefined }) {
+  const show = useContext(RubricDescriptionsContext);
+  if (!text || !show) {
+    return null;
+  }
+  return <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{text}</Markdown>;
+}
 
 const KPI_LABELS: Record<string, string> = {
   commits: "commits",
@@ -623,6 +648,8 @@ export function RubricCheckAnnotation({
     targetStudentProfileId
   );
   const isGrader = useIsGraderOrInstructor();
+  const assignment = useAssignmentData();
+  const isSelfReviewRubric = criteria.rubric_id === assignment.self_review_rubric_id;
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
   const submission = useSubmissionMaybe();
@@ -677,7 +704,7 @@ export function RubricCheckAnnotation({
         </HStack>
         <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
       </HStack>
-      <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+      <RubricDescription text={check.description} />
       {linkedArtifactId && submission && check.artifact && (
         <Box mt={1}>
           <Link
@@ -709,6 +736,16 @@ export function RubricCheckAnnotation({
           check={check}
         />
       ))}
+
+      {/* Bare-check regrade requests render here for students (create) and staff (view/respond). */}
+      {!isPreviewMode && !isApplied && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog
+          submissionReviewId={reviewForThisRubric.id}
+          rubricCheckId={check.id}
+          check={check}
+          isReleased={isReleased}
+        />
+      )}
 
       {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}
 
@@ -769,6 +806,8 @@ export function RubricCheckGlobal({
   const isGrader = useIsGraderOrInstructor();
   const isTaOnly = useIsGrader();
   const isInstructor = useIsInstructor();
+  const assignment = useAssignmentData();
+  const isSelfReviewRubric = criteria.rubric_id === assignment.self_review_rubric_id;
   const pathname = usePathname();
   const isPreviewMode = !submission;
   const linkedAritfactId = check.artifact
@@ -860,7 +899,7 @@ export function RubricCheckGlobal({
                   </Field.Label>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
-                <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+                <RubricDescription text={check.description} />
                 {linkedFileId && submission && (
                   <Link
                     prefetch={true}
@@ -944,7 +983,7 @@ export function RubricCheckGlobal({
                         {points} {check.name}
                       </Text>
                     </Field.Label>
-                    <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+                    <RubricDescription text={check.description} />
                   </Checkbox>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
@@ -988,7 +1027,7 @@ export function RubricCheckGlobal({
                         {points} {check.name}
                       </Text>
                     </Field.Label>
-                    <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+                    <RubricDescription text={check.description} />
                   </Radio>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
@@ -1047,6 +1086,16 @@ export function RubricCheckGlobal({
           check={check}
         />
       ))}
+
+      {/* Bare-check regrade requests render here for students (create) and staff (view/respond). */}
+      {!isPreviewMode && !isApplied && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog
+          submissionReviewId={reviewForThisRubric.id}
+          rubricCheckId={check.id}
+          check={check}
+          isReleased={isReleased}
+        />
+      )}
 
       {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}
 
@@ -1297,7 +1346,7 @@ export function RubricCriteria({
         </Heading>
 
         <Fieldset.HelperText>
-          <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{criteria.description}</Markdown>
+          <RubricDescription text={criteria.description} />
         </Fieldset.HelperText>
         {isTaOnly && !isInstructor && reviewForThisRubric?.released && (
           <Alert status="warning" variant="subtle" borderRadius="md" mb={2} title="Grading is locked">
@@ -1355,7 +1404,7 @@ export function RubricPart({
   return (
     <Box w="100%" role="region" aria-label={`Rubric Part: ${part.name}`}>
       <Heading size="md">{part.name}</Heading>
-      <Markdown>{part.description}</Markdown>
+      <RubricDescription text={part.description} />
       <VStack align="start" w="100%" gap={2}>
         {criteria.map((criteria, index) => (
           <RubricCriteria
@@ -1402,6 +1451,12 @@ function RubricMenu() {
 }
 export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
   const unsortedRubrics = useRubrics();
+  // Descriptions are collapsed by default for students (keeps the sidebar scannable) but shown for
+  // graders/instructors, who rely on them while grading. Derive the default from the role each
+  // render (so it picks up role state that hydrates after mount) and let a manual toggle override.
+  const isGraderOrInstructorForDescriptions = useIsGraderOrInstructor();
+  const [descriptionsOverride, setDescriptionsOverride] = useState<boolean | null>(null);
+  const showDescriptions = descriptionsOverride ?? isGraderOrInstructorForDescriptions;
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
   const activeReviewAssignment = useActiveReviewAssignment();
   const rubrics = useMemo(() => {
@@ -1530,26 +1585,42 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   );
 
   return (
-    <VStack w="100%">
-      <RubricMenu />
-      {rubrics.map((rubric, index) => (
-        <Box
-          key={rubric.id}
-          id={`rubric-${rubric.id}`}
-          data-rubric-id={rubric.id}
-          ref={setRubricRef(rubric.id)}
-          pt="40px"
-          w="100%"
-          role="region"
-          aria-label={`Rubric: ${rubric.name}`}
+    <RubricDescriptionsContext.Provider value={showDescriptions}>
+      <VStack w="100%">
+        <RubricMenu />
+        <Switch
+          checked={showDescriptions}
+          onCheckedChange={(e) => setDescriptionsOverride(e.checked)}
+          size="sm"
+          alignSelf="start"
         >
-          <RubricSidebar key={rubric.id} rubricId={rubric.id} />
-          {index < rubrics.length - 1 && (
-            <Separator orientation="horizontal" borderTopWidth="4px" borderColor="border.emphasized" my={2} mt="50px" />
-          )}
-        </Box>
-      ))}
-    </VStack>
+          Show rubric descriptions
+        </Switch>
+        {rubrics.map((rubric, index) => (
+          <Box
+            key={rubric.id}
+            id={`rubric-${rubric.id}`}
+            data-rubric-id={rubric.id}
+            ref={setRubricRef(rubric.id)}
+            pt="40px"
+            w="100%"
+            role="region"
+            aria-label={`Rubric: ${rubric.name}`}
+          >
+            <RubricSidebar key={rubric.id} rubricId={rubric.id} />
+            {index < rubrics.length - 1 && (
+              <Separator
+                orientation="horizontal"
+                borderTopWidth="4px"
+                borderColor="border.emphasized"
+                my={2}
+                mt="50px"
+              />
+            )}
+          </Box>
+        ))}
+      </VStack>
+    </RubricDescriptionsContext.Provider>
   );
 }
 
@@ -1626,7 +1697,7 @@ function AssignToStudentPart({
         <Heading size="md">{part.name}</Heading>
         <Badge variant="secondary">Assign</Badge>
       </HStack>
-      {part.description && <Markdown>{part.description}</Markdown>}
+      {part.description && <RubricDescription text={part.description} />}
       <Box my={2}>
         <NativeSelectRoot>
           <NativeSelectField
@@ -1941,7 +2012,7 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
           <Text fontSize="lg" fontWeight="semibold">
             {rubric.name}
           </Text>
-          {rubric.description && <Markdown>{rubric.description}</Markdown>}
+          <RubricDescription text={rubric.description} />
           <Text mt={2}>This rubric is empty.</Text>
         </VStack>
       </Box>

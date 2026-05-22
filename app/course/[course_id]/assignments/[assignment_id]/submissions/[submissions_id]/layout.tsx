@@ -32,6 +32,7 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
+import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/SubmissionRegradeRequestsPanel";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
@@ -2110,6 +2111,7 @@ function RubricView() {
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
+        <SubmissionRegradeRequestsPanel submissionId={submission.id} />
         <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />
         <Comments />
       </VStack>
@@ -2143,12 +2145,18 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submission = useSubmission();
   const hasGraderOutput = submissionHasGraderOutput(submission.grader_results);
   const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
-  const activeSubPage = explicitSubPage ?? (hasGraderOutput ? "results" : "files");
+  const gradingReviewForDefault = useSubmissionReviewOrGradingReview(submission.grading_review_id ?? undefined);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  // Default tab: students land on the released grade summary if available; otherwise (and always
+  // for graders/instructors, who grade from the rubric sidebar) autograder feedback if present,
+  // else files.
+  const defaultSubPage =
+    !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
+  const activeSubPage = explicitSubPage ?? defaultSubPage;
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
   });
-  const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
@@ -2298,10 +2306,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         display="flex"
         flexWrap="wrap"
       >
+        <NextLink href={linkToSubPage(pathname, "grade", searchParams)}>
+          <Button variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+            <Icon as={FaCheckCircle} />
+            Grade
+          </Button>
+        </NextLink>
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
-            <Icon as={FaCheckCircle} />
-            Grading Summary
+            <Icon as={FaRobot} />
+            Autograder Detail
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
@@ -2323,9 +2337,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
           {children}
         </Box>
-        <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
-          <RubricView />
-        </Box>
+        {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there.
+            On other tabs keep the full rubric sidebar: students rely on it to perform self-review,
+            so we must NOT collapse it to applied-only here. */}
+        {activeSubPage !== "grade" && (
+          <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
+            <RubricView />
+          </Box>
+        )}
       </Flex>
     </Flex>
   );

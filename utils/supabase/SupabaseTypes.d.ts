@@ -8491,14 +8491,17 @@ export type Database = {
           last_commented_by: string | null;
           last_updated_at: string;
           opened_at: string | null;
+          resolution_reason: string | null;
           resolved_at: string | null;
           resolved_by: string | null;
           resolved_points: number | null;
+          rubric_check_id: number | null;
           status: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id: number | null;
           submission_comment_id: number | null;
           submission_file_comment_id: number | null;
           submission_id: number;
+          submission_review_id: number | null;
           updated_at: string;
         };
         Insert: {
@@ -8518,14 +8521,17 @@ export type Database = {
           last_commented_by?: string | null;
           last_updated_at?: string;
           opened_at?: string | null;
+          resolution_reason?: string | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           resolved_points?: number | null;
+          rubric_check_id?: number | null;
           status: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id?: number | null;
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id: number;
+          submission_review_id?: number | null;
           updated_at?: string;
         };
         Update: {
@@ -8545,14 +8551,17 @@ export type Database = {
           last_commented_by?: string | null;
           last_updated_at?: string;
           opened_at?: string | null;
+          resolution_reason?: string | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           resolved_points?: number | null;
+          rubric_check_id?: number | null;
           status?: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id?: number | null;
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id?: number;
+          submission_review_id?: number | null;
           updated_at?: string;
         };
         Relationships: [
@@ -8641,6 +8650,13 @@ export type Database = {
             referencedColumns: ["student_private_profile_id"];
           },
           {
+            foreignKeyName: "submission_regrade_requests_rubric_check_id_fkey";
+            columns: ["rubric_check_id"];
+            isOneToOne: false;
+            referencedRelation: "rubric_checks";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "submission_regrade_requests_submission_artifact_comment_id_fkey";
             columns: ["submission_artifact_comment_id"];
             isOneToOne: false;
@@ -8688,6 +8704,27 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["grading_submission_review_id"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_review_id"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "submission_reviews";
+            referencedColumns: ["id"];
           },
           {
             foreignKeyName: "submission_regrade_requests_submitted_by_fkey";
@@ -11599,6 +11636,14 @@ export type Database = {
         };
         Returns: number;
       };
+      create_regrade_request_for_check: {
+        Args: {
+          p_rubric_check_id: number;
+          p_submission_review_id: number;
+          private_profile_id: string;
+        };
+        Returns: number;
+      };
       create_repos_for_student: {
         Args: { class_id?: number; p_force?: boolean; user_id: string };
         Returns: undefined;
@@ -12666,6 +12711,9 @@ export type Database = {
         Args: {
           closed_points?: number;
           new_status: Database["public"]["Enums"]["regrade_status"];
+          p_line?: number;
+          p_submission_artifact_id?: number;
+          p_submission_file_id?: number;
           profile_id: string;
           regrade_request_id: number;
           resolved_points?: number;

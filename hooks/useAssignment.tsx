@@ -2,6 +2,7 @@
 import {
   AssignmentWithRubricsAndReferences,
   RegradeRequest,
+  RegradeStatus,
   ReviewAssignmentParts,
   ReviewAssignments,
   Rubric,
@@ -353,6 +354,37 @@ export function useRegradeRequestsBySubmission(submission_id: number | null | un
     [submission_id]
   );
   return useListTableControllerValues(controller.regradeRequests, findRegradeRequestsPredicate);
+}
+
+/**
+ * Returns the active regrade request for a rubric check that was never applied
+ * (no backing submission/file/artifact comment yet).
+ */
+export function useBareCheckRegradeRequest(
+  submission_review_id: number | null | undefined,
+  rubric_check_id: number | null | undefined
+) {
+  const controller = useAssignmentController();
+  const findPredicate = useCallback(
+    (regrade_request: RegradeRequest) =>
+      regrade_request.submission_review_id === submission_review_id &&
+      regrade_request.rubric_check_id === rubric_check_id &&
+      regrade_request.submission_comment_id == null &&
+      regrade_request.submission_file_comment_id == null &&
+      regrade_request.submission_artifact_comment_id == null,
+    [submission_review_id, rubric_check_id]
+  );
+  const matches = useListTableControllerValues(controller.regradeRequests, findPredicate);
+  // Only surface an ACTIVE bare-check request, and pick deterministically (most recently updated)
+  // so the UI never latches onto a stale/non-actionable row when several exist.
+  return useMemo(() => {
+    const ACTIVE_STATUSES: RegradeStatus[] = ["draft", "opened", "escalated"];
+    const active = matches.filter((r) => ACTIVE_STATUSES.includes(r.status as RegradeStatus));
+    if (active.length === 0) {
+      return undefined;
+    }
+    return [...active].sort((a, b) => new Date(b.last_updated_at).getTime() - new Date(a.last_updated_at).getTime())[0];
+  }, [matches]);
 }
 
 /**

@@ -367,11 +367,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
+    // Released submissions now default students to the Grade tab; switch to the autograder
+    // detail (results) view that this test exercises.
+    await page.getByRole("button", { name: "Autograder Detail" }).click();
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
-    // `/submissions/:id` auto-redirects to `/results` (when grader output
-    // exists) before this test clicks "Files". Scan the results route here so
-    // axe also covers the autograder output view, the Pyret REPL header
-    // (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
+    // Scan the results route here so axe also covers the autograder output view, the Pyret REPL
+    // header (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
     await expect(page).toHaveURL(/\/results(?:\?.*)?$/);
     await assertStudentPageAccessible(page, "grading results /results route");
     await page.getByRole("button", { name: "Files" }).click();
