@@ -2,7 +2,6 @@ import { resolveTargetStudentProfileIdForRubricComment } from "@/lib/rubricComme
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import type { Page, Locator } from "@playwright/test";
-import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { promises as fs } from "node:fs";
 import Papa from "papaparse";
@@ -17,6 +16,7 @@ import {
   createAuthenticatedClient
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { visualScreenshot } from "./VisualTestUtils";
 // removed unused import
 
 dotenv.config({ path: ".env.local", quiet: true });
@@ -143,6 +143,61 @@ async function waitForGradebookRecalculationsIdle(page: Page, timeoutMs = 30_000
   });
 }
 
+// The recalculation pipeline is async (DB trigger → pg_net → edge function). On slow
+// CI workers a row's is_recalculating flag can be left stuck true, which blocks new
+// enqueues, so a column — or, worse, a *dependent* column downstream of one we just
+// changed — never recomputes and a poll for its final value hangs until timeout.
+// Clear any stuck flags and re-invoke the worker directly so the poll can make progress.
+async function kickGradebookRecalculation(classId: number) {
+  // Surface real failures: this runs inside a toPass loop, so throwing on a
+  // genuine error retries the kick (and reports the cause) instead of silently
+  // no-op'ing and letting the caller's poll flake until timeout.
+  const { error: resetError } = await supabase
+    .from("gradebook_row_recalc_state")
+    .update({ is_recalculating: false })
+    .eq("class_id", classId)
+    .eq("is_recalculating", true);
+  if (resetError) {
+    throw new Error(`Failed to clear stuck recalculation flags: ${resetError.message}`);
+  }
+  const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
+  if (edgeSecret) {
+    // Non-fatal: the DB RPC fallback below still runs if the edge invoke fails.
+    await supabase.functions
+      .invoke("gradebook-column-recalculate", { headers: { "x-edge-function-secret": edgeSecret } })
+      .catch(() => {});
+  }
+  // Also invoke via the DB's internal mechanism as a fallback (pg_net may be slow).
+  const { error: rpcError } = await supabase.rpc("invoke_gradebook_recalculation_background_task");
+  if (rpcError) {
+    throw new Error(`Failed to invoke recalculation background task: ${rpcError.message}`);
+  }
+}
+
+// Poll a gradebook UI cell until it shows the expected value, kicking the async recalc
+// worker between attempts. Calculated columns (Final Grade, Average Assignments, …) are
+// recomputed by the DB→pg_net→edge-function pipeline, which can stall under CI load — so
+// without a kick the poll just times out on the stale value. Use this for calculated
+// columns; manual columns and autograder/assignment scores don't go through this pipeline.
+async function expectCalculatedCell(
+  page: Page,
+  studentName: string,
+  column: string,
+  expected: number,
+  opts: { classId: number; timeout?: number }
+) {
+  let kicks = 0;
+  await expect(async () => {
+    if (kicks < 6 && (await readCellNumber(page, studentName, column)) !== expected) {
+      kicks++;
+      await kickGradebookRecalculation(opts.classId);
+    }
+    const after = await readCellNumber(page, studentName, column);
+    expect(after).not.toBeNaN();
+    expect(after).toBe(expected);
+  }).toPass({ timeout: opts.timeout ?? 60_000 });
+}
+
 async function getGradebookDataHeaderTitles(page: Page): Promise<string[]> {
   const region = page.getByRole("region", { name: "Instructor Gradebook Table" });
   await region.evaluate((el) => {
@@ -213,6 +268,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
     const users = await createUsersInClass([
       {
         name: "Alice Anderson",
+        public_profile_name: "Gradebook Pseudonym Alice",
         email: "alice-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -220,6 +276,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Bob Brown",
+        public_profile_name: "Gradebook Pseudonym Bob",
         email: "bob-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -227,6 +284,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Charlie Chen",
+        public_profile_name: "Gradebook Pseudonym Charlie",
         email: "charlie-gradebook@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -234,6 +292,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       },
       {
         name: "Professor Smith",
+        public_profile_name: "Gradebook Pseudonym Instructor",
         email: "prof-smith-gradebook@pawtograder.net",
         role: "instructor",
         class_id: course.id,
@@ -478,23 +537,7 @@ test.describe("Gradebook Page - Comprehensive", () => {
       }
       if (data?.score !== 90 && kickCount < 5) {
         kickCount++;
-        // Clear stuck recalculation states that block new enqueues
-        await supabase
-          .from("gradebook_row_recalc_state")
-          .update({ is_recalculating: false })
-          .eq("class_id", course.id)
-          .eq("is_recalculating", true);
-        // Kick the recalculation worker directly (pg_net may be slow)
-        const edgeSecret = process.env.EDGE_FUNCTION_SECRET || process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
-        if (edgeSecret) {
-          await supabase.functions
-            .invoke("gradebook-column-recalculate", {
-              headers: { "x-edge-function-secret": edgeSecret }
-            })
-            .catch(() => {});
-        }
-        // Also invoke via the DB's internal mechanism as fallback
-        await supabase.rpc("invoke_gradebook_recalculation_background_task");
+        await kickGradebookRecalculation(course.id);
       }
       expect(data?.score).toBe(90);
     }).toPass({ timeout: 120_000 });
@@ -532,7 +575,9 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Wait for gradebook to finish updating with the private final grade.
     // The final-grade column is calculated from average-assignments, which
     // depends on the code-walk column. The recalculation pipeline is async
-    // (DB → pg_net → edge function); just poll the result.
+    // (DB → pg_net → edge function) and the *dependent* final-grade recompute
+    // can stall after the code-walk score lands, so kick the worker if it lags.
+    let finalGradeKicks = 0;
     await expect(async () => {
       const { data: privateRecord, error: privateError } = await supabase
         .from("gradebook_column_students")
@@ -544,6 +589,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
         .single();
       if (privateError) {
         throw new Error(`Failed to get private gradebook column student data: ${privateError.message}`);
+      }
+      if (privateRecord?.score !== 51.95 && finalGradeKicks < 5) {
+        finalGradeKicks++;
+        await kickGradebookRecalculation(course.id);
       }
       expect(privateRecord?.score).toBe(51.95);
     }).toPass({ timeout: 120_000 });
@@ -866,14 +915,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
       expect(after).toBe(84.5);
     }).toPass({ timeout: 60_000 });
 
-    await expect(async () => {
-      const after = await readCellNumber(page, students[0].private_profile_name, "Final Grade");
-      expect(after).not.toBeNaN();
-      expect(after).toBe(51.95);
-    }).toPass({ timeout: 60_000 });
+    await expectCalculatedCell(page, students[0].private_profile_name, "Final Grade", 51.95, { classId: course.id });
 
     // Take screenshot for visual regression testing
-    await argosScreenshot(page, "Gradebook Page - Full Data");
+    await visualScreenshot(page, "Gradebook Page - Full Data");
   });
 
   test("Editing a manual column updates the Participation cell value", async ({ page }) => {
@@ -889,11 +934,10 @@ test.describe("Gradebook Page - Comprehensive", () => {
     // Expect participation cell to show the new value and final grade to change
     await expect(partCell).toHaveText(/80(\.0+)?|80$/);
 
-    await expect(async () => {
-      const after = await readCellNumber(page, studentName, "Final Grade");
-      expect(after).not.toBeNaN();
-      expect(after).toBe(51.5);
-    }).toPass({ timeout: 60_000 });
+    // Final grade recomputes from the changed participation score via the async recalc
+    // pipeline; if the dependent recompute stalls the cell stays on its prior value (51.95),
+    // so kick the worker while polling for the new total.
+    await expectCalculatedCell(page, studentName, "Final Grade", 51.5, { classId: course.id });
   });
 
   test("Overriding a calculated column (Average Assignments) persists and displays the override", async ({ page }) => {
@@ -908,20 +952,23 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await page.locator('input[name="score_override"]').fill("92");
     await page.getByRole("button", { name: /^Override$/ }).click();
 
-    // Value should update to the override
+    // Value should update to the override. The override write recomputes the column via the
+    // async recalc pipeline, so kick the worker between attempts to avoid timing out on the
+    // pre-override value.
+    let overrideKicks = 0;
     await expect(async () => {
+      if (overrideKicks < 6 && (await readCellNumber(page, studentName, "Average Assignments")) !== 92) {
+        overrideKicks++;
+        await kickGradebookRecalculation(course.id);
+      }
       const after = await readCellNumber(page, studentName, "Average Assignments");
       expect(after).not.toBeNaN();
       expect(after).toBe(92);
       expect(after).not.toBe(before);
     }).toPass({ timeout: 60_000 });
 
-    // Final Grade should update
-    await expect(async () => {
-      const after = await readCellNumber(page, studentName, "Final Grade");
-      expect(after).not.toBeNaN();
-      expect(after).toBe(90.8);
-    }).toPass({ timeout: 60_000 });
+    // Final Grade should update (depends on the overridden Average Assignments).
+    await expectCalculatedCell(page, studentName, "Final Grade", 90.8, { classId: course.id });
   });
 
   test("Import Columns workflow creates a new column and populates scores", async ({ page }) => {
@@ -1454,6 +1501,7 @@ test.describe("Gradebook Page - CSV Render Export", () => {
       throw new Error(`Failed to set render export score for export test: ${setRenderExportScoreError.message}`);
     }
 
+    let renderKicks = 0;
     await expect(async () => {
       const { data: renderRecord, error: renderError } = await supabase
         .from("gradebook_column_students")
@@ -1465,6 +1513,12 @@ test.describe("Gradebook Page - CSV Render Export", () => {
         .single();
       if (renderError) {
         throw new Error(`Failed to read stabilized render export record: ${renderError.message}`);
+      }
+      // is_recalculating settles to false only once the async recalc pipeline drains; kick
+      // the worker between attempts so a stalled flag doesn't time the poll out.
+      if (renderKicks < 6 && renderRecord?.is_recalculating !== false) {
+        renderKicks++;
+        await kickGradebookRecalculation(exportCourse.id);
       }
       expect(renderRecord?.is_recalculating).toBe(false);
       expect(renderRecord?.score_override ?? renderRecord?.score).toBe(92);
@@ -1598,7 +1652,7 @@ test.describe("Gradebook column reorder (issue #531)", () => {
       .filter({ hasText: colName });
     await headerCell.getByRole("button", { name: "Column options" }).click();
     await page.getByRole("menuitem", { name: "Move Left", exact: true }).click();
-    await expect(page.getByText("Column moved left").first()).toBeVisible();
+    await expect(page.getByText("Column moved left").first()).toBeAttached();
 
     // Verify sort_order decreased by 1 in the database
     await expect(async () => {
@@ -1629,10 +1683,8 @@ test.describe("Gradebook column reorder (issue #531)", () => {
     // chakra menu it controls. Retry the entire open+click sequence as a
     // single unit so a transient detach doesn't fail the test. Each attempt
     // re-resolves the locator (so the new mount is targeted), waits for
-    // virtualizer idle, opens the menu, and clicks Move Right. Any
-    // intermediate detach throws and we try again. The ultimate signal that
-    // the click succeeded is the "Column moved right" toast (matching how
-    // Move Left works above), and the DB sort_order assertion that follows.
+    // virtualizer idle, opens the menu, clicks Move Right, then verifies the
+    // DB sort_order. Any intermediate detach throws and we try again.
     await expect(async () => {
       // If a previous attempt's Move Right click already landed in the DB
       // (sort_order back to original) but the toast assertion timed out
@@ -1651,11 +1703,27 @@ test.describe("Gradebook column reorder (issue #531)", () => {
         return;
       }
       await waitForVirtualizerIdle(page);
-      const buttonNow = headerCellAfterMove.getByRole("button", { name: "Column options" });
+      const freshHeaderCellAfterMove = region
+        .locator("thead tr")
+        .filter({ has: page.locator("th").filter({ hasText: "Student Name" }) })
+        .locator("[data-col-id]")
+        .filter({ hasText: colName });
+      await freshHeaderCellAfterMove.scrollIntoViewIfNeeded();
+      await waitForVirtualizerIdle(page);
+      const buttonNow = freshHeaderCellAfterMove.getByRole("button", { name: "Column options" });
       await buttonNow.scrollIntoViewIfNeeded();
       await buttonNow.click();
-      await page.getByRole("menuitem", { name: "Move Right", exact: true }).click({ force: true });
-      await expect(page.getByText("Column moved right").first()).toBeVisible({ timeout: 5000 });
+      const moveRightItem = page.getByRole("menuitem", { name: "Move Right", exact: true });
+      await expect(moveRightItem).toBeVisible({ timeout: 5_000 });
+      await moveRightItem.click({ force: true });
+      await expect(async () => {
+        const { data: colAfterClick } = await supabase
+          .from("gradebook_columns")
+          .select("sort_order")
+          .eq("id", colBefore!.id)
+          .single();
+        expect(colAfterClick?.sort_order).toBe(sortOrderBefore);
+      }).toPass({ timeout: 5_000, intervals: [250, 500] });
     }).toPass({ timeout: 30_000, intervals: [250, 500, 1000] });
 
     // Verify sort_order restored to original

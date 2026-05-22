@@ -23,6 +23,7 @@ import { format, formatDistanceToNow, isPast } from "date-fns";
 import { FaClipboardList, FaExclamationCircle } from "react-icons/fa";
 
 import CalendarScheduleSummary from "@/components/calendar/calendar-schedule-summary";
+import { CourseFeatureGate } from "@/components/course/course-feature-gate";
 import { DiscussionSummary } from "@/components/discussion/DiscussionSummary";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
@@ -33,6 +34,7 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { Suspense } from "react";
 import RegradeRequestsTable from "./RegradeRequestsTable";
+import { COURSE_FEATURES } from "@/lib/courseFeatures";
 
 function SurveyDashboardCta({
   href,
@@ -159,77 +161,82 @@ export default async function StudentDashboard({
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
+      <Heading as="h1" size="lg" mb={4}>
+        Course {course?.name} Dashboard
+      </Heading>
       {identitiesResult.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
 
-      {incompleteSurveysForBanner.length > 0 && (
-        <Box w="100%" mb={3}>
-          <Text fontWeight="semibold" fontSize="sm" mb={2} color="fg.muted">
-            Surveys to complete
-          </Text>
-          <VStack gap={2} align="stretch">
-            {incompleteSurveysForBanner.map((survey) => {
-              const response = responsesBySurveyId.get(survey.id);
-              const isOverdue = Boolean(survey.due_date && isPast(new Date(survey.due_date)));
-              const inProgress = Boolean(response && !response.is_submitted);
-              const href = `/course/${course_id}/surveys/${survey.id}`;
-              return (
-                <Box
-                  key={survey.id}
-                  w="100%"
-                  p={3}
-                  borderRadius="md"
-                  border="1px solid"
-                  borderColor={isOverdue ? "red.300" : "blue.300"}
-                  bg={isOverdue ? "red.50" : "blue.50"}
-                  _dark={{
-                    bg: isOverdue ? "red.900" : "blue.900",
-                    borderColor: isOverdue ? "red.600" : "blue.600"
-                  }}
-                >
-                  <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
-                    <HStack gap={3} align="flex-start">
-                      <Icon fontSize="lg" color={isOverdue ? "red.500" : "blue.500"} mt={0.5}>
-                        {isOverdue ? <FaExclamationCircle /> : <FaClipboardList />}
-                      </Icon>
-                      <VStack align="start" gap={0}>
-                        <HStack gap={2} flexWrap="wrap">
-                          <Text fontWeight="semibold" fontSize="sm">
-                            {survey.title ?? "Untitled survey"}
-                          </Text>
-                          <Badge colorPalette={isOverdue ? "red" : inProgress ? "yellow" : "blue"} size="sm">
-                            {isOverdue ? "Overdue" : inProgress ? "In progress" : "Pending"}
-                          </Badge>
-                        </HStack>
-                        {survey.due_date && (
-                          <Text fontSize="xs" color="fg.muted">
-                            {isOverdue
-                              ? `Was due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`
-                              : `Due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`}
-                          </Text>
-                        )}
-                      </VStack>
+      <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
+        {incompleteSurveysForBanner.length > 0 && (
+          <Box w="100%" mb={3}>
+            <Text fontWeight="semibold" fontSize="sm" mb={2} color="fg.muted">
+              Surveys to complete
+            </Text>
+            <VStack gap={2} align="stretch">
+              {incompleteSurveysForBanner.map((survey) => {
+                const response = responsesBySurveyId.get(survey.id);
+                const isOverdue = Boolean(survey.due_date && isPast(new Date(survey.due_date)));
+                const inProgress = Boolean(response && !response.is_submitted);
+                const href = `/course/${course_id}/surveys/${survey.id}`;
+                return (
+                  <Box
+                    key={survey.id}
+                    w="100%"
+                    p={3}
+                    borderRadius="md"
+                    border="1px solid"
+                    borderColor={isOverdue ? "red.300" : "blue.300"}
+                    bg={isOverdue ? "red.50" : "blue.50"}
+                    _dark={{
+                      bg: isOverdue ? "red.900" : "blue.900",
+                      borderColor: isOverdue ? "red.600" : "blue.600"
+                    }}
+                  >
+                    <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
+                      <HStack gap={3} align="flex-start">
+                        <Icon fontSize="lg" color={isOverdue ? "red.500" : "blue.500"} mt={0.5}>
+                          {isOverdue ? <FaExclamationCircle /> : <FaClipboardList />}
+                        </Icon>
+                        <VStack align="start" gap={0}>
+                          <HStack gap={2} flexWrap="wrap">
+                            <Text fontWeight="semibold" fontSize="sm">
+                              {survey.title ?? "Untitled survey"}
+                            </Text>
+                            <Badge colorPalette={isOverdue ? "red" : inProgress ? "yellow" : "blue"} size="sm">
+                              {isOverdue ? "Overdue" : inProgress ? "In progress" : "Pending"}
+                            </Badge>
+                          </HStack>
+                          {survey.due_date && (
+                            <Text fontSize="xs" color="fg.muted">
+                              {isOverdue
+                                ? `Was due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`
+                                : `Due ${formatDistanceToNow(new Date(survey.due_date), { addSuffix: true })}`}
+                            </Text>
+                          )}
+                        </VStack>
+                      </HStack>
+                      <SurveyDashboardCta
+                        href={href}
+                        label={inProgress ? "Continue" : "Take survey"}
+                        ariaLabel={`${inProgress ? "Continue" : "Take survey"}: ${survey.title ?? "Untitled survey"}`}
+                        colorPalette={isOverdue ? "red" : "blue"}
+                      />
                     </HStack>
-                    <SurveyDashboardCta
-                      href={href}
-                      label={inProgress ? "Continue" : "Take survey"}
-                      ariaLabel={`${inProgress ? "Continue" : "Take survey"}: ${survey.title ?? "Untitled survey"}`}
-                      colorPalette={isOverdue ? "red" : "blue"}
-                    />
-                  </HStack>
-                </Box>
-              );
-            })}
-          </VStack>
-        </Box>
-      )}
+                  </Box>
+                );
+              })}
+            </VStack>
+          </Box>
+        )}
+      </CourseFeatureGate>
 
       {/* Section Cards */}
       {(classSection || labSection) && (
         <HStack gap={4} align="stretch" flexWrap="wrap">
           {/* Course Section Card */}
           {classSection && (
-            <CardRoot flex={1} minW="200px" h="100%">
+            <CardRoot flex={{ base: "1 1 100%", sm: "1 1 200px" }} h="100%">
               <CardBody p={3} h="100%" display="flex" flexDirection="column">
                 <Text fontSize="xs" color="fg.muted" mb={2} fontWeight="medium">
                   Course Section
@@ -255,7 +262,7 @@ export default async function StudentDashboard({
 
           {/* Lab Section Card */}
           {labSection && (
-            <CardRoot flex={1} minW="200px" h="100%">
+            <CardRoot flex={{ base: "1 1 100%", sm: "1 1 200px" }} h="100%">
               <CardBody p={3} h="100%" display="flex" flexDirection="column">
                 <Text fontSize="xs" color="fg.muted" mb={2} fontWeight="medium">
                   Lab Section
@@ -344,107 +351,111 @@ export default async function StudentDashboard({
       </Box>
 
       {/* Discussion Activity Summary */}
-      {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+      <CourseFeatureGate feature={COURSE_FEATURES.DISCUSSION}>
+        {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+      </CourseFeatureGate>
 
-      <Box>
-        <Heading size="lg" mb={4}>
-          Active Surveys
-        </Heading>
-        <Stack spaceY={4}>
-          {!surveys || surveys.length === 0 ? (
-            <CardRoot>
-              <CardHeader>No active surveys</CardHeader>
-              <CardBody>
-                <DataListRoot>
-                  <DataListItem>
-                    <DataListItemLabel>Info</DataListItemLabel>
-                    <DataListItemValue>
-                      There are no published surveys for you in this course right now.
-                    </DataListItemValue>
-                  </DataListItem>
-                </DataListRoot>
-              </CardBody>
-            </CardRoot>
-          ) : (
-            surveys.map((survey) => {
-              const response = responsesBySurveyId.get(survey.id);
+      <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>
+        <Box>
+          <Heading size="lg" mb={4}>
+            Active Surveys
+          </Heading>
+          <Stack spaceY={4}>
+            {!surveys || surveys.length === 0 ? (
+              <CardRoot>
+                <CardHeader>No active surveys</CardHeader>
+                <CardBody>
+                  <DataListRoot>
+                    <DataListItem>
+                      <DataListItemLabel>Info</DataListItemLabel>
+                      <DataListItemValue>
+                        There are no published surveys for you in this course right now.
+                      </DataListItemValue>
+                    </DataListItem>
+                  </DataListRoot>
+                </CardBody>
+              </CardRoot>
+            ) : (
+              surveys.map((survey) => {
+                const response = responsesBySurveyId.get(survey.id);
 
-              let statusLabel = "Not started";
-              let buttonLabel = "Start";
-              let colorScheme: "blue" | "yellow" | "green" | "gray" = "blue";
+                let statusLabel = "Not started";
+                let buttonLabel = "Start";
+                let colorScheme: "blue" | "yellow" | "green" | "gray" = "blue";
 
-              if (response) {
-                if (response.is_submitted) {
-                  if (survey.allow_response_editing) {
-                    statusLabel = "Submitted (editable)";
-                    buttonLabel = "Edit";
-                    colorScheme = "green";
+                if (response) {
+                  if (response.is_submitted) {
+                    if (survey.allow_response_editing) {
+                      statusLabel = "Submitted (editable)";
+                      buttonLabel = "Edit";
+                      colorScheme = "green";
+                    } else {
+                      statusLabel = "Submitted (locked)";
+                      buttonLabel = "View";
+                      colorScheme = "gray";
+                    }
                   } else {
-                    statusLabel = "Submitted (locked)";
-                    buttonLabel = "View";
-                    colorScheme = "gray";
+                    statusLabel = "In progress";
+                    buttonLabel = "Continue";
+                    colorScheme = "yellow";
                   }
-                } else {
-                  statusLabel = "In progress";
-                  buttonLabel = "Continue";
-                  colorScheme = "yellow";
                 }
-              }
 
-              const href = `/course/${course_id}/surveys/${survey.id}`;
+                const href = `/course/${course_id}/surveys/${survey.id}`;
 
-              return (
-                <CardRoot key={survey.id}>
-                  <CardHeader>
-                    <Stack direction="row" justify="space-between" align="center" gap={4}>
-                      <Box>
-                        <Link href={href}>
-                          <Text as="span" fontWeight="semibold">
-                            {survey.title ?? "Untitled survey"}
+                return (
+                  <CardRoot key={survey.id}>
+                    <CardHeader>
+                      <Stack direction="row" justify="space-between" align="center" gap={4}>
+                        <Box>
+                          <Link href={href}>
+                            <Text as="span" fontWeight="semibold">
+                              {survey.title ?? "Untitled survey"}
+                            </Text>
+                          </Link>
+                          {survey.description && (
+                            <Text fontSize="sm" opacity={0.8} mt={1}>
+                              {survey.description}
+                            </Text>
+                          )}
+                          <Text fontSize="xs" opacity={0.6} mt={1}>
+                            {statusLabel}
                           </Text>
-                        </Link>
-                        {survey.description && (
-                          <Text fontSize="sm" opacity={0.8} mt={1}>
-                            {survey.description}
-                          </Text>
-                        )}
-                        <Text fontSize="xs" opacity={0.6} mt={1}>
-                          {statusLabel}
-                        </Text>
-                      </Box>
-                      <SurveyDashboardCta
-                        href={href}
-                        label={buttonLabel}
-                        ariaLabel={`${buttonLabel} survey: ${survey.title ?? "Untitled survey"}`}
-                        colorPalette={colorScheme}
-                      />
-                    </Stack>
-                  </CardHeader>
-                  <CardBody>
-                    <DataListRoot>
-                      <DataListItem>
-                        <DataListItemLabel>Due</DataListItemLabel>
-                        <DataListItemValue>
-                          {survey.due_date ? <TimeZoneAwareDate date={survey.due_date} format="Pp" /> : "No due date"}
-                        </DataListItemValue>
-                      </DataListItem>
-
-                      {response?.submitted_at && (
+                        </Box>
+                        <SurveyDashboardCta
+                          href={href}
+                          label={buttonLabel}
+                          ariaLabel={`${buttonLabel} survey: ${survey.title ?? "Untitled survey"}`}
+                          colorPalette={colorScheme}
+                        />
+                      </Stack>
+                    </CardHeader>
+                    <CardBody>
+                      <DataListRoot>
                         <DataListItem>
-                          <DataListItemLabel>Submitted</DataListItemLabel>
+                          <DataListItemLabel>Due</DataListItemLabel>
                           <DataListItemValue>
-                            <TimeZoneAwareDate date={response.submitted_at} format="Pp" />
+                            {survey.due_date ? <TimeZoneAwareDate date={survey.due_date} format="Pp" /> : "No due date"}
                           </DataListItemValue>
                         </DataListItem>
-                      )}
-                    </DataListRoot>
-                  </CardBody>
-                </CardRoot>
-              );
-            })
-          )}
-        </Stack>
-      </Box>
+
+                        {response?.submitted_at && (
+                          <DataListItem>
+                            <DataListItemLabel>Submitted</DataListItemLabel>
+                            <DataListItemValue>
+                              <TimeZoneAwareDate date={response.submitted_at} format="Pp" />
+                            </DataListItemValue>
+                          </DataListItem>
+                        )}
+                      </DataListRoot>
+                    </CardBody>
+                  </CardRoot>
+                );
+              })
+            )}
+          </Stack>
+        </Box>
+      </CourseFeatureGate>
 
       <Box>
         <Heading size="lg" mb={4}>
@@ -463,26 +474,28 @@ export default async function StudentDashboard({
       </Box>
 
       {/* Only show OfficeHoursStatusCard when no calendar is configured - serves as fallback */}
-      {!hasCalendar && (
-        <Box>
-          <Suspense
-            fallback={
-              <Box>
-                <Heading size="lg" mb={4}>
-                  Office Hours
-                </Heading>
-                <CardRoot>
-                  <CardBody>
-                    <Text color="fg.muted">Loading office hours...</Text>
-                  </CardBody>
-                </CardRoot>
-              </Box>
-            }
-          >
-            <OfficeHoursStatusCard />
-          </Suspense>
-        </Box>
-      )}
+      <CourseFeatureGate feature={COURSE_FEATURES.OFFICE_HOURS}>
+        {!hasCalendar && (
+          <Box>
+            <Suspense
+              fallback={
+                <Box>
+                  <Heading size="lg" mb={4}>
+                    Office Hours
+                  </Heading>
+                  <CardRoot>
+                    <CardBody>
+                      <Text color="fg.muted">Loading office hours...</Text>
+                    </CardBody>
+                  </CardRoot>
+                </Box>
+              }
+            >
+              <OfficeHoursStatusCard />
+            </Suspense>
+          </Box>
+        )}
+      </CourseFeatureGate>
     </VStack>
   );
 }

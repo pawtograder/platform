@@ -18,7 +18,7 @@ interface SISClass {
   sync_enabled: boolean;
   total_invitations: number;
   pending_invitations: number;
-  expired_invitations: number;
+  dropped_invitations: number;
 }
 
 export default function SISSyncPage() {
@@ -271,9 +271,9 @@ export default function SISSyncPage() {
                             {class_.pending_invitations} pending
                           </Badge>
                         )}
-                        {class_.expired_invitations > 0 && (
+                        {class_.dropped_invitations > 0 && (
                           <Badge size="sm" colorPalette="red">
-                            {class_.expired_invitations} expired
+                            {class_.dropped_invitations} dropped
                           </Badge>
                         )}
                         {class_.total_invitations === 0 && (

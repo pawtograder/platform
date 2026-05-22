@@ -129,7 +129,17 @@ export function MeanDotStripChart({
             {barKeys.map((key, idx) => {
               const rawVal = allValues[idx] ?? 0;
               const color = getLikertColor(rawVal, allValues);
-              return <Bar key={key} dataKey={key} stackId="strip" fill={color} barSize={8} radius={0} />;
+              return (
+                <Bar
+                  isAnimationActive={false}
+                  key={key}
+                  dataKey={key}
+                  stackId="strip"
+                  fill={color}
+                  barSize={8}
+                  radius={0}
+                />
+              );
             })}
             <Scatter dataKey="meanPosition" fill="#1A202C" shape="circle" r={5} />
           </ComposedChart>

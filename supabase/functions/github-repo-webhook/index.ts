@@ -407,6 +407,15 @@ async function handlePushToStudentRepo(
       status: status as unknown as Json
     });
     if (checkRunError) {
+      // 23505 = unique_violation. With UNIQUE (repository_id, sha) the
+      // SELECT-then-INSERT pattern above has a race window: concurrent webhook
+      // deliveries for the same commit can both pass the SELECT, then one wins
+      // the INSERT and the other returns 23505. Treat that as a no-op so we
+      // don't throw and force GitHub to retry the whole delivery.
+      if (checkRunError.code === "23505") {
+        scope.setTag("repository_check_run_insert_race", "true");
+        continue;
+      }
       console.error(checkRunError);
       scope.setTag("error_source", "repository_check_run_insert_failed");
       scope.setTag("error_context", "Could not create repository_check_run");
@@ -535,7 +544,7 @@ async function handlePushToGraderSolution(
             (unitAcc, unit) =>
               unitAcc +
               (isMutationTestUnit(unit)
-                ? unit.breakPoints[0].pointsToAward
+                ? (unit.linearScoring?.points ?? unit.breakPoints?.[0]?.pointsToAward ?? 0)
                 : isRegularTestUnit(unit)
                   ? unit.points
                   : 0),
@@ -1611,7 +1620,7 @@ eventHandler.on("pull_request", async ({ payload }: { payload: PullRequestEvent 
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
-  return "locations" in unit && "breakPoints" in unit;
+  return "locations" in unit;
 }
 
 // Type guard to check if a unit is a regular test unit

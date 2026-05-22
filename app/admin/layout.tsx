@@ -153,11 +153,11 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
           as="main"
           id="main-content"
           tabIndex={-1}
-          outline="none"
           maxW="7xl"
           mx="auto"
           py={6}
           px={{ base: 4, sm: 6, lg: 8 }}
+          _focusVisible={{ outline: "2px solid", outlineColor: "orange.500", outlineOffset: "2px" }}
         >
           {children}
         </Box>

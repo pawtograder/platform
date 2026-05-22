@@ -7,7 +7,20 @@ import {
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, Textarea, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  CloseButton,
+  Dialog,
+  Flex,
+  Heading,
+  HStack,
+  List,
+  Skeleton,
+  Table,
+  Text,
+  Textarea,
+  VStack
+} from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { AdjustDueDateDialog } from "@/app/course/[course_id]/manage/assignments/[assignment_id]/due-date-exceptions/page";
@@ -19,6 +32,7 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
+import SubmissionRegradeRequestsPanel from "@/components/regrade-requests/SubmissionRegradeRequestsPanel";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
@@ -52,6 +66,8 @@ import {
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useTableControllerTableValues } from "@/lib/TableController";
+import { StaffCommitHistory } from "@/components/submissions/staff-commit-history";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { formatGradingReviewScoreLines } from "@/lib/formatGradingReviewForMarkdown";
 import { getDisplayedGradingTotalForStudent } from "@/lib/getDisplayedGradingTotalForStudent";
@@ -1116,6 +1132,40 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
       pageSize: 1000
     }
   });
+  const courseController = useCourseController();
+
+  // Refresh the history when a submission_review changes — e.g. when grading is
+  // completed on the active (or a reactivated older) submission. Issue #598: the
+  // "Total Score" column reflects submission_reviews data, but the only realtime
+  // listener here fires on `submissions` is_active changes, not on review
+  // completion, so the manually-graded total stayed stale until a manual reload.
+  // We listen on each listed submission's review channel and invalidate the list.
+  const submissionIds = useMemo(() => (data?.data ?? []).map((s) => s.id), [data?.data]);
+  const submissionIdsKey = submissionIds.join(",");
+  useEffect(() => {
+    const realtime = courseController?.classRealTimeController;
+    if (!realtime || submissionIds.length === 0) return;
+
+    const unsubscribers = submissionIds.map((id) =>
+      realtime.subscribeToTableForSubmission(
+        "submission_reviews",
+        id,
+        (message: import("@/lib/TableController").BroadcastMessage) => {
+          if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "BULK_UPDATE") {
+            invalidate({ resource: "submissions", invalidates: ["list"] });
+          }
+        }
+      )
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+    // submissionIdsKey is a stable string derived from submissionIds; depending on
+    // the array directly would re-subscribe on every refetch even when ids are equal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseController, submissionIdsKey, invalidate]);
+
   const router = useRouter();
   const { time_zone } = useCourse();
   const [isActivating, setIsActivating] = useState(false);
@@ -1218,7 +1268,7 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                       <>Not for grading</>
                     ) : (
                       <Button
-                        variant="outline"
+                        colorPalette="blue"
                         size="xs"
                         disabled={disableActivationButton}
                         loading={isActivating}
@@ -1262,7 +1312,11 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
 function SubmissionHistory({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
   const invalidate = useInvalidate();
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
+  const [isStaffDialogOpen, setIsStaffDialogOpen] = useState(false);
   const courseController = useCourseController();
+  const isStaff = useIsGraderOrInstructor();
+  const { course_id } = useParams();
+  const courseId = Number(course_id);
 
   // TODO: Remove this once we migrate to TableController for submissions tracking
   // Listen for submission broadcasts to detect when a new active submission appears
@@ -1317,6 +1371,60 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
     submission.assignment_group_id,
     invalidate
   ]);
+
+  if (isStaff) {
+    return (
+      <Dialog.Root
+        open={isStaffDialogOpen}
+        onOpenChange={(details) => setIsStaffDialogOpen(details.open)}
+        size="cover"
+        lazyMount
+        unmountOnExit
+      >
+        <Dialog.Trigger asChild>
+          <Button
+            variant={hasNewSubmission ? "solid" : "outline"}
+            colorPalette={hasNewSubmission ? "yellow" : "default"}
+          >
+            <Icon as={FaHistory} />
+            Commit History
+            {hasNewSubmission && <Icon as={FaBell} />}
+          </Button>
+        </Dialog.Trigger>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content p={3}>
+            <Dialog.Header p={0}>
+              <Flex justify="space-between" align="center" gap={4}>
+                <Box>
+                  <Dialog.Title>Commit History</Dialog.Title>
+                  <Text fontSize="sm" color="fg.muted">
+                    {submission.repository}
+                  </Text>
+                </Box>
+                <Dialog.CloseTrigger asChild>
+                  <CloseButton bg="bg" size="sm" />
+                </Dialog.CloseTrigger>
+              </Flex>
+            </Dialog.Header>
+            <Dialog.Body p={0} pt={3}>
+              {submission.repository_id !== null && (
+                <StaffCommitHistory
+                  courseId={courseId}
+                  assignmentId={submission.assignment_id}
+                  repositoryId={submission.repository_id}
+                  repositoryFullName={submission.repository}
+                  profileId={submission.profile_id}
+                  assignmentGroupId={submission.assignment_group_id}
+                  currentSubmissionId={submission.id}
+                />
+              )}
+            </Dialog.Body>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Dialog.Root>
+    );
+  }
 
   return (
     <PopoverRoot lazyMount unmountOnExit>
@@ -1503,9 +1611,27 @@ function ReviewStats() {
       )}
       {!isInstructor && <DataListItem label="Released to student" value={review.released ? "Yes" : "No"} />}
       {completed_by && <DataListItem label="Completed by" value={<PersonName size="2xs" uid={completed_by} />} />}
-      {completed_at && <DataListItem label="Completed at" value={formatRelative(completed_at, new Date())} />}
+      {completed_at && (
+        <DataListItem
+          label="Completed at"
+          value={
+            <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+              {formatRelative(completed_at, new Date())}
+            </Text>
+          }
+        />
+      )}
       {checked_by && <DataListItem label="Checked by" value={<PersonName size="2xs" uid={checked_by} />} />}
-      {checked_at && <DataListItem label="Checked at" value={formatRelative(checked_at, new Date())} />}
+      {checked_at && (
+        <DataListItem
+          label="Checked at"
+          value={
+            <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+              {formatRelative(checked_at, new Date())}
+            </Text>
+          }
+        />
+      )}
       {mostRecentGrader && (
         <DataListItem label="Last updated by" value={<PersonName size="2xs" uid={mostRecentGrader} />} />
       )}
@@ -1607,7 +1733,9 @@ function ReviewActions() {
       <ReviewStats />
       {showCompleteReviewButton && !review.completed_at && (
         <VStack>
-          <Heading size="md">Submission Review Actions</Heading>
+          <Heading as="h2" size="md">
+            Submission Review Actions
+          </Heading>
           <HStack w="100%" justify="space-between">
             {!review.completed_at && <CompleteReviewButton />}
             {/* {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
@@ -1646,7 +1774,9 @@ function UnGradedGradingSummary() {
 
   return (
     <Box>
-      <Heading size="xl">Grading Summary</Heading>
+      <Heading as="h2" size="xl">
+        Grading Summary
+      </Heading>
       <Text color="text.muted" fontSize="sm">
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
@@ -1723,12 +1853,32 @@ function PerStudentGradingTotalsDisplay({
 }) {
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const courseController = useCourseController();
+  const allProfiles = useTableControllerTableValues(courseController.profiles);
+  const profileNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of allProfiles) map.set(p.id, (p as { name?: string }).name ?? "");
+    return map;
+  }, [allProfiles]);
   const entries = Object.entries(totals).filter((entry): entry is [string, number] => typeof entry[1] === "number");
   if (entries.length === 0) return null;
+
+  // Sort by user name. Profile_ids are random UUIDs that differ between test
+  // runs, so sorting by id produces a different order each run. Name is the
+  // only stable cross-run signal we have. Logged-in user stays first when
+  // present. If any name hasn't loaded yet, hold off rendering to avoid a
+  // mixed-loaded partial sort (which would show a non-deterministic order in
+  // visual tests until realtime catches up).
+  const allNamesLoaded = entries.every(([id]) => (profileNamesById.get(id) ?? "").length > 0);
+  if (!allNamesLoaded) return null;
 
   entries.sort(([a], [b]) => {
     if (a === private_profile_id) return -1;
     if (b === private_profile_id) return 1;
+    const nameA = profileNamesById.get(a) ?? a;
+    const nameB = profileNamesById.get(b) ?? b;
+    const byName = nameA.localeCompare(nameB);
+    if (byName !== 0) return byName;
     return a.localeCompare(b);
   });
 
@@ -1800,8 +1950,33 @@ function PerStudentGradingTotalsDisplay({
 function IndividualScoresDisplay({ individualScores }: { individualScores: IndividualScores }) {
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const courseController = useCourseController();
+  const allProfiles = useTableControllerTableValues(courseController.profiles);
+  const profileNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of allProfiles) map.set(p.id, (p as { name?: string }).name ?? "");
+    return map;
+  }, [allProfiles]);
   const entries = Object.entries(individualScores).filter((entry): entry is [string, number] => entry[1] !== undefined);
   if (entries.length === 0) return null;
+
+  // Sort by user name (logged-in user first when present). See sort comment in
+  // PerStudentGradingTotalsDisplay above — profile_ids are non-deterministic
+  // across test runs, names are the only stable cross-run signal. Hold off on
+  // rendering until every entry's name has loaded so a partially-loaded sort
+  // doesn't show a non-deterministic mixed order.
+  const allNamesLoaded = entries.every(([id]) => (profileNamesById.get(id) ?? "").length > 0);
+  if (!allNamesLoaded) return null;
+
+  entries.sort(([a], [b]) => {
+    if (a === private_profile_id) return -1;
+    if (b === private_profile_id) return 1;
+    const nameA = profileNamesById.get(a) ?? a;
+    const nameB = profileNamesById.get(b) ?? b;
+    const byName = nameA.localeCompare(nameB);
+    if (byName !== 0) return byName;
+    return a.localeCompare(b);
+  });
 
   const myEntry = entries.find(([profileId]) => profileId === private_profile_id);
   const sortedEntries = isGraderOrInstructor ? entries : myEntry ? [myEntry] : [];
@@ -1864,16 +2039,19 @@ function RubricView() {
 
   return (
     <Box
-      position="sticky"
-      top="0"
+      as="aside"
+      aria-label="Grading summary"
+      data-grading-summary-aside=""
+      position={{ base: "static", lg: "sticky" }}
+      top={{ base: "auto", lg: "0" }}
       borderTopWidth={{ base: "1px", lg: "0" }}
       borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
       padding="2"
-      pb="80px"
-      height="100vh"
+      pb={{ base: "4", lg: "80px" }}
+      height={{ base: "auto", lg: "100vh" }}
       overflowX="hidden"
-      overflowY="auto"
+      overflowY={{ base: "visible", lg: "auto" }}
       ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
@@ -1884,8 +2062,10 @@ function RubricView() {
               Review Task: {rubric?.name} ({rubric?.review_round})
             </Heading>
             {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
-            <Text fontSize="sm">Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}</Text>
-            <Text fontSize="sm" data-visual-test="blackout">
+            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
+              Assigned to: {reviewAssignment.assignee_profile_id || "N/A"}
+            </Text>
+            <Text fontSize="sm" data-visual-test="transparent" data-visual-placeholder="review-status">
               Due:{" "}
               {reviewAssignment.due_date ? (
                 <TimeZoneAwareDate date={reviewAssignment.due_date} format="MMM d, h:mm a" />
@@ -1906,7 +2086,7 @@ function RubricView() {
           gradingReview &&
           gradingReview.total_score !== null &&
           gradingReview.total_score !== undefined && (
-            <Heading size="xl">
+            <Heading as="h2" size="xl">
               Overall Score ({gradingReview.total_score}/{assignment.total_points})
             </Heading>
           )}
@@ -1931,6 +2111,7 @@ function RubricView() {
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
+        <SubmissionRegradeRequestsPanel submissionId={submission.id} />
         <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />
         <Comments />
       </VStack>
@@ -1945,7 +2126,9 @@ function Comments() {
   }
   return (
     <Box>
-      <Heading size="md">Comments</Heading>
+      <Heading as="h2" size="md">
+        Comments
+      </Heading>
       <VStack align="start" gap={2}>
         {comments.map((comment) => (
           <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" />
@@ -1962,12 +2145,18 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submission = useSubmission();
   const hasGraderOutput = submissionHasGraderOutput(submission.grader_results);
   const explicitSubPage = getSubmissionFilesOrResultsTab(pathname);
-  const activeSubPage = explicitSubPage ?? (hasGraderOutput ? "results" : "files");
+  const gradingReviewForDefault = useSubmissionReviewOrGradingReview(submission.grading_review_id ?? undefined);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  // Default tab: students land on the released grade summary if available; otherwise (and always
+  // for graders/instructors, who grade from the rubric sidebar) autograder feedback if present,
+  // else files.
+  const defaultSubPage =
+    !isGraderOrInstructor && gradingReviewForDefault?.released ? "grade" : hasGraderOutput ? "results" : "files";
+  const activeSubPage = explicitSubPage ?? defaultSubPage;
   const submitter = useUserProfile(submission.profile_id);
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
   });
-  const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const { assignment } = useAssignmentController();
   const { dueDate, hoursExtended, time_zone } = useAssignmentDueDate(assignment, {
@@ -2014,16 +2203,17 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 <HStack gap={1} flexWrap="wrap" alignItems="baseline">
                   <HStack gap={1}>
                     Group {assignmentGroupWithMembers.name} (
-                    {assignmentGroupWithMembers.assignment_groups_members.map((member) => (
-                      <HStack key={member.profile_id} gap={1}>
-                        <PersonName key={member.profile_id} uid={member.profile_id} showAvatar={false} />
-                        <StudentSummaryTrigger
-                          key={member.profile_id}
-                          student_id={member.profile_id}
-                          course_id={parseInt(course_id as string, 10)}
-                        />
-                      </HStack>
-                    ))}
+                    {[...assignmentGroupWithMembers.assignment_groups_members]
+                      .sort((a, b) => a.id - b.id)
+                      .map((member) => (
+                        <HStack key={member.id} gap={1}>
+                          <PersonName uid={member.profile_id} showAvatar={false} />
+                          <StudentSummaryTrigger
+                            student_id={member.profile_id}
+                            course_id={parseInt(course_id as string, 10)}
+                          />
+                        </HStack>
+                      ))}
                     )
                   </HStack>
                   {assignmentGroupWithMembers.mentor_profile_id && (
@@ -2105,11 +2295,27 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </HStack>
       </Flex>
 
-      <Box p={0} m={0} borderBottomColor="border.emphasized" borderBottomWidth="2px" bg="bg.muted">
+      <Box
+        as="nav"
+        aria-label="Submission tabs"
+        p={0}
+        m={0}
+        borderBottomColor="border.emphasized"
+        borderBottomWidth="2px"
+        bg="bg.muted"
+        display="flex"
+        flexWrap="wrap"
+      >
+        <NextLink href={linkToSubPage(pathname, "grade", searchParams)}>
+          <Button variant={activeSubPage === "grade" ? "solid" : "ghost"}>
+            <Icon as={FaCheckCircle} />
+            Grade
+          </Button>
+        </NextLink>
         <NextLink href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={activeSubPage === "results" ? "solid" : "ghost"}>
-            <Icon as={FaCheckCircle} />
-            Grading Summary
+            <Icon as={FaRobot} />
+            Autograder Detail
           </Button>
         </NextLink>
         <NextLink href={linkToSubPage(pathname, "files", searchParams)}>
@@ -2127,13 +2333,18 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </NextLink>
         )}
       </Box>
-      <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4} key={pathname}>
+      <Flex flexDirection={{ base: "column", lg: "row" }} wrap="wrap">
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={{ base: 0, lg: 4 }} key={pathname}>
           {children}
         </Box>
-        <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>
-          <RubricView />
-        </Box>
+        {/* The Grade tab is its own self-contained ledger — don't duplicate the grading sidebar there.
+            On other tabs keep the full rubric sidebar: students rely on it to perform self-review,
+            so we must NOT collapse it to applied-only here. */}
+        {activeSubPage !== "grade" && (
+          <Box flex={{ base: "1 1 100%", lg: "0 0 28rem" }} minWidth={0}>
+            <RubricView />
+          </Box>
+        )}
       </Flex>
     </Flex>
   );

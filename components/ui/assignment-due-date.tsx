@@ -33,6 +33,8 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
     assignmentGroupId: assignment_group_id
   });
   const hoursExtended = dueDate.hoursExtended;
+  const requireTokensBeforeDueDate = (assignment as Assignment & { require_tokens_before_due_date: boolean })
+    .require_tokens_before_due_date;
 
   if (!lateTokens || !dueDate) {
     return <Skeleton height="20px" width="80px" />;
@@ -73,7 +75,10 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   }
 
   if (isAfter(new TZDate(new Date()), dueDate.dueDate)) {
-    return <Text>(Firm date: You have passed the due date)</Text>;
+    if ((assignment as Assignment & { require_tokens_before_due_date: boolean }).require_tokens_before_due_date) {
+      return <Text>(Firm date: You have passed the due date)</Text>;
+    }
+    return <Text>(Deadline passed: submitting will auto-apply a late token if you have one remaining)</Text>;
   }
   return (
     <Dialog.Root
@@ -88,16 +93,30 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
           Extend Due Date
         </Button>
       </Dialog.Trigger>
+      {requireTokensBeforeDueDate && (
+        <Text fontSize="sm" color="fg.muted">
+          Tokens must be applied before the due date.
+        </Text>
+      )}
       <Dialog.Backdrop />
       <Dialog.Positioner>
         <Dialog.Content>
           <Dialog.Header>
             <Dialog.Description>
               <Dialog.Title>Extend Due Date For {assignment.title}</Dialog.Title>
+              {requireTokensBeforeDueDate && (
+                <>
+                  You must apply token before <TimeZoneAwareDate date={dueDate.dueDate} format="MMM d, h:mm a" /> - once
+                  the deadline passes you will no longer be able to apply tokens.{" "}
+                </>
+              )}
               The course late policy grants each student {course.late_tokens_per_student} late tokens. Each token
-              extends the due date by 24 hours, but are not automatically applied - to use them, you must use this form
-              to apply them BEFORE the assignment is due. You can apply up to {assignment.max_late_tokens} tokens to
-              this assignment. You have already applied {lateTokensAppliedToAssignment} tokens to this assignment.
+              extends the due date by 24 hours.{" "}
+              {requireTokensBeforeDueDate
+                ? "Tokens are not automatically applied - to use them, you must use this form to apply them BEFORE the assignment is due."
+                : "Tokens can be applied before the deadline using this form, or will be automatically applied when you submit after the deadline."}{" "}
+              You can apply up to {assignment.max_late_tokens} tokens to this assignment. You have already applied{" "}
+              {lateTokensAppliedToAssignment} tokens to this assignment.
               {assignment.max_late_tokens > 1 && (
                 <>
                   Note that to apply multiple tokens, you must use this form multiple times, always being sure to extend
@@ -195,8 +214,8 @@ export function AssignmentDueDate({
     <Flex gap={1} wrap="wrap" maxWidth="100%">
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
-        <Text minWidth={0} data-visual-test="blackout">
-          <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" />
+        <Text minWidth={0} data-visual-test="transparent" data-visual-placeholder="date">
+          <TimeZoneAwareDate date={dueDate} format="MMM d, h:mm a" visualPlaceholder="date" />
         </Text>
         {hoursExtended > 0 && (
           <Text>

@@ -5,7 +5,8 @@ import { useActiveHelpRequest } from "@/hooks/useActiveHelpRequest";
 import { useHelpRequestUnreadCount } from "@/hooks/useHelpRequestUnreadCount";
 import { useMessageNotifications } from "@/hooks/useMessageNotifications";
 import { useHelpRequestStudents, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
-import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import { Badge, Box, Button, Card, Flex, HStack, Icon, IconButton, Stack, Text } from "@chakra-ui/react";
@@ -184,7 +185,7 @@ export function FloatingHelpRequestWidget() {
   if (!activeRequest) {
     return (
       <>
-        <Box position="fixed" bottom={4} right={4} zIndex={1000}>
+        <Box position="fixed" bottom={4} right={4} zIndex={1000} data-visual-test="removed">
           <Tooltip content={tooltipText} positioning={{ placement: "left" }}>
             <Button
               size="md"
@@ -231,6 +232,7 @@ export function FloatingHelpRequestWidget() {
       zIndex={1000}
       maxW={{ base: "calc(100vw - 2rem)", md: "400px" }}
       w="100%"
+      data-visual-test="removed"
     >
       <Card.Root>
         <Card.Body p={0}>

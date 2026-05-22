@@ -1,0 +1,98 @@
+{
+  "id": 100,
+  "name": "Multi-Option Rubric",
+  "description": "A rubric with single-pick option-style checks.",
+  "review_round": "grading-review",
+  "is_private": false,
+  "cap_score_to_assignment_points": false,
+  "parts": [
+    {
+      "id": 200,
+      "data": null,
+      "name": "Part A",
+      "ordinal": 0,
+      "description": "First part.",
+      "is_assign_to_student": false,
+      "is_individual_grading": false,
+      "criteria": [
+        {
+          "id": 300,
+          "data": null,
+          "name": "Criterion A1",
+          "ordinal": 0,
+          "description": "",
+          "is_additive": true,
+          "is_deduction_only": false,
+          "total_points": 5,
+          "min_checks_per_submission": null,
+          "max_checks_per_submission": null,
+          "checks": [
+            {
+              "id": 400,
+              "name": "Quality tier",
+              "ordinal": 0,
+              "description": "",
+              "points": 5,
+              "is_required": true,
+              "is_annotation": false,
+              "is_comment_required": false,
+              "student_visibility": "if_released",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": null,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": {
+                "options": [
+                  { "label": "Option 1", "points": 5 },
+                  { "label": "Option 2", "points": 3 },
+                  { "label": "Option 3", "points": 0 }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": 301,
+          "data": null,
+          "name": "Criterion A2",
+          "ordinal": 1,
+          "description": "",
+          "is_additive": true,
+          "is_deduction_only": false,
+          "total_points": 5,
+          "min_checks_per_submission": null,
+          "max_checks_per_submission": null,
+          "checks": [
+            {
+              "id": 401,
+              "name": "Tier with four options",
+              "ordinal": 0,
+              "description": "",
+              "points": 5,
+              "is_required": true,
+              "is_annotation": false,
+              "is_comment_required": false,
+              "student_visibility": "if_released",
+              "file": null,
+              "artifact": null,
+              "group": null,
+              "max_annotations": null,
+              "annotation_target": null,
+              "kpi_category": null,
+              "data": {
+                "options": [
+                  { "label": "Option A", "points": 5 },
+                  { "label": "Option B", "points": 4 },
+                  { "label": "Option C", "points": 2 },
+                  { "label": "Option D", "points": 0 }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -668,7 +668,9 @@ export function CodeLineComment({ comment_id }: { comment_id: number }) {
                   </Text>
                 )}
               </Text>
-              <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
+              <Text data-visual-test="transparent" data-visual-placeholder="timestamp">
+                commented on {format(comment.created_at, "MMM d, yyyy")}
+              </Text>
             </HStack>
             <HStack>
               {authorProfile?.flair ? (
@@ -1033,6 +1035,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
       borderRadius="md"
       boxShadow="lg"
       ref={popupRef}
+      data-annotation-popup=""
     >
       <VStack gap={2} align="stretch">
         <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">

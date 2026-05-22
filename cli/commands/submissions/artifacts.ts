@@ -5,8 +5,8 @@
 import type { Argv } from "yargs";
 import * as fs from "fs";
 import * as path from "path";
-import { apiCall } from "../../utils/api";
-import { logger, handleError, CLIError } from "../../utils/logger";
+import { apiCall } from "@/cli/utils/api";
+import { logger, handleError, CLIError } from "@/cli/utils/logger";
 
 const DEFAULT_BATCH = 5;
 

@@ -5,6 +5,7 @@ import NotificationsBox from "@/components/notifications/notifications-box";
 import { TimeZoneSelector } from "@/components/TimeZoneSelector";
 import { Button } from "@/components/ui/button";
 import { ColorModeButton } from "@/components/ui/color-mode";
+import { GlobalSearchTrigger } from "@/components/ui/global-search-trigger";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "@/components/ui/link";
@@ -115,7 +116,7 @@ function SupportMenu() {
     <Menu.Root>
       <Menu.Trigger asChild>
         <IconButton variant="outline" colorPalette="blue" size="sm" aria-label="Support & Documentation">
-          <HiOutlineSupport />
+          <HiOutlineSupport aria-hidden focusable={false} />
         </IconButton>
       </Menu.Trigger>
       <Portal>
@@ -802,27 +803,8 @@ function ObfuscatedGradesModePicker() {
         aria-label="Toggle obfuscated grades mode"
         css={{ _icon: { width: "5", height: "5" } }}
       >
-        {isObfuscated ? <TbSpyOff /> : <TbSpy />}
+        {isObfuscated ? <TbSpyOff aria-hidden focusable={false} /> : <TbSpy aria-hidden focusable={false} />}
       </IconButton>
-    </Tooltip>
-  );
-}
-
-function KeyboardShortcutsButton() {
-  const { openHelp } = useKeyboardShortcuts();
-
-  return (
-    <Tooltip content="Keyboard shortcuts (?)" showArrow>
-      <Button
-        variant="outline"
-        colorPalette="gray"
-        size="sm"
-        onClick={openHelp}
-        aria-label="Open keyboard shortcuts"
-        px={{ base: 2, lg: 3 }}
-      >
-        <FiCommand />
-      </Button>
     </Tooltip>
   );
 }
@@ -979,11 +961,11 @@ function SafeTimeZoneIndicator() {
 
 export default function UserMenu() {
   return (
-    <HStack minWidth={0}>
+    <HStack minWidth={0} flexWrap="wrap" gap={2} justifyContent="flex-end">
+      <GlobalSearchTrigger />
       <SafeTimeZoneIndicator />
       <ConnectionStatusIndicator />
       <SupportMenu />
-      <KeyboardShortcutsButton />
       <ColorModeButton colorPalette="gray" variant="outline" />
       <NotificationsBox />
       <ObfuscatedGradesModePicker />

@@ -4,7 +4,7 @@
 
 import { parse } from "csv-parse/sync";
 import { readFileSync } from "fs";
-import { AssignmentScheduleRow } from "../types";
+import { AssignmentScheduleRow } from "@/cli/types";
 import { CLIError } from "./logger";
 
 /**

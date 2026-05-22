@@ -51,14 +51,22 @@ const NOTIFICATION_MUTED_INLINE_STYLE: CSSProperties = {
 export type NotificationEnvelope = { type: string };
 export type DiscussionThreadNotification = NotificationEnvelope & {
   type: "discussion_thread";
-  new_comment_number: number;
-  new_comment_id: number;
+  action?: "new_post" | "reply" | "marked_duplicate";
+  new_comment_number?: number;
+  new_comment_id?: number;
   root_thread_id: number;
-  reply_author_profile_id: string;
-  teaser: string;
+  reply_author_profile_id?: string;
+  teaser?: string;
 
-  thread_name: string;
-  reply_author_name: string;
+  thread_name?: string;
+  reply_author_name?: string;
+  /** When action === "marked_duplicate" */
+  duplicate_thread_id?: number;
+  original_thread_subject?: string;
+  duplicate_original_subject?: string;
+  marked_by_user_id?: string;
+  marked_by_name?: string;
+  duplicate_thread_ordinal?: number;
 };
 
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {
@@ -240,6 +248,12 @@ export type RegradeRequestNotification = NotificationEnvelope & {
         comment_author_name: string;
         comment_id: number;
       }
+    | {
+        action: "auto_resolved";
+        resolution_reason: string;
+        resolved_by: string;
+        resolved_by_name: string;
+      }
   );
 
 // function truncateString(str: string, maxLength: number) {
@@ -360,7 +374,27 @@ function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notifi
 function DiscussionThreadReplyNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as DiscussionThreadNotification;
   const rootThread = useDiscussionThreadTeaser(body.root_thread_id, ["ordinal", "subject", "class_id"]);
-  const author = useUserProfile(body.reply_author_profile_id);
+  const author = useUserProfile(body.reply_author_profile_id ?? "");
+
+  if (body.action === "marked_duplicate") {
+    const dupSubject = body.duplicate_original_subject ?? "your post";
+    const origSubject = body.original_thread_subject ?? rootThread?.subject ?? "another thread";
+    const staffName = body.marked_by_name ?? "Course staff";
+    return (
+      <HStack align="flex-start" gap="3">
+        <Box flexShrink="0" p="2" bg="orange.subtle" borderRadius="md">
+          <Text fontSize="xs" fontWeight="bold">
+            Duplicate
+          </Text>
+        </Box>
+        <VStack align="flex-start" gap="1" flex="1">
+          <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+            {`**${staffName}** marked your post **${dupSubject}** as a duplicate of **${origSubject}** and merged it into that thread.`}
+          </Markdown>
+        </VStack>
+      </HStack>
+    );
+  }
 
   if (!author || !rootThread) {
     return <Skeleton height="40px" width="100%" />;
@@ -443,6 +477,14 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
     actorProfileId = body.escalated_by;
     actorName = body.escalated_by_name;
     message = <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${actorName}** escalated a regrade request`}</Markdown>;
+  } else if (body.action === "auto_resolved") {
+    actorProfileId = body.resolved_by;
+    actorName = body.resolved_by_name;
+    message = (
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
+        {`Your regrade request was automatically resolved because the grade it referenced was changed. Re-check your grade and escalate if you still disagree.`}
+      </Markdown>
+    );
   } else {
     // action === "new_comment"
     actorProfileId = body.comment_author;
@@ -452,15 +494,17 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
 
   const actor = useUserProfile(actorProfileId);
 
-  if (!actor) {
+  // For auto_resolved the message is self-contained, so a missing/unloaded resolver
+  // profile must not leave the teaser stuck on a skeleton.
+  if (!actor && body.action !== "auto_resolved") {
     return <Skeleton height="40px" width="100%" />;
   }
 
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={actor.avatar_url} alt="" />
-        <Avatar.Fallback fontSize="xs">{actor.name?.charAt(0)}</Avatar.Fallback>
+        <Avatar.Image src={actor?.avatar_url} alt="" />
+        <Avatar.Fallback fontSize="xs">{actor?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
         {message}
@@ -538,6 +582,11 @@ function getNotificationUrl(notification: Notification, course_id: string): stri
     return `/course/${course_id}/assignments/${assignmentBody.assignment_id}`;
   } else if (body.type === "discussion_thread") {
     const discussionBody = body as DiscussionThreadNotification;
+    if (discussionBody.action === "marked_duplicate") {
+      const ord = discussionBody.duplicate_thread_ordinal;
+      const replyIdx = ord != null ? `#post-${ord}` : "";
+      return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
+    }
     const replyIdx = discussionBody.new_comment_number ? `#post-${discussionBody.new_comment_number}` : "";
     return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
   } else if (body.type === "course_enrollment") {

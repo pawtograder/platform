@@ -206,7 +206,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
   const existing = createContentLimiters.get(key);
   if (existing) return existing;
   const id = `create_content:${key}:${Deno.env.get("GITHUB_APP_ID") || ""}`;
-  const opts = { reservoir: 50, maxConcurrent: 50, reservoirRefreshAmount: 50, reservoirRefreshInterval: 60_000 };
+  const opts = { reservoir: 40, maxConcurrent: 40, reservoirRefreshAmount: 40, reservoirRefreshInterval: 60_000 };
   let limiter: Bottleneck;
   if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
     limiter = buildRedisBottleneck(id, opts, false);
@@ -221,6 +221,7 @@ export function getCreateContentLimiter(org: string): Bottleneck {
 }
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
+export type GetCommitResponse = Endpoints["GET /repos/{owner}/{repo}/commits/{ref}"]["response"];
 export type GitHubOIDCToken = {
   jti: string;
   sub: string;
@@ -606,6 +607,36 @@ export async function updateAutograderWorkflowHash(repoName: string) {
   }
   return hash;
 }
+export async function repoHasFileAtRef(
+  repoName: string,
+  path: string,
+  ref: string,
+  scope?: Sentry.Scope
+): Promise<boolean> {
+  scope?.setTag("github_operation", "check_file_at_ref");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", path);
+  scope?.setTag("ref", ref);
+  const octokit = await getOctoKit(repoName, scope);
+  if (!octokit) {
+    throw new Error(`Check file at ref failed: No octokit found for ${repoName}`);
+  }
+  try {
+    await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
+      owner: repoName.split("/")[0],
+      repo: repoName.split("/")[1],
+      path,
+      ref
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 404) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function getFileFromRepo(repoName: string, path: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "get_file");
   scope?.setTag("repository", repoName);
@@ -999,6 +1030,21 @@ export async function createBranchProtectionRuleset(
         }
         // If it's 422/409 but not a duplicate error, rethrow so callers can handle it
       }
+
+      // Free GitHub accounts can't enable branch protection on private repositories.
+      // GitHub returns "Upgrade to GitHub Pro or make this repository public to enable
+      // this feature." — there's no way for the platform to satisfy this from server
+      // side, so swallow it: the repo is created and usable, just without the ruleset.
+      const message = (e.message || "").toLowerCase();
+      if (
+        message.includes("upgrade to github pro") ||
+        message.includes("upgrade your github plan") ||
+        message.includes("upgrade your account")
+      ) {
+        scope?.setTag("ruleset_unsupported_by_plan", "true");
+        console.log(`Branch protection ruleset not supported by GitHub plan for ${org}/${repoName} — skipping`);
+        return;
+      }
     }
     throw e;
   }
@@ -1054,6 +1100,13 @@ export async function listFilesInRepo(org: string, repo: string, scope?: Sentry.
   return await listFilesInRepoDirectory(octokit, org, repo, "");
 }
 
+function isGitHubNotFoundError(error: unknown): boolean {
+  return (
+    (error instanceof RequestError && error.status === 404) ||
+    (error instanceof Error && error.message.includes("Not Found"))
+  );
+}
+
 export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
   scope?.setTag("github_operation", "archive_repo");
   scope?.setTag("org", org);
@@ -1070,28 +1123,54 @@ export async function archiveRepoAndLock(org: string, repo: string, scope?: Sent
   }
   console.log(`archiving repo ${org}/${repo}`);
   //Remove all direct access to the repo
-  const collaborators = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
-    owner: org,
-    repo,
-    per_page: 100
-  });
-  for (const collaborator of collaborators.data) {
-    console.log("removing collaborator", collaborator.login);
-    await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
+  let collaborators: Endpoints["GET /repos/{owner}/{repo}/collaborators"]["response"];
+  try {
+    collaborators = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
       owner: org,
       repo,
-      username: collaborator.login
+      per_page: 100
     });
+  } catch (error) {
+    if (isGitHubNotFoundError(error)) {
+      console.log(`repo ${org}/${repo} not found while archiving; treating as already archived`);
+      return;
+    }
+    throw error;
+  }
+  for (const collaborator of collaborators.data) {
+    console.log("removing collaborator", collaborator.login);
+    try {
+      await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
+        owner: org,
+        repo,
+        username: collaborator.login
+      });
+    } catch (error) {
+      if (isGitHubNotFoundError(error)) {
+        console.log(`repo ${org}/${repo} or collaborator ${collaborator.login} not found while archiving; continuing`);
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const newName = `archived-${new Date().toISOString()}-${repo}`;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const newName = `archived-${timestamp}-${repo}`;
   console.log("renaming repo to", newName);
   //Rename the repo
-  await octokit.request("PATCH /repos/{owner}/{repo}", {
-    owner: org,
-    repo,
-    name: newName
-  });
+  try {
+    await octokit.request("PATCH /repos/{owner}/{repo}", {
+      owner: org,
+      repo,
+      name: newName
+    });
+  } catch (error) {
+    if (isGitHubNotFoundError(error)) {
+      console.log(`repo ${org}/${repo} not found while renaming; treating as already archived`);
+      return;
+    }
+    throw error;
+  }
 }
 /**
  * Syncs the staff team for a course.
@@ -1861,15 +1940,47 @@ export async function listCommits(
     page
   });
   const page_links = commits.headers["link"];
+  // `link` header omits the `next` rel entirely on the last page, so an undefined
+  // match must be treated as "no more pages". `next_page !== null` was true for
+  // `undefined`, which made `has_more` always true.
   const next_page = page_links
     ?.split(",")
-    .find((l) => l.includes("next"))
+    .find((l) => l.includes('rel="next"'))
     ?.split(";")[0]
-    .split("=")[1];
+    .trim();
   return {
     commits: commits.data,
-    has_more: next_page !== null
+    has_more: Boolean(next_page) && commits.data.length > 0
   };
+}
+
+export async function getCommit(
+  repo_full_name: string,
+  ref: string,
+  scope?: Sentry.Scope
+): Promise<GetCommitResponse["data"]> {
+  scope?.setTag("github_operation", "get_commit");
+  scope?.setTag("repository", repo_full_name);
+  scope?.setTag("ref", ref);
+
+  const parts = repo_full_name
+    .split("/")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length !== 2) {
+    throw new Error(`Invalid repo_full_name format: ${repo_full_name}`);
+  }
+  const [org, repo] = parts;
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+  const commit = await octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+    owner: org,
+    repo,
+    ref
+  });
+  return commit.data;
 }
 
 export async function triggerWorkflow(
@@ -2042,7 +2153,7 @@ export async function enqueueSyncRepoPermissions({
   }
   return data;
 }
-export async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string) {
+export async function enqueueGithubArchiveRepo(class_id: number, org: string, repo: string, debug_id?: string) {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -2050,7 +2161,8 @@ export async function enqueueGithubArchiveRepo(class_id: number, org: string, re
   const { data, error } = await adminSupabase.rpc("enqueue_github_archive_repo", {
     p_class_id: class_id,
     p_org: org,
-    p_repo: repo
+    p_repo: repo,
+    p_debug_id: debug_id
   });
   if (error) {
     Sentry.captureException(error);

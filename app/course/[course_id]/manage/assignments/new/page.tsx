@@ -23,6 +23,7 @@ export default function NewAssignmentPage() {
     defaultValues: {
       allow_not_graded_submissions: true,
       permit_empty_submissions: true,
+      require_tokens_before_due_date: true,
       grading_default_profile_id: null,
       auto_assign_at_deadline: false,
       auto_assign_assignee_pool: "graders",
@@ -103,6 +104,7 @@ export default function NewAssignmentPage() {
             allow_late: form.getValues("allow_late"),
             description: form.getValues("description"),
             max_late_tokens: form.getValues("max_late_tokens") || null,
+            require_tokens_before_due_date: form.getValues("require_tokens_before_due_date") !== false,
             allow_not_graded_submissions: form.getValues("allow_not_graded_submissions"),
             permit_empty_submissions: form.getValues("permit_empty_submissions") !== false,
             total_points: form.getValues("total_points"),

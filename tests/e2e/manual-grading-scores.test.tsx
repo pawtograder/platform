@@ -2,7 +2,6 @@ import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/Da
 import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
-import { argosScreenshot } from "@argos-ci/playwright";
 import { resolveTargetStudentProfileIdForRubricComment } from "@/lib/rubricCommentTargetStudentProfileId";
 import {
   createClass,
@@ -14,6 +13,7 @@ import {
   TestingUser
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { visualScreenshot } from "./VisualTestUtils";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -48,7 +48,9 @@ async function addComment({
       rubric_check_id: check_id,
       class_id,
       author: author_id,
-      comment: `Grading comment for check ${check_id}`,
+      // Stable comment text — embedding the autoincrement check_id makes
+      // screenshots vary across runs (1001 vs 1543 etc.).
+      comment: `Grading comment for this check`,
       points,
       released: false,
       eventually_visible: true,
@@ -108,7 +110,7 @@ async function createGroupSubmission({
   const { data: groupData, error: groupError } = await supabase
     .from("assignment_groups")
     .insert({
-      name: `Test Group ${Date.now()}`,
+      name: `Manual Score Group - ${assignment.title}`,
       class_id: course.id,
       assignment_id: assignment.id
     })
@@ -152,6 +154,7 @@ test.describe("Manual grading score calculation", () => {
     [instructor, studentA, studentB, studentC] = await createUsersInClass([
       {
         name: "Score Instructor",
+        public_profile_name: "Score Pseudonym Instructor",
         email: "score-instructor@pawtograder.net",
         role: "instructor",
         class_id: course.id,
@@ -159,6 +162,7 @@ test.describe("Manual grading score calculation", () => {
       },
       {
         name: "Score Student A",
+        public_profile_name: "Score Pseudonym Student A",
         email: "score-student-a@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -166,6 +170,7 @@ test.describe("Manual grading score calculation", () => {
       },
       {
         name: "Score Student B",
+        public_profile_name: "Score Pseudonym Student B",
         email: "score-student-b@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -173,6 +178,7 @@ test.describe("Manual grading score calculation", () => {
       },
       {
         name: "Score Student C",
+        public_profile_name: "Score Pseudonym Student C",
         email: "score-student-c@pawtograder.net",
         role: "student",
         class_id: course.id,
@@ -270,7 +276,9 @@ test.describe("Manual grading score calculation", () => {
 
       const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
       await expect(scoreHeading).toBeVisible({ timeout: 15000 });
-      await argosScreenshot(page, "Individual grading - student view with score");
+      await visualScreenshot(page, "Individual grading - student view with score", {
+        stabilizeRubric: "Grading Rubric"
+      });
       await assertStudentPageAccessible(page, "manual grading individual student score");
     });
   });
@@ -351,7 +359,9 @@ test.describe("Manual grading score calculation", () => {
 
       const scoreHeading = page.getByRole("heading", { name: /Overall Score/ });
       await expect(scoreHeading).toBeVisible({ timeout: 15000 });
-      await argosScreenshot(page, "Group grading shared - student view with score");
+      await visualScreenshot(page, "Group grading shared - student view with score", {
+        stabilizeRubric: "Grading Rubric"
+      });
       await assertStudentPageAccessible(page, "manual grading group shared student score");
     });
   });
@@ -552,7 +562,9 @@ test.describe("Manual grading score calculation", () => {
       await expect(page.getByText("Scores by student")).toBeVisible({ timeout: 15000 });
       await expect(page.getByRole("heading", { name: /Overall Score/ })).not.toBeVisible();
       await expect(page.getByText("(You)")).toBeVisible();
-      await argosScreenshot(page, "Group individual grading - student view with individual score");
+      await visualScreenshot(page, "Group individual grading - student view with individual score", {
+        stabilizeRubric: "Grading Rubric"
+      });
       await assertStudentPageAccessible(page, "manual grading group individual student score");
     });
 
@@ -570,7 +582,9 @@ test.describe("Manual grading score calculation", () => {
       await expect(scoresSection.getByText("Score Student A").first()).toBeVisible();
       await expect(scoresSection.getByText("Score Student B").first()).toBeVisible();
       await expect(scoresSection.getByText("Score Student C").first()).toBeVisible();
-      await argosScreenshot(page, "Group individual grading - instructor view with all scores");
+      await visualScreenshot(page, "Group individual grading - instructor view with all scores", {
+        stabilizeRubric: "Grading Rubric"
+      });
     });
 
     test("removing individual grading comments clears individual_scores", async () => {

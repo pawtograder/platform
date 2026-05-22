@@ -43,11 +43,9 @@ import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import {
-  useAllRubricChecks,
   useAssignmentController,
   useAssignmentData,
   useGraderPseudonymousMode,
-  useReferenceCheckRecordsFromCheck,
   useReviewAssignment,
   useReviewAssignmentRubricParts,
   useRubricById,
@@ -84,23 +82,47 @@ import {
 } from "@/lib/studentFacingErrorMessages";
 import { useIsTableControllerReady } from "@/lib/TableController";
 import { Icon } from "@chakra-ui/react";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { formatRelative } from "date-fns";
-import { useParams, usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode
+} from "react";
+import { Switch } from "@/components/ui/switch";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
-import { FaCheckCircle, FaChartLine, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
+import { FaCheckCircle, FaChartLine, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
 import RequestRegradeDialog from "./request-regrade-dialog";
+import RequestRegradeForCheckDialog from "@/components/ui/RequestRegradeForCheckDialog";
 import { Tooltip } from "./tooltip";
 
 // Module-stable style — see `components/ui/markdown.tsx` for why
 // `<Markdown style={{...}}>` literals defeat its `memo` wrapper.
 const RUBRIC_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
+
+// Whether rubric part/criteria/check descriptions are shown in the sidebar. Defaults to true so
+// any non-sidebar use is unaffected; the sidebar provides `false` (collapsed) with a toggle.
+const RubricDescriptionsContext = createContext<boolean>(true);
+
+/** A rubric description that the sidebar can collapse behind its "Show descriptions" toggle. */
+function RubricDescription({ text }: { text: string | null | undefined }) {
+  const show = useContext(RubricDescriptionsContext);
+  if (!text || !show) {
+    return null;
+  }
+  return <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{text}</Markdown>;
+}
 
 const KPI_LABELS: Record<string, string> = {
   commits: "commits",
@@ -109,223 +131,6 @@ const KPI_LABELS: Record<string, string> = {
   issues_opened: "issues opened",
   issues_closed: "issues closed",
   issue_comments: "issue comments"
-};
-
-interface CheckOptionType extends OptionBase {
-  value: number;
-  label: string;
-  rubricName?: string;
-  reviewRound?: string;
-}
-
-/**
- * Inline reference management component for preview mode
- */
-const InlineReferenceManager = function InlineReferenceManager({
-  checkId,
-  classId,
-  currentRubricId
-}: {
-  checkId: number;
-  classId: number;
-  currentRubricId: number;
-}) {
-  const { assignment_id } = useParams();
-  const [isAddingReference, setIsAddingReference] = useState(false);
-  const [selectedCheckOption, setSelectedCheckOption] = useState<CheckOptionType | undefined>(undefined);
-
-  // Get existing references for this check
-  const referencingChecks = useReferenceCheckRecordsFromCheck(checkId);
-
-  // Get rubrics and all checks directly from controllers
-  const allRubrics = useRubrics();
-  const allChecks = useAllRubricChecks();
-  const otherRubrics = useMemo(
-    () => allRubrics?.filter((rubric) => rubric.id !== currentRubricId) ?? [],
-    [allRubrics, currentRubricId]
-  );
-  const { rubricCheckReferencesController } = useAssignmentController();
-
-  // Build check options from other rubrics only
-  const checkOptions: CheckOptionType[] = useMemo(() => {
-    if (!allChecks || !allRubrics || !referencingChecks) return [];
-
-    // Get checks for other rubrics
-    const otherRubricIds = otherRubrics.map((r) => r.id);
-
-    // Filter out negative/zero IDs (preview mode with unsaved rubric)
-    const validRubricIds = otherRubricIds.filter((id) => id > 0);
-
-    if (validRubricIds.length === 0) {
-      // In preview mode with unsaved rubric, no references available
-      return [];
-    }
-
-    const checksForOtherRubrics = allChecks.filter(
-      (check) =>
-        validRubricIds.includes(check.rubric_id) &&
-        !referencingChecks.find((c) => c.referenced_rubric_check_id === check.id)
-    );
-
-    return checksForOtherRubrics.map((c) => {
-      const rubric = allRubrics?.find((r) => r.id === c.rubric_id);
-      return {
-        value: c.id,
-        label: `${c.name} (${c.points} pts)`,
-        rubricName: rubric?.name || "Unknown",
-        reviewRound: rubric?.review_round || "General"
-      };
-    });
-  }, [allChecks, otherRubrics, allRubrics, referencingChecks]);
-
-  const handleAddReference = useCallback(async () => {
-    if (!selectedCheckOption) {
-      toaster.error({
-        title: "Error",
-        description: "Please select a check to reference."
-      });
-      return;
-    }
-
-    try {
-      await rubricCheckReferencesController.create({
-        assignment_id: Number.parseInt(assignment_id as string),
-        rubric_id: currentRubricId,
-        referencing_rubric_check_id: checkId,
-        referenced_rubric_check_id: selectedCheckOption.value,
-        class_id: classId
-      });
-      toaster.success({
-        title: "Reference Added",
-        description: "The rubric check reference has been added successfully."
-      });
-      setIsAddingReference(false);
-      setSelectedCheckOption(undefined);
-    } catch (error) {
-      toaster.error({
-        title: "Error Adding Reference",
-        description: error instanceof Error ? error.message : "Unknown error occurred"
-      });
-    }
-  }, [rubricCheckReferencesController, classId, selectedCheckOption, checkId, currentRubricId, assignment_id]);
-
-  const handleDeleteReference = useCallback(
-    async (referenceId: number) => {
-      try {
-        await rubricCheckReferencesController.hardDelete(referenceId);
-        toaster.success({
-          title: "Reference Removed",
-          description: "The reference has been removed successfully."
-        });
-      } catch (error) {
-        toaster.error({
-          title: "Error Removing Reference",
-          description: error instanceof Error ? error.message : "Unknown error occurred"
-        });
-      }
-    },
-    [rubricCheckReferencesController]
-  );
-
-  const existingReferences = referencingChecks || [];
-  // If no options available and we're in preview mode, show a message
-  if (checkOptions.length === 0 && currentRubricId <= 0) {
-    return (
-      <Box mt={2}>
-        <Text fontSize="xs" color="fg.muted">
-          Reference management will be available after saving this rubric.
-        </Text>
-      </Box>
-    );
-  }
-
-  return (
-    <Box mt={2}>
-      {/* Show existing references */}
-      {existingReferences.length > 0 && (
-        <VStack gap={1} alignItems="stretch" mb={2}>
-          {existingReferences.map((reference) => {
-            if (!reference) return null;
-
-            // Find the referenced check to get its name and points
-            const referencedCheck = allChecks.find((check) => check.id === reference.referenced_rubric_check_id);
-            if (!referencedCheck) return null;
-
-            return (
-              <HStack key={reference.id} fontSize="xs" gap={1} p={1} bg="bg.muted" borderRadius="sm">
-                <Icon as={FaLink} color="blue.500" />
-                <Text flex={1} truncate>
-                  {referencedCheck.name} ({referencedCheck.points} pts)
-                </Text>
-                <Button
-                  size="2xs"
-                  variant="ghost"
-                  colorPalette="red"
-                  onClick={() => handleDeleteReference(reference.id)}
-                >
-                  <Icon as={FaTimes} />
-                </Button>
-              </HStack>
-            );
-          })}
-        </VStack>
-      )}
-
-      {/* Add reference UI */}
-      {!isAddingReference ? (
-        <Button size="2xs" variant="outline" colorPalette="blue" onClick={() => setIsAddingReference(true)}>
-          <Icon as={FaLink} mr={1} />
-          Add Reference
-        </Button>
-      ) : (
-        <VStack gap={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default" bg="bg.canvas">
-          <ChakraReactSelect<CheckOptionType, false>
-            size="sm"
-            options={checkOptions}
-            value={selectedCheckOption}
-            onChange={(option) => setSelectedCheckOption(option || undefined)}
-            placeholder="Select check to reference..."
-            aria-label="Select check to reference"
-            isLoading={false}
-            formatOptionLabel={(option) => (
-              <VStack alignItems="flex-start" gap={0}>
-                <Text fontSize="sm">{option.label}</Text>
-                <Text fontSize="xs" color="fg.muted">
-                  {option.rubricName} ({option.reviewRound})
-                </Text>
-              </VStack>
-            )}
-            chakraStyles={{
-              menu: (provided) => ({ ...provided, zIndex: 10000 }),
-              control: (provided) => ({ ...provided, minHeight: "auto" })
-            }}
-          />
-          <HStack gap={1} w="100%">
-            <Button
-              size="2xs"
-              colorPalette="green"
-              onClick={handleAddReference}
-              disabled={!selectedCheckOption}
-              flex={1}
-            >
-              Add
-            </Button>
-            <Button
-              size="2xs"
-              variant="outline"
-              onClick={() => {
-                setIsAddingReference(false);
-                setSelectedCheckOption(undefined);
-              }}
-              flex={1}
-            >
-              Cancel
-            </Button>
-          </HStack>
-        </VStack>
-      )}
-    </Box>
-  );
 };
 
 export function CommentActions({
@@ -626,7 +431,10 @@ export function RubricCheckComment({
                     ({author.real_name})
                   </Text>
                 )}{" "}
-                {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
+                {criteria ? "applied" : "commented"}{" "}
+                <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+                  {formatRelative(comment.created_at, new Date())}
+                </Text>
               </Text>
               <CommentActions comment={comment} setIsEditing={setIsEditing} />
             </HStack>
@@ -822,13 +630,12 @@ export function StudentVisibilityIndicator({
 export function RubricCheckAnnotation({
   check,
   criteria,
-  assignmentId,
-  classId,
   currentRubricId,
   targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
+  /** Kept on the parent prop type for back-compat with call sites; unused since reference editing moved into the rubric editor GUI. */
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -841,6 +648,8 @@ export function RubricCheckAnnotation({
     targetStudentProfileId
   );
   const isGrader = useIsGraderOrInstructor();
+  const assignment = useAssignmentData();
+  const isSelfReviewRubric = criteria.rubric_id === assignment.self_review_rubric_id;
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
   const submission = useSubmissionMaybe();
@@ -895,7 +704,7 @@ export function RubricCheckAnnotation({
         </HStack>
         <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
       </HStack>
-      <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+      <RubricDescription text={check.description} />
       {linkedArtifactId && submission && check.artifact && (
         <Box mt={1}>
           <Link
@@ -928,12 +737,17 @@ export function RubricCheckAnnotation({
         />
       ))}
 
-      {/* Inline reference management for preview mode */}
-      {isPreviewMode && assignmentId && classId && currentRubricId ? (
-        <InlineReferenceManager checkId={check.id} classId={classId} currentRubricId={currentRubricId} />
-      ) : (
-        <></>
+      {/* Bare-check regrade requests render here for students (create) and staff (view/respond). */}
+      {!isPreviewMode && !isApplied && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog
+          submissionReviewId={reviewForThisRubric.id}
+          rubricCheckId={check.id}
+          check={check}
+          isReleased={isReleased}
+        />
       )}
+
+      {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}
 
       {/* Show referenced feedback for grading mode */}
       {!isPreviewMode && gradingIsPermitted && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
@@ -945,14 +759,13 @@ export function RubricCheckGlobal({
   check,
   criteria,
   isSelected,
-  assignmentId,
-  classId,
   currentRubricId,
   targetStudentProfileId
 }: {
   check: RubricCheckType;
   criteria: RubricCriteriaType;
   isSelected: boolean;
+  /** Kept on the parent prop type for back-compat with call sites; unused since reference editing moved into the rubric editor GUI. */
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -993,6 +806,8 @@ export function RubricCheckGlobal({
   const isGrader = useIsGraderOrInstructor();
   const isTaOnly = useIsGrader();
   const isInstructor = useIsInstructor();
+  const assignment = useAssignmentData();
+  const isSelfReviewRubric = criteria.rubric_id === assignment.self_review_rubric_id;
   const pathname = usePathname();
   const isPreviewMode = !submission;
   const linkedAritfactId = check.artifact
@@ -1084,7 +899,7 @@ export function RubricCheckGlobal({
                   </Field.Label>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
-                <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+                <RubricDescription text={check.description} />
                 {linkedFileId && submission && (
                   <Link
                     prefetch={true}
@@ -1168,7 +983,7 @@ export function RubricCheckGlobal({
                         {points} {check.name}
                       </Text>
                     </Field.Label>
-                    <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+                    <RubricDescription text={check.description} />
                   </Checkbox>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
@@ -1212,7 +1027,7 @@ export function RubricCheckGlobal({
                         {points} {check.name}
                       </Text>
                     </Field.Label>
-                    <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{check.description}</Markdown>
+                    <RubricDescription text={check.description} />
                   </Radio>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
@@ -1272,10 +1087,17 @@ export function RubricCheckGlobal({
         />
       ))}
 
-      {/* Inline reference management for preview mode */}
-      {isPreviewMode && assignmentId && classId && currentRubricId && (
-        <InlineReferenceManager checkId={check.id} classId={classId} currentRubricId={currentRubricId} />
+      {/* Bare-check regrade requests render here for students (create) and staff (view/respond). */}
+      {!isPreviewMode && !isApplied && !isSelfReviewRubric && reviewForThisRubric && (
+        <RequestRegradeForCheckDialog
+          submissionReviewId={reviewForThisRubric.id}
+          rubricCheckId={check.id}
+          check={check}
+          isReleased={isReleased}
+        />
       )}
+
+      {/* Reference editing is now part of the rubric editor GUI (CheckRow). */}
 
       {/* Show referenced feedback for grading mode */}
       {!isPreviewMode && gradingIsPermitted && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
@@ -1524,7 +1346,7 @@ export function RubricCriteria({
         </Heading>
 
         <Fieldset.HelperText>
-          <Markdown style={RUBRIC_DESCRIPTION_STYLE}>{criteria.description}</Markdown>
+          <RubricDescription text={criteria.description} />
         </Fieldset.HelperText>
         {isTaOnly && !isInstructor && reviewForThisRubric?.released && (
           <Alert status="warning" variant="subtle" borderRadius="md" mb={2} title="Grading is locked">
@@ -1582,7 +1404,7 @@ export function RubricPart({
   return (
     <Box w="100%" role="region" aria-label={`Rubric Part: ${part.name}`}>
       <Heading size="md">{part.name}</Heading>
-      <Markdown>{part.description}</Markdown>
+      <RubricDescription text={part.description} />
       <VStack align="start" w="100%" gap={2}>
         {criteria.map((criteria, index) => (
           <RubricCriteria
@@ -1607,7 +1429,7 @@ function RubricMenu() {
   }
 
   return (
-    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2}>
+    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2} data-visual-test="removed">
       <NativeSelectRoot>
         <NativeSelectField
           aria-label="Select active rubric"
@@ -1629,6 +1451,12 @@ function RubricMenu() {
 }
 export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
   const unsortedRubrics = useRubrics();
+  // Descriptions are collapsed by default for students (keeps the sidebar scannable) but shown for
+  // graders/instructors, who rely on them while grading. Derive the default from the role each
+  // render (so it picks up role state that hydrates after mount) and let a manual toggle override.
+  const isGraderOrInstructorForDescriptions = useIsGraderOrInstructor();
+  const [descriptionsOverride, setDescriptionsOverride] = useState<boolean | null>(null);
+  const showDescriptions = descriptionsOverride ?? isGraderOrInstructorForDescriptions;
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
   const activeReviewAssignment = useActiveReviewAssignment();
   const rubrics = useMemo(() => {
@@ -1757,26 +1585,42 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   );
 
   return (
-    <VStack w="100%">
-      <RubricMenu />
-      {rubrics.map((rubric, index) => (
-        <Box
-          key={rubric.id}
-          id={`rubric-${rubric.id}`}
-          data-rubric-id={rubric.id}
-          ref={setRubricRef(rubric.id)}
-          pt="40px"
-          w="100%"
-          role="region"
-          aria-label={`Rubric: ${rubric.name}`}
+    <RubricDescriptionsContext.Provider value={showDescriptions}>
+      <VStack w="100%">
+        <RubricMenu />
+        <Switch
+          checked={showDescriptions}
+          onCheckedChange={(e) => setDescriptionsOverride(e.checked)}
+          size="sm"
+          alignSelf="start"
         >
-          <RubricSidebar key={rubric.id} rubricId={rubric.id} />
-          {index < rubrics.length - 1 && (
-            <Separator orientation="horizontal" borderTopWidth="4px" borderColor="border.emphasized" my={2} mt="50px" />
-          )}
-        </Box>
-      ))}
-    </VStack>
+          Show rubric descriptions
+        </Switch>
+        {rubrics.map((rubric, index) => (
+          <Box
+            key={rubric.id}
+            id={`rubric-${rubric.id}`}
+            data-rubric-id={rubric.id}
+            ref={setRubricRef(rubric.id)}
+            pt="40px"
+            w="100%"
+            role="region"
+            aria-label={`Rubric: ${rubric.name}`}
+          >
+            <RubricSidebar key={rubric.id} rubricId={rubric.id} />
+            {index < rubrics.length - 1 && (
+              <Separator
+                orientation="horizontal"
+                borderTopWidth="4px"
+                borderColor="border.emphasized"
+                my={2}
+                mt="50px"
+              />
+            )}
+          </Box>
+        ))}
+      </VStack>
+    </RubricDescriptionsContext.Provider>
   );
 }
 
@@ -1853,7 +1697,7 @@ function AssignToStudentPart({
         <Heading size="md">{part.name}</Heading>
         <Badge variant="secondary">Assign</Badge>
       </HStack>
-      {part.description && <Markdown>{part.description}</Markdown>}
+      {part.description && <RubricDescription text={part.description} />}
       <Box my={2}>
         <NativeSelectRoot>
           <NativeSelectField
@@ -2127,7 +1971,14 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
   });
   /** False only while we might still be loading the group row; avoid treating [] as "no group" during fetch. */
   const groupMembersContextReady = !isGroupSubmission || assignmentGroupsTableReady;
-  const resolvedGroupMembers = assignmentGroupWithMembers?.assignment_groups_members ?? [];
+  // Stable order — assignment_groups_members arrives via realtime in a
+  // non-deterministic order across test runs, which would scramble the
+  // per-student IndividualGradingStudentBlock rendering in screenshots. Sort
+  // by member.id so the order is consistent within a session, and we'll let
+  // each child render its own name.
+  const resolvedGroupMembers = [...(assignmentGroupWithMembers?.assignment_groups_members ?? [])].sort(
+    (a, b) => a.id - b.id
+  );
   const hasGroupMembers = isGroupSubmission && resolvedGroupMembers.length > 0;
 
   if (!rubric) {
@@ -2161,7 +2012,7 @@ export function RubricSidebar({ rubricId }: { rubricId: number }) {
           <Text fontSize="lg" fontWeight="semibold">
             {rubric.name}
           </Text>
-          {rubric.description && <Markdown>{rubric.description}</Markdown>}
+          <RubricDescription text={rubric.description} />
           <Text mt={2}>This rubric is empty.</Text>
         </VStack>
       </Box>

@@ -1,7 +1,6 @@
 import { Assignment, Course, RubricCheck, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import { type Page } from "@playwright/test";
-import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -14,6 +13,7 @@ import {
   TestingUser
 } from "./TestingUtils";
 import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { stabilizeRubricSidebar, visualScreenshot } from "./VisualTestUtils";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -56,6 +56,7 @@ test.beforeAll(async () => {
   [student, instructor, grader, student2] = await createUsersInClass([
     {
       name: "Grading Student",
+      public_profile_name: "Grading Pseudonym Student",
       email: "grading-student@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -63,6 +64,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Grading Instructor",
+      public_profile_name: "Grading Pseudonym Instructor",
       email: "grading-instructor@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -70,6 +72,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Grading Grader",
+      public_profile_name: "Grading Pseudonym Grader",
       email: "grading-grader@pawtograder.net",
       role: "grader",
       class_id: course.id,
@@ -77,6 +80,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Grading Student 2",
+      public_profile_name: "Grading Pseudonym Student 2",
       email: "grading-student2@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -155,21 +159,25 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Students can submit self-review early", async ({ page }) => {
     await loginAsUser(page, student!, course);
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
-    await argosScreenshot(page, "Student can submit self-review early");
+    // The "Submission Limit for this assignment" alert renders asynchronously
+    // after a separate RPC and is now hidden in visual tests (see the
+    // data-visual-test="removed" on the alert in page.tsx) so its
+    // arrival timing can't affect this screenshot's page height.
+    await visualScreenshot(page, "Student can submit self-review early");
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
     // The "Submission finalized" success toast is the explicit signal that
     // finalize_submission_early completed and reviewAssignments has been
     // refetched (see finalizeSubmissionEarly.tsx). Without this, the test
     // races the "Complete Self Review" button into existence.
-    // Chakra renders the toast title twice (visible toast + portal duplicate
-    // both with the same id), so .first() is required to satisfy strict mode.
-    await expect(page.getByText("Submission finalized").first()).toBeVisible();
+    // Visual-test mode removes toasts from layout before screenshots, so the
+    // explicit app signal is attachment rather than visibility.
+    await expect(page.getByText("Submission finalized").first()).toBeAttached();
     // Even after the toast appears, the "Complete Self Review" button only
     // renders once useMyReviewAssignments() observes the new row AND
     // useRubric("self-review") returns the matching rubric (see
@@ -212,7 +220,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Add a comment about this line" }).click();
     await page.getByRole("textbox", { name: "Add a comment about this line" }).fill(SELF_REVIEW_COMMENT_1);
-    await argosScreenshot(page, "Adding a comment on the self-review");
+    await visualScreenshot(page, "Adding a comment on the self-review", { stabilizeRubric: "Self-Review Rubric" });
     await page.getByRole("button", { name: "Add Comment" }).click();
     await page.getByText("Annotate line 15 with a check:").waitFor({ state: "hidden" });
 
@@ -221,7 +229,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     });
     await page.getByRole("option", { name: "Self Review Check 1 (+5)" }).click();
     await page.getByRole("textbox", { name: "Optionally add a comment, or" }).fill("comment");
-    await argosScreenshot(page, "Adding a second self-review check");
+    await visualScreenshot(page, "Adding a second self-review check", { stabilizeRubric: "Self-Review Rubric" });
     await page.getByRole("button", { name: "Add Check" }).click();
     // await clickAddCheckWithRetry(page);
     await page.getByText("Annotate line 5 with a check:").waitFor({ state: "hidden" });
@@ -236,7 +244,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page
       .getByRole("textbox", { name: "Optional: comment on check Self Review Check 2" })
       .fill(SELF_REVIEW_COMMENT_2);
-    await argosScreenshot(page, "Adding a global self-review check with a comment");
+    await visualScreenshot(page, "Adding a global self-review check with a comment", {
+      stabilizeRubric: "Self-Review Rubric"
+    });
 
     await page.getByRole("button", { name: "Add Check" }).click();
     //Wait for the textbox to disappear
@@ -245,7 +255,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Complete Review" }).click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
-    await argosScreenshot(page, "Self-Review Rubric completed");
+    await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
     await assertStudentPageAccessible(page, "grading self-review completed");
   });
 
@@ -273,11 +283,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByRole("region", { name: "Grading check Self Review Check 2" }).first()).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     //Scroll self-review rubric to top of its container
-    await page.getByRole("region", { name: "Self-Review Rubric" }).evaluate((el) => {
-      el.scrollIntoView({ block: "start", behavior: "instant" });
+    await stabilizeRubricSidebar(page, "Self-Review Rubric");
+    await visualScreenshot(page, "Instructor can view the student's self-review", {
+      stabilizeRubric: "Self-Review Rubric"
     });
-    await page.waitForTimeout(100); // Ensure scroll completes before screenshot
-    await argosScreenshot(page, "Instructor can view the student's self-review");
 
     //Scroll grading rubric to top of its container
     await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
@@ -290,7 +299,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("option", { name: "Grading Review Check 1 (+10)" }).click();
     await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
     await page.getByRole("textbox", { name: "Optionally add a comment, or" }).fill(GRADING_REVIEW_COMMENT_1);
-    await argosScreenshot(page, "Instructor adds a grading review check");
+    await visualScreenshot(page, "Instructor adds a grading review check", { stabilizeRubric: "Grading Rubric" });
     await page.getByRole("button", { name: "Add Check" }).click();
     // await clickAddCheckWithRetry(page);
     await page.getByText("Annotate line 4 with a check:").waitFor({ state: "hidden" });
@@ -323,7 +332,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).click();
-    await argosScreenshot(page, "Instructor completes the grading review");
+    await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
     await page.getByRole("button", { name: "Mark as Complete" }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
@@ -353,12 +362,19 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
+    // Released submissions now default students to the Grade tab; switch to the autograder
+    // detail (results) view that this test exercises.
+    await page.getByRole("button", { name: "Autograder Detail" }).click();
     await page.getByText("Lint Results: Passed").waitFor({ state: "visible" }); // Wait for the page to stabilize
+    // Scan the results route here so axe also covers the autograder output view, the Pyret REPL
+    // header (aria-controls), the Feedbot Textarea, and any Switch-rendered toggles.
+    await expect(page).toHaveURL(/\/results(?:\?.*)?$/);
+    await assertStudentPageAccessible(page, "grading results /results route");
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
@@ -367,11 +383,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_1);
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
     //Scroll grading rubric to top of its container
-    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
-      el.scrollIntoView({ block: "start", behavior: "instant" });
-    });
-    await page.waitForTimeout(100); // Ensure scroll completes before screenshot
-    await argosScreenshot(page, "Student can view their grading results");
+    await stabilizeRubricSidebar(page, "Grading Rubric");
+    await visualScreenshot(page, "Student can view their grading results", { stabilizeRubric: "Grading Rubric" });
     await assertStudentPageAccessible(page, "grading results submission files");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
@@ -379,7 +392,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await expect(region).toBeVisible();
     await region.getByRole("button", { name: "Request regrade for this check" }).click();
-    await argosScreenshot(page, "Student can request a regrade");
+    // The "Request regrade" popover is portalled and applies aria-hidden to the
+    // rubric sidebar while open, so we cannot use stabilizeRubric here. The 7:59 vs
+    // 8:06 PM applied-at timestamp diff that previously made this flaky is handled
+    // by the transparent-text wrap on rubric-sidebar.tsx.
+    await expect(page.getByRole("button", { name: "Draft Regrade Request" })).toBeVisible();
+    await visualScreenshot(page, "Student can request a regrade");
     await page.getByRole("button", { name: "Draft Regrade Request" }).click();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -395,7 +413,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .click();
     await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
-    await argosScreenshot(page, "Student can add a comment to open the regrade request");
+    await visualScreenshot(page, "Student can add a comment to open the regrade request", {
+      stabilizeRubric: "Grading Rubric"
+    });
   });
   test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
@@ -408,7 +428,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .click();
-    await argosScreenshot(page, "Instructors can view the student's regrade request");
+    await visualScreenshot(page, "Instructors can view the student's regrade request", {
+      stabilizeRubric: "Grading Rubric"
+    });
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
@@ -422,10 +444,23 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     ).toBeVisible();
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
-    await argosScreenshot(page, "Instructors can resolve the regrade request");
     // Popover content is portalled (not under the rubric check region); scope to the resolve dialog.
     const resolveRegradePopover = page.getByRole("dialog").filter({ hasText: "Grade Adjustment:" });
     await expect(resolveRegradePopover).toBeVisible();
+    // Wait for the resolve button to render — previously the screenshot raced
+    // its appearance, producing an 11k-px diff. (Button's accessible name is
+    // "Resolve regrade request" via aria-label; visible text is "Resolve with
+    // No Change" before any grade adjustment.)
+    await expect(resolveRegradePopover.getByText("Resolve with No Change")).toBeVisible();
+    // Capture only the rubric check region rather than the whole page. The
+    // popover panel itself paints with sub-pixel-shifted height between runs
+    // (a Chakra Popover layout race we can't otherwise pin), but the value of
+    // this visual test is the rubric region's "Regrade Pending" state — the
+    // popover open/close interaction is already covered by the click + assert
+    // calls around it.
+    await visualScreenshot(page, "Instructors can resolve the regrade request", {
+      element: page.getByLabel("Grading checks on line 4")
+    });
     await resolveRegradePopover.getByRole("textbox", { name: /Grade adjustment/i }).fill(REGRADE_RESOLVE_ADJUSTMENT);
     await expect(resolveRegradePopover).toContainText(
       new RegExp(`New points awarded:\\s*${REGRADE_RESOLVE_EXPECTED_POINTS.replace(".", "\\.")}`)
@@ -458,7 +493,18 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByLabel("Add Comment", { exact: true })
       .click();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Escalate to Instructor" }).click();
-    await argosScreenshot(page, "Students can appeal their regrade request");
+    // Same popover-aria-hidden issue as the "Request a regrade" popover above.
+    await expect(page.getByRole("button", { name: "Escalate Request" })).toBeVisible();
+    // Make sure all earlier comments have re-rendered before snapshotting —
+    // the comment stream loads via realtime and races the screenshot, which
+    // caused a 64px page-height delta between runs.
+    {
+      const appealRegion = page.getByLabel("Grading checks on line 4");
+      await expect(appealRegion.getByText(REGRADE_COMMENT)).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_RESOLUTION)).toBeVisible();
+      await expect(appealRegion.getByText(REGRADE_ESCALATION)).toBeVisible();
+    }
+    await visualScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
     // Wait for the escalation to settle before axe runs — otherwise axe races
     // the closing popover / toast and reports transient focus-trap / labeling violations.
@@ -484,7 +530,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .fill(REGRADE_FINAL_COMMENT);
-    await argosScreenshot(page, "Instructors can view the student's regrade appeal");
+    // Ensure the prior regrade-discussion comments are loaded before the
+    // screenshot — they arrive via realtime and otherwise race capture, giving
+    // a ~64px page-height delta between runs.
+    await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
+    await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
+    await visualScreenshot(page, "Instructors can view the student's regrade appeal", {
+      stabilizeRubric: "Grading Rubric"
+    });
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
@@ -495,8 +549,23 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Grade adjustment" }).fill("100");
     await expect(page.getByRole("dialog").getByText("This is a significant change")).toBeVisible();
     await page.getByRole("dialog").getByRole("button", { name: "Close regrade request" }).click();
-    await argosScreenshot(page, "Instructors can close the regrade request");
+    // Wait for the regrade status heading to actually flip to "Regrade Closed" before
+    // capturing — without this the screenshot races the previous "Regrade Escalated"
+    // state, producing 1-in-N visual diffs.
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
+    // Several updates land asynchronously after the close, in roughly this order:
+    //   1. Regrade status heading flips to "Regrade Closed".
+    //   2. The check's own +points display updates.
+    //   3. The "Grading Review Criteria N/20" sidebar total recomputes.
+    //   4. Earlier comments in the regrade discussion stream re-render in the
+    //      collapsed-after-close layout (the comment list height can grow ~64px).
+    // Wait on each so the screenshot lands in a deterministic visual state.
+    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText("120.5");
+    await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await expect(region.getByText(REGRADE_RESOLUTION)).toBeVisible();
+    await expect(region.getByText(REGRADE_ESCALATION)).toBeVisible();
+    await expect(region.getByText(REGRADE_FINAL_COMMENT)).toBeVisible();
+    await visualScreenshot(page, "Instructors can close the regrade request", { stabilizeRubric: "Grading Rubric" });
   });
   test("Graders assigned to a rubric part see just that rubric part to grade", async ({ page }) => {
     // Earlier test releases all submission reviews on this assignment; second submission gets released too,
@@ -520,11 +589,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public static void main(")).toBeVisible();
 
     //Scroll grading rubric to top of its container
-    await page.getByRole("region", { name: "Grading Rubric" }).evaluate((el) => {
-      el.scrollIntoView({ block: "start", behavior: "instant" });
+    await stabilizeRubricSidebar(page, "Grading Rubric");
+    await visualScreenshot(page, "Graders assigned to a rubric part see just that rubric part to grade", {
+      stabilizeRubric: "Grading Rubric"
     });
-    await page.waitForTimeout(1000); // Ensure scroll completes before screenshot
-    await argosScreenshot(page, "Graders assigned to a rubric part see just that rubric part to grade");
     await page.getByText("Third check for grading review").click();
 
     await clickWithTextboxRetry(

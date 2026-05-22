@@ -179,11 +179,16 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
 /**
  * Type-safe filter for real-time event filtering.
- * Supports basic equality filters that match PostgrestFilterBuilder patterns.
+ * Supports basic equality filters that match PostgrestFilterBuilder patterns, or
+ * a predicate function for cases where the row's match condition isn't a simple
+ * AND over column equalities (e.g. "root threads OR duplicate-marked threads").
  */
-export type RealtimeFilter<T extends TablesThatHaveAnIDField> = {
+export type RealtimeFilterRecord<T extends TablesThatHaveAnIDField> = {
   [K in keyof DatabaseTableTypes[T]["Row"]]?: DatabaseTableTypes[T]["Row"][K] | DatabaseTableTypes[T]["Row"][K][];
 };
+export type RealtimeFilter<T extends TablesThatHaveAnIDField> =
+  | RealtimeFilterRecord<T>
+  | ((row: DatabaseTableTypes[T]["Row"]) => boolean);
 
 /**
  * Hook that returns all values from a TableController that match a predicate.
@@ -1315,12 +1320,14 @@ export default class TableController<
           // Optimization opportunity: we should fix it so that no subscriber depends on this behavior
           this._rows = newRows;
           this._rebuildRowsById();
+          this._rebuildIndexesAndNotifyListeners();
           this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
         }
       } else {
         // Membership changed: replace rows and notify list + item listeners accordingly
         this._rows = newRows;
         this._rebuildRowsById();
+        this._rebuildIndexesAndNotifyListeners();
 
         // Notify list listeners
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
@@ -1459,20 +1466,23 @@ export default class TableController<
 
     const refetchedRows = await this._refetchRowsByIds(ids);
 
-    // Update existing rows and add new ones
+    // Mirror the matchesFilter handling in _handleUpdate so that a row whose
+    // refetched state no longer matches the realtime filter is evicted from
+    // the cache (e.g. a discussion_thread whose root_class_id was nulled out
+    // after a duplicate-merge no longer belongs in the teaser list).
     for (const [id, row] of refetchedRows) {
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+      const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
 
-      if (existingRow) {
+      if (existingRow && !matchesFilter) {
+        this._removeRow(id);
+      } else if (existingRow && matchesFilter) {
         this._updateRow(id, row as ResultOne & { id: IDType }, false);
-      } else {
-        // Check if the fetched row matches our realtime filter
-        if (this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
-          this._addRow({
-            ...row,
-            __db_pending: false
-          });
-        }
+      } else if (!existingRow && matchesFilter) {
+        this._addRow({
+          ...row,
+          __db_pending: false
+        });
       }
     }
   }
@@ -1799,6 +1809,10 @@ export default class TableController<
           __db_pending: false
         }));
         this._rebuildRowsById();
+        // Bring any indexes built before the initial fetch resolved in sync,
+        // and notify subscribers (e.g. `useIndexedTableControllerValue`) that
+        // were registered against the previously-empty controller.
+        this._rebuildIndexesAndNotifyListeners();
 
         // Initialize watermark
         for (const r of this._rows) {
@@ -2399,6 +2413,10 @@ export default class TableController<
       return true; // No filter means all rows match
     }
 
+    if (typeof this._realtimeFilter === "function") {
+      return this._realtimeFilter(rowData as DatabaseTableTypes[RelationName]["Row"]);
+    }
+
     for (const [key, filterValue] of Object.entries(this._realtimeFilter)) {
       const rowValue = rowData[key];
 
@@ -2792,6 +2810,46 @@ export default class TableController<
     for (const row of this._rows) {
       if ("id" in (row as object)) {
         this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
+      }
+    }
+  }
+
+  /**
+   * After a wholesale `_rows` reassignment (initial fetch, full refetch),
+   * rebuild every existing index's forward map from the new `_rows` and
+   * re-notify every registered indexed listener with its fresh value.
+   *
+   * Per-row mutations go through `_notifyIndexedListeners`, which keeps the
+   * forward map and listeners in sync incrementally. Bulk reassignments
+   * bypass that path, so a subscriber that registered against an empty
+   * controller (e.g. `useIndexedTableControllerValue` mounted before the
+   * initial fetch resolves) would otherwise never receive an update.
+   */
+  private _rebuildIndexesAndNotifyListeners() {
+    if (this._indexes.size === 0) return;
+    for (const [field, entry] of this._indexes) {
+      entry.rowIdsByValue.clear();
+      for (const row of this._rows) {
+        const value = (row as unknown as Record<string, unknown>)[field];
+        if (value === undefined || value === null) continue;
+        const id = (row as ResultOne & { id: IDType }).id;
+        let rowIds = entry.rowIdsByValue.get(value);
+        if (!rowIds) {
+          rowIds = new Set();
+          entry.rowIdsByValue.set(value, rowIds);
+        }
+        rowIds.add(id);
+      }
+      for (const [value, listeners] of entry.singleListenersByValue) {
+        if (listeners.size === 0) continue;
+        const matched = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+        const single = matched.length > 0 ? matched[0] : undefined;
+        for (const l of listeners) l(single);
+      }
+      for (const [value, listeners] of entry.listListenersByValue) {
+        if (listeners.size === 0) continue;
+        const matched = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+        for (const l of listeners) l(matched);
       }
     }
   }

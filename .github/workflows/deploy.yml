@@ -132,11 +132,38 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUN_TMP"
-          npx supabase stop --no-backup || true
-          docker volume ls --filter label=com.supabase.cli.project=${SUPABASE_PROJECT} -q \
-            | xargs -r docker volume rm || true
+          rm -f "$RUN_TMP/supabase-start.exitcode"
 
-          nohup npx supabase start > "$RUN_TMP/supabase-start.log" 2>&1 &
+          # `supabase start` occasionally races its own internal stop/restart and
+          # dies with "failed to bind host port 0.0.0.0:54322/tcp: address already
+          # in use" — a container from the in-progress attempt hasn't released the
+          # fixed port before the next bind. Reset this run's containers/volumes and
+          # retry. The reset is scoped to SUPABASE_PROJECT (unique per run_id +
+          # attempt), so concurrent jobs sharing the runner pool are never touched.
+          # Backgrounded so the container pulls + migrations overlap with the build.
+          nohup bash -c '
+            set -uo pipefail
+            reset_supabase() {
+              npx supabase stop --no-backup >/dev/null 2>&1 || true
+              docker ps -aq --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" \
+                | xargs -r docker rm -f >/dev/null 2>&1 || true
+              docker volume ls --filter "label=com.supabase.cli.project=${SUPABASE_PROJECT}" -q \
+                | xargs -r docker volume rm >/dev/null 2>&1 || true
+            }
+            reset_supabase
+            for attempt in $(seq 1 5); do
+              echo "=== supabase start attempt ${attempt}/5 ==="
+              if npx supabase start; then
+                echo 0 > "${RUN_TMP}/supabase-start.exitcode"
+                exit 0
+              fi
+              echo "supabase start failed on attempt ${attempt}; resetting and retrying"
+              reset_supabase
+              sleep $((attempt * 3))
+            done
+            echo 1 > "${RUN_TMP}/supabase-start.exitcode"
+            exit 1
+          ' > "$RUN_TMP/supabase-start.log" 2>&1 &
           echo $! > "$RUN_TMP/supabase-start.pid"
 
       # Background the browser install (~30-90s, mostly downloads + apt-get).
@@ -171,31 +198,65 @@ jobs:
       - name: Wait for Supabase + finalize schema
         run: |
           set -euo pipefail
-          PID="$(cat $RUN_TMP/supabase-start.pid)"
-          # `wait` is useless here — the bg process was launched in a previous
-          # step's shell and is reparented to PID 1. Poll the API until it
-          # answers. `supabase start` can exit successfully while kong is
-          # still warming up, so don't bail on the first PID-gone tick —
-          # give the API a grace period to come up before declaring failure.
-          grace_ticks=0
+          # Poll the API until it answers. The background launcher retries
+          # `supabase start` (with a reset between attempts) and writes its final
+          # status to supabase-start.exitcode; if that lands non-zero, all retries
+          # were exhausted, so fail fast with the log instead of polling for the
+          # full timeout.
           for i in $(seq 1 600); do
             if curl -sf -o /dev/null \
                  -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
                  "${LOCAL_SUPABASE_URL}/rest/v1/"; then
               break
             fi
-            if ! kill -0 "$PID" 2>/dev/null; then
-              grace_ticks=$((grace_ticks + 1))
-              if [ "$grace_ticks" -gt 20 ]; then
-                echo 'supabase start exited and the API never came up within 20s'
-                echo '--- supabase-start.log ---'
-                cat $RUN_TMP/supabase-start.log || true
-                exit 1
-              fi
+            if [ -f "$RUN_TMP/supabase-start.exitcode" ] \
+               && [ "$(cat "$RUN_TMP/supabase-start.exitcode")" != "0" ]; then
+              echo 'supabase start exhausted its retries and never came up'
+              echo '--- supabase-start.log ---'
+              cat "$RUN_TMP/supabase-start.log" || true
+              exit 1
             fi
             sleep 1
           done
           # Final readiness check — fail loudly if we fell out of the loop.
+          curl -sf -o /dev/null \
+            -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+            "${LOCAL_SUPABASE_URL}/rest/v1/"
+
+          # Ephemeral CI Postgres — trade durability for speed. The volume is
+          # destroyed at job end, so fsync/full_page_writes give us nothing.
+          # synchronous_commit is SIGHUP-reloadable; fsync, full_page_writes,
+          # and shared_buffers require a restart (done below).
+          # Notes on the psql invocation:
+          #   * Each ALTER SYSTEM must run outside a transaction block, so use
+          #     one -c flag per statement — `psql -c "a;b;c"` wraps multi-
+          #     statement input in an implicit transaction and would fail.
+          #   * Connect as supabase_admin (the actual superuser) — the
+          #     `postgres` role on supabase-local is not superuser and gets
+          #     `permission denied to set parameter` on ALTER SYSTEM.
+          #   * Use -h 127.0.0.1 so pg_hba.conf's `host ... 127.0.0.1 trust`
+          #     rule applies; the unix-socket rule requires scram-sha-256.
+          docker exec -i "supabase_db_${SUPABASE_PROJECT}" \
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U supabase_admin -d postgres \
+              -c "ALTER SYSTEM SET synchronous_commit = off" \
+              -c "ALTER SYSTEM SET fsync = off" \
+              -c "ALTER SYSTEM SET full_page_writes = off" \
+              -c "ALTER SYSTEM SET shared_buffers = '512MB'" \
+              -c "ALTER SYSTEM SET work_mem = '32MB'" \
+              -c "ALTER SYSTEM SET maintenance_work_mem = '256MB'" \
+              -c "ALTER SYSTEM SET autovacuum = off"
+          docker restart "supabase_db_${SUPABASE_PROJECT}"
+
+          # Re-wait for REST after the db bounce — PostgREST reconnects lazily
+          # but Kong returns 5xx until the upstream is healthy again.
+          for i in $(seq 1 120); do
+            if curl -sf -o /dev/null \
+                 -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
+                 "${LOCAL_SUPABASE_URL}/rest/v1/"; then
+              break
+            fi
+            sleep 1
+          done
           curl -sf -o /dev/null \
             -H "apikey: ${LOCAL_SUPABASE_ANON_KEY}" \
             "${LOCAL_SUPABASE_URL}/rest/v1/"
@@ -228,7 +289,12 @@ jobs:
       - name: Start Next.js prod server
         run: |
           set -euo pipefail
-          nohup env PORT=3001 npm run start > $RUN_TMP/next-server.log 2>&1 &
+          # CSP is served in report-only mode for E2E so Playwright's
+          # page.evaluate / waitForFunction (string-eval via CDP) is not
+          # blocked by `script-src` strict-dynamic. The header is still
+          # emitted, so tests can still assert its shape; enforcement
+          # ships in prod via the default `Content-Security-Policy`.
+          nohup env PORT=3001 CSP_REPORT_ONLY=1 npm run start > $RUN_TMP/next-server.log 2>&1 &
           echo $! > $RUN_TMP/next-server.pid
           ready=0
           for i in $(seq 1 60); do

@@ -42,6 +42,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useRouter } from "next/navigation";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
+
+const CourseContext = createContext<Course | null>(null);
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
 export function useAssignmentGroupWithMembers({
@@ -297,18 +299,24 @@ type DiscussionThreadTeaser = Pick<
   | "ordinal"
   | "answer"
   | "pinned"
+  | "duplicate_marked_at"
 >;
+
+// Duplicate-marked threads are kept in the controller so a stale SSR teaser is
+// updated in place by the cheap incremental catch-up after a duplicate-merge;
+// they must not appear in the visible feed.
+const isVisibleTeaser = (row: DiscussionThreadTeaser) => row.duplicate_marked_at == null;
 
 export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
-  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>(
-    () => controller.discussionThreadTeasers.list().data as DiscussionThreadTeaser[]
+  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>(() =>
+    (controller.discussionThreadTeasers.list().data as DiscussionThreadTeaser[]).filter(isVisibleTeaser)
   );
   useEffect(() => {
     const { data, unsubscribe } = controller.discussionThreadTeasers.list((data) => {
-      setTeasers(data as DiscussionThreadTeaser[]);
+      setTeasers((data as DiscussionThreadTeaser[]).filter(isVisibleTeaser));
     });
-    setTeasers(data as DiscussionThreadTeaser[]);
+    setTeasers((data as DiscussionThreadTeaser[]).filter(isVisibleTeaser));
     return unsubscribe;
   }, [controller]);
   return teasers;
@@ -596,42 +604,31 @@ export class CourseController {
   get userId() {
     return this._userId;
   }
+
+  /** Move one SSR-hydration slice out of `_initialData` so TableController owns it. */
+  private _takeInitialDataSlice<K extends keyof CourseControllerInitialData>(key: K): CourseControllerInitialData[K] {
+    const data = this._initialData;
+    if (!data) {
+      return undefined;
+    }
+    const slice = data[key];
+    if (slice !== undefined) {
+      (data as Partial<CourseControllerInitialData>)[key] = undefined;
+    }
+    return slice;
+  }
+
   /**
    * Initialize critical TableControllers immediately after construction
    * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
    */
   initializeEagerControllers() {
-    // Create profiles and userRolesWithProfiles immediately
-    // These are accessed frequently and should be ready
-    void this.profiles; // Triggers lazy creation
+    // Keep eager initialization minimal so large staff courses can stream quickly.
+    void this.profiles;
     if (this.canViewFullClassUserRoles) {
-      void this.userRolesWithProfiles; // Triggers lazy creation
+      void this.userRolesWithProfiles;
     }
-    // Eagerly initialize due-date related controllers to ensure realtime subscriptions are active
-    void this.assignmentDueDateExceptions; // Triggers lazy creation
-    void this.studentDeadlineExtensions; // Triggers lazy creation
-    void this.assignments; // Triggers lazy creation
-    void this.assignmentGroupsWithMembers; // Triggers lazy creation
-    void this.notifications; // Triggers lazy creation
-    void this.discussionThreadTeasers; // Triggers lazy creation
-    void this.tags; // Triggers lazy creation
-    void this.labSections; // Triggers lazy creation
-    void this.labSectionMeetings; // Triggers lazy creation
-    void this.labSectionLeaders; // Triggers lazy creation
-    void this.classSections; // Triggers lazy creation
-    void this.discussionTopics; // Triggers lazy creation
-    void this.repositories; // Triggers lazy creation
-    void this.gradebookColumns; // Triggers lazy creation
-    if (this.isStaff) {
-      void this.discordChannels; // Triggers lazy creation (staff only)
-      void this.discordMessages; // Triggers lazy creation (staff only)
-    }
-    void this.livePolls; // Triggers lazy creation
-    void this.surveys; // Triggers lazy creation
-    void this.surveySeries; // Triggers lazy creation
-
-    // Clear initialData to free memory after all eager controllers are initialized
-    this._initialData = undefined;
+    void this.notifications;
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -708,7 +705,7 @@ export class CourseController {
         table: "profiles",
         query: this.client.from("profiles").select("*").eq("class_id", this.courseId),
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.profiles
+        initialData: this._takeInitialDataSlice("profiles")
       });
     }
     return this._profiles;
@@ -716,12 +713,24 @@ export class CourseController {
 
   get discussionThreadTeasers(): TableController<"discussion_threads"> {
     if (!this._discussionThreadTeasers) {
+      const courseId = this.courseId;
+      // Include current root threads AND threads that *used* to be roots but were
+      // marked as a duplicate (root_class_id is nulled on merge, duplicate_marked_at
+      // is set). Keeping duplicate-marked rows in the controller means the cheap
+      // since-watermark catch-up will see the merge UPDATE — without this we'd
+      // need a full refetch to evict stale SSR teasers after a duplicate-merge.
+      // The display layer filters duplicate_marked_at != null out of the feed.
       this._discussionThreadTeasers = new TableController({
         client: this.client,
         table: "discussion_threads",
-        query: this.client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
+        query: this.client
+          .from("discussion_threads")
+          .select("*")
+          .eq("class_id", courseId)
+          .or(`root_class_id.eq.${courseId},duplicate_marked_at.not.is.null`),
         classRealTimeController: this.classRealTimeController,
-        realtimeFilter: { root_class_id: this.courseId },
+        realtimeFilter: (row) =>
+          row.class_id === courseId && (row.root_class_id === courseId || row.duplicate_marked_at != null),
         initialData: this._initialData?.discussionThreadTeasers
       });
     }
@@ -905,7 +914,7 @@ export class CourseController {
         query,
         selectForSingleRow: staffSelect,
         classRealTimeController: this.classRealTimeController,
-        initialData: this._initialData?.userRolesWithProfiles,
+        initialData: this._takeInitialDataSlice("userRolesWithProfiles"),
         autoFetchMissingRows: this.canViewFullClassUserRoles
       });
     }
@@ -1667,13 +1676,37 @@ export class CourseController {
   }
 }
 
-function CourseControllerProviderImpl({ controller }: { controller: CourseController }) {
-  const { user } = useAuthState();
-  const course = useCourse();
+function CourseProvider({
+  controller,
+  initialCourse,
+  children
+}: {
+  controller: CourseController;
+  initialCourse: Course;
+  children: React.ReactNode;
+}) {
+  const [course, setCourse] = useState(initialCourse);
+
+  useEffect(() => {
+    setCourse(initialCourse);
+  }, [initialCourse]);
+
+  useEffect(() => {
+    const unsubscribe = controller.classRealTimeController.subscribeToClassesUpdate((updatedCourse) => {
+      setCourse((current) => ({ ...current, ...updatedCourse }));
+    });
+    return unsubscribe;
+  }, [controller]);
 
   useEffect(() => {
     controller.course = course;
   }, [course, controller]);
+
+  return <CourseContext.Provider value={course}>{children}</CourseContext.Provider>;
+}
+
+function CourseControllerProviderImpl({ controller }: { controller: CourseController }) {
+  const { user } = useAuthState();
 
   const { data: notifications } = useList<Notification>({
     resource: "notifications",
@@ -1786,6 +1819,7 @@ export function CourseControllerProvider({
   const [courseController, setCourseController] = useState<CourseController | null>(null);
   const { user } = useAuthState();
   const userId = user?.id;
+  const { role: enrollment } = useClassProfiles();
 
   // Use ref for initialData so it doesn't trigger effect re-runs.
   // initialData is SSR-provided and gets a new object reference on every server render,
@@ -1854,8 +1888,10 @@ export function CourseControllerProvider({
 
   return (
     <CourseControllerContext.Provider value={courseController}>
-      <CourseControllerProviderImpl controller={courseController} />
-      {children}
+      <CourseProvider controller={courseController} initialCourse={enrollment.classes}>
+        <CourseControllerProviderImpl controller={courseController} />
+        {children}
+      </CourseProvider>
     </CourseControllerContext.Provider>
   );
 }
@@ -1882,6 +1918,11 @@ export function useAssignmentDueDate(
   const labSectionMeetings = useTableControllerTableValues(controller.labSectionMeetings) as LabSectionMeeting[];
   const labSectionsReady = useIsTableControllerReady(controller.labSections);
   const labSectionMeetingsReady = useIsTableControllerReady(controller.labSectionMeetings);
+  // A student's lab_section_id lives on their user role, not on labSections/labSectionMeetings.
+  // Subscribe so this hook re-renders (and the memo below recomputes) once the role loads;
+  // otherwise the lab-based due date stays stuck on the un-adjusted original due date.
+  const userRoles = useTableControllerTableValues(controller.userRolesWithProfiles);
+  const userRolesReady = useIsTableControllerReady(controller.userRolesWithProfiles);
 
   const dueDateExceptionsFilter = useCallback(
     (e: AssignmentDueDateException) => {
@@ -1925,7 +1966,7 @@ export function useAssignmentDueDate(
     if (hasLabScheduling && labSectionsReady && labSectionMeetingsReady) {
       // Get student's lab section
       if (options?.studentPrivateProfileId) {
-        labSectionId = controller.getStudentLabSectionId(options.studentPrivateProfileId);
+        labSectionId = userRolesReady ? controller.getStudentLabSectionId(options.studentPrivateProfileId) : null;
       } else if (options?.labSectionId) {
         labSectionId = options.labSectionId;
       }
@@ -1989,6 +2030,8 @@ export function useAssignmentDueDate(
     labSectionMeetings,
     labSectionsReady,
     labSectionMeetingsReady,
+    userRoles,
+    userRolesReady,
     assignment,
     controller,
     options,
@@ -2014,8 +2057,11 @@ export function useLateTokens() {
 }
 
 export function useCourse() {
-  const { role } = useClassProfiles();
-  return role.classes;
+  const course = useContext(CourseContext);
+  if (!course) {
+    throw new Error("useCourse must be used within CourseControllerProvider");
+  }
+  return course;
 }
 
 export function useCourseController() {
