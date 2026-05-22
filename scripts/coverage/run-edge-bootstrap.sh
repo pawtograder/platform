@@ -22,6 +22,7 @@ fi
 
 exec deno run \
   --allow-env --allow-net --allow-read --allow-write --allow-sys \
+  --allow-import \
   --coverage=coverage/edge \
   --env-file="$ENV_FILE" \
   --import-map=supabase/functions/_coverage/deno.json \
