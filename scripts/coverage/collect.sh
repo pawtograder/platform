@@ -32,14 +32,19 @@ fi
 # --- Next.js server (Node V8) ---------------------------------------------
 if [[ -d coverage/server ]]; then
   echo "[collect] c8 report (server)"
-  # c8 expects NODE_V8_COVERAGE to point at the dump dir. We translate the
-  # raw V8 JSON to lcov by running c8 with --reporter=lcovonly against the
-  # already-collected data.
+  # CRITICAL: pass --exclude-after-remap so c8's include/exclude
+  # globs apply to the *resolved* source paths (app/foo.tsx) instead
+  # of the *dist* paths (.next/server/app/.../page.js). Without it,
+  # the `--exclude='.next/**'` below also rejects every Server
+  # Component page bundle BEFORE source-map resolution, leaving only
+  # the handful of utility files that Node loaded outside the bundle
+  # (lib/courseFeatures.ts, utils/utils.ts) in the report.
   NODE_V8_COVERAGE="$ROOT/coverage/server" npx c8 report \
     --reporter=lcovonly \
     --report-dir=coverage \
     --src="$ROOT" \
-    --include='app/**' --include='lib/**' --include='utils/**' --include='hooks/**' \
+    --exclude-after-remap \
+    --include='app/**' --include='lib/**' --include='utils/**' --include='hooks/**' --include='components/**' \
     --exclude='**/*.d.ts' --exclude='**/node_modules/**' --exclude='.next/**' \
     || echo "[collect] WARN: c8 server report failed"
   if [[ -f coverage/lcov.info ]]; then
