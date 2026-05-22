@@ -4,16 +4,20 @@
  * Three identity modes drive how raw database ids appear in the exported NDJSON:
  *
  *   - "raw"    — emit the real id (string or number). No tokenizer is used.
- *   - "hash"   — deterministic HMAC of the id, using a CLI-supplied salt.
- *                Same salt across runs => same tokens (joinable across dumps).
- *   - "opaque" — deterministic HMAC of the id, using a CLI-supplied salt that
- *                the CLI generates randomly per run and never persists.
- *                Tokens are stable within one run (so parallel per-assignment
- *                streams agree) but a future dump cannot reproduce them.
+ *   - "hash"   — HMAC of the id using a CLI-supplied salt combined with a
+ *                server-side vault pepper. Same salt on the same deployment =>
+ *                same tokens (joinable across dumps). Offline recompute requires
+ *                the pepper, which never leaves the server.
+ *   - "opaque" — same HMAC scheme with a CLI-generated random per-run salt.
+ *                Tokens are stable within one run but not reproducible without
+ *                both the ephemeral salt and the server pepper.
  *
- * The token is HMAC-SHA256(salt, `${kind}:${rawId}`), base32-encoded, truncated
- * to 16 chars. Kind-namespacing prevents two different objects with the same
- * numeric id (e.g. submission #123 and student-profile #123) from colliding.
+ * Key derivation (server-only):
+ *   derivedKey = HMAC-SHA256(pepper, clientSalt)
+ *   token      = base32(HMAC-SHA256(derivedKey, `${kind}:${rawId}`))[0:16]
+ *
+ * Kind-namespacing prevents two different objects with the same numeric id
+ * (e.g. submission #123 and student-profile #123) from colliding.
  */
 
 export type IdentityMode = "raw" | "hash" | "opaque";
@@ -36,27 +40,42 @@ export interface Tokenizer {
 }
 
 /**
- * Build a tokenizer bound to a salt. The salt MUST be at least 16 bytes of
- * entropy when used in opaque mode; the CLI is responsible for generating it.
+ * Build a tokenizer bound to a client salt and server pepper. The salt MUST be
+ * at least 16 characters; the pepper MUST be at least 32. Only the edge
+ * function calls this — the CLI never receives the pepper.
  *
  * Tokens are computed lazily and cached so repeated lookups for the same
  * (kind, id) are O(1) after the first call.
  */
-export async function createTokenizer(salt: string): Promise<Tokenizer> {
+export async function createTokenizer(salt: string, pepper: string): Promise<Tokenizer> {
   if (salt.length < 16) {
     throw new Error("tokenizer salt must be at least 16 characters");
   }
+  if (pepper.length < 32) {
+    throw new Error("tokenizer pepper must be at least 32 characters");
+  }
+
+  const encoder = new TextEncoder();
+
+  const pepperKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(pepper),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const derivedKeyBytes = await crypto.subtle.sign("HMAC", pepperKey, encoder.encode(salt));
 
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(salt),
+    derivedKeyBytes,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]
   );
 
   const cache = new Map<string, string>();
-  const encoder = new TextEncoder();
 
   async function compute(kind: TokenKind, rawId: string | number | bigint): Promise<string> {
     const message = `${kind}:${String(rawId)}`;

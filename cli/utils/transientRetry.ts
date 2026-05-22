@@ -23,7 +23,10 @@ const TRANSIENT_ERROR_PATTERNS = [
   /fetch failed/i,
   /UND_ERR_SOCKET/i,
   /\b504\b/, // Gateway Timeout from Kong / load balancer
-  /\b503\b/ // BOOT_ERROR / WORKER_LIMIT from edge runtime
+  /\b503\b/, // BOOT_ERROR / WORKER_LIMIT from edge runtime
+  /CPU time exceeded/i,
+  /WORKER_LIMIT/i,
+  /stream ended without \{end\}/i // edge isolate killed before handler finished
 ];
 
 /**

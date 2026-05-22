@@ -1,7 +1,7 @@
 /**
  * Assessment export — streams a privacy-controlled snapshot of rubrics, final
- * grading review scores, autograder test results, hint feedback, and
- * gradebook columns for a class.
+ * grading review scores, autograder test results, Feedbot hint responses, hint
+ * feedback, and gradebook columns for a class.
  *
  * Architecture (see /docs design discussion):
  *   - One CLI run = one random salt held only by the CLI.
@@ -16,8 +16,10 @@
  *
  * Identity modes:
  *   - "raw"    — emit real ids/emails/names. Requires confirm_pii: true.
- *   - "hash"   — HMAC of id with caller-supplied salt; joinable across runs.
- *   - "opaque" — HMAC with caller-generated random salt; intra-run only.
+ *   - "hash"   — HMAC of id with caller-supplied salt + server vault pepper;
+ *                joinable across runs on the same deployment. Offline recompute
+ *                requires the pepper, which never leaves the server.
+ *   - "opaque" — per-run random CLI salt + server pepper; intra-run only.
  */
 
 import type { MCPAuthContext } from "../../_shared/MCPAuth.ts";
@@ -29,11 +31,14 @@ import { assertUserCanAccessClass } from "../utils/auth.ts";
 import { streamNdjson } from "../utils/ndjson.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
-import { createTokenizer, type IdentityMode, type Tokenizer } from "../utils/tokenization.ts";
+import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
+import { type IdentityMode, type Tokenizer } from "../utils/tokenization.ts";
 
 const SCHEMA_VERSION = 1;
 const STUDENT_PAGE_SIZE = 500;
 const FACT_PAGE_SIZE = 1000;
+/** Max UUIDs per PostgREST `.in()` filter — long lists exceed HTTP URL limits. */
+const UUID_IN_BATCH_SIZE = 50;
 const DEFAULT_TEST_OUTPUT_MAX_BYTES = 4096;
 
 interface PreambleParams {
@@ -54,6 +59,8 @@ interface PreambleParams {
   assignments?: Array<string | number>;
   /** Gradebook column selectors, same id|slug|glob shape. Empty => all columns. */
   gradebook_columns?: Array<string | number>;
+  /** When true, omit gradebook column metadata from the preamble. */
+  skip_gradebook?: boolean;
 }
 
 async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
@@ -88,7 +95,7 @@ async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unk
   const classData = await resolveClass(supabase, classIdentifier);
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
-  const tokenizer = mode === "raw" ? null : await createTokenizer(params.salt!);
+  const tokenizer = mode === "raw" ? null : await createExportTokenizer(supabase, params.salt!);
 
   return streamNdjson(async (writer) => {
     await writer.write({
@@ -103,7 +110,10 @@ async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unk
     const subjectCount = await streamStudents(supabase, classData.id, mode, tokenizer, writer);
     const sectionCount = await streamSections(supabase, classData.id, mode, tokenizer, writer);
     const assignmentCount = await streamAssignments(supabase, classData.id, params.assignments, writer);
-    const gradebookColumnCount = await streamGradebookColumns(supabase, classData.id, params.gradebook_columns, writer);
+    const gradebookColumnCount =
+      params.skip_gradebook === true
+        ? 0
+        : await streamGradebookColumns(supabase, classData.id, params.gradebook_columns, writer);
 
     await writer.write({
       kind: "end",
@@ -159,13 +169,18 @@ async function streamStudents(
     // the query plan simple and avoid PostgREST's nested-select overhead.
     let userInfo: Map<string, { email: string | null; name: string | null }> | null = null;
     if (mode === "raw") {
+      userInfo = new Map();
       const userIds = rows.map((r) => r.user_id);
-      const { data: userRows, error: userErr } = await supabase
-        .from("users")
-        .select("user_id, email, name")
-        .in("user_id", userIds);
-      if (userErr) throw new CLICommandError(`Failed to load user emails: ${userErr.message}`, 500);
-      userInfo = new Map((userRows ?? []).map((u) => [u.user_id, { email: u.email, name: u.name }]));
+      for (const batch of chunked(userIds, UUID_IN_BATCH_SIZE)) {
+        const { data: userRows, error: userErr } = await supabase
+          .from("users")
+          .select("user_id, email, name")
+          .in("user_id", batch);
+        if (userErr) throw new CLICommandError(`Failed to load user emails: ${userErr.message}`, 500);
+        for (const u of userRows ?? []) {
+          userInfo.set(u.user_id, { email: u.email, name: u.name });
+        }
+      }
     }
 
     for (const row of rows) {
@@ -387,6 +402,8 @@ async function streamGradebookColumns(
   return resolved.length;
 }
 
+type AssignmentExportSection = "all" | "meta" | "submissions" | "scores" | "tests" | "engagement";
+
 interface AssignmentExportParams {
   class?: string | number;
   identity_mode?: IdentityMode;
@@ -397,22 +414,69 @@ interface AssignmentExportParams {
   /** Include grader_result_tests.output (truncated to test_output_max_bytes). */
   with_test_output?: boolean;
   test_output_max_bytes?: number;
+  /** When true, export every submission attempt; default is is_active only. */
+  all_submissions?: boolean;
+  /**
+   * Export slice for chunked assignment dumps. The CLI calls meta → submissions →
+   * scores → tests → engagement separately so each edge invocation gets a fresh
+   * CPU budget. Omit or "all" for a single monolithic stream (may time out).
+   */
+  section?: AssignmentExportSection;
+  /** Paginate scores section: batch index over grading-review ids (0-based). */
+  score_review_batch_index?: number;
+  /** Paginate tests section: batch index over submission ids (0-based). */
+  test_submission_batch_index?: number;
+  /** Paginate engagement section: batch index over submission ids (0-based). */
+  engagement_submission_batch_index?: number;
 }
 
-/**
- * Streams everything specific to one assignment: rubric tree, autograder
- * config, groups (if applicable), is_active submissions, rubric check
- * results from the final grading review, autograder test results, and hint
- * feedback. The CLI calls this once per assignment, optionally in parallel,
- * passing the same salt so subject/group/submission tokens line up across
- * calls.
- */
-async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
-  const params = rawParams as unknown as AssignmentExportParams;
+/** Grading reviews processed per scores-section edge call. */
+const SCORE_REVIEW_BATCH_SIZE = 80;
+/** Submissions per tests-section call when output is included (output is heavy). */
+const TEST_SUBMISSION_BATCH_WITH_OUTPUT = 20;
+/** Submissions per tests-section call without output. */
+const TEST_SUBMISSION_BATCH_NO_OUTPUT = 100;
+/** Submissions per engagement-section call (hints + error-pin rows). */
+const ENGAGEMENT_SUBMISSION_BATCH_SIZE = 150;
+
+type AssignmentExportContext = {
+  supabase: ReturnType<typeof getAdminClient>;
+  classData: { id: number; slug: string };
+  assignmentRow: { id: number; slug: string; title: string; grading_rubric_id: number | null };
+  tokenizer: Tokenizer | null;
+  mode: IdentityMode;
+  allSubmissions: boolean;
+  withTestOutput: boolean;
+  testOutputMax: number;
+};
+
+/** Strip multi-kilobyte LLM prompt/result blobs from test rows — hints.json carries results. */
+function slimExtraDataForExport(extra: unknown): unknown {
+  if (extra === null || extra === undefined || typeof extra !== "object") return extra ?? null;
+  const data = extra as Record<string, unknown>;
+  const llm = data.llm;
+  if (llm === null || llm === undefined || typeof llm !== "object") return extra;
+  const llmObj = llm as Record<string, unknown>;
+  const { prompt: _prompt, result: _result, ...llmRest } = llmObj;
+  return {
+    ...data,
+    llm: {
+      ...llmRest,
+      has_prompt: typeof llmObj.prompt === "string" && llmObj.prompt.length > 0,
+      has_result: typeof llmObj.result === "string" && llmObj.result.trim().length > 0
+    }
+  };
+}
+
+async function resolveAssignmentExportContext(
+  ctx: MCPAuthContext,
+  params: AssignmentExportParams
+): Promise<AssignmentExportContext> {
   const classIdentifier = params.class;
   const assignmentIdentifier = params.assignment;
   const mode: IdentityMode = params.identity_mode ?? "opaque";
   const withTestOutput = params.with_test_output === true;
+  const allSubmissions = params.all_submissions === true;
   const testOutputMax = Math.max(
     0,
     Math.min(1024 * 1024, params.test_output_max_bytes ?? DEFAULT_TEST_OUTPUT_MAX_BYTES)
@@ -438,12 +502,190 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
-
-  // Resolve the assignment by id or exact slug. Globs would have already been
-  // expanded by the preamble call; per-assignment streams take a concrete id.
   const assignmentRow = await resolveOneAssignment(supabase, classData.id, assignmentIdentifier);
+  const tokenizer = mode === "raw" ? null : await createExportTokenizer(supabase, params.salt!);
 
-  const tokenizer = mode === "raw" ? null : await createTokenizer(params.salt!);
+  return {
+    supabase,
+    classData,
+    assignmentRow,
+    tokenizer,
+    mode,
+    allSubmissions,
+    withTestOutput,
+    testOutputMax
+  };
+}
+
+function exportAssignmentMeta(exportCtx: AssignmentExportContext): Promise<Response> {
+  const { supabase, classData, assignmentRow, tokenizer, mode, allSubmissions } = exportCtx;
+  return streamNdjson(async (writer) => {
+    await writer.write({
+      kind: "manifest",
+      schema_version: SCHEMA_VERSION,
+      identity_mode: mode,
+      class: { id: classData.id, slug: classData.slug },
+      assignment: { id: assignmentRow.id, slug: assignmentRow.slug, title: assignmentRow.title },
+      submissions_scope: allSubmissions ? "all" : "active",
+      scores_scope: "active"
+    });
+
+    const rubricCount = await streamRubric(supabase, assignmentRow.grading_rubric_id, mode, tokenizer, writer);
+    const autograderTestCount = await streamAutograderConfig(supabase, assignmentRow.id, writer);
+    const groupCount = await streamGroups(supabase, assignmentRow.id, classData.id, mode, tokenizer, writer);
+
+    await writer.write({
+      kind: "end",
+      counts: {
+        rubric_checks: rubricCount,
+        autograder_tests: autograderTestCount,
+        groups: groupCount,
+        submissions: 0,
+        scores: 0,
+        grader_tests: 0,
+        hints: 0,
+        error_pin_engagement: 0
+      }
+    });
+  });
+}
+
+function exportAssignmentSubmissions(exportCtx: AssignmentExportContext): Promise<Response> {
+  const { supabase, assignmentRow, tokenizer, mode, allSubmissions } = exportCtx;
+  return streamNdjson(async (writer) => {
+    const { submissionCount } = await streamSubmissions(
+      supabase,
+      assignmentRow.id,
+      allSubmissions,
+      mode,
+      tokenizer,
+      writer
+    );
+
+    await writer.write({
+      kind: "end",
+      counts: {
+        rubric_checks: 0,
+        autograder_tests: 0,
+        groups: 0,
+        submissions: submissionCount,
+        scores: 0,
+        grader_tests: 0,
+        hints: 0,
+        error_pin_engagement: 0
+      }
+    });
+  });
+}
+
+function exportAssignmentScores(exportCtx: AssignmentExportContext, batchIndex: number): Promise<Response> {
+  const { supabase, assignmentRow, tokenizer, mode, allSubmissions } = exportCtx;
+  return streamNdjson(async (writer) => {
+    const { activeSubmissionIds } = await loadSubmissionScope(supabase, assignmentRow.id, allSubmissions);
+    const { reviewIds, reviewToSubmission } = await loadReviewScope(supabase, activeSubmissionIds);
+
+    const start = batchIndex * SCORE_REVIEW_BATCH_SIZE;
+    const reviewBatch = reviewIds.slice(start, start + SCORE_REVIEW_BATCH_SIZE);
+    const hasMore = start + SCORE_REVIEW_BATCH_SIZE < reviewIds.length;
+
+    const scoreCount =
+      reviewBatch.length === 0
+        ? 0
+        : await streamScoresForReviews(supabase, reviewBatch, reviewToSubmission, mode, tokenizer, writer);
+
+    await writer.write({
+      kind: "end",
+      counts: {
+        rubric_checks: 0,
+        autograder_tests: 0,
+        groups: 0,
+        submissions: 0,
+        scores: scoreCount,
+        grader_tests: 0,
+        hints: 0,
+        error_pin_engagement: 0
+      },
+      ...(hasMore ? { next_score_review_batch_index: batchIndex + 1 } : {})
+    });
+  });
+}
+
+function exportAssignmentTests(exportCtx: AssignmentExportContext, batchIndex: number): Promise<Response> {
+  const { supabase, assignmentRow, tokenizer, mode, allSubmissions, withTestOutput, testOutputMax } = exportCtx;
+  const batchSize = withTestOutput ? TEST_SUBMISSION_BATCH_WITH_OUTPUT : TEST_SUBMISSION_BATCH_NO_OUTPUT;
+
+  return streamNdjson(async (writer) => {
+    const { submissionIds } = await loadSubmissionScope(supabase, assignmentRow.id, allSubmissions);
+    const start = batchIndex * batchSize;
+    const submissionBatch = submissionIds.slice(start, start + batchSize);
+    const hasMore = start + batchSize < submissionIds.length;
+
+    const { testCount } = await streamGraderTests(
+      supabase,
+      submissionBatch,
+      mode,
+      tokenizer,
+      writer,
+      withTestOutput,
+      testOutputMax
+    );
+
+    await writer.write({
+      kind: "end",
+      counts: {
+        rubric_checks: 0,
+        autograder_tests: 0,
+        groups: 0,
+        submissions: 0,
+        scores: 0,
+        grader_tests: testCount,
+        hints: 0,
+        error_pin_engagement: 0
+      },
+      ...(hasMore ? { next_test_submission_batch_index: batchIndex + 1 } : {})
+    });
+  });
+}
+
+function exportAssignmentEngagement(exportCtx: AssignmentExportContext, batchIndex: number): Promise<Response> {
+  const { supabase, classData, assignmentRow, tokenizer, mode, allSubmissions } = exportCtx;
+
+  return streamNdjson(async (writer) => {
+    const { submissionIds } = await loadSubmissionScope(supabase, assignmentRow.id, allSubmissions);
+    const start = batchIndex * ENGAGEMENT_SUBMISSION_BATCH_SIZE;
+    const submissionBatch = submissionIds.slice(start, start + ENGAGEMENT_SUBMISSION_BATCH_SIZE);
+    const hasMore = start + ENGAGEMENT_SUBMISSION_BATCH_SIZE < submissionIds.length;
+
+    const hintCount = await streamHints(supabase, submissionBatch, mode, tokenizer, writer);
+    const errorPinEngagementCount = await streamErrorPinEngagement(
+      supabase,
+      classData.id,
+      submissionBatch,
+      mode,
+      tokenizer,
+      writer
+    );
+
+    await writer.write({
+      kind: "end",
+      counts: {
+        rubric_checks: 0,
+        autograder_tests: 0,
+        groups: 0,
+        submissions: 0,
+        scores: 0,
+        grader_tests: 0,
+        hints: hintCount,
+        error_pin_engagement: errorPinEngagementCount
+      },
+      ...(hasMore ? { next_engagement_submission_batch_index: batchIndex + 1 } : {})
+    });
+  });
+}
+
+function exportAssignmentAll(exportCtx: AssignmentExportContext): Promise<Response> {
+  const { supabase, classData, assignmentRow, tokenizer, mode, allSubmissions, withTestOutput, testOutputMax } =
+    exportCtx;
 
   return streamNdjson(async (writer) => {
     await writer.write({
@@ -451,26 +693,26 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
       schema_version: SCHEMA_VERSION,
       identity_mode: mode,
       class: { id: classData.id, slug: classData.slug },
-      assignment: { id: assignmentRow.id, slug: assignmentRow.slug, title: assignmentRow.title }
+      assignment: { id: assignmentRow.id, slug: assignmentRow.slug, title: assignmentRow.title },
+      submissions_scope: allSubmissions ? "all" : "active",
+      scores_scope: "active"
     });
 
     const rubricCount = await streamRubric(supabase, assignmentRow.grading_rubric_id, mode, tokenizer, writer);
     const autograderTestCount = await streamAutograderConfig(supabase, assignmentRow.id, writer);
     const groupCount = await streamGroups(supabase, assignmentRow.id, classData.id, mode, tokenizer, writer);
 
-    // Submissions establish (submission_id → submission_token) and the subject
-    // each row belongs to. Subsequent fact streams reuse the same tokenizer
-    // so all references to the same submission produce the same token.
-    const { submissionCount, submissionIds } = await streamSubmissions(
+    const { submissionCount, submissionIds, activeSubmissionIds } = await streamSubmissions(
       supabase,
       assignmentRow.id,
+      allSubmissions,
       mode,
       tokenizer,
       writer
     );
 
-    const scoreCount = await streamScores(supabase, submissionIds, mode, tokenizer, writer);
-    const { testCount, graderTestIds } = await streamGraderTests(
+    const scoreCount = await streamScores(supabase, activeSubmissionIds, mode, tokenizer, writer);
+    const { testCount } = await streamGraderTests(
       supabase,
       submissionIds,
       mode,
@@ -479,7 +721,7 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
       withTestOutput,
       testOutputMax
     );
-    const hintCount = await streamHints(supabase, graderTestIds, mode, tokenizer, writer);
+    const hintCount = await streamHints(supabase, submissionIds, mode, tokenizer, writer);
     const errorPinEngagementCount = await streamErrorPinEngagement(
       supabase,
       classData.id,
@@ -503,6 +745,33 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
       }
     });
   });
+}
+
+/**
+ * Streams everything specific to one assignment. The CLI fans out sectioned
+ * calls (meta → submissions → scores → tests → engagement) so each edge
+ * invocation stays within CPU limits on large classes.
+ */
+async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
+  const params = rawParams as unknown as AssignmentExportParams;
+  const exportCtx = await resolveAssignmentExportContext(ctx, params);
+  const section: AssignmentExportSection = params.section ?? "all";
+
+  switch (section) {
+    case "meta":
+      return exportAssignmentMeta(exportCtx);
+    case "submissions":
+      return exportAssignmentSubmissions(exportCtx);
+    case "scores":
+      return exportAssignmentScores(exportCtx, Math.max(0, params.score_review_batch_index ?? 0));
+    case "tests":
+      return exportAssignmentTests(exportCtx, Math.max(0, params.test_submission_batch_index ?? 0));
+    case "engagement":
+      return exportAssignmentEngagement(exportCtx, Math.max(0, params.engagement_submission_batch_index ?? 0));
+    case "all":
+    default:
+      return exportAssignmentAll(exportCtx);
+  }
 }
 
 async function resolveOneAssignment(
@@ -712,34 +981,92 @@ async function streamGroups(
   return groups.length;
 }
 
+/** Lightweight submission id list for sectioned/paginated export slices. */
+async function loadSubmissionScope(
+  supabase: ReturnType<typeof getAdminClient>,
+  assignmentId: number,
+  allSubmissions: boolean
+): Promise<{ submissionIds: number[]; activeSubmissionIds: number[] }> {
+  let cursor = 0;
+  const submissionIds: number[] = [];
+  const activeSubmissionIds: number[] = [];
+
+  while (true) {
+    let query = supabase
+      .from("submissions")
+      .select("id, is_active")
+      .eq("assignment_id", assignmentId)
+      .gt("id", cursor)
+      .order("id", { ascending: true })
+      .limit(FACT_PAGE_SIZE);
+    if (!allSubmissions) query = query.eq("is_active", true);
+
+    const { data: rows, error } = await query;
+    if (error) throw new CLICommandError(`Failed to load submissions: ${error.message}`, 500);
+    if (!rows || rows.length === 0) break;
+
+    for (const row of rows) {
+      submissionIds.push(row.id);
+      if (row.is_active) activeSubmissionIds.push(row.id);
+    }
+
+    if (rows.length < FACT_PAGE_SIZE) break;
+    cursor = rows[rows.length - 1]!.id;
+  }
+
+  return { submissionIds, activeSubmissionIds };
+}
+
+async function loadReviewScope(
+  supabase: ReturnType<typeof getAdminClient>,
+  submissionIds: number[]
+): Promise<{ reviewIds: number[]; reviewToSubmission: Map<number, number> }> {
+  const submissionToReview = new Map<number, number>();
+  for (const batch of chunked(submissionIds, 500)) {
+    const { data, error } = await supabase.from("submissions").select("id, grading_review_id").in("id", batch);
+    if (error) throw new CLICommandError(`Failed to load grading review ids: ${error.message}`, 500);
+    for (const r of data ?? []) {
+      if (r.grading_review_id !== null) submissionToReview.set(r.id, r.grading_review_id);
+    }
+  }
+  const reviewIds = Array.from(submissionToReview.values());
+  const reviewToSubmission = new Map<number, number>();
+  for (const [subId, revId] of submissionToReview.entries()) reviewToSubmission.set(revId, subId);
+  return { reviewIds, reviewToSubmission };
+}
+
 /**
- * Page through is_active submissions for the assignment and emit one record
- * per submission. Returns the list of submission ids so subsequent fact
- * streams can scope their queries; this gives us a single authoritative
- * filter (is_active=true) instead of repeating the join in each fact query.
+ * Page through submissions for the assignment and emit one record per row.
+ * By default only is_active submissions are exported (the final attempt per
+ * student/group). Pass allSubmissions=true to include every attempt — needed
+ * for hint feedback and autograder history on earlier tries.
  */
 async function streamSubmissions(
   supabase: ReturnType<typeof getAdminClient>,
   assignmentId: number,
+  allSubmissions: boolean,
   mode: IdentityMode,
   tokenizer: Tokenizer | null,
   writer: { write: (record: Record<string, unknown>) => Promise<void> }
-): Promise<{ submissionCount: number; submissionIds: number[] }> {
+): Promise<{ submissionCount: number; submissionIds: number[]; activeSubmissionIds: number[] }> {
   let cursor = 0;
   let total = 0;
   const ids: number[] = [];
+  const activeIds: number[] = [];
 
   while (true) {
-    const { data: rows, error } = await supabase
+    let query = supabase
       .from("submissions")
       .select(
-        "id, profile_id, assignment_group_id, sha, run_number, run_attempt, created_at, grading_review_id, repository"
+        "id, profile_id, assignment_group_id, sha, run_number, run_attempt, created_at, grading_review_id, repository, is_active"
       )
       .eq("assignment_id", assignmentId)
-      .eq("is_active", true)
       .gt("id", cursor)
       .order("id", { ascending: true })
       .limit(FACT_PAGE_SIZE);
+    if (!allSubmissions) query = query.eq("is_active", true);
+
+    const { data: rows, error } = await query;
     if (error) throw new CLICommandError(`Failed to load submissions: ${error.message}`, 500);
     if (!rows || rows.length === 0) break;
 
@@ -770,19 +1097,21 @@ async function streamSubmissions(
         run_number: row.run_number,
         run_attempt: row.run_attempt,
         created_at: row.created_at,
+        is_active: row.is_active,
         has_final_review: row.grading_review_id !== null,
         // Repository url is course design metadata, not student PII — same
         // posture as autograder.grader_repo above.
         repository: row.repository
       });
       ids.push(row.id);
+      if (row.is_active) activeIds.push(row.id);
       total += 1;
     }
 
     if (rows.length < FACT_PAGE_SIZE) break;
     cursor = rows[rows.length - 1]!.id;
   }
-  return { submissionCount: total, submissionIds: ids };
+  return { submissionCount: total, submissionIds: ids, activeSubmissionIds: activeIds };
 }
 
 /**
@@ -805,20 +1134,20 @@ async function streamScores(
   writer: { write: (record: Record<string, unknown>) => Promise<void> }
 ): Promise<number> {
   if (submissionIds.length === 0) return 0;
-
-  // Step 1: load grading_review_id for each is_active submission.
-  const submissionToReview = new Map<number, number>();
-  for (const batch of chunked(submissionIds, 500)) {
-    const { data, error } = await supabase.from("submissions").select("id, grading_review_id").in("id", batch);
-    if (error) throw new CLICommandError(`Failed to load grading review ids: ${error.message}`, 500);
-    for (const r of data ?? []) {
-      if (r.grading_review_id !== null) submissionToReview.set(r.id, r.grading_review_id);
-    }
-  }
-  const reviewIds = Array.from(submissionToReview.values());
+  const { reviewIds, reviewToSubmission } = await loadReviewScope(supabase, submissionIds);
   if (reviewIds.length === 0) return 0;
-  const reviewToSubmission = new Map<number, number>();
-  for (const [subId, revId] of submissionToReview.entries()) reviewToSubmission.set(revId, subId);
+  return streamScoresForReviews(supabase, reviewIds, reviewToSubmission, mode, tokenizer, writer);
+}
+
+async function streamScoresForReviews(
+  supabase: ReturnType<typeof getAdminClient>,
+  reviewIds: number[],
+  reviewToSubmission: Map<number, number>,
+  mode: IdentityMode,
+  tokenizer: Tokenizer | null,
+  writer: { write: (record: Record<string, unknown>) => Promise<void> }
+): Promise<number> {
+  if (reviewIds.length === 0) return 0;
 
   let total = 0;
   total += await streamScoresFromTable(
@@ -1038,7 +1367,7 @@ async function streamGraderTests(
           is_released: row.is_released,
           name_format: row.name_format,
           output_format: row.output_format,
-          extra_data: row.extra_data ?? null
+          extra_data: slimExtraDataForExport(row.extra_data)
         };
 
         if (withOutput) {
@@ -1068,28 +1397,32 @@ async function streamGraderTests(
 }
 
 /**
- * Hint feedback rows linked to the exported grader_result_tests. created_by is
- * the rater's private_profile_id — on group submissions multiple rows can come
- * from different group members, and we preserve each individual rater per the
- * design discussion ("just report per student who rated").
+ * Feedbot / hint export for an assignment. Two sources:
+ *   - feedback: student ratings in grader_result_tests_hint_feedback
+ *   - llm: cached Feedbot responses on grader_result_tests.extra_data.llm.result
+ *
+ * Feedback rows carry rater/useful/comment; LLM rows carry the subject who
+ * received the hint. When a student rated a hint we skip the duplicate LLM row
+ * for that (grader_test, subject) pair.
  */
 async function streamHints(
   supabase: ReturnType<typeof getAdminClient>,
-  graderTestIds: number[],
+  submissionIds: number[],
   mode: IdentityMode,
   tokenizer: Tokenizer | null,
   writer: { write: (record: Record<string, unknown>) => Promise<void> }
 ): Promise<number> {
-  if (graderTestIds.length === 0) return 0;
+  if (submissionIds.length === 0) return 0;
   let total = 0;
+  const feedbackKeys = new Set<string>();
 
-  for (const batch of chunked(graderTestIds, 500)) {
+  for (const batch of chunked(submissionIds, 500)) {
     let cursor = 0;
     while (true) {
       const { data: rows, error } = await supabase
         .from("grader_result_tests_hint_feedback")
         .select("id, submission_id, grader_result_tests_id, hint, useful, comment, created_by, created_at")
-        .in("grader_result_tests_id", batch)
+        .in("submission_id", batch)
         .gt("id", cursor)
         .order("id", { ascending: true })
         .limit(FACT_PAGE_SIZE);
@@ -1097,6 +1430,7 @@ async function streamHints(
       if (!rows || rows.length === 0) break;
 
       for (const row of rows) {
+        feedbackKeys.add(compoundKey(row.grader_result_tests_id, row.created_by));
         const submissionRef =
           tokenizer === null
             ? { id: row.submission_id }
@@ -1110,6 +1444,7 @@ async function streamHints(
 
         await writer.write({
           kind: "hint",
+          source: "feedback",
           submission: submissionRef,
           grader_test: graderTestRef,
           rater: raterRef,
@@ -1125,6 +1460,74 @@ async function streamHints(
       cursor = rows[rows.length - 1]!.id;
     }
   }
+
+  for (const batch of chunked(submissionIds, 500)) {
+    const graderResultIdToSubmission = new Map<number, number>();
+    const { data: graderResults, error: grErr } = await supabase
+      .from("grader_results")
+      .select("id, submission_id")
+      .in("submission_id", batch);
+    if (grErr) throw new CLICommandError(`Failed to load grader_results for hints: ${grErr.message}`, 500);
+    for (const r of graderResults ?? []) {
+      if (r.submission_id !== null) graderResultIdToSubmission.set(r.id, r.submission_id);
+    }
+    const graderResultIds = Array.from(graderResultIdToSubmission.keys());
+    if (graderResultIds.length === 0) continue;
+
+    for (const grBatch of chunked(graderResultIds, 500)) {
+      let cursor = 0;
+      while (true) {
+        const { data: rows, error } = await supabase
+          .from("grader_result_tests")
+          .select("id, grader_result_id, submission_id, student_id, extra_data")
+          .in("grader_result_id", grBatch)
+          .not("extra_data->llm->>result", "is", null)
+          .gt("id", cursor)
+          .order("id", { ascending: true })
+          .limit(FACT_PAGE_SIZE);
+        if (error) throw new CLICommandError(`Failed to load LLM hints: ${error.message}`, 500);
+        if (!rows || rows.length === 0) break;
+
+        for (const row of rows) {
+          const extra = row.extra_data as { llm?: { result?: string } } | null;
+          const hintText = extra?.llm?.result?.trim();
+          if (!hintText) continue;
+          if (row.student_id !== null && feedbackKeys.has(compoundKey(row.id, row.student_id))) continue;
+
+          const resolvedSubmissionId =
+            graderResultIdToSubmission.get(row.grader_result_id) ?? row.submission_id ?? null;
+          const submissionRef =
+            resolvedSubmissionId === null
+              ? null
+              : tokenizer === null
+                ? { id: resolvedSubmissionId }
+                : { token: await tokenizer.token("submission", resolvedSubmissionId) };
+          const graderTestRef =
+            tokenizer === null ? { id: row.id } : { token: await tokenizer.token("grader_test", row.id) };
+          const subjectRef =
+            row.student_id === null
+              ? null
+              : tokenizer === null
+                ? { id: row.student_id }
+                : { token: await tokenizer.token("subject", row.student_id) };
+
+          await writer.write({
+            kind: "hint",
+            source: "llm",
+            submission: submissionRef,
+            grader_test: graderTestRef,
+            subject: subjectRef,
+            hint: hintText
+          });
+          total += 1;
+        }
+
+        if (rows.length < FACT_PAGE_SIZE) break;
+        cursor = rows[rows.length - 1]!.id;
+      }
+    }
+  }
+
   return total;
 }
 
@@ -1313,19 +1716,38 @@ async function loadUserIdsByProfileId(
   classId: number,
   profileIds: string[]
 ): Promise<Map<string, string>> {
+  const wanted = new Set(profileIds);
   const userIdByProfileId = new Map<string, string>();
-  for (const batch of chunked(profileIds, 500)) {
-    const { data, error } = await supabase
+  if (wanted.size === 0) return userIdByProfileId;
+
+  // Page through enrolled students for the class instead of a giant
+  // private_profile_id=in.(...) filter — long UUID lists blow past HTTP URL limits.
+  let cursor: string | null = null;
+  while (true) {
+    let query = supabase
       .from("user_roles")
       .select("private_profile_id, user_id")
       .eq("class_id", classId)
       .eq("role", "student")
       .eq("disabled", false)
-      .in("private_profile_id", batch);
+      .order("private_profile_id", { ascending: true })
+      .limit(STUDENT_PAGE_SIZE);
+
+    if (cursor !== null) query = query.gt("private_profile_id", cursor);
+
+    const { data, error } = await query;
     if (error) throw new CLICommandError(`Failed to load student user ids: ${error.message}`, 500);
-    for (const row of data ?? []) {
-      if (row.private_profile_id !== null) userIdByProfileId.set(row.private_profile_id, row.user_id);
+    if (!data || data.length === 0) break;
+
+    for (const row of data) {
+      if (row.private_profile_id !== null && wanted.has(row.private_profile_id)) {
+        userIdByProfileId.set(row.private_profile_id, row.user_id);
+      }
     }
+
+    if (userIdByProfileId.size === wanted.size) break;
+    if (data.length < STUDENT_PAGE_SIZE) break;
+    cursor = data[data.length - 1]!.private_profile_id;
   }
   return userIdByProfileId;
 }
@@ -1337,7 +1759,7 @@ async function loadReadStatusByUserAndThread(
 ): Promise<Map<string, string | null>> {
   const readAtByUserAndThread = new Map<string, string | null>();
   for (const threadBatch of chunked(discussionThreadIds, 200)) {
-    for (const userBatch of chunked(userIds, 200)) {
+    for (const userBatch of chunked(userIds, UUID_IN_BATCH_SIZE)) {
       const { data, error } = await supabase
         .from("discussion_thread_read_status")
         .select("user_id, discussion_thread_id, read_at")
@@ -1359,7 +1781,7 @@ async function loadLikesByProfileAndThread(
 ): Promise<Set<string>> {
   const likedByProfileAndThread = new Set<string>();
   for (const threadBatch of chunked(discussionThreadIds, 200)) {
-    for (const profileBatch of chunked(profileIds, 200)) {
+    for (const profileBatch of chunked(profileIds, UUID_IN_BATCH_SIZE)) {
       const { data, error } = await supabase
         .from("discussion_thread_likes")
         .select("creator, discussion_thread")
@@ -1434,7 +1856,7 @@ async function handleGradebookExport(ctx: MCPAuthContext, rawParams: Record<stri
   const classData = await resolveClass(supabase, classIdentifier);
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
-  const tokenizer = mode === "raw" ? null : await createTokenizer(params.salt!);
+  const tokenizer = mode === "raw" ? null : await createExportTokenizer(supabase, params.salt!);
 
   return streamNdjson(async (writer) => {
     await writer.write({
@@ -1554,8 +1976,9 @@ interface RosterParams {
  * real identifiers: name, email, SIS user id, class section name, and lab
  * section name.
  *
- * Only hash mode is supported. Opaque tokens are per-run random and cannot be
- * reproduced after the fact; raw exports have no tokens to map back from.
+ * Only hash mode is supported. Opaque tokens use a per-run client salt plus the
+ * server vault pepper and cannot be reproduced after the fact; raw exports have
+ * no tokens to map back from.
  */
 async function handleRoster(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as RosterParams;
@@ -1585,7 +2008,7 @@ async function handleRoster(ctx: MCPAuthContext, rawParams: Record<string, unkno
   const classData = await resolveClass(supabase, classIdentifier);
   await assertUserCanAccessClass(supabase, ctx.userId, classData.id);
 
-  const tokenizer = await createTokenizer(params.salt);
+  const tokenizer = await createExportTokenizer(supabase, params.salt);
 
   // Pre-fetch section name maps so per-student rows don't need individual lookups.
   const { data: classSectionRows, error: csErr } = await supabase
