@@ -7,7 +7,7 @@ import { UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/Databas
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
 import { clearViewAsCookie, getViewAsCookie, setViewAsCookie } from "@/lib/viewAs";
@@ -94,7 +94,6 @@ type UserRoleWithClassAndUser = GetResult<
  */
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
-  const router = useRouter();
   const { user } = useAuthState();
   const userId = user?.id;
   const [roles, setRoles] = useState<UserRoleWithClassAndUser[]>([]);
@@ -209,20 +208,24 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     (studentPrivateProfileId: string) => {
       if (!course_id) return;
       setViewAsCookie(course_id as string, studentPrivateProfileId);
-      setViewAsProfileId(studentPrivateProfileId);
-      router.push(`/course/${course_id}`);
-      router.refresh();
+      // Do a full document navigation rather than a soft client transition. The server
+      // recomputes the effective identity from the cookie and every course/realtime
+      // controller is rebuilt cleanly under the student identity. A soft transition
+      // (router.push + refresh) flips the client identity while the existing controllers
+      // are still being torn down, which surfaces stale-reference crashes such as
+      // "TableController for table 'discussion_threads' is closed. Cannot call getById(...)".
+      window.location.assign(`/course/${course_id}`);
     },
-    [course_id, router]
+    [course_id]
   );
 
   const exitViewAs = useCallback(() => {
     if (!course_id) return;
     clearViewAsCookie(course_id as string);
-    setViewAsProfileId(null);
-    setViewAsRole(null);
-    router.refresh();
-  }, [course_id, router]);
+    // Full reload for the same reason as enterViewAs: rebuild all controllers under the
+    // restored instructor identity instead of racing a soft teardown/rebuild.
+    window.location.assign(`/course/${course_id}`);
+  }, [course_id]);
 
   if (isLoading) {
     return <Skeleton height="100px" width="100%" />;

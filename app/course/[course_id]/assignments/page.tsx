@@ -76,6 +76,10 @@ export default function StudentPage() {
   const [query, setQuery] = useState("");
 
   const private_profile_id = role.private_profile_id;
+  // Use the effective role's user id (not `user?.id`) so the dashboard filter still matches
+  // when an instructor is viewing as a student — `useAuthState` is always the real signed-in
+  // user, while `role` from `useClassProfiles` follows view-as.
+  const effective_user_id = role.user_id;
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
     meta: {
@@ -95,7 +99,7 @@ export default function StudentPage() {
     resource: "assignments_for_student_dashboard",
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
-      { field: "student_user_id", operator: "eq", value: user?.id },
+      { field: "student_user_id", operator: "eq", value: effective_user_id },
       { field: "student_profile_id", operator: "eq", value: private_profile_id }
     ],
     pagination: {

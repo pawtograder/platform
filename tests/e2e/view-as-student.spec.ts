@@ -1,9 +1,10 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
 import dotenv from "dotenv";
-import { createClass, createUsersInClass, loginAsUser, TestingUser } from "./TestingUtils";
+import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "./TestingUtils";
 import { visualScreenshot } from "./VisualTestUtils";
 import { viewAsCookieName } from "@/lib/viewAs";
+import { addDays } from "date-fns";
 dotenv.config({ path: ".env.local", quiet: true });
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
@@ -15,6 +16,7 @@ let student: TestingUser | undefined;
 let instructor: TestingUser | undefined;
 
 const STUDENT_NAME = "View As Target Student";
+const ASSIGNMENT_TITLE = "View As Target Assignment";
 
 test.beforeAll(async ({}, testInfo) => {
   testInfo.setTimeout(120_000);
@@ -37,6 +39,13 @@ test.beforeAll(async ({}, testInfo) => {
       useMagicLink: true
     }
   ]);
+  // One released assignment so the student dashboard view returns at least one row.
+  // This is what an instructor in view-as expects to see on `/course/<id>/assignments`.
+  await insertAssignment({
+    class_id: course.id,
+    name: ASSIGNMENT_TITLE,
+    due_date: addDays(new Date(), 7).toUTCString()
+  });
 });
 
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
@@ -147,5 +156,23 @@ test.describe("Instructor view-as-student (read-only)", () => {
 
     // Visual snapshot of the result (no view-as banner; normal enabled student form).
     await visualScreenshot(page, "View as student - forged cookie ignored for non-instructor");
+  });
+
+  test("instructor in view-as sees the student's assignments list populated", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    // Activate view-as via the per-course cookie. The dashboard view
+    // `assignments_for_student_dashboard` is security_invoker, so seeing the student's row
+    // requires the instructor branch of the broadened ur_students CTE + the
+    // user_privileges RLS policy added alongside it. Without those, the list is empty.
+    await page
+      .context()
+      .addCookies([{ name: viewAsCookieName(course.id), value: student!.private_profile_id, url: BASE_URL }]);
+
+    await page.goto(`/course/${course.id}/assignments`);
+
+    // The banner is up (view-as engaged) and the seeded assignment is listed.
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+    await expect(page.getByText(ASSIGNMENT_TITLE).first()).toBeVisible();
   });
 });
