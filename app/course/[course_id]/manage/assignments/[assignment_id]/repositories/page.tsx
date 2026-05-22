@@ -3,6 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { useCourse, useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import { EdgeFunctionError, resendOrgInvitation } from "@/lib/edgeFunctions";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -12,6 +13,8 @@ import {
   Box,
   Button,
   Code,
+  FieldLabel,
+  FieldRoot,
   Heading,
   HStack,
   Icon,
@@ -25,7 +28,16 @@ import {
 } from "@chakra-ui/react";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
-import { CheckIcon, RefreshCw, GitPullRequest, ShieldCheck } from "lucide-react";
+import {
+  DialogRoot,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogBody,
+  DialogFooter,
+  DialogCloseTrigger
+} from "@/components/ui/dialog";
+import { CheckIcon, RefreshCw, GitPullRequest, ShieldCheck, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -329,6 +341,167 @@ function FixRepoPermissionsButton({
   );
 }
 
+const CLEANUP_CONFIRM_PHRASE = "CLEANUP";
+const CLEANUP_CONFIRM_INPUT_ID = "cleanup-individual-repos-confirm-input";
+
+function CleanupIndividualReposButton({
+  courseId,
+  assignmentId,
+  tableController,
+  individualRepoCount
+}: {
+  courseId: number;
+  assignmentId: number;
+  tableController: TableController<"repositories", typeof joinedSelect, number> | undefined;
+  individualRepoCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<1 | 2>(1);
+  const [confirmText, setConfirmText] = useState("");
+  const [isRunning, setIsRunning] = useState(false);
+
+  const resetAndClose = () => {
+    setOpen(false);
+    setStep(1);
+    setConfirmText("");
+  };
+
+  const handleOpenChange = (details: { open: boolean }) => {
+    if (!details.open) {
+      setOpen(false);
+      setStep(1);
+      setConfirmText("");
+    }
+  };
+
+  const handleCleanup = async () => {
+    if (confirmText.trim() !== CLEANUP_CONFIRM_PHRASE) {
+      return;
+    }
+    const supabase = createClient();
+    setIsRunning(true);
+    try {
+      const { data, error } = await supabase.rpc("cleanup_individual_repositories_for_assignment", {
+        p_class_id: courseId,
+        p_assignment_id: assignmentId
+      });
+      if (error) throw error;
+      const result = data as { message?: string; summary?: Record<string, number> };
+      toaster.success({
+        title: "Cleanup started",
+        description: result.message ?? "Individual repositories were queued for archival."
+      });
+      resetAndClose();
+      await tableController?.refetchAll();
+    } catch (error) {
+      console.error(error);
+      toaster.error({
+        title: "Cleanup failed",
+        description: error instanceof Error ? error.message : "Could not clean up individual repositories."
+      });
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  const disabledNoIndividuals = individualRepoCount === 0;
+
+  return (
+    <>
+      <Button
+        size="sm"
+        colorPalette="red"
+        variant="outline"
+        disabled={disabledNoIndividuals}
+        title={disabledNoIndividuals ? "There are no individual repositories for this assignment." : undefined}
+        onClick={() => {
+          setStep(1);
+          setConfirmText("");
+          setOpen(true);
+        }}
+      >
+        <Icon as={Trash2} boxSize={3.5} />
+        Cleanup individual repositories
+      </Button>
+
+      <DialogRoot open={open} onOpenChange={handleOpenChange}>
+        <DialogContent maxW="lg">
+          <DialogHeader>
+            <DialogTitle>Cleanup individual repositories</DialogTitle>
+            <DialogCloseTrigger />
+          </DialogHeader>
+          <DialogBody>
+            {step === 1 ? (
+              <VStack alignItems="flex-start" gap={3}>
+                <Text fontSize="sm">
+                  Use this when students were given both an individual repository and a group repository by mistake (for
+                  example, groups were configured after the assignment was released).
+                </Text>
+                <Text fontSize="sm" fontWeight="semibold">
+                  This will:
+                </Text>
+                <Box as="ul" pl={5} fontSize="sm" style={{ listStyleType: "disc" }}>
+                  <li>
+                    Archive {individualRepoCount} individual student{" "}
+                    {individualRepoCount === 1 ? "repository" : "repositories"} on GitHub (async queue)
+                  </li>
+                  <li>Delete related submissions, grades, and workflow data from Pawtograder</li>
+                  <li>Remove the individual repository records (group repos are unchanged)</li>
+                </Box>
+                <Text fontSize="sm" color="red.600" _dark={{ color: "red.300" }}>
+                  This cannot be undone. Continue only if you are sure.
+                </Text>
+              </VStack>
+            ) : (
+              <VStack alignItems="stretch" gap={3}>
+                <Text fontSize="sm">
+                  Type <Code>{CLEANUP_CONFIRM_PHRASE}</Code> below to confirm. This runs the cleanup immediately.
+                </Text>
+                <FieldRoot gap={1.5}>
+                  <FieldLabel htmlFor={CLEANUP_CONFIRM_INPUT_ID}>{CLEANUP_CONFIRM_PHRASE}</FieldLabel>
+                  <Input
+                    id={CLEANUP_CONFIRM_INPUT_ID}
+                    placeholder={CLEANUP_CONFIRM_PHRASE}
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    autoComplete="off"
+                  />
+                </FieldRoot>
+              </VStack>
+            )}
+          </DialogBody>
+          <DialogFooter gap={2}>
+            {step === 1 ? (
+              <>
+                <Button variant="outline" onClick={resetAndClose}>
+                  Cancel
+                </Button>
+                <Button colorPalette="red" onClick={() => setStep(2)}>
+                  Continue
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setStep(1)} disabled={isRunning}>
+                  Back
+                </Button>
+                <Button
+                  colorPalette="red"
+                  loading={isRunning}
+                  disabled={confirmText.trim() !== CLEANUP_CONFIRM_PHRASE || isRunning}
+                  onClick={handleCleanup}
+                >
+                  Confirm cleanup
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </DialogRoot>
+    </>
+  );
+}
+
 function HandoutCommitHistory({ assignmentId }: { assignmentId: number }) {
   const { time_zone } = useCourse();
   const { data: assignment } = useOne<Database["public"]["Tables"]["assignments"]["Row"]>({
@@ -600,10 +773,16 @@ export default function RepositoriesPage() {
       {
         id: "actions",
         header: "Actions",
-        cell: ({ row }) => <SyncButton repoId={row.original.id} tableController={repositories} />
+        cell: ({ row }) => {
+          return (
+            <HStack gap={2}>
+              <SyncButton repoId={row.original.id} tableController={repositories} />
+            </HStack>
+          );
+        }
       }
     ],
-    [repositories, assignment]
+    [repositories, assignment?.data?.template_repo, assignment?.data?.latest_template_sha]
   );
 
   const {
@@ -706,6 +885,16 @@ export default function RepositoriesPage() {
   }, [data]);
 
   const selectedCount = getSelectedRowModel().rows.length;
+  const tableRows = getRowModel().rows;
+  const rowWindow = useVirtualizedRowWindow(tableRows, {
+    estimatedRowHeight: 72,
+    minRowsForVirtualization: 80
+  });
+
+  const individualRepoCount = useMemo(() => {
+    const rows = (data as unknown as RepositoryRow[]) ?? [];
+    return rows.filter((r) => r.assignment_group_id == null && r.profile_id != null).length;
+  }, [data]);
 
   return (
     <VStack w="100%">
@@ -743,130 +932,150 @@ export default function RepositoriesPage() {
             </Button>
           </HStack>
         )}
-        <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto" w="100%">
-          <HStack justifyContent="space-between" alignItems="flex-start" w="100%" mb={2}>
+        <Box overflowX="auto" maxW="100vw" w="100%">
+          <HStack justifyContent="space-between" alignItems="flex-start" w="100%" mb={2} flexWrap="wrap" gap={2}>
             <Heading size="sm">Repository Status</Heading>
-            <FixRepoPermissionsButton
-              courseId={Number(course_id)}
-              assignmentId={Number(assignment_id)}
-              tableController={repositories}
-            />
+            <HStack flexWrap="wrap" gap={2} justifyContent="flex-end">
+              <CleanupIndividualReposButton
+                courseId={Number(course_id)}
+                assignmentId={Number(assignment_id)}
+                tableController={repositories}
+                individualRepoCount={individualRepoCount}
+              />
+              <FixRepoPermissionsButton
+                courseId={Number(course_id)}
+                assignmentId={Number(assignment_id)}
+                tableController={repositories}
+              />
+            </HStack>
           </HStack>
-          <Table.Root minW="0" w="100%">
-            <Table.Header>
-              {getHeaderGroups().map((headerGroup) => (
-                <Table.Row key={headerGroup.id} bg="bg.subtle">
-                  {headerGroup.headers.map((header) => (
-                    <Table.ColumnHeader key={header.id}>
-                      {header.isPlaceholder ? null : (
-                        <>
-                          <Text onClick={header.column.getToggleSortingHandler()}>
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            {{
-                              asc: " 🔼",
-                              desc: " 🔽"
-                            }[header.column.getIsSorted() as string] ?? " 🔄"}
-                          </Text>
-                          {header.id === "group_name" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.groups.map((name) => ({ label: name, value: name }))}
-                              placeholder="Filter by group..."
-                            />
-                          )}
-                          {header.id === "profile_name" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.students.map((name) => ({ label: name, value: name }))}
-                              placeholder="Filter by student..."
-                            />
-                          )}
-                          {header.id === "repository" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.repos.map((repo) => ({ label: repo, value: repo }))}
-                              placeholder="Filter by repository..."
-                            />
-                          )}
-                          {header.id === "is_github_ready" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                { label: "Yes", value: "Yes" },
-                                { label: "No", value: "No" }
-                              ]}
-                              placeholder="Filter by readiness..."
-                            />
-                          )}
-                          {header.id === "synced_sha" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={dataForOptions.syncedShas.map((sha) => ({ label: sha, value: sha }))}
-                              placeholder="Filter by synced SHA..."
-                            />
-                          )}
-                          {header.id === "sync_status" && (
-                            <Select
-                              isMulti={true}
-                              id={header.id}
-                              onChange={(e) => {
-                                const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                header.column.setFilterValue(values.length > 0 ? values : undefined);
-                              }}
-                              options={[
-                                { label: "No Sync Requested", value: "No Sync Requested" },
-                                { label: "Synced", value: "Synced" },
-                                { label: "Not Up-to-date", value: "Not Up-to-date" },
-                                { label: "PR Open", value: "PR Open" },
-                                { label: "Sync Finalizing", value: "Sync Finalizing" },
-                                { label: "Sync in Progress", value: "Sync in Progress" },
-                                { label: "Sync Error", value: "Sync Error" }
-                              ]}
-                              placeholder="Filter by sync status..."
-                            />
-                          )}
-                        </>
-                      )}
-                    </Table.ColumnHeader>
-                  ))}
-                </Table.Row>
-              ))}
-            </Table.Header>
-            <Table.Body>
-              {getRowModel().rows.map((row) => (
-                <Table.Row key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                  ))}
-                </Table.Row>
-              ))}
-            </Table.Body>
-          </Table.Root>
+          <Box ref={rowWindow.containerRef} onScroll={rowWindow.onScroll} overflowY="auto" maxH="70vh">
+            <Table.Root minW="0" w="100%">
+              <Table.Header>
+                {getHeaderGroups().map((headerGroup) => (
+                  <Table.Row key={headerGroup.id} bg="bg.subtle">
+                    {headerGroup.headers.map((header) => (
+                      <Table.ColumnHeader key={header.id}>
+                        {header.isPlaceholder ? null : (
+                          <>
+                            <Text onClick={header.column.getToggleSortingHandler()}>
+                              {flexRender(header.column.columnDef.header, header.getContext())}
+                              {{
+                                asc: " 🔼",
+                                desc: " 🔽"
+                              }[header.column.getIsSorted() as string] ?? " 🔄"}
+                            </Text>
+                            {header.id === "group_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.groups.map((name) => ({ label: name, value: name }))}
+                                placeholder="Filter by group..."
+                              />
+                            )}
+                            {header.id === "profile_name" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.students.map((name) => ({ label: name, value: name }))}
+                                placeholder="Filter by student..."
+                              />
+                            )}
+                            {header.id === "repository" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.repos.map((repo) => ({ label: repo, value: repo }))}
+                                placeholder="Filter by repository..."
+                              />
+                            )}
+                            {header.id === "is_github_ready" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "Yes", value: "Yes" },
+                                  { label: "No", value: "No" }
+                                ]}
+                                placeholder="Filter by readiness..."
+                              />
+                            )}
+                            {header.id === "synced_sha" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={dataForOptions.syncedShas.map((sha) => ({ label: sha, value: sha }))}
+                                placeholder="Filter by synced SHA..."
+                              />
+                            )}
+                            {header.id === "sync_status" && (
+                              <Select
+                                isMulti={true}
+                                id={header.id}
+                                onChange={(e) => {
+                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                }}
+                                options={[
+                                  { label: "No Sync Requested", value: "No Sync Requested" },
+                                  { label: "Synced", value: "Synced" },
+                                  { label: "Not Up-to-date", value: "Not Up-to-date" },
+                                  { label: "PR Open", value: "PR Open" },
+                                  { label: "Sync Finalizing", value: "Sync Finalizing" },
+                                  { label: "Sync in Progress", value: "Sync in Progress" },
+                                  { label: "Sync Error", value: "Sync Error" }
+                                ]}
+                                placeholder="Filter by sync status..."
+                              />
+                            )}
+                          </>
+                        )}
+                      </Table.ColumnHeader>
+                    ))}
+                  </Table.Row>
+                ))}
+              </Table.Header>
+              <Table.Body>
+                {rowWindow.shouldVirtualize && rowWindow.paddingTop > 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
+                  </Table.Row>
+                ) : null}
+                {rowWindow.visibleRows.map((row) => (
+                  <Table.Row key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
+                    ))}
+                  </Table.Row>
+                ))}
+                {rowWindow.shouldVirtualize && rowWindow.paddingBottom > 0 ? (
+                  <Table.Row>
+                    <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
+                  </Table.Row>
+                ) : null}
+              </Table.Body>
+            </Table.Root>
+          </Box>
         </Box>
 
         <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">

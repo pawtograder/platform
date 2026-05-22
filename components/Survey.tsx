@@ -30,7 +30,19 @@ export default function SurveyComponent({
   // Get color mode to determine theme
   const { colorMode } = useColorMode();
 
-  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
+  const survey = useMemo(() => {
+    const model = new Model(surveyJson);
+    // Accessibility tuning (WCAG 1.3.2 Meaningful Sequence + 1.3.1 Info &
+    // Relationships): SurveyJS defaults auto-focus the first answer, which
+    // causes VoiceOver to read the choice list before the question prompt.
+    // Force the title above the inputs, render titles as real h2 headings
+    // so AT can navigate to them, and stop the auto-focus so the question
+    // is read in document order.
+    model.questionTitleLocation = "top";
+    model.focusFirstQuestionAutomatic = false;
+    model.questionTitleTagName = "h2";
+    return model;
+  }, [surveyJson]);
 
   useEffect(() => {
     if (colorMode === "dark") {

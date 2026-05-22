@@ -1,5 +1,6 @@
 "use client";
 
+import { PageContainer } from "@/components/ui/page-container";
 import { Box, Heading, Text, VStack, HStack } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -40,14 +41,14 @@ export default function StudentPollsPage() {
   };
 
   return (
-    <Box py={8} maxW="1200px" my={2} mx="auto">
+    <PageContainer py={8}>
       <VStack align="stretch" gap={6} w="100%">
         {/* Header */}
         {!isLoading && (
           <VStack align="stretch" gap={4}>
-            <HStack justify="space-between" align="center">
-              <VStack align="start" gap={2} flex={1}>
-                <Heading size="xl" color="fg" textAlign="left">
+            <HStack justify="space-between" align="center" flexWrap="wrap" gap={3}>
+              <VStack align="start" gap={2} flex={1} minW={0}>
+                <Heading as="h1" size="xl" color="fg" textAlign="left">
                   Live Polls
                 </Heading>
                 <Text color="fg" fontSize="md" opacity={0.8}>
@@ -80,6 +81,6 @@ export default function StudentPollsPage() {
           <StudentPollsTable polls={polls} onPollClick={handlePollClick} />
         )}
       </VStack>
-    </Box>
+    </PageContainer>
   );
 }

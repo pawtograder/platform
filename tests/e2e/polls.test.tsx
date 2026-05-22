@@ -1,5 +1,6 @@
 import { expect, test } from "../global-setup";
 import { createClass, createUsersInClass, loginAsUser, supabase } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -95,6 +96,7 @@ test.describe("Polls", () => {
 
     await expect(page.getByRole("heading", { name: "No Live Polls Available" })).toBeVisible();
     await expect(page.getByText("There are currently no live polls available for this course.")).toBeVisible();
+    await assertStudentPageAccessible(page, "polls empty state");
   });
 
   // TODO: Possible vulnerability to flakiness, check issue and reduce the time limit for the check
@@ -140,6 +142,7 @@ test.describe("Polls", () => {
       .toBe(true);
 
     await expect(emptyHeading).toBeHidden();
+    await assertStudentPageAccessible(page, "polls realtime live row");
   });
 
   test("student sees active poll with answer action", async ({ page }) => {
@@ -155,6 +158,7 @@ test.describe("Polls", () => {
     const pollRow = page.getByRole("row", { name: /active poll/i });
     await expect(pollRow).toBeVisible();
     await expect(pollRow.getByRole("button", { name: /answer poll/i })).toBeVisible();
+    await assertStudentPageAccessible(page, "polls active poll row");
   });
 
   test("instructor sees empty manage polls state", async ({ page }) => {
@@ -234,6 +238,7 @@ test.describe("Polls", () => {
 
     await expect(page.getByRole("heading", { name: "No Live Polls Available" })).toBeVisible();
     await expect(page.getByText("Hidden Closed Poll")).not.toBeVisible();
+    await assertStudentPageAccessible(page, "polls closed hidden");
   });
 
   test("student only sees the most recent live poll", async ({ page }) => {
@@ -261,6 +266,7 @@ test.describe("Polls", () => {
     await expect(page.getByText("Newer Live Poll")).toBeVisible();
     await expect(page.getByText("Older Live Poll")).not.toBeVisible();
     await expect(page.getByRole("row", { name: /Newer Live Poll/i })).toHaveCount(1);
+    await assertStudentPageAccessible(page, "polls most recent live");
   });
 
   test("instructor sees poll actions menu items", async ({ page }) => {
@@ -374,6 +380,7 @@ test.describe("Polls", () => {
     const [pollPage] = await Promise.all([page.waitForEvent("popup"), answerButton.click()]);
     await pollPage.waitForLoadState("domcontentloaded");
     await expect(pollPage).toHaveURL(new RegExp(`/poll/${course.id}`));
+    await assertStudentPageAccessible(pollPage, "poll answer popup");
   });
 
   test("student submits a require-login poll and response is stored", async ({ page }) => {
@@ -396,6 +403,7 @@ test.describe("Polls", () => {
     await page.getByRole("button", { name: /Complete|Submit/i }).click();
 
     await expect(page.getByRole("heading", { name: /Thank You!/i })).toBeVisible();
+    await assertStudentPageAccessible(page, "poll submit thank you");
 
     await expect
       .poll(

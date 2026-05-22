@@ -100,7 +100,7 @@ export function ConsistentAxesChart({
                     formatter={(value: number) => [value, "Responses"]}
                     labelFormatter={(label) => `Value: ${label}`}
                   />
-                  <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                  <Bar isAnimationActive={false} dataKey="count" radius={[0, 4, 4, 0]}>
                     {rows.map((entry, idx) => (
                       <Cell key={idx} fill={getLikertColor(entry.value, allValues)} />
                     ))}

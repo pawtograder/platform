@@ -324,7 +324,7 @@ export function CompleteReviewAssignmentButton() {
   return (
     <Popover.Root lazyMount>
       <Popover.Trigger asChild>
-        <Button variant="surface" colorPalette="green">
+        <Button variant="solid" colorPalette="green">
           Complete Review Assignment
         </Button>
       </Popover.Trigger>
@@ -411,7 +411,7 @@ export function CompleteReviewButton() {
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="surface" colorPalette="green">
+        <Button variant="solid" colorPalette="green">
           Complete Review <Icon as={FaRegCheckCircle} />
         </Button>
       </Popover.Trigger>
@@ -554,7 +554,7 @@ function ReviewAssignmentActions() {
         {activeReviewAssignment.completed_by && rubric && (
           <Text>
             {rubric.name} completed on{" "}
-            <span data-visual-test="blackout">
+            <span data-visual-test="transparent" data-visual-placeholder="review-status">
               <TimeZoneAwareDate date={activeReviewAssignment.completed_at} format="Pp" />
             </span>{" "}
             by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
@@ -571,7 +571,7 @@ function ReviewAssignmentActions() {
           <Text textAlign="left">
             Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} is required on this
             submission by{" "}
-            <span data-visual-test="blackout">
+            <span data-visual-test="transparent" data-visual-placeholder="review-status">
               <TimeZoneAwareDate date={activeReviewAssignment.due_date} format="MMM d, h:mm a" />.
             </span>
           </Text>
@@ -591,7 +591,7 @@ function ReviewAssignmentActions() {
       {activeReviewAssignment && activeReviewAssignment.completed_at && activeReviewAssignment.completed_by && (
         <Text textAlign="left" fontSize="sm" color="fg.muted">
           Your {rubric?.name} review {rubricPartsAdvice ? `(on ${rubricPartsAdvice})` : ""} was completed on{" "}
-          <span data-visual-test="blackout">
+          <span data-visual-test="transparent" data-visual-placeholder="review-status">
             <TimeZoneAwareDate date={activeReviewAssignment.completed_at} format="Pp" />
           </span>{" "}
           by <PersonName uid={activeReviewAssignment.completed_by} showAvatar={false} />
@@ -633,7 +633,7 @@ function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id:
   return (
     <Text>
       {rubric.name} completed on{" "}
-      <span data-visual-test="blackout">
+      <span data-visual-test="transparent" data-visual-placeholder="review-status">
         <TimeZoneAwareDate date={submissionReview?.completed_at} format="Pp" />
       </span>{" "}
       by <PersonName uid={submissionReview.completed_by} showAvatar={false} />

@@ -179,11 +179,16 @@ const TABLE_TO_CHANNEL_MAP: Partial<Record<TablesThatHaveAnIDField, ChannelType[
 
 /**
  * Type-safe filter for real-time event filtering.
- * Supports basic equality filters that match PostgrestFilterBuilder patterns.
+ * Supports basic equality filters that match PostgrestFilterBuilder patterns, or
+ * a predicate function for cases where the row's match condition isn't a simple
+ * AND over column equalities (e.g. "root threads OR duplicate-marked threads").
  */
-export type RealtimeFilter<T extends TablesThatHaveAnIDField> = {
+export type RealtimeFilterRecord<T extends TablesThatHaveAnIDField> = {
   [K in keyof DatabaseTableTypes[T]["Row"]]?: DatabaseTableTypes[T]["Row"][K] | DatabaseTableTypes[T]["Row"][K][];
 };
+export type RealtimeFilter<T extends TablesThatHaveAnIDField> =
+  | RealtimeFilterRecord<T>
+  | ((row: DatabaseTableTypes[T]["Row"]) => boolean);
 
 /**
  * Hook that returns all values from a TableController that match a predicate.
@@ -558,6 +563,102 @@ export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };
 
+/**
+ * Indexed-by-field counterpart to `useFindTableControllerValue`. Subscribes
+ * to the *first* row in `controller` whose `field === value`, using the
+ * controller's `subscribeIndexedSingle` path so a row mutation only
+ * notifies subscribers whose `value` actually matches — eliminating the
+ * `O(listeners × rows)` predicate-scan that the find-by-predicate path
+ * pays.
+ *
+ * `field` must be a column on the row. Pass a stable string literal
+ * (or a value from a typed enum) — anything that changes between renders
+ * will tear down and re-register the subscription.
+ */
+export function useIndexedTableControllerValue<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType> | undefined,
+  field: keyof Database["public"]["Tables"][T]["Row"] & string,
+  value: unknown
+): PossiblyTentativeResult<ResultType> | undefined {
+  const [val, setVal] = useState<PossiblyTentativeResult<ResultType> | undefined>(() => {
+    if (!controller || value === undefined || value === null) return undefined;
+    // No listener — `subscribeIndexedSingle` short-circuits and returns just
+    // the current data with a no-op unsubscribe. Passing `() => {}` here
+    // would register a permanent listener whose unsubscribe is discarded.
+    return controller.subscribeIndexedSingle(field, value).data as PossiblyTentativeResult<ResultType> | undefined;
+  });
+  useEffect(() => {
+    if (!controller || value === undefined || value === null) {
+      setVal(undefined);
+      return;
+    }
+    const { data, unsubscribe } = controller.subscribeIndexedSingle(field, value, (row) => {
+      setVal(row as PossiblyTentativeResult<ResultType> | undefined);
+    });
+    setVal(data as PossiblyTentativeResult<ResultType> | undefined);
+    return unsubscribe;
+  }, [controller, field, value]);
+  return val;
+}
+
+/**
+ * Indexed-by-field counterpart to `useListTableControllerValues` (with a
+ * single field=value predicate). Subscribes to *all* rows where
+ * `field === value`. Same scaling properties as
+ * `useIndexedTableControllerValue` — only this listener fires when rows
+ * matching `value` change.
+ *
+ * The returned array's identity changes only when the matching set
+ * changes (or when one of the rows in the set changes). It does NOT
+ * change when an unrelated row in another value-bucket is updated.
+ */
+export function useIndexedTableControllerValues<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType> | undefined,
+  field: keyof Database["public"]["Tables"][T]["Row"] & string,
+  value: unknown
+): PossiblyTentativeResult<ResultType>[] {
+  const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>(() => {
+    if (!controller || value === undefined || value === null) return [];
+    // See `useIndexedTableControllerValue`: omit the listener so the
+    // initializer doesn't register a leaked subscription.
+    return controller.subscribeIndexedList(field, value).data as PossiblyTentativeResult<ResultType>[];
+  });
+  useEffect(() => {
+    if (!controller || value === undefined || value === null) {
+      setValues([]);
+      return;
+    }
+    const { data, unsubscribe } = controller.subscribeIndexedList(field, value, (rows) => {
+      setValues(rows as PossiblyTentativeResult<ResultType>[]);
+    });
+    setValues(data as PossiblyTentativeResult<ResultType>[]);
+    return unsubscribe;
+  }, [controller, field, value]);
+  return values;
+}
+
 //TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
 export type GradebookRowRecalcStateBroadcastMessage = {
   type: "gradebook_row_recalc_state";
@@ -624,6 +725,14 @@ export default class TableController<
   }
 
   private _rows: PossiblyTentativeResult<ResultOne>[] = [];
+  /**
+   * Mirror of `_rows` keyed by `id`. Maintained in lockstep with every
+   * `_rows` mutation. Used to make `_resolveIndexedRows` (and any other
+   * id-keyed lookup on the hot notification path) O(matches) instead of
+   * O(N), which matters because `_notifyIndexedListeners` may invoke the
+   * resolver many times per single row mutation.
+   */
+  private _rowsById: Map<IDType, PossiblyTentativeResult<ResultOne>> = new Map();
   private _client: SupabaseClient;
   private _query: PostgrestFilterBuilder<
     Database["public"],
@@ -647,6 +756,29 @@ export default class TableController<
   private _channelsCompletedInitialConnection: Set<string> = new Set(); // Track which channels have completed their first connection
   private _connectionStatusDebounceTimer: NodeJS.Timeout | null = null;
   private _lastFetchTimestamp: number = 0;
+  /**
+   * True when this controller hydrated from server-provided `initialData`
+   * (skipping the in-browser initial fetch). In that case, rows inserted
+   * between the SSR fetch and the realtime channel join are NOT delivered
+   * to us — broadcasts only fire for events after the channel is in the
+   * "joined" state. We catch up by issuing a since-watermark refetch the
+   * first time a relevant channel reaches "joined". Set to false once that
+   * catch-up has been kicked off so we don't repeat it.
+   */
+  private _needsCatchUpAfterInitialDataHydration: boolean = false;
+  /**
+   * True once the post-SSR catch-up refetch has been kicked off (from either
+   * the construction-time "already-joined" branch or the
+   * `_handleConnectionStatusChange` first-channel-join branch). Once set, the
+   * connection-status path becomes dormant for the rest of this controller's
+   * lifetime — it must NOT re-fire on later reconnects/channel rejoins. The
+   * catch-up is a one-shot SSR-recovery mechanism, distinct from the
+   * periodic-reconnect refetch (which has its own auto-refetch gate further
+   * down in `_handleConnectionStatusChange`). Without this gate, lab-sections
+   * pages with ~6 controllers would each re-fetch on every status change,
+   * cascading into wall-clock that page navigation can't budget for.
+   */
+  private _postSsrCatchUpDone: boolean = false;
   private _closed: boolean = false;
   private _realtimeFilter: RealtimeFilter<RelationName> | null = null;
   /**
@@ -669,6 +801,32 @@ export default class TableController<
   ) => void)[] = [];
   private _itemDataListeners: Map<IDType, ((data: PossiblyTentativeResult<ResultOne> | undefined) => void)[]> =
     new Map();
+  /**
+   * Indexed-listener registry for `subscribeIndexedSingle` / `subscribeIndexedList`.
+   *
+   * Outer key is the field name being indexed (e.g. `"discussion_thread_id"`).
+   * For each indexed field we maintain:
+   *   - `rowIdsByValue`: forward index from a field value to the set of row
+   *     ids currently holding that value.
+   *   - `singleListenersByValue` / `listListenersByValue`: subscribers that
+   *     only care about rows matching a specific field value, partitioned
+   *     by single-row vs list semantics.
+   *
+   * Lazy: an entry is only created the first time `_ensureIndex(field)` is
+   * called. Once created, mutations in `_addRow`/`_updateRow`/`_removeRow`
+   * keep it consistent and notify only the listeners whose value matches —
+   * eliminating the `O(listeners × rows)` predicate-scan fan-out that the
+   * `useFindTableControllerValue` / `useListTableControllerValues` paths
+   * pay on every publish.
+   */
+  private _indexes: Map<
+    string,
+    {
+      rowIdsByValue: Map<unknown, Set<IDType>>;
+      singleListenersByValue: Map<unknown, Set<(row: PossiblyTentativeResult<ResultOne> | undefined) => void>>;
+      listListenersByValue: Map<unknown, Set<(rows: PossiblyTentativeResult<ResultOne>[]) => void>>;
+    }
+  > = new Map();
   // Batching state for debounced operations - single queue to maintain order
   private _pendingOperations: BroadcastMessage[] = [];
   private _debounceTimeout: NodeJS.Timeout | null = null;
@@ -705,7 +863,19 @@ export default class TableController<
     await this.readyPromise;
     if (this._isRefetching) {
       return new Promise((resolve) => {
-        this._refetchListeners.push(() => resolve());
+        // Self-removing listener: a plain `.push(() => resolve())` would leak
+        // because `_refetchListeners` is otherwise only pruned by the
+        // unsubscribe closure returned from `subscribeToRefetchStatus`. Every
+        // concurrent caller of `refetchAll()`/`update()`/`catchUpSinceWatermark()`
+        // hits this path on an in-flight collision, so without removal the
+        // listener array grows unboundedly on long-lived controllers (e.g.
+        // chatty pages like reviews/lab-sections), permanently fanning out
+        // every future refetch-status notification.
+        const listener = () => {
+          this._refetchListeners = this._refetchListeners.filter((l) => l !== listener);
+          resolve();
+        };
+        this._refetchListeners.push(listener);
       });
     }
     return Promise.resolve();
@@ -1137,6 +1307,7 @@ export default class TableController<
             // Only notify if deeply different
             if (!this._deepEqualObjects(current, updated)) {
               this._rows[i] = updated as PossiblyTentativeResult<ResultOne>;
+              this._rowsById.set(current.id, updated as PossiblyTentativeResult<ResultOne>);
               const listeners = this._itemDataListeners.get(current.id);
               if (listeners) {
                 listeners.forEach((listener) => listener(this._rows[i]));
@@ -1148,11 +1319,15 @@ export default class TableController<
         if (anyChanges) {
           // Optimization opportunity: we should fix it so that no subscriber depends on this behavior
           this._rows = newRows;
+          this._rebuildRowsById();
+          this._rebuildIndexesAndNotifyListeners();
           this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
         }
       } else {
         // Membership changed: replace rows and notify list + item listeners accordingly
         this._rows = newRows;
+        this._rebuildRowsById();
+        this._rebuildIndexesAndNotifyListeners();
 
         // Notify list listeners
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
@@ -1222,7 +1397,16 @@ export default class TableController<
         `TableController for table '${this._table}' is closed. Cannot call refetchAll(). This indicates a stale reference is being used.`
       );
     }
+    // If a refetch is already in flight (e.g. triggered by a realtime
+    // reconnection or another caller), don't kick off a duplicate — but DO
+    // wait for it to complete. Returning immediately here defeats the whole
+    // point of `await refetchAll()` as a "data ready" signal: callers like
+    // FinalizeSubmissionEarly rely on the await to gate a success toast that
+    // means "the new rows are now in the cache." Without this wait, they
+    // race the toast against the still-in-flight refetch, and downstream
+    // tests/UI flicker between empty and populated states.
     if (this._isRefetching) {
+      await this.waitForRefetchToComplete();
       return;
     }
     if (Date.now() - this._lastRefetchAllTime < 3000) {
@@ -1231,6 +1415,38 @@ export default class TableController<
     this._lastRefetchAllTime = Date.now();
 
     await this._refetchAllData();
+  }
+
+  /**
+   * Public method to run an incremental since-watermark catch-up refetch.
+   *
+   * Useful for consumers that need to guarantee fresh data at a specific
+   * UI moment (e.g., a modal opening) without paying the cost of a full
+   * refetch. This is much cheaper than `refetchAll()` because it only
+   * fetches rows whose `updated_at > _maxUpdatedAtMs`. It is also safe to
+   * call frequently: there is no rate limit (unlike `refetchAll`), and
+   * concurrent calls are coalesced here by piggybacking on any in-flight
+   * refetch via `waitForRefetchToComplete()`.
+   *
+   * Falls back to no-op if the table has no `updated_at` watermark or if
+   * the controller is closed.
+   */
+  async catchUpSinceWatermark(): Promise<void> {
+    if (this._closed) return;
+    if (this._maxUpdatedAtMs == null) return;
+    if (!this._shouldEnableAutoRefetch()) return;
+    // If a refetch is already in flight (e.g. a reconnection-driven
+    // `_refetchSinceMaxUpdatedAt` or a `refetchAll`), don't issue a second
+    // `gt("updated_at", …)` query against the same watermark. Two concurrent
+    // refetches would both call `_addRow`/`_updateRow`/`_bumpMaxUpdatedAtFrom`
+    // and double-fire `_listDataListeners`, producing half-applied snapshots
+    // and a clobbered watermark. Mirror the guard in `_refetchAllData`:
+    // piggyback on the in-flight refetch and return.
+    if (this._isRefetching) {
+      await this.waitForRefetchToComplete();
+      return;
+    }
+    await this._refetchSinceMaxUpdatedAt();
   }
 
   /**
@@ -1250,20 +1466,23 @@ export default class TableController<
 
     const refetchedRows = await this._refetchRowsByIds(ids);
 
-    // Update existing rows and add new ones
+    // Mirror the matchesFilter handling in _handleUpdate so that a row whose
+    // refetched state no longer matches the realtime filter is evicted from
+    // the cache (e.g. a discussion_thread whose root_class_id was nulled out
+    // after a duplicate-merge no longer belongs in the teaser list).
     for (const [id, row] of refetchedRows) {
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+      const matchesFilter = this._matchesRealtimeFilter(row as unknown as Record<string, unknown>);
 
-      if (existingRow) {
+      if (existingRow && !matchesFilter) {
+        this._removeRow(id);
+      } else if (existingRow && matchesFilter) {
         this._updateRow(id, row as ResultOne & { id: IDType }, false);
-      } else {
-        // Check if the fetched row matches our realtime filter
-        if (this._matchesRealtimeFilter(row as unknown as Record<string, unknown>)) {
-          this._addRow({
-            ...row,
-            __db_pending: false
-          });
-        }
+      } else if (!existingRow && matchesFilter) {
+        this._addRow({
+          ...row,
+          __db_pending: false
+        });
       }
     }
   }
@@ -1327,6 +1546,10 @@ export default class TableController<
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
     // Track which relevant channels have reconnected
     const relevantReconnections: string[] = [];
+    // Track whether at least one relevant channel reached "joined" for the
+    // first time during this status update. We use this to drive the
+    // initial-data catch-up refetch (see _needsCatchUpAfterInitialDataHydration).
+    let relevantInitialJoinHappened = false;
 
     for (const channel of status.channels) {
       if (!this._isChannelRelevantForTable(channel)) {
@@ -1351,10 +1574,47 @@ export default class TableController<
       // Mark channel as having completed initial connection once it reaches "joined" state for the first time
       if (isChannelNowConnected && !hadCompletedInitialConnection) {
         this._channelsCompletedInitialConnection.add(channel.name);
+        relevantInitialJoinHappened = true;
       }
 
       // Update tracked state
       this._lastChannelStates.set(channel.name, channel.state);
+    }
+
+    // First-time channel join after hydrating from initialData: rows that
+    // were INSERTed between the SSR fetch and channel-join are not delivered
+    // by realtime broadcasts (those only cover events after we joined). Run
+    // a refetch to catch them. For tables with `updated_at`, _refetchAllData
+    // does a cheap since-watermark refetch; for tables without (e.g.
+    // rubric_checks/rubrics/rubric_criteria), it falls back to a full
+    // refetch — which is exactly what's needed when the SSR cache was stale
+    // at hydration time. We deliberately bypass `_shouldEnableAutoRefetch()`
+    // here because that gate is meant to suppress *periodic reconnect*
+    // refetches on tables without watermarks, not the one-shot post-SSR
+    // catch-up. Skipping the catch-up for these tables produced a flake:
+    // the SSR cache for `rubric_checks:${assignment_id}:staff` could return
+    // an empty/stale snapshot if the cache was populated before assignment
+    // setup completed, and without catch-up the rubricChecksController stayed
+    // empty forever, making `useRubricCriteriaInstances` filter out applied
+    // global checks (Self Review Check 2 region never mounted in CI).
+    //
+    // Crucially this branch is gated by `!_postSsrCatchUpDone` so it fires
+    // EXACTLY ONCE per controller lifetime — never on later reconnects or
+    // channel rejoins. Pages that mount many SSR-hydrated controllers (e.g.
+    // lab-sections w/ ~6) would otherwise stack one full refetch per
+    // controller per status change, blowing the navigation wall-clock.
+    if (
+      relevantInitialJoinHappened &&
+      this._needsCatchUpAfterInitialDataHydration &&
+      !this._postSsrCatchUpDone &&
+      this._ready &&
+      !this._closed
+    ) {
+      this._needsCatchUpAfterInitialDataHydration = false;
+      this._postSsrCatchUpDone = true;
+      // Fire and forget — _refetchAllData internally guards against
+      // overlapping refetches.
+      void this._refetchAllData();
     }
 
     // Only refetch if a relevant channel has reconnected (not initial connection)
@@ -1528,6 +1788,12 @@ export default class TableController<
         if (initialData) {
           // Use pre-loaded data from server (skip initial fetch)
           dataToLoad = initialData;
+          // We did not hit the database from the browser yet, so we have no
+          // guarantee that initialData contains rows inserted just before
+          // page load (cache invalidation might still be in flight). Schedule
+          // a since-watermark catch-up refetch after the realtime channel
+          // joins — see _handleConnectionStatusChange.
+          this._needsCatchUpAfterInitialDataHydration = true;
         } else {
           // Fetch data from database
           dataToLoad = await this._fetchInitialData(loadEntireTable);
@@ -1542,6 +1808,11 @@ export default class TableController<
           ...row,
           __db_pending: false
         }));
+        this._rebuildRowsById();
+        // Bring any indexes built before the initial fetch resolved in sync,
+        // and notify subscribers (e.g. `useIndexedTableControllerValue`) that
+        // were registered against the previously-empty controller.
+        this._rebuildIndexesAndNotifyListeners();
 
         // Initialize watermark
         for (const r of this._rows) {
@@ -1617,6 +1888,36 @@ export default class TableController<
           }
           // Don't call listener(undefined) - let the hook keep its initial value if we don't have data yet
         });
+        // If we hydrated from initialData AND every relevant channel is
+        // already joined at construction time (subscribeToStatus only fires
+        // on *changes*, so the listener won't be invoked when the channel was
+        // pre-joined by another consumer), kick off the catch-up immediately.
+        // This covers cases like multiple lab-section controllers in the same
+        // page sharing a single class:staff channel — the second/third
+        // controllers find the channel already joined. Bypassing
+        // `_shouldEnableAutoRefetch()` here matches the rationale in
+        // _handleConnectionStatusChange: this is a one-shot post-SSR
+        // catch-up, not a periodic reconnect refetch. We also set
+        // `_postSsrCatchUpDone` so the connection-status path stays dormant
+        // even if a later channel transition would otherwise trigger it.
+        if (
+          this._needsCatchUpAfterInitialDataHydration &&
+          !this._postSsrCatchUpDone &&
+          this._lastChannelStates.size > 0 &&
+          this._areRelevantChannelsConnected()
+        ) {
+          this._needsCatchUpAfterInitialDataHydration = false;
+          this._postSsrCatchUpDone = true;
+          // Mark each already-joined relevant channel so subsequent state
+          // changes are correctly classified as reconnections rather than
+          // first-time joins.
+          for (const [name, state] of this._lastChannelStates) {
+            if (state === "joined") {
+              this._channelsCompletedInitialConnection.add(name);
+            }
+          }
+          void this._refetchAllData();
+        }
         resolve();
       } catch (error) {
         if (!this._closed) {
@@ -1851,6 +2152,9 @@ export default class TableController<
       if (pendingRow) {
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
+        // Rewrite any indexed-id references from the temp id to the real id
+        // BEFORE mutating, so indexed listeners can still resolve this row.
+        this._swapIdInIndexes(pendingRowWithId.id, data.id as IDType);
         pendingRowWithId.id = data.id as IDType;
         // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
@@ -2109,6 +2413,10 @@ export default class TableController<
       return true; // No filter means all rows match
     }
 
+    if (typeof this._realtimeFilter === "function") {
+      return this._realtimeFilter(rowData as DatabaseTableTypes[RelationName]["Row"]);
+    }
+
     for (const [key, filterValue] of Object.entries(this._realtimeFilter)) {
       const rowValue = rowData[key];
 
@@ -2281,11 +2589,37 @@ export default class TableController<
 
   private _nonExistantKeys: Set<IDType> = new Set();
   private async _maybeRefetchKey(id: IDType) {
-    if (!this._ready || !this._autoFetchMissingRows) {
+    if (!this._autoFetchMissingRows) {
       return;
     }
     if (this._nonExistantKeys.has(id)) {
       return;
+    }
+
+    // If the controller hasn't completed its initial fetch yet, wait for it.
+    // The initial fetch may include this row, in which case we don't need to
+    // issue a per-row refetch. Without this wait, callers that arrive before
+    // _ready (e.g. a route navigation that mounts a detail page before the
+    // course-wide TableController has loaded) silently get `undefined`
+    // forever — _maybeRefetchKey used to early-return when !_ready, and the
+    // ready-transition only fires listeners for rows already present in
+    // _rows. The result was the discussion thread heading would
+    // intermittently never paint until reload.
+    if (!this._ready) {
+      try {
+        await this._readyPromise;
+      } catch {
+        return;
+      }
+      if (this._closed) return;
+      // After the initial fetch, the row may now be present; if so, no
+      // single-row refetch is needed. Listeners attached via getById() will
+      // have been notified by the ready-transition fan-out (see the
+      // _readyPromise resolver).
+      const existing = this._rows.find((row) => (row as ResultOne & { id: IDType }).id === id);
+      if (existing) {
+        return existing as unknown as ResultOne;
+      }
     }
 
     this._nonExistantKeys.add(id);
@@ -2437,6 +2771,303 @@ export default class TableController<
     };
   }
 
+  /**
+   * Lazily build (and return) the index entry for `field`. The first call
+   * for a given field walks every row once to populate the forward index;
+   * subsequent calls are O(1). Mutations in `_addRow`/`_updateRow`/
+   * `_removeRow` keep already-built indexes in sync.
+   */
+  private _ensureIndex(field: string) {
+    let entry = this._indexes.get(field);
+    if (entry) return entry;
+    entry = {
+      rowIdsByValue: new Map(),
+      singleListenersByValue: new Map(),
+      listListenersByValue: new Map()
+    };
+    for (const row of this._rows) {
+      const value = (row as unknown as Record<string, unknown>)[field];
+      if (value === undefined || value === null) continue;
+      const id = (row as ResultOne & { id: IDType }).id;
+      let rowIds = entry.rowIdsByValue.get(value);
+      if (!rowIds) {
+        rowIds = new Set();
+        entry.rowIdsByValue.set(value, rowIds);
+      }
+      rowIds.add(id);
+    }
+    this._indexes.set(field, entry);
+    return entry;
+  }
+
+  /**
+   * Rebuild the `_rowsById` mirror from the current `_rows`. Called after
+   * any wholesale `_rows` reassignment (initial load, refetch catch-up).
+   * Per-row mutations keep the map in sync inline and don't need this.
+   */
+  private _rebuildRowsById() {
+    this._rowsById.clear();
+    for (const row of this._rows) {
+      if ("id" in (row as object)) {
+        this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
+      }
+    }
+  }
+
+  /**
+   * After a wholesale `_rows` reassignment (initial fetch, full refetch),
+   * rebuild every existing index's forward map from the new `_rows` and
+   * re-notify every registered indexed listener with its fresh value.
+   *
+   * Per-row mutations go through `_notifyIndexedListeners`, which keeps the
+   * forward map and listeners in sync incrementally. Bulk reassignments
+   * bypass that path, so a subscriber that registered against an empty
+   * controller (e.g. `useIndexedTableControllerValue` mounted before the
+   * initial fetch resolves) would otherwise never receive an update.
+   */
+  private _rebuildIndexesAndNotifyListeners() {
+    if (this._indexes.size === 0) return;
+    for (const [field, entry] of this._indexes) {
+      entry.rowIdsByValue.clear();
+      for (const row of this._rows) {
+        const value = (row as unknown as Record<string, unknown>)[field];
+        if (value === undefined || value === null) continue;
+        const id = (row as ResultOne & { id: IDType }).id;
+        let rowIds = entry.rowIdsByValue.get(value);
+        if (!rowIds) {
+          rowIds = new Set();
+          entry.rowIdsByValue.set(value, rowIds);
+        }
+        rowIds.add(id);
+      }
+      for (const [value, listeners] of entry.singleListenersByValue) {
+        if (listeners.size === 0) continue;
+        const matched = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+        const single = matched.length > 0 ? matched[0] : undefined;
+        for (const l of listeners) l(single);
+      }
+      for (const [value, listeners] of entry.listListenersByValue) {
+        if (listeners.size === 0) continue;
+        const matched = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+        for (const l of listeners) l(matched);
+      }
+    }
+  }
+
+  /**
+   * Optimistic create / realtime-dedup swaps a tentative row's id from the
+   * negative temp value to the real DB id by mutating the same row object
+   * in place. Without rewriting our id-keyed bookkeeping the forward index
+   * entries (`rowIdsByValue`) and the `_rowsById` mirror would keep
+   * pointing at the temp id, so subsequent lookups couldn't find the row.
+   * Walk every index entry plus the row mirror, rewriting any temp id we
+   * hold to the new id.
+   */
+  private _swapIdInIndexes(oldId: IDType, newId: IDType) {
+    if (oldId === newId) return;
+    const row = this._rowsById.get(oldId);
+    if (row !== undefined) {
+      this._rowsById.delete(oldId);
+      this._rowsById.set(newId, row);
+    }
+    if (this._indexes.size === 0) return;
+    for (const entry of this._indexes.values()) {
+      for (const ids of entry.rowIdsByValue.values()) {
+        if (ids.delete(oldId)) ids.add(newId);
+      }
+    }
+  }
+
+  /** Resolve the row ids matching `(field, value)` to actual row objects. */
+  private _resolveIndexedRows(rowIds: Set<IDType> | undefined): PossiblyTentativeResult<ResultOne>[] {
+    if (!rowIds || rowIds.size === 0) return [];
+    const out: PossiblyTentativeResult<ResultOne>[] = [];
+    // O(matches) via the id-keyed mirror of `_rows`. The previous walk over
+    // `_rows` was O(N) per call and is on the hot notification fan-out path.
+    const byId = this._rowsById;
+    for (const id of rowIds) {
+      const row = byId.get(id);
+      if (row !== undefined) out.push(row);
+    }
+    return out;
+  }
+
+  /**
+   * Subscribe to the *first* row whose `field === value`. Returns the
+   * current matching row (or `undefined`) plus an unsubscribe.
+   *
+   * Designed for "lookup by foreign key" patterns where the existing
+   * `useFindTableControllerValue` would re-scan all rows on every list
+   * publish. With `subscribeIndexedSingle`, mutations only notify
+   * subscribers whose `value` actually matches, so a single row update
+   * costs O(1) rather than O(listeners × rows).
+   */
+  subscribeIndexedSingle(
+    field: string,
+    value: unknown,
+    listener?: (row: PossiblyTentativeResult<ResultOne> | undefined) => void
+  ): { data: PossiblyTentativeResult<ResultOne> | undefined; unsubscribe: () => void } {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call subscribeIndexedSingle(${field}, ${String(value)}).`
+      );
+    }
+    const entry = this._ensureIndex(field);
+
+    const matchedRows = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+    const data = matchedRows.length > 0 ? matchedRows[0] : undefined;
+
+    if (!listener) {
+      return { data, unsubscribe: () => {} };
+    }
+
+    let listeners = entry.singleListenersByValue.get(value);
+    if (!listeners) {
+      listeners = new Set();
+      entry.singleListenersByValue.set(value, listeners);
+    }
+    listeners.add(listener);
+
+    return {
+      data,
+      unsubscribe: () => {
+        const set = entry.singleListenersByValue.get(value);
+        if (!set) return;
+        set.delete(listener);
+        if (set.size === 0) entry.singleListenersByValue.delete(value);
+      }
+    };
+  }
+
+  /**
+   * Subscribe to *all* rows whose `field === value`. Same scaling
+   * properties as `subscribeIndexedSingle`. Listener fires on any row
+   * change that affects the matching set: a new row entering, an existing
+   * row's other-field update, a row leaving (via update or delete).
+   */
+  subscribeIndexedList(
+    field: string,
+    value: unknown,
+    listener?: (rows: PossiblyTentativeResult<ResultOne>[]) => void
+  ): { data: PossiblyTentativeResult<ResultOne>[]; unsubscribe: () => void } {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call subscribeIndexedList(${field}, ${String(value)}).`
+      );
+    }
+    const entry = this._ensureIndex(field);
+    const data = this._resolveIndexedRows(entry.rowIdsByValue.get(value));
+
+    if (!listener) {
+      return { data, unsubscribe: () => {} };
+    }
+
+    let listeners = entry.listListenersByValue.get(value);
+    if (!listeners) {
+      listeners = new Set();
+      entry.listListenersByValue.set(value, listeners);
+    }
+    listeners.add(listener);
+
+    return {
+      data,
+      unsubscribe: () => {
+        const set = entry.listListenersByValue.get(value);
+        if (!set) return;
+        set.delete(listener);
+        if (set.size === 0) entry.listListenersByValue.delete(value);
+      }
+    };
+  }
+
+  /**
+   * Notify indexed listeners after a row mutation. Walks every existing
+   * index entry (one per indexed field) and re-derives the matching rows
+   * for any value that was affected by this row's old/new state. Designed
+   * to be called from `_addRow` / `_updateRow` / `_removeRow`.
+   *
+   * `oldValueByField` and `newValueByField` distinguish three cases per
+   * field:
+   *   - both undefined → field unaffected (no notification).
+   *   - same value → row content changed but field unchanged → re-notify
+   *     listeners for that single value (their row data may have changed).
+   *   - different values → row moved between value-buckets → notify
+   *     listeners on BOTH the old and new values.
+   *
+   * `oldValueByField` may be omitted on insert; `newValueByField` may be
+   * omitted on delete.
+   */
+  private _notifyIndexedListeners(
+    rowId: IDType,
+    operation: "add" | "update" | "remove",
+    oldRow?: PossiblyTentativeResult<ResultOne>,
+    newRow?: PossiblyTentativeResult<ResultOne>
+  ): void {
+    if (this._indexes.size === 0) return;
+    for (const [field, entry] of this._indexes) {
+      const oldValue = oldRow !== undefined ? (oldRow as unknown as Record<string, unknown>)[field] : undefined;
+      const newValue = newRow !== undefined ? (newRow as unknown as Record<string, unknown>)[field] : undefined;
+
+      // Maintain forward index based on the actual operation.
+      if (operation === "add" && newValue !== undefined && newValue !== null) {
+        let ids = entry.rowIdsByValue.get(newValue);
+        if (!ids) {
+          ids = new Set();
+          entry.rowIdsByValue.set(newValue, ids);
+        }
+        ids.add(rowId);
+      } else if (operation === "remove" && oldValue !== undefined && oldValue !== null) {
+        const ids = entry.rowIdsByValue.get(oldValue);
+        if (ids) {
+          ids.delete(rowId);
+          if (ids.size === 0) entry.rowIdsByValue.delete(oldValue);
+        }
+      } else if (operation === "update") {
+        // Field-level set/move/clear.
+        const moved = oldValue !== newValue;
+        if (moved) {
+          if (oldValue !== undefined && oldValue !== null) {
+            const ids = entry.rowIdsByValue.get(oldValue);
+            if (ids) {
+              ids.delete(rowId);
+              if (ids.size === 0) entry.rowIdsByValue.delete(oldValue);
+            }
+          }
+          if (newValue !== undefined && newValue !== null) {
+            let ids = entry.rowIdsByValue.get(newValue);
+            if (!ids) {
+              ids = new Set();
+              entry.rowIdsByValue.set(newValue, ids);
+            }
+            ids.add(rowId);
+          }
+        }
+      }
+
+      // Determine which values' listeners need to fire.
+      const affectedValues = new Set<unknown>();
+      if (oldValue !== undefined && oldValue !== null) affectedValues.add(oldValue);
+      if (newValue !== undefined && newValue !== null) affectedValues.add(newValue);
+
+      for (const value of affectedValues) {
+        const ids = entry.rowIdsByValue.get(value);
+        // Single-row listeners.
+        const singleListeners = entry.singleListenersByValue.get(value);
+        if (singleListeners && singleListeners.size > 0) {
+          const matched = this._resolveIndexedRows(ids);
+          const single = matched.length > 0 ? matched[0] : undefined;
+          for (const l of singleListeners) l(single);
+        }
+        // List listeners.
+        const listListeners = entry.listListenersByValue.get(value);
+        if (listListeners && listListeners.size > 0) {
+          const matched = this._resolveIndexedRows(ids);
+          for (const l of listListeners) l(matched);
+        }
+      }
+    }
+  }
+
   async invalidate(id: IDType) {
     if (this._closed) {
       throw new Error(
@@ -2467,8 +3098,7 @@ export default class TableController<
     // Enforce uniqueness by ID. If a row with the same ID already exists, treat this as an update.
     if ("id" in row) {
       const id = (row as { id: IDType }).id;
-      const existingIndex = this._rows.findIndex((r) => (r as ResultOne & { id: IDType }).id === id);
-      if (existingIndex !== -1) {
+      if (this._rowsById.has(id)) {
         this._updateRow(
           id,
           row as unknown as ResultOne & { id: IDType },
@@ -2479,6 +3109,15 @@ export default class TableController<
     }
 
     this._rows = [...this._rows, row];
+    if ("id" in row) {
+      this._rowsById.set((row as ResultOne & { id: IDType }).id, row);
+    }
+    // Notify indexed listeners FIRST so they see the row in `_rows` when
+    // they re-resolve via `_resolveIndexedRows`. Then the broad
+    // `_listDataListeners` fan-out runs (the legacy O(N) path).
+    if ("id" in row) {
+      this._notifyIndexedListeners((row as ResultOne & { id: IDType }).id, "add", undefined, row);
+    }
     this._listDataListeners.forEach((listener) => listener(this._rows, { entered: [row], left: [] }));
     if ("id" in row) {
       //Should always be true, fix up types later...
@@ -2490,22 +3129,32 @@ export default class TableController<
   }
 
   private _updateRow(id: IDType, newRow: ResultOne & { id: IDType }, is_pending: boolean = false) {
-    const index = this._rows.findIndex((r) => (r as ResultOne & { id: IDType }).id === id);
+    const oldRow = this._rowsById.get(id);
+    if (oldRow === undefined) {
+      throw new Error("Row not found");
+    }
+    const index = this._rows.indexOf(oldRow);
     if (index === -1) {
       throw new Error("Row not found");
     }
-    const oldRow = this._rows[index];
-    this._rows[index] = {
+    const merged = {
       ...this._rows[index],
       ...newRow,
       __db_pending: is_pending
-    };
+    } as PossiblyTentativeResult<ResultOne>;
+    this._rows[index] = merged;
+    this._rowsById.set(id, merged);
 
     const itemListeners = this._itemDataListeners.get(id as IDType);
 
     if (itemListeners) {
       itemListeners.forEach((listener) => listener(this._rows[index]));
     }
+
+    // Notify indexed listeners against the in-place updated row. We pass
+    // both `oldRow` and the freshly merged row so the helper can detect
+    // field-value movement (row leaving one bucket and entering another).
+    this._notifyIndexedListeners(id, "update", oldRow, this._rows[index]);
 
     // Create new array reference to ensure React detects the change
     const newRowsArray = [...this._rows];
@@ -2520,11 +3169,15 @@ export default class TableController<
   }
 
   private _removeRow(id: IDType) {
-    const rowToRemove = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+    const rowToRemove = this._rowsById.get(id);
     if (!rowToRemove) {
       return;
     }
+    this._rowsById.delete(id);
     this._rows = this._rows.filter((r) => (r as ResultOne & { id: IDType }).id !== id);
+    // Indexed listeners need to see the row gone from the index BEFORE the
+    // legacy fan-out runs. The helper handles the index-pruning side.
+    this._notifyIndexedListeners(id, "remove", rowToRemove, undefined);
     this._listDataListeners.forEach((listener) =>
       listener(this._rows, { entered: [], left: [rowToRemove as ResultOne] })
     );
@@ -2558,7 +3211,7 @@ export default class TableController<
     }
 
     // Check if the real-time broadcast has already updated this row
-    const currentRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+    const currentRow = this._rowsById.get(data.id as IDType);
     if (currentRow && !(currentRow as PossiblyTentativeResult<ResultOne>).__db_pending) {
       // Row was already updated by real-time broadcast, just return the data
       return data;
@@ -2568,6 +3221,9 @@ export default class TableController<
     // This handles cases where real-time might be slow or disabled
     const tentativeRowStillExists = this._rows.find((r) => r === tentativeRow);
     if (tentativeRowStillExists) {
+      // Same temp→real id swap as the realtime-dedup path: keep the index
+      // forward map in sync before mutating the row's id in place.
+      this._swapIdInIndexes(tentativeRow.id as IDType, data.id as IDType);
       tentativeRow.id = data.id;
       this._updateRow(data.id, data, false);
     }

@@ -46,7 +46,7 @@ export async function FlashcardsDecksBody({ course_id }: { course_id: string }) 
           {flashcardDecks.length} deck{flashcardDecks.length !== 1 ? "s" : ""} available
         </Badge>
       </Box>
-      <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4, xl: 5 }} gap={24} justifyItems="center" px={4}>
+      <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4, xl: 5 }} gap={{ base: 6, md: 12, lg: 24 }}>
         {flashcardDecks.map((deck: FlashcardDeck) => (
           <FlashcardDeckCard key={deck.id} deck={deck} courseId={course_id} />
         ))}

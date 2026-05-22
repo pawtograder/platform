@@ -22,8 +22,9 @@ import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, loginAsUser, TestingUser, supabase } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
@@ -714,6 +715,10 @@ test.describe("Fixture 1: Weighted Average Course", () => {
 
     // Wait for the gradebook region to appear, then expand all groups
     await expect(page.getByText("Expand All")).toBeVisible({ timeout: 30_000 });
+    // Also scan the *collapsed* state — that's what every student sees on
+    // first load. The expanded scan below catches the article cards; this
+    // one catches the chrome (group headers, expand controls, summary row).
+    await assertStudentPageAccessible(page, "gradebook calculations student released grades (collapsed)");
     await page.getByText("Expand All").click();
     // Wait a tick for state update to propagate
     await page.waitForTimeout(500);
@@ -728,6 +733,7 @@ test.describe("Fixture 1: Weighted Average Course", () => {
     const finalCard = page.getByRole("article", { name: "Grade for Final Grade" });
     await expect(finalCard).toBeVisible({ timeout: 10_000 });
     await expect(finalCard).toContainText(/84(\.0+)?/);
+    await assertStudentPageAccessible(page, "gradebook calculations student released grades");
   });
 });
 
@@ -1990,6 +1996,7 @@ test.describe("Fixture 5: Score Override Precedence", () => {
 
     // Wait for the gradebook region to appear, then expand all groups
     await expect(page.getByText("Expand All")).toBeVisible({ timeout: 30_000 });
+    await assertStudentPageAccessible(page, "gradebook calculations student overrides UI (collapsed)");
     await page.getByText("Expand All").click();
     await page.waitForTimeout(500);
 
@@ -2002,5 +2009,6 @@ test.describe("Fixture 5: Score Override Precedence", () => {
     const bonusCard = page.getByRole("article", { name: "Grade for Final with Bonus" });
     await expect(bonusCard).toBeVisible({ timeout: 30_000 });
     await expect(bonusCard).toContainText(/82(\.0+)?/);
+    await assertStudentPageAccessible(page, "gradebook calculations student overrides UI");
   });
 });

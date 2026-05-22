@@ -63,7 +63,21 @@ export default function Flashcard({
   }
 
   return (
-    <Box height="100%" maxW="4xl" mx="auto" style={{ perspective: "1000px" }}>
+    // The two card faces below are `position: absolute` with `height: 100%`
+    // relative to this box, which in turn has `height: 100%` relative to its
+    // ancestors. CSS resolves `height: <percentage>` against the parent's
+    // *explicit* `height`, NOT against `min-height`, so a `minH`-only parent
+    // would cascade `auto` and collapse every face to its intrinsic header
+    // line. Set an explicit responsive `h` so the percentage chain resolves
+    // at every breakpoint; clamp the absolute size with `maxH` so the card
+    // never grows past the viewport (1.4.10 reflow-friendly).
+    <Box
+      h={{ base: "60vh", md: "70vh", lg: "80vh" }}
+      maxH="900px"
+      maxW="4xl"
+      mx="auto"
+      style={{ perspective: "1000px" }}
+    >
       {/* Card Container with Flip Animation */}
       <Box
         position="relative"

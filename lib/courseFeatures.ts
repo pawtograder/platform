@@ -99,6 +99,18 @@ export const MANAGEABLE_COURSE_FEATURES: readonly ManageableCourseFeature[] = [
   }
 ];
 
+export const COURSE_FEATURE_DEFAULTS = MANAGEABLE_COURSE_FEATURES.reduce(
+  (acc, def) => {
+    acc[def.name] = def.defaultWhenMissing;
+    return acc;
+  },
+  {} as Record<CourseFeatureName, boolean>
+);
+
+export function courseFeatureDefaultEnabled(name: CourseFeatureName): boolean {
+  return COURSE_FEATURE_DEFAULTS[name] ?? true;
+}
+
 export function courseFeatureEffectiveEnabled(
   features: { name: string; enabled: boolean }[] | null | undefined,
   name: CourseFeatureName,
@@ -106,4 +118,11 @@ export function courseFeatureEffectiveEnabled(
 ): boolean {
   const row = features?.find((f) => f.name === name);
   return row?.enabled ?? defaultWhenMissing;
+}
+
+export function courseFeatureEnabled(
+  features: { name: string; enabled: boolean }[] | null | undefined,
+  name: CourseFeatureName
+): boolean {
+  return courseFeatureEffectiveEnabled(features, name, courseFeatureDefaultEnabled(name));
 }

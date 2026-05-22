@@ -15,9 +15,10 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { COURSE_FEATURES } from "@/lib/courseFeatures";
+import { useCourse } from "@/hooks/useCourseController";
+import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack, useBreakpointValue } from "@chakra-ui/react";
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
@@ -247,10 +248,13 @@ export default function DynamicCourseNav() {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
   const { role: enrollment } = useClassProfiles();
+  const course = useCourse() as CourseWithFeatures;
   const { colorMode } = useColorMode();
 
   const isInstructor = enrollment.role === "instructor";
   const isInstructorOrGrader = enrollment.role === "instructor" || enrollment.role === "grader";
+  /** Matches `display={{ base, md }}` splits below — only one layout gets landmark ids / exposes nav to SRs. */
+  const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
 
   useEffect(() => {
     if (courseNavRef.current) {
@@ -263,7 +267,6 @@ export default function DynamicCourseNav() {
     return <Skeleton height="40" width="100%" />;
   }
 
-  const course = enrollment.classes as CourseWithFeatures;
   const filteredLinks = LinkItems(enrollment.class_id)
     .filter(
       (link) =>
@@ -272,13 +275,14 @@ export default function DynamicCourseNav() {
         (!link.instructor_only || isInstructor)
     )
     .filter((link) => {
-      if (!("feature_flag" in link)) return true;
-      const feature = course.features?.find((f) => f.name === link.feature_flag);
-      return feature ? feature.enabled : true; // Default to enabled if feature not found
+      const featureFlag = "feature_flag" in link ? link.feature_flag : undefined;
+      if (!featureFlag) return true;
+      return courseFeatureEnabled(course.features, featureFlag);
     });
 
   return (
     <Box
+      as="header"
       px={{ base: 2, md: 4 }}
       py={{ base: 2, md: 2 }}
       ref={courseNavRef}
@@ -290,28 +294,39 @@ export default function DynamicCourseNav() {
     >
       <NavigationProgressBar />
       {/* Mobile Layout */}
-      <Box display={{ base: "block", md: "none" }}>
+      <Box display={{ base: "block", md: "none" }} aria-hidden={isMdUp ? true : undefined}>
         <VStack gap={2} align="stretch">
           {/* Top row: Course picker, logo, course name, user menu */}
           <HStack justifyContent="space-between" alignItems="center">
             <HStack>
               <CoursePicker currentCourse={enrollment.classes} />
-              {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
-              ) : (
-                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
-              )}
+              <NextLink href="/course" aria-label="Pawtograder home">
+                {colorMode === "dark" ? (
+                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
+                ) : (
+                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
+                )}
+              </NextLink>
               <Text fontSize="md" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
                   {enrollment.classes.course_title ?? enrollment.classes.name}
                 </Link>
               </Text>
             </HStack>
-            <UserMenu />
+            <Box id={!isMdUp ? "user-menu" : undefined}>
+              <UserMenu />
+            </Box>
           </HStack>
 
           {/* Navigation links - horizontal scroll on mobile */}
-          <Box overflowX="auto" overflowY="hidden" pb={1}>
+          <Box
+            as="nav"
+            id={!isMdUp ? "primary-nav" : undefined}
+            aria-label="Course navigation"
+            overflowX="auto"
+            overflowY="hidden"
+            pb={1}
+          >
             <HStack gap={1} minWidth="max-content">
               {filteredLinks.map((link) => {
                 if (link.submenu) {
@@ -325,6 +340,7 @@ export default function DynamicCourseNav() {
                       <Menu.Root>
                         <Menu.Trigger asChild>
                           <Button
+                            aria-label={`${link.name} menu`}
                             colorPalette="gray"
                             size="xs"
                             fontSize="xs"
@@ -349,9 +365,9 @@ export default function DynamicCourseNav() {
                                     (!submenu.instructors_or_graders_only || isInstructorOrGrader)
                                 )
                                 .filter((submenu) => {
-                                  if (!("feature_flag" in submenu)) return true;
-                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
-                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
+                                  const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
+                                  if (!featureFlag) return true;
+                                  return courseFeatureEnabled(course.features, featureFlag);
                                 })
                                 .map((submenu) => (
                                   <Menu.Item key={submenu.name} value={submenu.name} asChild>
@@ -385,7 +401,10 @@ export default function DynamicCourseNav() {
                         whiteSpace="nowrap"
                         asChild
                       >
-                        <NextLink href={link.target || "#"}>
+                        <NextLink
+                          href={link.target || "#"}
+                          aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+                        >
                           <HStack gap={1}>
                             {React.createElement(link.icon, { size: 14 })}
                             <Text>{link.name}</Text>
@@ -403,96 +422,115 @@ export default function DynamicCourseNav() {
         </VStack>
       </Box>
 
-      {/* Desktop Layout - unchanged */}
-      <Box display={{ base: "none", md: "block" }}>
-        <Flex width="100%" pt="2" alignItems="center" justifyContent="space-between">
-          <VStack gap="0" align="start">
-            <HStack>
+      {/* Desktop Layout */}
+      <Box display={{ base: "none", md: "block" }} aria-hidden={!isMdUp ? true : undefined}>
+        <Box width="100%" pt="2">
+          {/* Title row: course identity on the left, user-menu chips on the right.
+              The chips wrap into stacked lines inside their right-hand block
+              (UserMenu uses flexWrap + justifyContent="flex-end") instead of
+              forcing the title onto a separate row. */}
+          <Flex width="100%" alignItems="flex-start" gap={2}>
+            <HStack flexShrink={0}>
               <CoursePicker currentCourse={enrollment.classes} />
-              {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
-              ) : (
-                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
-              )}
+              <NextLink href="/course" aria-label="Pawtograder home">
+                {colorMode === "dark" ? (
+                  <Image src="/Logo-Dark.png" width={30} height={30} alt="Pawtograder" />
+                ) : (
+                  <Image src="/Logo-Light.png" width={30} height={30} alt="Pawtograder" />
+                )}
+              </NextLink>
               <Text fontSize="xl" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
                   {enrollment.classes.course_title ?? enrollment.classes.name}
                 </Link>
               </Text>
             </HStack>
-            <HStack width="100%" mt={2}>
-              {filteredLinks.map((link) => {
-                if (link.submenu) {
-                  return (
-                    <Box
-                      key={link.name}
-                      borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
-                      borderColor="orange.600"
-                    >
-                      <Menu.Root>
-                        <Menu.Trigger asChild>
-                          <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
-                            <Flex align="center" role="group">
-                              <HStack>
-                                {React.createElement(link.icon)}
-                                {link.name}
-                              </HStack>
-                            </Flex>
-                          </Button>
-                        </Menu.Trigger>
-                        <Portal>
-                          <Menu.Positioner>
-                            <Menu.Content>
-                              {link.submenu
-                                .filter(
-                                  (submenu) =>
-                                    (!submenu.instructors_only || isInstructor) &&
-                                    (!submenu.instructors_or_graders_only || isInstructorOrGrader)
-                                )
-                                .filter((submenu) => {
-                                  if (!("feature_flag" in submenu)) return true;
-                                  const feature = course.features?.find((f) => f.name === submenu.feature_flag);
-                                  return feature ? feature.enabled : true; // Default to enabled if feature not found
-                                })
-                                .map((submenu) => (
-                                  <Menu.Item key={submenu.name} value={submenu.name} asChild>
-                                    <NextLink href={submenu.target || "#"}>
-                                      {React.createElement(submenu.icon)}
-                                      {submenu.name}
-                                    </NextLink>
-                                  </Menu.Item>
-                                ))}
-                            </Menu.Content>
-                          </Menu.Positioner>
-                        </Portal>
-                      </Menu.Root>
-                    </Box>
-                  );
-                } else {
-                  return (
-                    <Box
-                      key={link.name}
-                      borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
-                      borderColor="orange.600"
-                    >
-                      <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
-                        <NextLink href={link.target || "#"}>
+            <Box id={isMdUp ? "user-menu" : undefined} flex="1" minWidth={0}>
+              <UserMenu />
+            </Box>
+          </Flex>
+          <HStack as="nav" id={isMdUp ? "primary-nav" : undefined} aria-label="Course navigation" width="100%" mt={2}>
+            {filteredLinks.map((link) => {
+              if (link.submenu) {
+                return (
+                  <Box
+                    key={link.name}
+                    borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
+                    borderColor="orange.600"
+                  >
+                    <Menu.Root>
+                      <Menu.Trigger asChild>
+                        <Button
+                          aria-label={`${link.name} menu`}
+                          colorPalette="gray"
+                          size="xs"
+                          fontSize="sm"
+                          pt="0"
+                          variant="ghost"
+                          asChild
+                        >
                           <Flex align="center" role="group">
                             <HStack>
                               {React.createElement(link.icon)}
                               {link.name}
                             </HStack>
                           </Flex>
-                        </NextLink>
-                      </Button>
-                    </Box>
-                  );
-                }
-              })}
-            </HStack>
-          </VStack>
-          <UserMenu />
-        </Flex>
+                        </Button>
+                      </Menu.Trigger>
+                      <Portal>
+                        <Menu.Positioner>
+                          <Menu.Content>
+                            {link.submenu
+                              .filter(
+                                (submenu) =>
+                                  (!submenu.instructors_only || isInstructor) &&
+                                  (!submenu.instructors_or_graders_only || isInstructorOrGrader)
+                              )
+                              .filter((submenu) => {
+                                const featureFlag = "feature_flag" in submenu ? submenu.feature_flag : undefined;
+                                if (!featureFlag) return true;
+                                return courseFeatureEnabled(course.features, featureFlag);
+                              })
+                              .map((submenu) => (
+                                <Menu.Item key={submenu.name} value={submenu.name} asChild>
+                                  <NextLink href={submenu.target || "#"}>
+                                    {React.createElement(submenu.icon)}
+                                    {submenu.name}
+                                  </NextLink>
+                                </Menu.Item>
+                              ))}
+                          </Menu.Content>
+                        </Menu.Positioner>
+                      </Portal>
+                    </Menu.Root>
+                  </Box>
+                );
+              } else {
+                return (
+                  <Box
+                    key={link.name}
+                    borderBottom={pathname.startsWith(link.target || "#") ? "3px solid" : "none"}
+                    borderColor="orange.600"
+                  >
+                    <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
+                      <NextLink
+                        href={link.target || "#"}
+                        aria-current={pathname.startsWith(link.target || "#") ? "page" : undefined}
+                      >
+                        <Flex align="center" role="group">
+                          <HStack>
+                            {React.createElement(link.icon)}
+                            {link.name}
+                          </HStack>
+                        </Flex>
+                      </NextLink>
+                    </Button>
+                  </Box>
+                );
+              }
+            })}
+          </HStack>
+        </Box>
       </Box>
     </Box>
   );

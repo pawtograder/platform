@@ -56,6 +56,8 @@ export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg
 export type ActiveSubmissionsWithGradesForAssignment =
   Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
     id: number;
+    /** Present on `submissions_with_grades_for_assignment_nice` when group mentors exist. */
+    assignment_group_mentor_name?: string | null;
   };
 export type ActiveSubmissionsWithRegressionTestResults =
   Database["public"]["Views"]["submissions_with_grades_for_assignment_and_regression_test"]["Row"] & {
@@ -715,12 +717,41 @@ export type HydratedRubricCriteria = Omit<Database["public"]["Tables"]["rubric_c
   data?: RubricCriteriaDataType;
 };
 export type RubricCriteriaDataType = Json;
+/**
+ * A YAML reference entry on a rubric check. Either name-keyed (review_round + part +
+ * criterion + check) or by numeric `id` (fallback for paste-from-DB). See
+ * `lib/rubric/references.ts` for resolution semantics.
+ */
+export type YamlReference = {
+  review_round?: string;
+  part?: string;
+  criterion?: string;
+  check?: string;
+  id?: number;
+};
+/**
+ * In-memory representation of a single rubric_check_references row attached to a
+ * hydrated check. `id` is the DB row id (present iff it already exists). If absent,
+ * the save flow will create the row. `referenced_rubric_check_id` is always
+ * required (already resolved by the time we hold one of these).
+ */
+export type HydratedRubricCheckReference = {
+  id?: number;
+  referenced_rubric_check_id: number;
+};
 export type HydratedRubricCheck = Omit<
   Database["public"]["Tables"]["rubric_checks"]["Row"],
   "data" | "student_visibility"
 > & {
   data?: Json;
   student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
+  /** Resolved references attached to this check. Populated by hydration & after saves. */
+  references?: HydratedRubricCheckReference[];
+  /**
+   * Unresolved references parsed from YAML. Resolution to numeric ids happens at
+   * save time once we have hydrated trees for the other rubrics on the assignment.
+   */
+  yaml_references?: YamlReference[];
 };
 export type RubricChecksDataType = {
   options: {
@@ -812,6 +843,7 @@ export type YmlRubricChecksType = Omit<
   | "annotation_target"
   | "data"
   | "kpi_category"
+  | "references"
 > & {
   id?: number;
   description?: string;
@@ -821,6 +853,7 @@ export type YmlRubricChecksType = Omit<
   annotation_target?: "file" | "artifact";
   data?: RubricChecksDataType;
   kpi_category?: Database["public"]["Enums"]["repo_analytics_kpi_category"] | null;
+  references?: YamlReference[];
 };
 
 export type AssignmentDueDateException = GetResult<

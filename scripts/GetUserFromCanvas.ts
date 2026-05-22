@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import Canvas, { CanvasApi } from "@kth/canvas-api";
 
-dotenv.config({ path: "./supabase/functions/.env" });
+dotenv.config({ path: "./supabase/functions/.env", quiet: true });
 
 const canvas = new CanvasApi(process.env.CANVAS_API_URL!, process.env.CANVAS_API_KEY!);
 async function main() {

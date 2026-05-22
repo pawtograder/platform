@@ -200,7 +200,16 @@ export default function SurveyResponsesView({
       }
     }
 
-    return filtered;
+    // Deterministic ordering: realtime arrival order is non-deterministic across
+    // runs. Sort by student name (then id) so the responses table renders the
+    // same way every time — required for visual regression stability.
+    return [...filtered].sort((a, b) => {
+      const nameA = a.profiles?.name ?? "";
+      const nameB = b.profiles?.name ?? "";
+      const byName = nameA.localeCompare(nameB);
+      if (byName !== 0) return byName;
+      return String(a.id).localeCompare(String(b.id));
+    });
   }, [responses, dateRangeStart, dateRangeEnd]);
 
   // Count active filters
@@ -507,7 +516,13 @@ export default function SurveyResponsesView({
           <Text fontSize="sm" color="fg.muted" mb={1}>
             TIME REMAINING
           </Text>
-          <Text fontSize="2xl" fontWeight="bold" color={isOverdue ? "red.fg" : isLessThan24Hours ? "orange.fg" : "fg"}>
+          <Text
+            fontSize="2xl"
+            fontWeight="bold"
+            color={isOverdue ? "red.fg" : isLessThan24Hours ? "orange.fg" : "fg"}
+            data-visual-test="transparent"
+            data-visual-placeholder="relative-time"
+          >
             {timeRemaining}
           </Text>
         </Box>

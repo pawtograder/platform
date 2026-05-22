@@ -1,6 +1,5 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { test, expect } from "../global-setup";
-import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -12,7 +11,9 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
-dotenv.config({ path: ".env.local" });
+import { assertStudentPageAccessible } from "./axeStudentA11y";
+import { visualScreenshot } from "./VisualTestUtils";
+dotenv.config({ path: ".env.local", quiet: true });
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -27,6 +28,7 @@ test.beforeAll(async () => {
   [student, student2, instructor] = await createUsersInClass([
     {
       name: "Office Hours Student",
+      public_profile_name: "Office Hours Pseudonym Student",
       email: "office-hours-student@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -34,6 +36,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Office Hours Student 2",
+      public_profile_name: "Office Hours Pseudonym Student 2",
       email: "office-hours-student2@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -41,6 +44,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Office Hours Instructor",
+      public_profile_name: "Office Hours Pseudonym Instructor",
       email: "office-hours-instructor@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -100,6 +104,12 @@ const HELP_REQUEST_OTHER_STUDENT_MESSAGE_1 = "Same boat here! Would love to lear
 test.describe("Office Hours", () => {
   test.describe.configure({ mode: "serial" });
   test("Student can request help", async ({ page }) => {
+    // This test does a magic-link login plus two full request flows and two axe
+    // scans. Under CI parallelism the login retry loop can spend up to ~5×15s
+    // recovering from transient GoTrue contention, which alone can exceed the
+    // default 60s budget and time the test out mid-login. Allow extra headroom so
+    // a slow-but-successful login doesn't surface as a flake.
+    test.slow();
     await loginAsUser(page, student!, course);
     const navRegion = page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
@@ -108,12 +118,20 @@ test.describe("Office Hours", () => {
     //Make a private request first
     await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
+    // Scan the "New Help Request" form once it has rendered with its
+    // description field. Catches form-control labeling regressions on the
+    // help-request submit screen before we navigate to the queue chat.
     await page.getByRole("textbox", { name: "Help Request Description" }).click();
+    await assertStudentPageAccessible(page, "office hours - new help request form");
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
-    await argosScreenshot(page, "Office Hours - Submit a Private Request");
+    await visualScreenshot(page, "Office Hours - Submit a Private Request");
     await page.getByRole("button", { name: "Submit Request" }).click();
 
+    // newRequestForm.tsx awaits helpRequests.create() then router.push() to
+    // /office-hours/{queue_id}/{request_id}. The router.push must land — if
+    // it doesn't, the user is stuck on the form (production bug).
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
     //Add a comment on it
     await page.getByRole("textbox", { name: "Type your message" }).click();
@@ -121,7 +139,7 @@ test.describe("Office Hours", () => {
       .getByRole("textbox", { name: "Type your message" })
       .fill("Thanks in advance! I might try to open a more geeral request too.");
     await page.getByRole("button", { name: "Send" }).click();
-    await argosScreenshot(page, "Office Hours - Private Request with Comment");
+    await visualScreenshot(page, "Office Hours - Private Request with Comment");
 
     //Make a public request
     await page.getByRole("link", { name: "New Request" }).click();
@@ -130,12 +148,19 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(HELP_REQUEST_MESSAGE_1);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
 
     //Add a comment on it
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await page.getByRole("button", { name: "Send" }).click();
+    // Wait for the message to post before axe runs so we don't catch the transient
+    // optimistic/"Submitting…" state. Scope to <p> because while the message is
+    // sending the textarea is briefly disabled with the same text still inside,
+    // which would trip getByText's strict-mode uniqueness check.
+    await expect(page.getByRole("paragraph").filter({ hasText: HELP_REQUEST_FOLLOW_UP_MESSAGE_1 })).toBeVisible();
+    await assertStudentPageAccessible(page, "office hours student queue");
   });
   test("Another student can view the public request and comment on it, but cant see the private", async ({ page }) => {
     await loginAsUser(page, student2!, course);
@@ -144,13 +169,15 @@ test.describe("Office Hours", () => {
     await page.waitForURL("**/office-hours/**");
 
     await page.getByRole("button", { name: "View Chat" }).click();
-    await argosScreenshot(page, "Office Hours - View Queue with a public request");
+    await visualScreenshot(page, "Office Hours - View Queue with a public request");
     await expect(page.getByText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1)).toBeVisible();
     await expect(page.getByText(PRIVATE_HELP_REQUEST_MESSAGE_1)).not.toBeVisible();
 
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);
     await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByRole("paragraph").filter({ hasText: HELP_REQUEST_OTHER_STUDENT_MESSAGE_1 })).toBeVisible();
+    await assertStudentPageAccessible(page, "office hours second student chat");
   });
   test("Instructor can view all, comment, and start a video call", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
@@ -161,11 +188,11 @@ test.describe("Office Hours", () => {
     await page.getByRole("link", { name: HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await expect(page.locator("body")).toContainText(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);
-    await argosScreenshot(page, "Office Hours - Instructor View Queue");
+    await visualScreenshot(page, "Office Hours - Instructor View Queue");
 
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_RESPONSE_1);
-    await argosScreenshot(page, "Office Hours - Instructor View Request with Comments");
+    await visualScreenshot(page, "Office Hours - Instructor View Request with Comments");
     await page.getByRole("button", { name: "Send" }).click();
     await page.getByRole("button", { name: "Show queue requests" }).click();
     await page.getByRole("link", { name: PRIVATE_HELP_REQUEST_MESSAGE_1 }).click();

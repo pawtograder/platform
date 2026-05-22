@@ -22,7 +22,9 @@ export default async function SubmissionsListing({
         {submissions.map((submission) => (
           <li key={submission.id}>
             {submission.is_active ? <ActiveSubmissionIcon /> : ""}
-            {submission.id}
+            <span data-visual-test="transparent" data-visual-placeholder="submission-id">
+              {submission.id}
+            </span>
           </li>
         ))}
       </ul>

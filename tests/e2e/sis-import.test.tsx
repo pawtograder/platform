@@ -42,7 +42,7 @@ test.describe("SIS Import (RPC)", () => {
     expect(state.invitation?.lab_section_id).not.toBeNull();
   });
 
-  test("expires invitation on drop then reactivates on re-add to different section", async () => {
+  test("drops invitation on drop then reactivates on re-add to different section", async () => {
     const course = await createClass({ name: "E2E SIS Import - Invite Drop Readd" });
     await createClassWithSISSections({
       class_id: course.id,
@@ -71,10 +71,10 @@ test.describe("SIS Import (RPC)", () => {
     const firstClassSection = state.invitation?.class_section_id;
     const firstLabSection = state.invitation?.lab_section_id;
 
-    // Drop -> invitation expires
+    // Drop -> invitation marked dropped
     await simulateSISSync({ class_id: course.id, roster: [] });
     state = await getEnrollmentState(course.id, sis_user_id);
-    expect(state.invitation?.status).toBe("expired");
+    expect(state.invitation?.status).toBe("dropped");
 
     // Re-add different section -> invitation becomes pending and section ids update
     await simulateSISSync({
@@ -402,7 +402,7 @@ test.describe("SIS Import (RPC)", () => {
         }
       ],
       p_sync_options: {
-        expire_missing: true,
+        drop_missing: true,
         section_updates: [
           {
             section_type: "lab",
@@ -463,10 +463,10 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
   test.describe.configure({ mode: "serial" });
 
   // =========================================================================
-  // 1. expire_missing: false option
+  // 1. drop_missing: false option
   // =========================================================================
-  test("does NOT expire invitations or disable enrollments when expire_missing=false", async () => {
-    const course = await createClass({ name: "E2E SIS - No Expire Missing" });
+  test("does NOT drop invitations or disable enrollments when drop_missing=false", async () => {
+    const course = await createClass({ name: "E2E SIS - No Drop Missing" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [33333], lab_section_crns: [] });
 
     // User 1: will get invitation
@@ -476,7 +476,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
       role: "student",
       class_id: course.id,
       useMagicLink: true,
-      name: "No Expire Student"
+      name: "No Drop Student"
     });
     const sis_user_id_2 = Math.floor(1_000_000_000 + Math.random() * 100_000);
     await setUserSisId(student.user_id, sis_user_id_2);
@@ -495,17 +495,17 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     expect(state1.invitation?.status).toBe("pending");
     expect(state2.user_role?.disabled).toBe(false);
 
-    // Sync with empty roster BUT expire_missing=false
+    // Sync with empty roster BUT drop_missing=false
     await simulateSISSync({
       class_id: course.id,
       roster: [],
-      expire_missing: false
+      drop_missing: false
     });
 
     // Both should remain unchanged
     state1 = await getEnrollmentState(course.id, sis_user_id_1);
     state2 = await getEnrollmentState(course.id, sis_user_id_2);
-    expect(state1.invitation?.status).toBe("pending"); // NOT expired
+    expect(state1.invitation?.status).toBe("pending"); // NOT dropped
     expect(state2.user_role?.disabled).toBe(false); // NOT disabled
   });
 
@@ -738,10 +738,10 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
   });
 
   // =========================================================================
-  // 5. Non-SIS invitation NOT expired on drop
+  // 5. Non-SIS invitation NOT dropped on drop
   // =========================================================================
-  test("does NOT expire non-SIS-managed invitation on drop", async () => {
-    const course = await createClass({ name: "E2E SIS - Non-SIS Invite No Expire" });
+  test("does NOT drop non-SIS-managed invitation on drop", async () => {
+    const course = await createClass({ name: "E2E SIS - Non-SIS Invite No Drop" });
     await createClassWithSISSections({ class_id: course.id, class_section_crns: [20001], lab_section_crns: [] });
 
     const sis_user_id = Math.floor(1_000_000_000 + Math.random() * 100_000);
@@ -766,7 +766,7 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     // Sync with empty roster (user not in SIS)
     await simulateSISSync({ class_id: course.id, roster: [] });
 
-    // Should NOT be expired because sis_managed=false
+    // Should NOT be dropped because sis_managed=false
     state = await getEnrollmentState(course.id, sis_user_id);
     expect(state.invitation?.status).toBe("pending");
   });
@@ -1051,9 +1051,9 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
   });
 
   // =========================================================================
-  // 14. Reactivates expired invitation and updates sections
+  // 14. Reactivates dropped invitation and updates sections
   // =========================================================================
-  test("reactivates expired invitation with updated section data", async () => {
+  test("reactivates dropped invitation with updated section data", async () => {
     const course = await createClass({ name: "E2E SIS - Reactivate With New Section" });
     const { classSections } = await createClassWithSISSections({
       class_id: course.id,
@@ -1072,10 +1072,10 @@ test.describe("SIS Import (RPC) - Additional Coverage", () => {
     let state = await getEnrollmentState(course.id, sis_user_id);
     expect(state.invitation?.class_section_id).toBe(classSections[0].id);
 
-    // Expire by dropping
+    // Drop by dropping
     await simulateSISSync({ class_id: course.id, roster: [] });
     state = await getEnrollmentState(course.id, sis_user_id);
-    expect(state.invitation?.status).toBe("expired");
+    expect(state.invitation?.status).toBe("dropped");
 
     // Reactivate in section 2
     const result = await simulateSISSync({

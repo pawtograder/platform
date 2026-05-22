@@ -189,9 +189,13 @@ export async function triggerWorkflow(
   params: FunctionTypes.AutograderTriggerGradingWorkflowRequest,
   supabase: SupabaseClient<Database>
 ) {
-  return await invokeEdgeFunction<{ message: string }>(supabase, "autograder-trigger-grading-workflow", {
-    body: params
-  });
+  return await invokeEdgeFunction<FunctionTypes.AutograderTriggerGradingWorkflowResponse>(
+    supabase,
+    "autograder-trigger-grading-workflow",
+    {
+      body: params
+    }
+  );
 }
 export async function assignmentGroupInstructorCreateGroup(
   params: FunctionTypes.AssignmentGroupInstructorCreateRequest,
@@ -256,6 +260,33 @@ export async function userFetchAzureProfile(params: { accessToken: string }, sup
 }
 export async function syncGitHubAccount(supabase: SupabaseClient<Database>) {
   return await invokeEdgeFunction<{ message: string }>(supabase, "github-user-sync", { body: {} });
+}
+
+export async function diagnoseInstructorGitHubAccount(
+  params: Omit<FunctionTypes.InstructorGitHubDiagnoseRequest, "action">,
+  supabase: SupabaseClient<Database>
+) {
+  return await invokeEdgeFunction<FunctionTypes.InstructorGitHubDiagnoseResponse>(supabase, "github-user-sync", {
+    body: { ...params, action: "diagnose" }
+  });
+}
+
+export async function syncInstructorGitHubAccount(
+  params: Omit<FunctionTypes.InstructorGitHubSyncRequest, "action">,
+  supabase: SupabaseClient<Database>
+) {
+  return await invokeEdgeFunction<FunctionTypes.InstructorGitHubSyncResponse>(supabase, "github-user-sync", {
+    body: { ...params, action: "sync" }
+  });
+}
+
+export async function unlinkInstructorGitHubAccount(
+  params: Omit<FunctionTypes.InstructorGitHubUnlinkRequest, "action">,
+  supabase: SupabaseClient<Database>
+) {
+  return await invokeEdgeFunction<FunctionTypes.InstructorGitHubUnlinkResponse>(supabase, "github-user-sync", {
+    body: { ...params, action: "unlink" }
+  });
 }
 export class EdgeFunctionError extends Error {
   details: string;

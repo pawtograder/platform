@@ -17,6 +17,13 @@ export interface ServerFilter {
   value: string | number | boolean | string[] | number[];
 }
 
+/** Negated PostgREST filter (`.not(column, operator, value)`). Value must follow PostgREST syntax for the operator. */
+export interface ServerNotFilter {
+  field: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "like" | "ilike" | "in" | "is";
+  value: string | number | boolean | string[] | number[];
+}
+
 export interface ServerOrderBy {
   field: string;
   direction: "asc" | "desc";
@@ -25,6 +32,8 @@ export interface UseCustomTableProps<TData> {
   columns: ColumnDef<TData>[];
   resource: keyof Database["public"]["Tables"];
   serverFilters?: ServerFilter[];
+  /** Applied as `.not(field, operator, value)` on the query (PostgREST `not.*` syntax). */
+  serverNotFilters?: ServerNotFilter[];
   serverOrderBys?: ServerOrderBy[];
   select?: string;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
@@ -33,6 +42,7 @@ export interface UseCustomTableProps<TData> {
 // Stable default values to prevent infinite re-rendering
 // These must be defined outside the hook to maintain referential equality
 const DEFAULT_SERVER_FILTERS: ServerFilter[] = [];
+const DEFAULT_SERVER_NOT_FILTERS: ServerNotFilter[] = [];
 const DEFAULT_SERVER_ORDER_BYS: ServerOrderBy[] = [];
 const DEFAULT_INITIAL_STATE = {};
 
@@ -93,6 +103,7 @@ export function useCustomTable<TData>({
   columns,
   resource,
   serverFilters = DEFAULT_SERVER_FILTERS,
+  serverNotFilters = DEFAULT_SERVER_NOT_FILTERS,
   serverOrderBys = DEFAULT_SERVER_ORDER_BYS,
   select = "*",
   initialState = DEFAULT_INITIAL_STATE
@@ -107,59 +118,82 @@ export function useCustomTable<TData>({
       setError(null);
 
       const supabase = createClient();
-      let query = supabase.from(resource).select(select);
+      const PAGE_SIZE = 1000;
 
-      // Apply server filters
-      serverFilters.forEach((filter) => {
-        switch (filter.operator) {
-          case "eq":
-            query = query.eq(filter.field, filter.value);
-            break;
-          case "neq":
-            query = query.neq(filter.field, filter.value);
-            break;
-          case "gt":
-            query = query.gt(filter.field, filter.value);
-            break;
-          case "gte":
-            query = query.gte(filter.field, filter.value);
-            break;
-          case "lt":
-            query = query.lt(filter.field, filter.value);
-            break;
-          case "lte":
-            query = query.lte(filter.field, filter.value);
-            break;
-          case "like":
-            query = query.like(filter.field, String(filter.value));
-            break;
-          case "ilike":
-            query = query.ilike(filter.field, String(filter.value));
-            break;
-          case "in":
-            query = query.in(filter.field, Array.isArray(filter.value) ? filter.value : [filter.value]);
-            break;
+      const buildQuery = () => {
+        let query = supabase.from(resource).select(select);
+
+        serverFilters.forEach((filter) => {
+          switch (filter.operator) {
+            case "eq":
+              query = query.eq(filter.field, filter.value);
+              break;
+            case "neq":
+              query = query.neq(filter.field, filter.value);
+              break;
+            case "gt":
+              query = query.gt(filter.field, filter.value);
+              break;
+            case "gte":
+              query = query.gte(filter.field, filter.value);
+              break;
+            case "lt":
+              query = query.lt(filter.field, filter.value);
+              break;
+            case "lte":
+              query = query.lte(filter.field, filter.value);
+              break;
+            case "like":
+              query = query.like(filter.field, String(filter.value));
+              break;
+            case "ilike":
+              query = query.ilike(filter.field, String(filter.value));
+              break;
+            case "in":
+              query = query.in(filter.field, Array.isArray(filter.value) ? filter.value : [filter.value]);
+              break;
+          }
+        });
+
+        serverNotFilters.forEach((filter) => {
+          query = query.not(filter.field, filter.operator, filter.value);
+        });
+
+        if (serverOrderBys.length > 0) {
+          serverOrderBys.forEach((orderBy) => {
+            query = query.order(orderBy.field, { ascending: orderBy.direction === "asc" });
+          });
+        } else {
+          // Deterministic order is required for stable pagination across pages
+          query = query.order("id", { ascending: true });
         }
-      });
 
-      // Apply server order bys
-      serverOrderBys.forEach((orderBy) => {
-        query = query.order(orderBy.field, orderBy.direction === "asc" ? { ascending: true } : { ascending: false });
-      });
+        return query;
+      };
 
-      const { data: result, error: queryError } = await query.limit(1000);
+      const allRows: TData[] = [];
+      for (let page = 0; ; page++) {
+        const from = page * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        const { data: pageRows, error: queryError } = await buildQuery().range(from, to);
 
-      if (queryError) {
-        throw queryError;
+        if (queryError) {
+          throw queryError;
+        }
+
+        const rows = (pageRows || []) as TData[];
+        allRows.push(...rows);
+
+        if (rows.length < PAGE_SIZE) break;
       }
 
-      setData((result || []) as TData[]);
+      setData(allRows);
     } catch (err) {
       setError(err instanceof Error ? err : new Error("An unknown error occurred"));
     } finally {
       setIsLoading(false);
     }
-  }, [resource, serverFilters, select, serverOrderBys]);
+  }, [resource, serverFilters, serverNotFilters, select, serverOrderBys]);
 
   // Re-fetch data when server filters, resource, or select clause changes
   // The useCallback dependencies ensure fetchData is recreated only when necessary

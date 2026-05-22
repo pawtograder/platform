@@ -34,7 +34,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import * as Sentry from "npm:@sentry/deno";
 import { authenticateMCPRequest, MCPAuthError, updateTokenLastUsed } from "../_shared/MCPAuth.ts";
-import { dispatch, UnknownCommandError } from "./router.ts";
+import { dispatch, dispatchStream, getCommand, UnknownCommandError } from "./router.ts";
+import { isStreamCommand } from "./commands/base.ts";
 import { corsHeaders } from "./utils/supabase.ts";
 import { CLICommandError } from "./errors.ts";
 import type { CLIRequest } from "./types.ts";
@@ -48,6 +49,7 @@ import "./commands/flashcards.ts";
 import "./commands/surveys.ts";
 import "./commands/submissions.ts";
 import "./commands/repos.ts";
+import "./commands/assessment.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
@@ -81,6 +83,14 @@ Deno.serve(async (req) => {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
+    }
+
+    // Streaming commands take ownership of the Response (status + headers +
+    // chunked body). The auth + scope check happens inside dispatchStream
+    // before the stream is opened so 401/403 still surface as proper errors.
+    const command = getCommand(body.command);
+    if (command && isStreamCommand(command)) {
+      return await dispatchStream(authContext, body, req);
     }
 
     const result = await dispatch(authContext, body);

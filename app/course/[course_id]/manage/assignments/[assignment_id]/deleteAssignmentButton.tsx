@@ -33,7 +33,8 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
       toaster.create({
         title: "Assignment Deleted",
         description: result.message,
-        type: "success"
+        type: "success",
+        duration: 10000
       });
 
       // Redirect to assignments list
@@ -45,13 +46,15 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
         toaster.create({
           title: "Delete Failed",
           description: error.details,
-          type: "error"
+          type: "error",
+          duration: 10000
         });
       } else {
         toaster.create({
           title: "Delete Failed",
           description: "An unexpected error occurred while deleting the assignment.",
-          type: "error"
+          type: "error",
+          duration: 10000
         });
       }
     } finally {
@@ -98,9 +101,12 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
                     <strong>If checks pass, ALL related data will be permanently deleted:</strong>
                   </Text>
                   <Box as="ul" fontSize="sm" color="fg.muted" ml={4}>
-                    <Box as="li">• All student repositories from GitHub</Box>
-                    <Box as="li">• Handout repository (template) from GitHub</Box>
-                    <Box as="li">• Solution repository (grader) from GitHub</Box>
+                    <Box as="li">
+                      • GitHub repositories: small batches are deleted immediately; larger batches are queued for
+                      background archival and locking
+                    </Box>
+                    <Box as="li">• Handout repository (template) GitHub cleanup</Box>
+                    <Box as="li">• Solution repository (grader) GitHub cleanup</Box>
                     <Box as="li">• All submissions and grading results</Box>
                     <Box as="li">• All assignment groups, invitations, and join requests</Box>
                     <Box as="li">• All due date exceptions and late tokens</Box>
@@ -117,7 +123,8 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
                     fontSize="lg"
                     fontWeight="bold"
                   >
-                    This action is not undoable, and will delete content from GitHub!
+                    This action is not undoable. Assignment data is deleted permanently, and associated GitHub
+                    repositories are either deleted immediately or archived in the background.
                   </Box>
                 </VStack>
               </Dialog.Body>

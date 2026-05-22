@@ -5,10 +5,18 @@ import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/comp
 import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser, { SystemNotification } from "./notification-teaser";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, type CSSProperties } from "react";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { OPEN_NOTIFICATIONS_EVENT } from "@/lib/clientEvents";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import Markdown from "@/components/ui/markdown";
+
+// Module-stable style — inline `{{...}}` literals defeat `<Markdown>`'s
+// `memo` because the prop changes identity each render.
+const SYSTEM_BANNER_BODY_STYLE: CSSProperties = {
+  fontSize: "0.875rem",
+  color: "var(--chakra-colors-fg-default)"
+};
 
 export default function NotificationsBox() {
   const { notifications, set_read, dismiss } = useNotifications();
@@ -17,6 +25,16 @@ export default function NotificationsBox() {
   const [bannerNotifications, setBannerNotifications] = useState<Notification[]>([]);
   const { role: classRole } = useClassProfiles();
   const course_id = classRole?.class_id;
+
+  // Keyboard shortcut (Shift+N) and any other UI affordance can toggle the
+  // popover by dispatching this event on `window`.
+  useEffect(() => {
+    function onToggle() {
+      setIsOpen((v) => !v);
+    }
+    window.addEventListener(OPEN_NOTIFICATIONS_EVENT, onToggle);
+    return () => window.removeEventListener(OPEN_NOTIFICATIONS_EVENT, onToggle);
+  }, []);
 
   // Filter out notifications where the author is the current user and separate by display mode
   const allFilteredNotifications = useMemo(
@@ -124,6 +142,7 @@ export default function NotificationsBox() {
           <Box display="inline-block">
             <PopoverTrigger asChild>
               <IconButton
+                aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}
                 variant="outline"
                 colorPalette="gray"
                 size="sm"
@@ -272,9 +291,7 @@ export default function NotificationsBox() {
                             <Text fontWeight="semibold" fontSize="sm" color="fg.default">
                               {body.title}
                             </Text>
-                            <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)" }}>
-                              {body.message}
-                            </Markdown>
+                            <Markdown style={SYSTEM_BANNER_BODY_STYLE}>{body.message}</Markdown>
                           </VStack>
                           <Button
                             size="xs"

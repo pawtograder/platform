@@ -11,6 +11,7 @@ import {
   TestingUser,
   supabase
 } from "@/tests/e2e/TestingUtils";
+import { assertStudentPageAccessible } from "@/tests/e2e/axeStudentA11y";
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -107,8 +108,8 @@ test.describe("Gifted tokens bug (#648)", () => {
     const lastAssignment = assignments[NUM_ASSIGNMENTS_TO_USE_TOKENS];
 
     await loginAsUser(page, student!, course);
-    await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await expect(page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
+    await page.locator("#primary-nav").getByRole("link").filter({ hasText: "Assignments" }).click();
     await expect(page).toHaveURL(/\/assignments\b/);
 
     await page.getByRole("link", { name: lastAssignment.title }).click();
@@ -127,5 +128,6 @@ test.describe("Gifted tokens bug (#648)", () => {
 
     const expectedDueDate = addHours(new TZDate(lastAssignment.due_date, "America/New_York"), 24);
     await expect(page.getByText(getDueDateString(expectedDueDate))).toBeVisible();
+    await assertStudentPageAccessible(page, "gifted tokens after extend due date");
   });
 });

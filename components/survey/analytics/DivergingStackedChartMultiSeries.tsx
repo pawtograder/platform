@@ -373,6 +373,7 @@ export function DivergingStackedChartMultiSeries({
                   const rawVal = match ? Number(match[1] ?? match[2]) : 0;
                   return (
                     <Bar
+                      isAnimationActive={false}
                       key={key}
                       dataKey={key}
                       stackId="stack"
@@ -386,6 +387,7 @@ export function DivergingStackedChartMultiSeries({
                   const rawVal = match ? Number(match[1] ?? match[2]) : 0;
                   return (
                     <Bar
+                      isAnimationActive={false}
                       key={key}
                       dataKey={key}
                       stackId="stack"

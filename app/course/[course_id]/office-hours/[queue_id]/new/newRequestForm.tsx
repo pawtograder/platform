@@ -49,7 +49,14 @@ type SelectOption = {
 
 //TODO: This is a big mess. We should refactor so that new help requests get made via a Postgres function (doing all work in one transaction)
 // and we use existing table controllers for accessing data instead of refine.dev...
-export default function HelpRequestForm() {
+export default function HelpRequestForm({
+  onSubmittingChange
+}: {
+  // Lets the parent suppress its "queue closed → redirect to queue" effect while a
+  // submission is in flight, so that redirect can't race (and swallow) this form's
+  // own navigation to the freshly created request.
+  onSubmittingChange?: (submitting: boolean) => void;
+} = {}) {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -76,7 +83,6 @@ export default function HelpRequestForm() {
     control,
     getValues,
     watch,
-    reset,
     setError,
     clearErrors,
     formState: { errors, isSubmitting },
@@ -390,7 +396,14 @@ export default function HelpRequestForm() {
       // Lightweight re-entrancy guard to prevent double submissions from rapid clicks
       if (isSubmittingGuard) return;
       setIsSubmittingGuard(true);
+      // Tell the parent page a submission is in flight so its "queue closed" redirect
+      // effect stands down — otherwise that router.replace can race the router.push below.
+      onSubmittingChange?.(true);
 
+      // Track whether we've navigated to the created request. On that path we must NOT
+      // run trailing state updates (guard reset, redirect re-enable): re-rendering after
+      // router.push can interrupt the App Router transition and strand the user.
+      let navigated = false;
       try {
         if (!private_profile_id) {
           toaster.error({
@@ -603,27 +616,18 @@ export default function HelpRequestForm() {
 
             toaster.success({
               title: "Success",
-              description: "Help request successfully created. Redirecting to queue view..."
+              description: "Help request successfully created. Opening your request..."
             });
 
-            // Reset form state after successful submission
-            reset({
-              help_queue: Number.parseInt(queue_id as string),
-              file_references: [],
-              location_type: "remote" as HelpRequestLocationType,
-              request: "",
-              is_private: false,
-              template_id: undefined,
-              referenced_submission_id: undefined,
-              followup_to: undefined
-            });
-
-            // Reset local state variables
-            setSelectedStudents(private_profile_id ? [private_profile_id] : []);
-            setSelectedAssignmentId(null);
-            setSelectedSubmissionId(null);
-
-            // Navigate to queue view
+            // Navigate to queue view BEFORE any state-clearing work. The form is
+            // about to unmount, so resetting state first is unnecessary and risky:
+            // each setState triggers a re-render whose effects (validation, error
+            // clearing, useList refetches) can run on the same microtask as
+            // router.push and silently swallow the navigation under load. This
+            // was observed on webkit in CI where the success toast fired but the
+            // URL never changed (issue tracked: form's post-create writes should
+            // be collapsed into a single RPC; see TODO at top of file).
+            navigated = true;
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
           } catch (error) {
             toaster.error({
@@ -635,13 +639,21 @@ export default function HelpRequestForm() {
 
         await handleSubmit(customOnFinish)();
       } finally {
-        setIsSubmittingGuard(false);
+        // Only reset on the non-navigating paths (validation bail / create failure). On the
+        // success path the component is unmounting into the new request; a trailing setState
+        // here re-renders and can swallow that navigation, and re-enabling the parent's
+        // redirect would let it fire against the in-flight push.
+        if (!navigated) {
+          setIsSubmittingGuard(false);
+          onSubmittingChange?.(false);
+        }
       }
     },
     [
       handleSubmit,
       isSubmittingGuard,
       setIsSubmittingGuard,
+      onSubmittingChange,
       queueIdsWithActiveStaff,
       setError,
       private_profile_id,
@@ -656,7 +668,6 @@ export default function HelpRequestForm() {
       queue_id,
       controller,
       router,
-      reset,
       submissions?.data,
       studentHelpActivity,
       templates.length
@@ -726,7 +737,7 @@ export default function HelpRequestForm() {
               Consider posting on the{" "}
               <Link
                 href={`/course/${course_id}/discussion`}
-                style={{ color: "var(--chakra-colors-blue-500)", textDecoration: "underline" }}
+                style={{ color: "var(--chakra-colors-blue-700)", textDecoration: "underline" }}
               >
                 Discussion Forum
               </Link>{" "}

@@ -7,6 +7,13 @@ import { registerCommand } from "../router.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveClass, resolveAssignment } from "../utils/resolvers.ts";
 import { fetchRubricWithHierarchy, requireRubricTableDeleteOk } from "../utils/rubric.ts";
+import {
+  indexAssignmentRubrics,
+  resolveYamlReference,
+  serializeReferencesForExport,
+  type IndexedCheck,
+  type YamlReference
+} from "../utils/rubricReferences.ts";
 import { CLICommandError } from "../errors.ts";
 import type {
   CLIResponse,
@@ -58,7 +65,19 @@ async function handleRubricsList(ctx: MCPAuthContext, params: Record<string, unk
   };
 }
 
-function buildExportData(rubric: RubricWithHierarchy): {
+/**
+ * Build the YAML-shaped export payload for a single rubric.
+ *
+ * `referencesByCheckId` maps a referencing check id → the YAML `references`
+ * array already resolved+serialized against the full assignment rubric index.
+ * Caller is responsible for loading rows from `rubric_check_references` and
+ * passing them through {@link serializeReferencesForExport}. Checks with no
+ * outgoing references omit the field entirely.
+ */
+function buildExportData(
+  rubric: RubricWithHierarchy,
+  referencesByCheckId: Map<number, YamlReference[]>
+): {
   name: string;
   description: string | null;
   cap_score_to_assignment_points: boolean;
@@ -85,24 +104,61 @@ function buildExportData(rubric: RubricWithHierarchy): {
         is_deduction_only: criteria.is_deduction_only,
         min_checks_per_submission: criteria.min_checks_per_submission,
         max_checks_per_submission: criteria.max_checks_per_submission,
-        checks: (criteria.rubric_checks ?? []).map((check) => ({
-          name: check.name,
-          description: check.description,
-          ordinal: check.ordinal,
-          points: check.points,
-          is_annotation: check.is_annotation,
-          is_comment_required: check.is_comment_required,
-          is_required: check.is_required,
-          annotation_target: check.annotation_target,
-          artifact: check.artifact,
-          file: check.file,
-          group: check.group,
-          max_annotations: check.max_annotations,
-          student_visibility: check.student_visibility
-        }))
+        checks: (criteria.rubric_checks ?? []).map((check) => {
+          const refs = referencesByCheckId.get(check.id);
+          const out: RubricExportPart["criteria"][number]["checks"][number] = {
+            name: check.name,
+            description: check.description,
+            ordinal: check.ordinal,
+            points: check.points,
+            is_annotation: check.is_annotation,
+            is_comment_required: check.is_comment_required,
+            is_required: check.is_required,
+            annotation_target: check.annotation_target,
+            artifact: check.artifact,
+            file: check.file,
+            group: check.group,
+            max_annotations: check.max_annotations,
+            student_visibility: check.student_visibility
+          };
+          if (refs && refs.length > 0) out.references = refs;
+          return out;
+        })
       }))
     }))
   };
+}
+
+/**
+ * Load every rubric on `assignmentId` and return both the hierarchy list and a
+ * flat index of every (rubric, part, criterion, check) tuple — used by both
+ * export (to serialize name-keyed references) and import (to resolve them).
+ */
+async function loadAssignmentRubricIndex(
+  supabase: ReturnType<typeof getAdminClient>,
+  assignmentId: number
+): Promise<{ rubrics: RubricWithHierarchy[]; indexed: IndexedCheck[] }> {
+  const { data, error } = await supabase
+    .from("rubrics")
+    .select(
+      `
+      *,
+      rubric_parts (
+        *,
+        rubric_criteria (
+          *,
+          rubric_checks (*)
+        )
+      )
+    `
+    )
+    .eq("assignment_id", assignmentId);
+
+  if (error) {
+    throw new CLICommandError(`Failed to load rubrics for assignment ${assignmentId}: ${error.message}`);
+  }
+  const rubrics = (data ?? []) as RubricWithHierarchy[];
+  return { rubrics, indexed: indexAssignmentRubrics(rubrics) };
 }
 
 async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, unknown>): Promise<CLIResponse> {
@@ -135,7 +191,43 @@ async function handleRubricsExport(ctx: MCPAuthContext, params: Record<string, u
   const rubric = await fetchRubricWithHierarchy(supabase, rubricId);
   if (!rubric) throw new CLICommandError(`Rubric not found: ${rubricId}`);
 
-  const exportData = buildExportData(rubric);
+  // Build the full-assignment index so we can emit name-keyed references that
+  // can target checks in *other* rubrics on this assignment.
+  const { indexed } = await loadAssignmentRubricIndex(supabase, assignment.id);
+
+  const referencingCheckIds: number[] = [];
+  for (const part of rubric.rubric_parts ?? []) {
+    for (const crit of part.rubric_criteria ?? []) {
+      for (const check of crit.rubric_checks ?? []) {
+        referencingCheckIds.push(check.id);
+      }
+    }
+  }
+
+  const referencesByCheckId = new Map<number, YamlReference[]>();
+  if (referencingCheckIds.length > 0) {
+    const { data: refRows, error: refErr } = await supabase
+      .from("rubric_check_references")
+      .select("referencing_rubric_check_id, referenced_rubric_check_id")
+      .eq("assignment_id", assignment.id)
+      .in("referencing_rubric_check_id", referencingCheckIds);
+    if (refErr) {
+      throw new CLICommandError(
+        `Failed to load rubric_check_references for assignment ${assignment.id}: ${refErr.message}`
+      );
+    }
+    const grouped = new Map<number, Array<{ referenced_rubric_check_id: number }>>();
+    for (const row of refRows ?? []) {
+      const arr = grouped.get(row.referencing_rubric_check_id) ?? [];
+      arr.push({ referenced_rubric_check_id: row.referenced_rubric_check_id });
+      grouped.set(row.referencing_rubric_check_id, arr);
+    }
+    for (const [checkId, refs] of grouped) {
+      referencesByCheckId.set(checkId, serializeReferencesForExport(refs, indexed));
+    }
+  }
+
+  const exportData = buildExportData(rubric, referencesByCheckId);
 
   return {
     success: true,
@@ -240,6 +332,16 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
 
   if (updateError) throw new CLICommandError(`Failed to update rubric: ${updateError.message}`);
 
+  // Track every newly-inserted check so we can resolve its YAML `references`
+  // after all checks (across every part/criterion) have been written.
+  const pendingChecks: Array<{
+    newCheckId: number;
+    partName: string;
+    criterionName: string;
+    checkName: string;
+    yamlReferences?: YamlReference[];
+  }> = [];
+
   for (const part of rubricData.parts) {
     const { data: newPart, error: partError } = await supabase
       .from("rubric_parts")
@@ -285,31 +387,83 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
       }
 
       for (const check of criteria.checks) {
-        const { error: checkError } = await supabase.from("rubric_checks").insert({
-          assignment_id: assignment.id,
-          class_id: classData.id,
-          rubric_id: targetRubricId,
-          rubric_criteria_id: newCriteria.id,
-          name: check.name,
-          description: check.description ?? null,
-          ordinal: check.ordinal ?? 0,
-          points: check.points ?? 0,
-          is_annotation: check.is_annotation ?? false,
-          is_comment_required: check.is_comment_required ?? false,
-          is_required: check.is_required ?? false,
-          annotation_target: check.annotation_target ?? null,
-          artifact: check.artifact ?? null,
-          file: check.file ?? null,
-          group: check.group ?? null,
-          max_annotations: check.max_annotations ?? null,
-          student_visibility:
-            (check.student_visibility as "always" | "if_released" | "if_applied" | "never") ?? "always"
-        });
+        const { data: newCheck, error: checkError } = await supabase
+          .from("rubric_checks")
+          .insert({
+            assignment_id: assignment.id,
+            class_id: classData.id,
+            rubric_id: targetRubricId,
+            rubric_criteria_id: newCriteria.id,
+            name: check.name,
+            description: check.description ?? null,
+            ordinal: check.ordinal ?? 0,
+            points: check.points ?? 0,
+            is_annotation: check.is_annotation ?? false,
+            is_comment_required: check.is_comment_required ?? false,
+            is_required: check.is_required ?? false,
+            annotation_target: check.annotation_target ?? null,
+            artifact: check.artifact ?? null,
+            file: check.file ?? null,
+            group: check.group ?? null,
+            max_annotations: check.max_annotations ?? null,
+            student_visibility:
+              (check.student_visibility as "always" | "if_released" | "if_applied" | "never") ?? "always"
+          })
+          .select("id")
+          .single();
 
-        if (checkError) {
-          throw new CLICommandError(`Failed to create check '${check.name}': ${checkError.message}`);
+        if (checkError || !newCheck) {
+          throw new CLICommandError(`Failed to create check '${check.name}': ${checkError?.message ?? "Unknown"}`);
         }
+
+        pendingChecks.push({
+          newCheckId: newCheck.id,
+          partName: part.name,
+          criterionName: criteria.name,
+          checkName: check.name,
+          yamlReferences: Array.isArray(check.references) ? check.references : undefined
+        });
       }
+    }
+  }
+
+  // ─── Resolve references after all checks are inserted ────────────────────
+  // Reload the full assignment rubric index so we can resolve cross-rubric
+  // name-keyed references (the export may include multiple rubrics, and the
+  // import may run them sequentially — either way, querying the DB now gives
+  // us the freshest snapshot).
+  const { rubrics: allRubrics, indexed: assignmentIndex } = await loadAssignmentRubricIndex(supabase, assignment.id);
+  const currentRubric = allRubrics.find((r) => r.id === targetRubricId);
+  const currentReviewRound = currentRubric?.review_round ?? null;
+
+  const warnings: Array<{ check_path: string; reason: string }> = [];
+  let referenceRowsInserted = 0;
+
+  for (const pending of pendingChecks) {
+    const refs = pending.yamlReferences;
+    if (!refs || refs.length === 0) continue;
+    const checkPath = `${pending.partName} > ${pending.criterionName} > ${pending.checkName}`;
+    for (const ref of refs) {
+      const outcome = resolveYamlReference(ref, assignmentIndex, currentReviewRound);
+      if (!outcome.ok) {
+        warnings.push({ check_path: checkPath, reason: outcome.reason });
+        // deno-lint-ignore no-console
+        console.warn(`[rubrics.import] Skipping reference on "${checkPath}": ${outcome.reason}`);
+        continue;
+      }
+      const { error: refInsertErr } = await supabase.from("rubric_check_references").insert({
+        assignment_id: assignment.id,
+        class_id: classData.id,
+        rubric_id: targetRubricId,
+        referencing_rubric_check_id: pending.newCheckId,
+        referenced_rubric_check_id: outcome.target.checkId
+      });
+      if (refInsertErr) {
+        throw new CLICommandError(
+          `Failed to insert rubric_check_reference for check "${checkPath}" → check id ${outcome.target.checkId}: ${refInsertErr.message}`
+        );
+      }
+      referenceRowsInserted++;
     }
   }
 
@@ -318,7 +472,13 @@ async function handleRubricsImport(ctx: MCPAuthContext, params: Record<string, u
     data: {
       rubric_type: rubricType,
       rubric_id: targetRubricId,
-      summary: { parts: partCount, criteria: criteriaCount, checks: checkCount },
+      summary: {
+        parts: partCount,
+        criteria: criteriaCount,
+        checks: checkCount,
+        references: referenceRowsInserted
+      },
+      reference_warnings: warnings,
       message: "Rubric imported successfully"
     }
   };

@@ -74,7 +74,7 @@ export function DistributionChart({ stats, questionTitle, valueLabels = {}, cour
               formatter={(value: number) => [value, "Responses"]}
               labelFormatter={(label) => `Value: ${label}`}
             />
-            <Bar dataKey="value" fill="#3B82F6" radius={[0, 4, 4, 0]} />
+            <Bar isAnimationActive={false} dataKey="value" fill="#3B82F6" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </Box>

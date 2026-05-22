@@ -3,8 +3,9 @@ import { test, expect } from "../global-setup";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, getAuthTokenForUser, loginAsUser, supabase } from "./TestingUtils";
+import { assertStudentPageAccessible } from "./axeStudentA11y";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", quiet: true });
 
 type Course = Awaited<ReturnType<typeof createClass>>;
 type User = Awaited<ReturnType<typeof createUsersInClass>>[number];
@@ -108,6 +109,7 @@ test.describe("Surveys Page", () => {
     await page.goto(`/course/${course.id}/surveys`);
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
+    await assertStudentPageAccessible(page, "surveys list empty");
   });
 
   test("student sees published survey and updated status", async ({ page }) => {
@@ -125,6 +127,7 @@ test.describe("Surveys Page", () => {
     await expect(page.getByText("Quick check-in")).toBeVisible();
     await expect(page.locator("span.chakra-badge", { hasText: "Not Started" })).toBeVisible();
     await expect(page.getByText("No Surveys Available")).not.toBeVisible();
+    await assertStudentPageAccessible(page, "surveys list with published");
   });
 
   test("draft survey is not visible to students", async ({ page }) => {
@@ -139,6 +142,7 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
     await expect(page.getByText("Draft Survey")).not.toBeVisible();
+    await assertStudentPageAccessible(page, "surveys list draft hidden");
   });
 
   test("closed survey is not visible to students", async ({ page }) => {
@@ -153,6 +157,7 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByRole("heading", { name: "No Surveys Available" })).toBeVisible();
     await expect(page.getByText("Closed Survey")).not.toBeVisible();
+    await assertStudentPageAccessible(page, "surveys list closed hidden");
   });
 
   test("student without assignment sees only surveys assigned to all", async ({ page }) => {
@@ -184,6 +189,7 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByText("All Students Survey")).toBeVisible();
     await expect(page.getByText("Specific Student Survey")).not.toBeVisible();
+    await assertStudentPageAccessible(page, "surveys list assignment filter A");
   });
 
   test("student with assignment sees both all-student and targeted survey", async ({ page }) => {
@@ -215,6 +221,7 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByText("All Students Survey")).toBeVisible();
     await expect(page.getByText("Specific Student Survey")).toBeVisible();
+    await assertStudentPageAccessible(page, "surveys list assignment filter B");
   });
 
   test("instructor RPC can assign specific students", async () => {
@@ -323,6 +330,7 @@ test.describe("Surveys Page", () => {
 
     await expect(page.getByRole("heading", { name: "Active Surveys" })).toBeVisible();
     await expect(page.getByText("No active surveys")).toBeVisible();
+    await assertStudentPageAccessible(page, "student dashboard surveys empty");
   });
 
   test("student dashboard active surveys show correct actions", async ({ page }) => {
@@ -391,6 +399,7 @@ test.describe("Surveys Page", () => {
     const editableCard = surveysSection.locator("div").filter({ hasText: "Dashboard Submitted Editable" }).first();
     await expect(editableCard.getByRole("link", { name: "Edit survey: Dashboard Submitted Editable" })).toBeVisible();
     await expect(editableCard.getByText("Submitted (editable)")).toBeVisible();
+    await assertStudentPageAccessible(page, "student dashboard active surveys");
   });
 
   test.skip("survey builder saves default JSON on create", async ({ page }) => {
@@ -599,6 +608,7 @@ test.describe("Surveys Page", () => {
     await expect(startLink).toBeVisible();
     await startLink.click();
     await expect(page).toHaveURL(new RegExp(`/course/${course.id}/surveys/${survey.id}`));
+    await assertStudentPageAccessible(page, "survey in-progress (shell)");
 
     const input = page.getByRole("textbox", { name: "Question 1" });
     await expect(input).toBeVisible();

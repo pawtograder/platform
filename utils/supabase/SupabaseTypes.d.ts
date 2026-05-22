@@ -1042,6 +1042,7 @@ export type Database = {
           permit_empty_submissions: boolean;
           regrade_deadline: string | null;
           release_date: string | null;
+          require_tokens_before_due_date: boolean;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
           show_leaderboard: boolean;
@@ -1080,6 +1081,7 @@ export type Database = {
           permit_empty_submissions?: boolean;
           regrade_deadline?: string | null;
           release_date?: string | null;
+          require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
           show_leaderboard?: boolean;
@@ -1118,6 +1120,7 @@ export type Database = {
           permit_empty_submissions?: boolean;
           regrade_deadline?: string | null;
           release_date?: string | null;
+          require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
           show_leaderboard?: boolean;
@@ -2422,6 +2425,10 @@ export type Database = {
           class_id: number;
           created_at: string;
           draft: boolean;
+          duplicate_marked_at: string | null;
+          duplicate_marked_by_display_name: string | null;
+          duplicate_marked_by_user_id: string | null;
+          duplicate_original_subject: string | null;
           edited_at: string | null;
           id: number;
           instructors_only: boolean;
@@ -2444,6 +2451,10 @@ export type Database = {
           class_id: number;
           created_at?: string;
           draft?: boolean;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
           edited_at?: string | null;
           id?: number;
           instructors_only?: boolean;
@@ -2466,6 +2477,10 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           draft?: boolean;
+          duplicate_marked_at?: string | null;
+          duplicate_marked_by_display_name?: string | null;
+          duplicate_marked_by_user_id?: string | null;
+          duplicate_original_subject?: string | null;
           edited_at?: string | null;
           id?: number;
           instructors_only?: boolean;
@@ -5102,7 +5117,6 @@ export type Database = {
           class_section_id: number | null;
           created_at: string;
           email: string | null;
-          expires_at: string | null;
           id: number;
           invited_by: string | null;
           lab_section_id: number | null;
@@ -5122,7 +5136,6 @@ export type Database = {
           class_section_id?: number | null;
           created_at?: string;
           email?: string | null;
-          expires_at?: string | null;
           id?: number;
           invited_by?: string | null;
           lab_section_id?: number | null;
@@ -5142,7 +5155,6 @@ export type Database = {
           class_section_id?: number | null;
           created_at?: string;
           email?: string | null;
-          expires_at?: string | null;
           id?: number;
           invited_by?: string | null;
           lab_section_id?: number | null;
@@ -6004,6 +6016,13 @@ export type Database = {
             foreignKeyName: "repository_analytics_daily_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_daily_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -6082,6 +6101,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_fetch_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
           },
           {
             foreignKeyName: "repository_analytics_fetch_status_repository_id_fkey";
@@ -6185,6 +6211,13 @@ export type Database = {
             foreignKeyName: "repository_analytics_items_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
+          {
+            foreignKeyName: "repository_analytics_items_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -6207,6 +6240,13 @@ export type Database = {
           repository_id?: number;
         };
         Relationships: [
+          {
+            foreignKeyName: "repository_analytics_repo_status_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: true;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
           {
             foreignKeyName: "repository_analytics_repo_status_repository_id_fkey";
             columns: ["repository_id"];
@@ -6275,6 +6315,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repository_check_run_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
           },
           {
             foreignKeyName: "repository_check_run_repository_id_fkey";
@@ -8441,14 +8488,17 @@ export type Database = {
           last_commented_by: string | null;
           last_updated_at: string;
           opened_at: string | null;
+          resolution_reason: string | null;
           resolved_at: string | null;
           resolved_by: string | null;
           resolved_points: number | null;
+          rubric_check_id: number | null;
           status: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id: number | null;
           submission_comment_id: number | null;
           submission_file_comment_id: number | null;
           submission_id: number;
+          submission_review_id: number | null;
           updated_at: string;
         };
         Insert: {
@@ -8468,14 +8518,17 @@ export type Database = {
           last_commented_by?: string | null;
           last_updated_at?: string;
           opened_at?: string | null;
+          resolution_reason?: string | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           resolved_points?: number | null;
+          rubric_check_id?: number | null;
           status: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id?: number | null;
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id: number;
+          submission_review_id?: number | null;
           updated_at?: string;
         };
         Update: {
@@ -8495,14 +8548,17 @@ export type Database = {
           last_commented_by?: string | null;
           last_updated_at?: string;
           opened_at?: string | null;
+          resolution_reason?: string | null;
           resolved_at?: string | null;
           resolved_by?: string | null;
           resolved_points?: number | null;
+          rubric_check_id?: number | null;
           status?: Database["public"]["Enums"]["regrade_status"];
           submission_artifact_comment_id?: number | null;
           submission_comment_id?: number | null;
           submission_file_comment_id?: number | null;
           submission_id?: number;
+          submission_review_id?: number | null;
           updated_at?: string;
         };
         Relationships: [
@@ -8591,6 +8647,13 @@ export type Database = {
             referencedColumns: ["student_private_profile_id"];
           },
           {
+            foreignKeyName: "submission_regrade_requests_rubric_check_id_fkey";
+            columns: ["rubric_check_id"];
+            isOneToOne: false;
+            referencedRelation: "rubric_checks";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "submission_regrade_requests_submission_artifact_comment_id_fkey";
             columns: ["submission_artifact_comment_id"];
             isOneToOne: false;
@@ -8638,6 +8701,27 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_nice";
             referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["grading_submission_review_id"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_review_id"];
+          },
+          {
+            foreignKeyName: "submission_regrade_requests_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "submission_reviews";
+            referencedColumns: ["id"];
           },
           {
             foreignKeyName: "submission_regrade_requests_submitted_by_fkey";
@@ -8994,6 +9078,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "repository_check_runs";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submissions_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
           },
           {
             foreignKeyName: "submissions_repository_id_fkey";
@@ -9846,6 +9937,13 @@ export type Database = {
             foreignKeyName: "workflow_events_repository_id_fkey";
             columns: ["repository_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
+          },
+          {
+            foreignKeyName: "workflow_events_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
             referencedRelation: "repositories";
             referencedColumns: ["id"];
           }
@@ -9912,6 +10010,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["repository_id"];
           },
           {
             foreignKeyName: "workflow_run_error_repository_id_fkey";
@@ -10763,6 +10868,7 @@ export type Database = {
           activesubmissionid: number | null;
           assignedgradername: string | null;
           assignedmetagradername: string | null;
+          assignment_group_mentor_name: string | null;
           assignment_id: number | null;
           assignment_slug: string | null;
           autograder_score: number | null;
@@ -10954,6 +11060,10 @@ export type Database = {
       };
     };
     Functions: {
+      _cli_resolve_submission_file_id: {
+        Args: { p_file_name: string; p_submission_id: number };
+        Returns: number;
+      };
       _grade_targets_for_submission: {
         Args: { p_submission_id: number };
         Returns: string[];
@@ -10972,6 +11082,14 @@ export type Database = {
       };
       _submission_review_recompute_scores: {
         Args: { p_submission_review_id: number };
+        Returns: undefined;
+      };
+      acquire_assignment_due_date_exception_lock: {
+        Args: {
+          _assignment_group_id: number;
+          _assignment_id: number;
+          _student_id: string;
+        };
         Returns: undefined;
       };
       admin_bulk_set_user_roles_disabled: {
@@ -11085,7 +11203,7 @@ export type Database = {
         Returns: {
           class_id: number;
           class_name: string;
-          expired_invitations: number;
+          dropped_invitations: number;
           last_sync_message: string;
           last_sync_status: string;
           last_sync_time: string;
@@ -11146,6 +11264,26 @@ export type Database = {
         Args: { p_name: string; p_section_id: number; p_updated_by?: string };
         Returns: boolean;
       };
+      apply_late_token_extension: {
+        Args: {
+          p_assignment_group_id: number;
+          p_assignment_id: number;
+          p_class_id: number;
+          p_creator_id: string;
+          p_hours_late: number;
+          p_student_id: string;
+          p_tokens_needed: number;
+        };
+        Returns: Json;
+      };
+      assignment_due_date_exception_lock_key: {
+        Args: {
+          _assignment_group_id: number;
+          _assignment_id: number;
+          _student_id: string;
+        };
+        Returns: number;
+      };
       audit_maintain_partitions: { Args: never; Returns: undefined };
       authorize_for_admin: { Args: { p_user_id?: string }; Returns: boolean };
       authorize_for_private_discussion_thread: {
@@ -11164,11 +11302,11 @@ export type Database = {
         Args: { submission_review_id: number };
         Returns: boolean;
       };
-      authorize_for_submission_review_writable: {
+      authorize_for_submission_review_comment_writable: {
         Args: { submission_review_id: number };
         Returns: boolean;
       };
-      authorize_for_submission_review_comment_writable: {
+      authorize_for_submission_review_writable: {
         Args: { submission_review_id: number };
         Returns: boolean;
       };
@@ -11224,6 +11362,15 @@ export type Database = {
         };
         Returns: Json;
       };
+      bulk_csv_import_enrollment: {
+        Args: {
+          p_class_id: number;
+          p_enrollment_data: Json;
+          p_import_mode: string;
+          p_notify?: boolean;
+        };
+        Returns: Json;
+      };
       bulk_update_review_assignment_due_dates: {
         Args: {
           p_assignment_id: number;
@@ -11231,15 +11378,6 @@ export type Database = {
           p_due_date: string;
           p_only_incomplete?: boolean;
           p_rubric_id: number;
-        };
-        Returns: Json;
-      };
-      bulk_csv_import_enrollment: {
-        Args: {
-          p_class_id: number;
-          p_enrollment_data: Json;
-          p_import_mode: string;
-          p_notify?: boolean;
         };
         Returns: Json;
       };
@@ -11358,6 +11496,10 @@ export type Database = {
         Returns: undefined;
       };
       cleanup_github_async_errors: { Args: never; Returns: undefined };
+      cleanup_individual_repositories_for_assignment: {
+        Args: { p_assignment_id: number; p_class_id: number };
+        Returns: Json;
+      };
       clear_all_incomplete_review_assignments: {
         Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
@@ -11388,16 +11530,16 @@ export type Database = {
         Args: {
           p_artifact_comments: Json;
           p_assignment_id: number;
-          p_authors_by_submission?: Json;
+          p_authors_by_submission: Json;
           p_class_id: number;
-          p_default_author?: string;
+          p_default_author: string;
           p_dry_run: boolean;
           p_file_comments: Json;
           p_mode: string;
           p_run_sync_only?: boolean;
           p_skip_sync?: boolean;
           p_submission_comments: Json;
-          p_sync_submission_ids?: number[];
+          p_sync_submission_ids: number[];
         };
         Returns: Json;
       };
@@ -11430,6 +11572,10 @@ export type Database = {
             };
             Returns: undefined;
           };
+      create_all_repos_for_assignment_internal: {
+        Args: { assignment_id: number; course_id: number; p_force?: boolean };
+        Returns: undefined;
+      };
       create_help_request_message_notification: {
         Args: {
           p_author_name: string;
@@ -11484,6 +11630,14 @@ export type Database = {
           submission_artifact_comment_id?: number;
           submission_comment_id?: number;
           submission_file_comment_id?: number;
+        };
+        Returns: number;
+      };
+      create_regrade_request_for_check: {
+        Args: {
+          p_rubric_check_id: number;
+          p_submission_review_id: number;
+          private_profile_id: string;
         };
         Returns: number;
       };
@@ -11577,6 +11731,7 @@ export type Database = {
         Args: { p_campaign_id: string; p_deleted_by?: string };
         Returns: number;
       };
+      dual_active_invariants_version: { Args: never; Returns: number };
       enqueue_autograder_reruns: {
         Args: {
           p_auto_promote?: boolean;
@@ -12087,6 +12242,7 @@ export type Database = {
           external_data: Json | null;
           gradebook_id: number;
           id: number;
+          instructor_only: boolean;
           max_score: number | null;
           name: string;
           released: boolean;
@@ -12115,6 +12271,7 @@ export type Database = {
           external_data: Json | null;
           gradebook_id: number;
           id: number;
+          instructor_only: boolean;
           max_score: number | null;
           name: string;
           released: boolean;
@@ -12230,6 +12387,10 @@ export type Database = {
         Args: { p_guild_id: string; p_user_id: string };
         Returns: undefined;
       };
+      mark_discussion_thread_duplicate: {
+        Args: { p_duplicate_root_id: number; p_original_root_id: number };
+        Returns: undefined;
+      };
       merge_class_feature: {
         Args: { p_class_id: number; p_enabled: boolean; p_name: string };
         Returns: undefined;
@@ -12237,6 +12398,10 @@ export type Database = {
       merge_class_feature_as_service_role: {
         Args: { p_class_id: number; p_enabled: boolean; p_name: string };
         Returns: undefined;
+      };
+      merge_duplicate_class_enrollments: {
+        Args: { p_class_id?: number };
+        Returns: number;
       };
       only_calendar_or_discord_ids_changed: {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
@@ -12322,10 +12487,6 @@ export type Database = {
         Args: { p_repository_ids: number[] };
         Returns: Json;
       };
-      release_instructor_only_gradebook_column: {
-        Args: { p_column_id: number };
-        Returns: undefined;
-      };
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };
         Returns: number;
@@ -12359,6 +12520,14 @@ export type Database = {
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
+      };
+      release_grading_reviews_for_submissions: {
+        Args: { p_assignment_id: number; p_submission_ids: number[] };
+        Returns: number;
+      };
+      release_instructor_only_gradebook_column: {
+        Args: { p_column_id: number };
+        Returns: undefined;
       };
       reorder_surveys_in_series: {
         Args: { p_ordinal_updates: Json; p_series_id: string };
@@ -12486,6 +12655,10 @@ export type Database = {
         Args: { assignment_id: number };
         Returns: number;
       };
+      unrelease_grading_reviews_for_submissions: {
+        Args: { p_assignment_id: number; p_submission_ids: number[] };
+        Returns: number;
+      };
       update_api_gateway_call: {
         Args: { p_latency_ms?: number; p_log_id: number; p_status_code: number };
         Returns: undefined;
@@ -12539,12 +12712,16 @@ export type Database = {
         Args: {
           closed_points?: number;
           new_status: Database["public"]["Enums"]["regrade_status"];
+          p_line?: number;
+          p_submission_artifact_id?: number;
+          p_submission_file_id?: number;
           profile_id: string;
           regrade_request_id: number;
           resolved_points?: number;
         };
         Returns: boolean;
       };
+      update_rubric_full: { Args: { p_rubric: Json }; Returns: string };
       update_sis_sync_status: {
         Args: {
           p_course_id: number;

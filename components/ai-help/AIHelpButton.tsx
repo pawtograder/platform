@@ -254,7 +254,7 @@ function MCPSetupDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                 <Box>
                   <HStack gap={2} mb={2}>
                     <Box
-                      bg="purple.500"
+                      bg="purple.solid"
                       color="white"
                       borderRadius="full"
                       w={6}
@@ -293,7 +293,7 @@ function MCPSetupDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                 <Box>
                   <HStack gap={2} mb={2}>
                     <Box
-                      bg="purple.500"
+                      bg="purple.solid"
                       color="white"
                       borderRadius="full"
                       w={6}
@@ -323,7 +323,7 @@ function MCPSetupDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                 <Box>
                   <HStack gap={2} mb={2}>
                     <Box
-                      bg="purple.500"
+                      bg="purple.solid"
                       color="white"
                       borderRadius="full"
                       w={6}
@@ -356,7 +356,7 @@ function MCPSetupDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                 <Box>
                   <HStack gap={2} mb={2}>
                     <Box
-                      bg="purple.500"
+                      bg="purple.solid"
                       color="white"
                       borderRadius="full"
                       w={6}
@@ -414,7 +414,7 @@ function MCPSetupDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
                 <Box>
                   <HStack gap={2} mb={2}>
                     <Box
-                      bg="purple.500"
+                      bg="purple.solid"
                       color="white"
                       borderRadius="full"
                       w={6}

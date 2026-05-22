@@ -12,11 +12,11 @@ import * as Sentry from "npm:@sentry/deno";
 type SISSycEnrollmentResult = {
   success: boolean;
   class_id: number;
-  expire_missing: boolean;
+  drop_missing: boolean;
   counts: {
     invitations_created: number;
     invitations_updated: number;
-    invitations_expired: number;
+    invitations_dropped: number;
     invitations_reactivated: number;
     enrollments_created: number;
     enrollments_updated: number;
@@ -781,7 +781,7 @@ export async function syncSISClasses(_supabase: SupabaseClient<Database>, classI
         p_class_id: classData.id,
         p_roster_data: rosterPayload,
         p_sync_options: {
-          expire_missing: true,
+          drop_missing: true,
           section_updates: sectionUpdates
         }
       });
@@ -792,13 +792,13 @@ export async function syncSISClasses(_supabase: SupabaseClient<Database>, classI
 
       const syncResult = syncData as unknown as SISSycEnrollmentResult;
       const newInvitationsCount = syncResult.counts.invitations_created;
-      const expiredInvitationsCount = syncResult.counts.invitations_expired;
+      const droppedInvitationsCount = syncResult.counts.invitations_dropped;
       const disabledUsersCount = syncResult.counts.enrollments_disabled;
       const reenabledUsersCount = syncResult.counts.enrollments_reenabled;
       const updatedMetadataCount = sectionUpdates.length;
 
       // Update sync status for all processed sections
-      const syncMessage = `Synced ${rosterResults.length} sections. New invitations: ${newInvitationsCount}, Expired: ${expiredInvitationsCount}, Re-enabled: ${reenabledUsersCount}`;
+      const syncMessage = `Synced ${rosterResults.length} sections. New invitations: ${newInvitationsCount}, Dropped: ${droppedInvitationsCount}, Re-enabled: ${reenabledUsersCount}`;
 
       // Update status for class sections
       for (const section of enabledClassSections) {
@@ -844,7 +844,7 @@ export async function syncSISClasses(_supabase: SupabaseClient<Database>, classI
           classId: classData.id,
           crnCount: rosterResults.length,
           newInvitations: newInvitationsCount,
-          expiredInvitations: expiredInvitationsCount,
+          droppedInvitations: droppedInvitationsCount,
           disabledUsers: disabledUsersCount,
           reenabledUsers: reenabledUsersCount,
           updatedMetadata: updatedMetadataCount

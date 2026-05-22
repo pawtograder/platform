@@ -5,21 +5,68 @@ import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams, useRouter } from "next/navigation";
 import { LucideMail, X } from "lucide-react";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { toaster } from "../ui/toaster";
 import Markdown from "../ui/markdown";
+
+// Module-stable style references. The notification dropdown renders
+// every notification on every parent re-render, and the surrounding
+// `<Markdown>` wrapper is now `memo()`-ed (see `components/ui/markdown.tsx`).
+// Hoisting these literals out of the JSX keeps the `style` prop's
+// identity stable so `memo` can short-circuit. Inline `style={{...}}`
+// literals would tear that down on every render.
+const NOTIFICATION_BODY_STYLE: CSSProperties = {
+  fontSize: "0.875rem",
+  color: "var(--chakra-colors-fg-default)",
+  lineHeight: "1.4"
+};
+const NOTIFICATION_BODY_BOLD_STYLE: CSSProperties = {
+  ...NOTIFICATION_BODY_STYLE,
+  fontWeight: "600"
+};
+const NOTIFICATION_BODY_SMALLER_STYLE: CSSProperties = {
+  fontSize: "0.8rem",
+  color: "var(--chakra-colors-fg-default)",
+  lineHeight: "1.4"
+};
+const NOTIFICATION_MUTED_PREVIEW_STYLE: CSSProperties = {
+  fontSize: "0.75rem",
+  color: "var(--chakra-colors-fg-muted)",
+  lineHeight: "1.3",
+  overflow: "hidden",
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical"
+};
+const NOTIFICATION_MUTED_TEXT_STYLE: CSSProperties = {
+  fontSize: "0.75rem",
+  color: "var(--chakra-colors-fg-muted)",
+  lineHeight: "1.3"
+};
+const NOTIFICATION_MUTED_INLINE_STYLE: CSSProperties = {
+  fontSize: "0.75rem",
+  color: "var(--chakra-colors-fg-muted)"
+};
 
 export type NotificationEnvelope = { type: string };
 export type DiscussionThreadNotification = NotificationEnvelope & {
   type: "discussion_thread";
-  new_comment_number: number;
-  new_comment_id: number;
+  action?: "new_post" | "reply" | "marked_duplicate";
+  new_comment_number?: number;
+  new_comment_id?: number;
   root_thread_id: number;
-  reply_author_profile_id: string;
-  teaser: string;
+  reply_author_profile_id?: string;
+  teaser?: string;
 
-  thread_name: string;
-  reply_author_name: string;
+  thread_name?: string;
+  reply_author_name?: string;
+  /** When action === "marked_duplicate" */
+  duplicate_thread_id?: number;
+  original_thread_subject?: string;
+  duplicate_original_subject?: string;
+  marked_by_user_id?: string;
+  marked_by_name?: string;
+  duplicate_thread_ordinal?: number;
 };
 
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {
@@ -201,6 +248,12 @@ export type RegradeRequestNotification = NotificationEnvelope & {
         comment_author_name: string;
         comment_id: number;
       }
+    | {
+        action: "auto_resolved";
+        resolution_reason: string;
+        resolved_by: string;
+        resolved_by_name: string;
+      }
   );
 
 // function truncateString(str: string, maxLength: number) {
@@ -216,19 +269,19 @@ function HelpRequestNotificationTeaser({ notification }: { notification: Notific
 
   if (body.action === "created") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.creator_name}** created a new help request in **${body.help_queue_name}**${body.is_private ? " *(private)*" : ""}`}
       </Markdown>
     );
   } else if (body.action === "assigned") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.assignee_name}** is now working on **${body.creator_name}**'s help request in **${body.help_queue_name}**`}
       </Markdown>
     );
   } else if (body.action === "status_changed") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`Help request by **${body.creator_name}** in **${body.help_queue_name}** was marked as **${body.status}**`}
       </Markdown>
     );
@@ -238,19 +291,7 @@ function HelpRequestNotificationTeaser({ notification }: { notification: Notific
     <VStack align="flex-start" gap="2">
       {message}
       {body.request_preview && (
-        <Markdown
-          style={{
-            fontSize: "0.75rem",
-            color: "var(--chakra-colors-fg-muted)",
-            lineHeight: "1.3",
-            overflow: "hidden",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical"
-          }}
-        >
-          {`> ${body.request_preview}`}
-        </Markdown>
+        <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.request_preview}`}</Markdown>
       )}
     </VStack>
   );
@@ -267,27 +308,15 @@ function HelpRequestMessageNotificationTeaser({ notification }: { notification: 
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={author.avatar_url} />
+        <Avatar.Image src={author.avatar_url} alt="" />
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        <Markdown style={NOTIFICATION_BODY_STYLE}>
           {`**${author.name}** replied to **${body.help_request_creator_name}**'s help request in **${body.help_queue_name}**${body.is_private ? " *(private)*" : ""}`}
         </Markdown>
         {body.message_preview && (
-          <Markdown
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--chakra-colors-fg-muted)",
-              lineHeight: "1.3",
-              overflow: "hidden",
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical"
-            }}
-          >
-            {`> ${body.message_preview}`}
-          </Markdown>
+          <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.message_preview}`}</Markdown>
         )}
       </VStack>
     </HStack>
@@ -297,7 +326,7 @@ function HelpRequestMessageNotificationTeaser({ notification }: { notification: 
 function AssignmentGroupMemberNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupMemberNotification;
   return (
-    <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+    <Markdown style={NOTIFICATION_BODY_STYLE}>
       {`**${body.name}** ${body.action === "join" ? "joined" : "left"} your group **${body.assignment_group_name}** for **${body.assignment_name}**${body.action === "join" ? ` *(added by ${body.added_by_name})*` : ""}`}
     </Markdown>
   );
@@ -305,7 +334,7 @@ function AssignmentGroupMemberNotificationTeaser({ notification }: { notificatio
 function AssignmentGroupInvitationNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupInvitationNotification;
   return (
-    <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+    <Markdown style={NOTIFICATION_BODY_STYLE}>
       {`**${body.inviter_name}** invited you to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
     </Markdown>
   );
@@ -316,25 +345,25 @@ function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notifi
   let message;
   if (body.status === "pending") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.requestor_name}** requested to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
   } else if (body.status === "approved") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.decision_maker_name}** approved **${body.requestor_name}**'s request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
   } else if (body.status === "rejected") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.decision_maker_name}** rejected **${body.requestor_name}**'s request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
   } else if (body.status === "withdrawn") {
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${body.requestor_name}** withdrew their request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
       </Markdown>
     );
@@ -345,7 +374,27 @@ function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notifi
 function DiscussionThreadReplyNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as DiscussionThreadNotification;
   const rootThread = useDiscussionThreadTeaser(body.root_thread_id, ["ordinal", "subject", "class_id"]);
-  const author = useUserProfile(body.reply_author_profile_id);
+  const author = useUserProfile(body.reply_author_profile_id ?? "");
+
+  if (body.action === "marked_duplicate") {
+    const dupSubject = body.duplicate_original_subject ?? "your post";
+    const origSubject = body.original_thread_subject ?? rootThread?.subject ?? "another thread";
+    const staffName = body.marked_by_name ?? "Course staff";
+    return (
+      <HStack align="flex-start" gap="3">
+        <Box flexShrink="0" p="2" bg="orange.subtle" borderRadius="md">
+          <Text fontSize="xs" fontWeight="bold">
+            Duplicate
+          </Text>
+        </Box>
+        <VStack align="flex-start" gap="1" flex="1">
+          <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+            {`**${staffName}** marked your post **${dupSubject}** as a duplicate of **${origSubject}** and merged it into that thread.`}
+          </Markdown>
+        </VStack>
+      </HStack>
+    );
+  }
 
   if (!author || !rootThread) {
     return <Skeleton height="40px" width="100%" />;
@@ -354,28 +403,14 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={author.avatar_url} />
+        <Avatar.Image src={author.avatar_url} alt="" />
         <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        <Markdown style={NOTIFICATION_BODY_STYLE}>
           {`**${author.name}** replied to thread **#${rootThread.ordinal}** **${rootThread.subject}**`}
         </Markdown>
-        {body.teaser && (
-          <Markdown
-            style={{
-              fontSize: "0.75rem",
-              color: "var(--chakra-colors-fg-muted)",
-              lineHeight: "1.3",
-              overflow: "hidden",
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical"
-            }}
-          >
-            {`> ${body.teaser}`}
-          </Markdown>
-        )}
+        {body.teaser && <Markdown style={NOTIFICATION_MUTED_PREVIEW_STYLE}>{`> ${body.teaser}`}</Markdown>}
       </VStack>
     </HStack>
   );
@@ -389,12 +424,8 @@ function EmailNotificationTeaser({ notification }: { notification: Notification 
         <LucideMail size={16} />
       </Box>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-          {`**${body.subject}**`}
-        </Markdown>
-        <Markdown style={{ fontSize: "0.75rem", color: "var(--chakra-colors-fg-muted)" }}>
-          {`*Check your email for details*`}
-        </Markdown>
+        <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${body.subject}**`}</Markdown>
+        <Markdown style={NOTIFICATION_MUTED_INLINE_STYLE}>{`*Check your email for details*`}</Markdown>
       </VStack>
     </HStack>
   );
@@ -410,16 +441,8 @@ function CourseEnrollmentNotificationTeaser({ notification }: { notification: No
         </svg>
       </Box>
       <VStack align="flex-start" gap="1" flex="1">
-        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-          {`Welcome to **${body.course_name}**!`}
-        </Markdown>
-        <Markdown
-          style={{
-            fontSize: "0.75rem",
-            color: "var(--chakra-colors-fg-muted)",
-            lineHeight: "1.3"
-          }}
-        >
+        <Markdown style={NOTIFICATION_BODY_STYLE}>{`Welcome to **${body.course_name}**!`}</Markdown>
+        <Markdown style={NOTIFICATION_MUTED_TEXT_STYLE}>
           {`You were added by **${body.inviter_name}** (${body.inviter_email})`}
         </Markdown>
       </VStack>
@@ -438,7 +461,7 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
     actorProfileId = body.opened_by;
     actorName = body.opened_by_name;
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${actorName}** opened a regrade request on your grading comment`}
       </Markdown>
     );
@@ -446,40 +469,42 @@ function RegradeRequestNotificationTeaser({ notification }: { notification: Noti
     actorProfileId = body.updated_by;
     actorName = body.updated_by_name;
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
         {`**${actorName}** updated a regrade request to **${body.new_status}**`}
       </Markdown>
     );
   } else if (body.action === "escalated") {
     actorProfileId = body.escalated_by;
     actorName = body.escalated_by_name;
+    message = <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${actorName}** escalated a regrade request`}</Markdown>;
+  } else if (body.action === "auto_resolved") {
+    actorProfileId = body.resolved_by;
+    actorName = body.resolved_by_name;
     message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-        {`**${actorName}** escalated a regrade request`}
+      <Markdown style={NOTIFICATION_BODY_STYLE}>
+        {`Your regrade request was automatically resolved because the grade it referenced was changed. Re-check your grade and escalate if you still disagree.`}
       </Markdown>
     );
   } else {
     // action === "new_comment"
     actorProfileId = body.comment_author;
     actorName = body.comment_author_name;
-    message = (
-      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
-        {`**${actorName}** commented on a regrade request`}
-      </Markdown>
-    );
+    message = <Markdown style={NOTIFICATION_BODY_STYLE}>{`**${actorName}** commented on a regrade request`}</Markdown>;
   }
 
   const actor = useUserProfile(actorProfileId);
 
-  if (!actor) {
+  // For auto_resolved the message is self-contained, so a missing/unloaded resolver
+  // profile must not leave the teaser stuck on a skeleton.
+  if (!actor && body.action !== "auto_resolved") {
     return <Skeleton height="40px" width="100%" />;
   }
 
   return (
     <HStack align="flex-start" gap="3">
       <Avatar.Root size="sm" flexShrink="0">
-        <Avatar.Image src={actor.avatar_url} />
-        <Avatar.Fallback fontSize="xs">{actor.name?.charAt(0)}</Avatar.Fallback>
+        <Avatar.Image src={actor?.avatar_url} alt="" />
+        <Avatar.Fallback fontSize="xs">{actor?.name?.charAt(0)}</Avatar.Fallback>
       </Avatar.Root>
       <VStack align="flex-start" gap="1" flex="1">
         {message}
@@ -536,25 +561,8 @@ function SystemNotificationTeaser({ notification }: { notification: Notification
         )}
       </Box>
       <VStack align="flex-start" gap="2" flex="1">
-        <Markdown
-          style={{
-            fontSize: "0.875rem",
-            color: "var(--chakra-colors-fg-default)",
-            lineHeight: "1.4",
-            fontWeight: "600"
-          }}
-        >
-          {body.title}
-        </Markdown>
-        <Markdown
-          style={{
-            fontSize: "0.8rem",
-            color: "var(--chakra-colors-fg-default)",
-            lineHeight: "1.4"
-          }}
-        >
-          {body.message}
-        </Markdown>
+        <Markdown style={NOTIFICATION_BODY_BOLD_STYLE}>{body.title}</Markdown>
+        <Markdown style={NOTIFICATION_BODY_SMALLER_STYLE}>{body.message}</Markdown>
       </VStack>
     </HStack>
   );
@@ -574,6 +582,11 @@ function getNotificationUrl(notification: Notification, course_id: string): stri
     return `/course/${course_id}/assignments/${assignmentBody.assignment_id}`;
   } else if (body.type === "discussion_thread") {
     const discussionBody = body as DiscussionThreadNotification;
+    if (discussionBody.action === "marked_duplicate") {
+      const ord = discussionBody.duplicate_thread_ordinal;
+      const replyIdx = ord != null ? `#post-${ord}` : "";
+      return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
+    }
     const replyIdx = discussionBody.new_comment_number ? `#post-${discussionBody.new_comment_number}` : "";
     return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
   } else if (body.type === "course_enrollment") {

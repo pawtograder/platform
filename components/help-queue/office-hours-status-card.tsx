@@ -1,7 +1,8 @@
 "use client";
 
 import { useHelpQueueAssignments, useHelpQueues, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
-import { useClassProfiles, useFeatureEnabled } from "@/hooks/useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useFeatureEnabled } from "@/hooks/useCourseFeatures";
 import { COURSE_FEATURES } from "@/lib/courseFeatures";
 import { useHelpDrawer } from "@/hooks/useHelpDrawer";
 import {
