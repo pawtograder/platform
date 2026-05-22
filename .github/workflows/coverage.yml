@@ -256,7 +256,15 @@ jobs:
         # client coverage is Chromium-only anyway. Without --project
         # the webkit project's tests get scheduled and all fail with
         # "did not run" because the webkit binary is missing.
+        #
+        # continue-on-error: this coverage workflow is v1 informational
+        # only and is upstream of the actual E2E gate
+        # (Standalone E2E Tests workflow). We don't want pre-existing
+        # E2E flakes to block coverage uploads — the failures still
+        # show in the step output (yellow ⚠️). Once the E2E suite is
+        # de-flaked we can flip this back on.
         run: npx playwright test --project=chromium
+        continue-on-error: true
         env:
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
 

@@ -118,6 +118,18 @@ async function loadAll(): Promise<{ failed: string[] }> {
   return { failed };
 }
 
+// Deno's coverage dump (--coverage=DIR) runs on clean process exit.
+// SIGINT/SIGTERM to a Deno process running an HTTP server does not by
+// default trigger a clean exit (the runtime keeps the event loop
+// alive). Register explicit signal handlers that call Deno.exit(0)
+// so V8 flushes its coverage profile to disk before we tear down.
+const shutdown = (sig: string) => {
+  console.log(`[coverage-bootstrap] received ${sig}, exiting (coverage flush)`);
+  Deno.exit(0);
+};
+Deno.addSignalListener("SIGINT", () => shutdown("SIGINT"));
+Deno.addSignalListener("SIGTERM", () => shutdown("SIGTERM"));
+
 const { failed } = await loadAll();
 // In CI we want bootstrap startup to fail visibly if any function
 // module errored at import time — silent partial registration produces
