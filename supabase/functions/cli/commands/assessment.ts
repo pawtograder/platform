@@ -470,7 +470,7 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
     );
 
     const scoreCount = await streamScores(supabase, submissionIds, mode, tokenizer, writer);
-    const testCount = await streamGraderTests(
+    const { testCount, graderTestIds } = await streamGraderTests(
       supabase,
       submissionIds,
       mode,
@@ -479,7 +479,7 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
       withTestOutput,
       testOutputMax
     );
-    const hintCount = await streamHints(supabase, submissionIds, mode, tokenizer, writer);
+    const hintCount = await streamHints(supabase, graderTestIds, mode, tokenizer, writer);
 
     await writer.write({
       kind: "end",
@@ -934,9 +934,10 @@ async function streamGraderTests(
   writer: { write: (record: Record<string, unknown>) => Promise<void> },
   withOutput: boolean,
   outputMaxBytes: number
-): Promise<number> {
-  if (submissionIds.length === 0) return 0;
+): Promise<{ testCount: number; graderTestIds: number[] }> {
+  if (submissionIds.length === 0) return { testCount: 0, graderTestIds: [] };
   let total = 0;
+  const graderTestIds: number[] = [];
 
   // Step 1: resolve submission_id → grader_result_id list. Most submissions
   // have a single grader_result; multi-attempt runs can have several.
@@ -952,7 +953,7 @@ async function streamGraderTests(
     }
   }
   const graderResultIds = Array.from(graderResultIdToSubmission.keys());
-  if (graderResultIds.length === 0) return 0;
+  if (graderResultIds.length === 0) return { testCount: 0, graderTestIds };
 
   // Step 2: page through grader_result_tests for those grader_result_ids.
   for (const batch of chunked(graderResultIds, 500)) {
@@ -1046,6 +1047,7 @@ async function streamGraderTests(
         }
 
         await writer.write(record);
+        graderTestIds.push(row.id);
         total += 1;
       }
 
@@ -1053,32 +1055,32 @@ async function streamGraderTests(
       cursor = typedRows[typedRows.length - 1]!.id;
     }
   }
-  return total;
+  return { testCount: total, graderTestIds };
 }
 
 /**
- * Hint feedback rows for is_active submissions. created_by is the rater's
- * private_profile_id — on group submissions multiple rows can come from
- * different group members, and we preserve each individual rater per the
+ * Hint feedback rows linked to the exported grader_result_tests. created_by is
+ * the rater's private_profile_id — on group submissions multiple rows can come
+ * from different group members, and we preserve each individual rater per the
  * design discussion ("just report per student who rated").
  */
 async function streamHints(
   supabase: ReturnType<typeof getAdminClient>,
-  submissionIds: number[],
+  graderTestIds: number[],
   mode: IdentityMode,
   tokenizer: Tokenizer | null,
   writer: { write: (record: Record<string, unknown>) => Promise<void> }
 ): Promise<number> {
-  if (submissionIds.length === 0) return 0;
+  if (graderTestIds.length === 0) return 0;
   let total = 0;
 
-  for (const batch of chunked(submissionIds, 500)) {
+  for (const batch of chunked(graderTestIds, 500)) {
     let cursor = 0;
     while (true) {
       const { data: rows, error } = await supabase
         .from("grader_result_tests_hint_feedback")
         .select("id, submission_id, grader_result_tests_id, hint, useful, comment, created_by, created_at")
-        .in("submission_id", batch)
+        .in("grader_result_tests_id", batch)
         .gt("id", cursor)
         .order("id", { ascending: true })
         .limit(FACT_PAGE_SIZE);
