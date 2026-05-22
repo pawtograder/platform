@@ -206,9 +206,30 @@ test("instructors can manage grading default profiles and apply them on assignme
   await editForm.getByLabel("Reminder interval (hours)").fill("6");
   await editForm.getByLabel("Reply-to email").fill("updated-reply@example.edu");
   await editForm.getByLabel("CC emails").fill("updated-cc@example.edu");
-  await editForm.getByRole("button", { name: "Save" }).click();
 
-  await expect(page.getByText("Assignment Updated")).toBeVisible({ timeout: 20_000 });
+  const saveButton = editForm.getByRole("button", { name: "Save" });
+  const assignmentUpdateResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/rest/v1/assignments") &&
+      response.request().method() === "PATCH" &&
+      response.url().includes(`id=eq.${assignment!.id}`),
+    { timeout: 20_000 }
+  );
+  await saveButton.click();
+  // Save sets loading/disabled immediately; also wait for the assignments PATCH so we
+  // do not race the success/error toaster from edit/page.tsx.
+  await expect(saveButton).toBeDisabled({ timeout: 5_000 });
+  const updateResponse = await assignmentUpdateResponse;
+  expect(updateResponse.ok(), `assignments PATCH failed with status ${updateResponse.status()}`).toBe(true);
+  await expect(saveButton).toBeEnabled({ timeout: 20_000 });
+
+  const successToast = page.getByText("Assignment Updated");
+  const errorToast = page.getByText("Update Error");
+  await expect(successToast.or(errorToast)).toBeVisible({ timeout: 20_000 });
+  if (await errorToast.isVisible()) {
+    throw new Error("Assignment update failed with 'Update Error' toast instead of 'Assignment Updated'");
+  }
+  await expect(successToast).toBeVisible();
 
   await expect(async () => {
     const { data: persistedAssignment, error: persistedAssignmentError } = await supabase
