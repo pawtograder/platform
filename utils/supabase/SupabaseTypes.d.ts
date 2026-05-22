@@ -5117,7 +5117,6 @@ export type Database = {
           class_section_id: number | null;
           created_at: string;
           email: string | null;
-          expires_at: string | null;
           id: number;
           invited_by: string | null;
           lab_section_id: number | null;
@@ -5137,7 +5136,6 @@ export type Database = {
           class_section_id?: number | null;
           created_at?: string;
           email?: string | null;
-          expires_at?: string | null;
           id?: number;
           invited_by?: string | null;
           lab_section_id?: number | null;
@@ -5157,7 +5155,6 @@ export type Database = {
           class_section_id?: number | null;
           created_at?: string;
           email?: string | null;
-          expires_at?: string | null;
           id?: number;
           invited_by?: string | null;
           lab_section_id?: number | null;
@@ -11206,7 +11203,7 @@ export type Database = {
         Returns: {
           class_id: number;
           class_name: string;
-          expired_invitations: number;
+          dropped_invitations: number;
           last_sync_message: string;
           last_sync_status: string;
           last_sync_time: string;
@@ -12401,6 +12398,10 @@ export type Database = {
       merge_class_feature_as_service_role: {
         Args: { p_class_id: number; p_enabled: boolean; p_name: string };
         Returns: undefined;
+      };
+      merge_duplicate_class_enrollments: {
+        Args: { p_class_id?: number };
+        Returns: number;
       };
       only_calendar_or_discord_ids_changed: {
         Args: { new_row: Database["public"]["Tables"]["classes"]["Row"] };
