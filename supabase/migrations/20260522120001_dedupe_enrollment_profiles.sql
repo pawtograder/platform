@@ -5,15 +5,19 @@
 -- pair for the same (user, class), producing duplicate rows in the gradebook.
 --
 -- This migration:
---   1. Provides merge_duplicate_class_enrollments(): collapses duplicate
---      (user_id, class_id) enrollments onto a single canonical row, repointing
---      every profiles(id) foreign key from the losing profiles to the canonical
---      ones, then deleting the losing enrollments and profiles.
---   2. Runs it across all classes to clean up existing data.
---   3. Adds a partial unique index so a second *active* enrollment for the same
+--   1. Adds a partial unique index so a second *active* enrollment for the same
 --      (user, class) can never be created again.
+--   2. Provides merge_duplicate_class_enrollments() as an OPT-IN manual cleanup
+--      tool: it collapses duplicate (user_id, class_id) enrollments onto a single
+--      canonical row, repointing every profiles(id) foreign key from the losing
+--      profiles to the canonical ones, then deleting the losing enrollments and
+--      profiles. It is NOT run automatically -- existing records are left as-is.
+--      Run `SELECT public.merge_duplicate_class_enrollments(<class_id>);` (or NULL
+--      for all classes) by hand if duplicates ever need collapsing.
 --
 -- The function is idempotent: re-running it when no duplicates exist is a no-op.
+-- Note: this only handles same-account (user_id, class_id) duplicates; duplicates
+-- spread across two separate accounts for one person are not touched.
 
 CREATE OR REPLACE FUNCTION public.merge_duplicate_class_enrollments(p_class_id bigint DEFAULT NULL)
 RETURNS integer
@@ -142,10 +146,9 @@ REVOKE ALL ON FUNCTION public.merge_duplicate_class_enrollments(bigint) FROM PUB
 GRANT EXECUTE ON FUNCTION public.merge_duplicate_class_enrollments(bigint) TO postgres;
 GRANT EXECUTE ON FUNCTION public.merge_duplicate_class_enrollments(bigint) TO service_role;
 
--- Clean up existing duplicates before enforcing the invariant.
-SELECT public.merge_duplicate_class_enrollments(NULL);
-
 -- Enforce: at most one active enrollment per (user, class) going forward.
+-- Existing data already satisfies this (no duplicate active (user, class) pairs),
+-- so no backfill is run; the merge function above is available for manual use.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_roles_one_active_per_class
   ON public.user_roles (user_id, class_id)
   WHERE disabled = false;
