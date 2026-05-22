@@ -8,23 +8,20 @@
  * Output:
  *   coverage/client.lcov
  *
- * Per-file coverage is merged across all tests by URL (relative to BASE_URL).
- * V8-emitted source-mapped files are resolved against the on-disk source so
- * lcov line numbers point at the .ts/.tsx source, not the compiled chunk.
+ * Implementation uses `monocart-coverage-reports`, which is purpose-built
+ * for Playwright + Next.js: it handles source-map resolution, webpack://
+ * path translation, and per-test merging in one pipeline.
  *
- * Usage:
- *   npx tsx scripts/coverage/v8-client-to-lcov.ts
- *     [--input coverage/client] [--output coverage/client.lcov]
- *     [--base-url http://localhost:3001]
+ * Source maps are loaded from the local `.next/` build (which is
+ * produced with `productionBrowserSourceMaps: true` when COVERAGE=1).
+ * We don't fetch them via HTTP because Next has typically been shut
+ * down by the time this script runs.
  */
 
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
-import v8toIstanbul from "v8-to-istanbul";
-import libCoverage from "istanbul-lib-coverage";
-import libReport from "istanbul-lib-report";
-import reports from "istanbul-reports";
+import MCR from "monocart-coverage-reports";
 
 type Args = { input: string; output: string; baseURL: string };
 
@@ -41,12 +38,87 @@ function parseArgs(): Args {
   };
 }
 
-type V8Entry = { url: string; scriptId: string; source?: string; functions: unknown[] };
+type V8Entry = {
+  url: string;
+  scriptId?: string;
+  source?: string;
+  functions?: unknown[];
+  sourceMap?: unknown;
+};
 
-async function main() {
+const REPO_ROOT = process.cwd();
+
+/**
+ * Translate the URL the browser served the chunk from to the local
+ * file path inside `.next/`. Returns null if it doesn't look like a
+ * Next.js static asset we care about.
+ *
+ * Example:
+ *   http://localhost:3001/_next/static/chunks/app/page-abc.js
+ *     → <repo>/.next/static/chunks/app/page-abc.js
+ */
+function urlToLocalPath(entryUrl: string, baseURL: URL): string | null {
+  let u: URL;
+  try {
+    u = new URL(entryUrl);
+  } catch {
+    return null;
+  }
+  if (u.origin !== baseURL.origin) return null;
+  if (!u.pathname.startsWith("/_next/")) return null;
+  return path.join(REPO_ROOT, ".next", u.pathname.slice("/_next/".length));
+}
+
+async function loadSourceMap(jsPath: string): Promise<unknown | null> {
+  const mapPath = `${jsPath}.map`;
+  try {
+    const raw = await readFile(mapPath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Translate the paths monocart hands us into repo-relative paths.
+ *
+ * Monocart pre-strips `webpack://` from source-map URLs, so what we
+ * receive looks like:
+ *   "_N_E/./app/page.tsx"               → repo source file
+ *   "_N_E/./components/X.tsx"           → repo source file
+ *   "_N_E/?abc1"                        → synthetic webpack module (drop)
+ *   "_N_E/-abc1"                        → synthetic (drop)
+ *   "_N_E/../../src/client/foo.ts"      → Next.js internal (drop)
+ *   "_N_E/./node_modules/..."           → vendored (drop)
+ *   "localhost-3001/_next/static/..."   → dist file URL (drop; not source)
+ *   "app/page.tsx"                      → already-normalized (pass through)
+ *
+ * Returns null for paths to drop entirely.
+ */
+function normalizeSourcePath(raw: string): string | null {
+  // Dist files come through as `<host>-<port>/_next/...`.
+  if (/^[a-z0-9.-]+\/_next\//i.test(raw)) return null;
+  // Monocart re-invokes sourcePath with the result of a previous call,
+  // so this function must be idempotent. Strip ONLY the known Next.js
+  // webpack package-name prefix (literal `_N_E/`); anything else is
+  // assumed to already be repo-relative.
+  let s = raw.startsWith("_N_E/") ? raw.slice("_N_E/".length) : raw;
+  // Synthetic webpack module ids like `?abc1` or `-abc1`.
+  if (/^[-?]/.test(s)) return null;
+  // Next.js internal sources (relative paths above repo root).
+  if (s.startsWith("../")) return null;
+  // Strip a leading `./`
+  s = s.replace(/^\.\//, "");
+  if (!s) return null;
+  // Drop node_modules and webpack runtime.
+  if (s.startsWith("node_modules/") || s.includes("/node_modules/")) return null;
+  if (s.startsWith("(webpack)/")) return null;
+  return s;
+}
+
+async function main(): Promise<void> {
   const args = parseArgs();
-  const inputDir = path.resolve(process.cwd(), args.input);
-  const repoRoot = process.cwd();
+  const inputDir = path.resolve(REPO_ROOT, args.input);
   const baseURL = new URL(args.baseURL);
 
   let files: string[];
@@ -61,10 +133,48 @@ async function main() {
     return;
   }
 
-  const map = libCoverage.createCoverageMap({});
+  // monocart's `add()` accepts raw V8 entries. We pre-attach source
+  // maps from disk because Next is no longer running and monocart's
+  // default HTTP fetch would fail.
+  const outputDir = path.dirname(path.resolve(REPO_ROOT, args.output));
+  const outputFileName = path.basename(args.output);
+
+  const mcr = (MCR as unknown as (opts: unknown) => unknown)({
+    name: "next-client",
+    outputDir,
+    reports: [["lcovonly", { file: outputFileName }]],
+    cleanCache: true,
+    logging: "warn",
+    entryFilter: (entry: { url?: string }) => {
+      if (!entry.url) return false;
+      try {
+        const u = new URL(entry.url);
+        if (u.origin !== baseURL.origin) return false;
+        return u.pathname.startsWith("/_next/");
+      } catch {
+        return false;
+      }
+    },
+    sourceFilter: (sourcePath: string) => {
+      // After our `sourcePath` callback returns a repo-relative path,
+      // restrict to the application code paths Codecov cares about.
+      if (!sourcePath) return false;
+      if (sourcePath.startsWith("app/")) return true;
+      if (sourcePath.startsWith("components/")) return true;
+      if (sourcePath.startsWith("hooks/")) return true;
+      if (sourcePath.startsWith("lib/")) return true;
+      if (sourcePath.startsWith("utils/")) return true;
+      return false;
+    },
+    sourcePath: (filePath: string) => {
+      const norm = normalizeSourcePath(filePath);
+      return norm ?? filePath;
+    }
+  }) as { add: (entries: unknown) => Promise<unknown>; generate: () => Promise<unknown> };
 
   let entriesSeen = 0;
   let entriesUsable = 0;
+  let mapsLoaded = 0;
 
   for (const name of files) {
     const raw = await readFile(path.join(inputDir, name), "utf8");
@@ -76,69 +186,38 @@ async function main() {
       continue;
     }
     const result = payload.result ?? [];
+
     for (const entry of result) {
       entriesSeen++;
       if (!entry.url || !entry.source) continue;
-      // We only care about scripts served from the app — drop browser
-      // internals, devtools, and third-party origins.
-      let entryUrl: URL;
-      try {
-        entryUrl = new URL(entry.url);
-      } catch {
-        continue;
-      }
-      if (entryUrl.origin !== baseURL.origin) continue;
-      if (!entryUrl.pathname.startsWith("/_next/")) continue;
 
-      try {
-        const converter = v8toIstanbul(
-          entry.url,
-          0,
-          {
-            // Provide the script source inline; v8-to-istanbul will consume
-            // the source-map URL from inside the source to resolve back to
-            // the original .ts/.tsx files.
-            source: entry.source
-          },
-          (filepath: string) => {
-            // v8-to-istanbul filter: return `true` to EXCLUDE a file,
-            // `false` to INCLUDE it (inverted from Array.filter). We
-            // exclude node_modules, webpack runtime, and any source not
-            // under the repo root (RSC payloads, build internals).
-            const norm = filepath.replace(/^file:\/\//, "");
-            if (norm.includes("/node_modules/")) return true;
-            if (norm.includes("/webpack/")) return true;
-            if (!norm.startsWith(repoRoot)) return true;
-            return false;
-          }
-        );
-        await converter.load();
-        converter.applyCoverage(entry.functions as never);
-        const istanbulData = converter.toIstanbul();
-        map.merge(istanbulData);
-        converter.destroy();
-        entriesUsable++;
-      } catch (err) {
-        // Common: V8 entry's sourcemap can't be found. That's fine — we
-        // just lose that script. Don't spam on every one.
-        if (process.env.COVERAGE_DEBUG === "1") {
-          console.warn(`[v8-client-to-lcov] convert failed for ${entry.url}:`, err);
-        }
+      const localPath = urlToLocalPath(entry.url, baseURL);
+      if (!localPath) continue;
+
+      // Load source map from disk; without it monocart can't translate
+      // V8 byte ranges to original .ts/.tsx files.
+      const sourceMap = await loadSourceMap(localPath);
+      if (sourceMap) {
+        entry.sourceMap = sourceMap;
+        mapsLoaded++;
       }
+      entriesUsable++;
+    }
+
+    if (result.length > 0) {
+      await mcr.add(result);
     }
   }
 
-  console.error(
-    `[v8-client-to-lcov] dumps=${files.length} entries_seen=${entriesSeen} entries_usable=${entriesUsable} files_with_coverage=${map.files().length}`
-  );
+  const summary = (await mcr.generate()) as { summary?: { lines?: { pct?: number } } };
 
-  const context = libReport.createContext({
-    dir: path.dirname(path.resolve(process.cwd(), args.output)),
-    coverageMap: map
-  });
-  const reporter = reports.create("lcovonly", { file: path.basename(args.output) });
-  reporter.execute(context);
-  console.error(`[v8-client-to-lcov] wrote ${args.output}`);
+  console.error(
+    `[v8-client-to-lcov] dumps=${files.length} entries_seen=${entriesSeen} entries_usable=${entriesUsable} sourcemaps_loaded=${mapsLoaded}`
+  );
+  const pct = summary?.summary?.lines?.pct;
+  if (typeof pct === "number") {
+    console.error(`[v8-client-to-lcov] line coverage: ${pct.toFixed(2)}%`);
+  }
 }
 
 main().catch((err) => {

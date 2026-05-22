@@ -27,8 +27,15 @@ const optimizePackageImports = [
   "react-markdown"
 ];
 
+const coverageBuild = process.env.COVERAGE === "1";
+
 const nextConfig: NextConfig = {
   output: process.env.NEXT_OUTPUT_STANDALONE === "true" ? "standalone" : undefined,
+  // V8 client coverage (collected by Playwright) needs sourcemaps to
+  // resolve compiled chunks back to .ts/.tsx. Enabled only in coverage
+  // builds — production builds keep maps off (faster build, smaller
+  // artifact, no IP leak in browser DevTools).
+  productionBrowserSourceMaps: coverageBuild,
   experimental: {
     optimizePackageImports,
     ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {}),
