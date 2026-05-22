@@ -17,6 +17,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:e2e": "npx playwright test",
+    "triage:flaky-e2e": "npx tsx scripts/FlakyTestTriageAgent.ts",
     "test:e2e:local": "cross-env BASE_URL=http://localhost:3000 npx playwright test",
     "test:k6:build": "webpack --config webpack.k6.config.js",
     "test:k6:submissions-api": "npm run test:k6:build && k6 run dist/k6-tests/submissions-api.js -e SUPABASE_URL=$SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY -e END_TO_END_SECRET=$END_TO_END_SECRET ",
@@ -156,6 +157,7 @@
   "devDependencies": {
     "@argos-ci/playwright": "^6.0.4",
     "@axe-core/playwright": "^4.11.2",
+    "@cursor/sdk": "^1.0.13",
     "@eslint/eslintrc": "^3.3.1",
     "@eslint/js": "^9.26.0",
     "@faker-js/faker": "^9.9.0",
