@@ -182,8 +182,8 @@ const DiscussionThreadContent = memo(
     const { role, private_profile_id } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
     const canEdit = useMemo(() => {
-      return authorProfile?.id === originalPoster || role.role === "instructor" || role.role === "grader";
-    }, [authorProfile, originalPoster, role.role]);
+      return authorProfile?.id === originalPoster || isGraderOrInstructor;
+    }, [authorProfile, originalPoster, isGraderOrInstructor]);
 
     // Like functionality
     const likeStatus = useDiscussionThreadLikes(thread.id);

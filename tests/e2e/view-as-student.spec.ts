@@ -176,4 +176,17 @@ test.describe("Instructor view-as-student (read-only)", () => {
     await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
     await expect(page.getByText(ASSIGNMENT_TITLE).first()).toBeVisible();
   });
+
+  test("instructor in view-as is redirected away from manage routes", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await page
+      .context()
+      .addCookies([{ name: viewAsCookieName(course.id), value: student!.private_profile_id, url: BASE_URL }]);
+
+    await page.goto(`/course/${course.id}/manage/course/enrollments`);
+
+    await expect(page).toHaveURL(new RegExp(`/course/${course.id}(/)?$`));
+    await expect(page.getByRole("alert", { name: "Viewing as student" })).toBeVisible();
+  });
 });

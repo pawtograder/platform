@@ -14,7 +14,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { BsArrowRight, BsChatDots, BsCheckCircle, BsChevronDown, BsChevronUp, BsQuestionCircle } from "react-icons/bs";
-import { useHelpQueues, useHelpQueueAssignments, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueues, useHelpQueueAssignments, useStudentVisibleHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 import { Tooltip } from "@/components/ui/tooltip";
 import { toaster } from "@/components/ui/toaster";
 import type { HelpRequestResolutionStatus } from "@/utils/supabase/DatabaseTypes";
@@ -40,7 +40,7 @@ export function FloatingHelpRequestWidget() {
   const allHelpRequestStudents = useHelpRequestStudents();
   const allHelpQueues = useHelpQueues();
   const allHelpQueueAssignments = useHelpQueueAssignments();
-  const allHelpRequests = useHelpRequests();
+  const allHelpRequests = useStudentVisibleHelpRequests();
   const resolutionModal = useModalManager();
   const controller = useOfficeHoursController();
   const { helpRequests, studentHelpActivity } = controller;

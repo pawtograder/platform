@@ -44,26 +44,37 @@ export function useClassProfiles() {
   return context;
 }
 
+/**
+ * Whether the viewer is a grader in the **effective** course identity. When an instructor
+ * is viewing as a student, this returns `false` (same as a real student). Use `realRole`
+ * from {@link useClassProfiles} when you need the viewer's actual enrollment.
+ */
 export function useIsGrader() {
   const { role } = useClassProfiles();
   return role.role === "grader";
 }
 
+/**
+ * Whether the viewer is an instructor in the **effective** course identity. When an
+ * instructor is viewing as a student, this returns `false`. Use `realRole` from
+ * {@link useClassProfiles} for staff-only affordances that must stay visible regardless
+ * of view-as (e.g. the enrollments "View as this student" action).
+ */
 export function useIsInstructor() {
   const { role } = useClassProfiles();
   return role.role === "instructor";
 }
 
 /**
- * Returns whether the current user's role is either "grader" or "instructor" in the class context.
- *
- * @returns `true` if the user is a grader or instructor; otherwise, `false`.
+ * Whether the viewer is grader or instructor in the **effective** course identity.
+ * Returns `false` while an instructor is masquerading as a student.
  */
 export function useIsGraderOrInstructor() {
   const { role } = useClassProfiles();
   return role.role === "grader" || role.role === "instructor";
 }
 
+/** Whether the viewer is a student in the **effective** course identity (including view-as). */
 export function useIsStudent() {
   const { role } = useClassProfiles();
   return role.role === "student";

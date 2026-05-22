@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import { COURSE_FEATURES, courseFeatureEnabled } from "@/lib/courseFeatures";
 import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
@@ -251,8 +251,8 @@ export default function DynamicCourseNav() {
   const course = useCourse() as CourseWithFeatures;
   const { colorMode } = useColorMode();
 
-  const isInstructor = enrollment.role === "instructor";
-  const isInstructorOrGrader = enrollment.role === "instructor" || enrollment.role === "grader";
+  const isInstructor = useIsInstructor();
+  const isInstructorOrGrader = useIsGraderOrInstructor();
   /** Matches `display={{ base, md }}` splits below — only one layout gets landmark ids / exposes nav to SRs. */
   const isMdUp = useBreakpointValue({ base: false, md: true }) ?? false;
 

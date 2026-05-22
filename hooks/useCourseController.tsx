@@ -2,6 +2,8 @@
 
 import { toaster } from "@/components/ui/toaster";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import { isDiscussionTeaserVisibleToStudent } from "@/lib/viewAsStudentDataMask";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import TableController, {
   useFindTableControllerValue,
   useIndexedTableControllerValue,
@@ -309,16 +311,20 @@ const isVisibleTeaser = (row: DiscussionThreadTeaser) => row.duplicate_marked_at
 
 export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
-  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>(() =>
-    (controller.discussionThreadTeasers.list().data as DiscussionThreadTeaser[]).filter(isVisibleTeaser)
-  );
+  const { isMasking, studentIds } = useViewAsStudentDataMask();
+  const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>(() => {
+    const rows = (controller.discussionThreadTeasers.list().data as DiscussionThreadTeaser[]).filter(isVisibleTeaser);
+    return isMasking ? rows.filter((t) => isDiscussionTeaserVisibleToStudent(t, studentIds)) : rows;
+  });
   useEffect(() => {
     const { data, unsubscribe } = controller.discussionThreadTeasers.list((data) => {
-      setTeasers((data as DiscussionThreadTeaser[]).filter(isVisibleTeaser));
+      const rows = (data as DiscussionThreadTeaser[]).filter(isVisibleTeaser);
+      setTeasers(isMasking ? rows.filter((t) => isDiscussionTeaserVisibleToStudent(t, studentIds)) : rows);
     });
-    setTeasers((data as DiscussionThreadTeaser[]).filter(isVisibleTeaser));
+    const rows = (data as DiscussionThreadTeaser[]).filter(isVisibleTeaser);
+    setTeasers(isMasking ? rows.filter((t) => isDiscussionTeaserVisibleToStudent(t, studentIds)) : rows);
     return unsubscribe;
-  }, [controller]);
+  }, [controller, isMasking, studentIds]);
   return teasers;
 }
 /**

@@ -30,7 +30,7 @@ import { RealtimeChat } from "@/components/realtime-chat";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsStudent } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
@@ -946,7 +946,8 @@ const HelpRequestStudents = ({
  */
 export default function HelpRequestChat({ request_id }: { request_id: number }) {
   const request = useHelpRequest(request_id);
-  const { private_profile_id, role } = useClassProfiles();
+  const { private_profile_id } = useClassProfiles();
+  const isStudent = useIsStudent();
   const profiles = useAllProfilesForClass();
   const router = useRouter();
   const params = useParams();
@@ -1041,10 +1042,10 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
     return (
       request &&
       (isInstructorOrGrader ||
-        (!request.is_private && role.role === "student") ||
+        (!request.is_private && isStudent) ||
         (request.is_private && studentIds.includes(private_profile_id!)))
     );
-  }, [isInstructorOrGrader, request, role.role, studentIds, private_profile_id]);
+  }, [isInstructorOrGrader, request, isStudent, studentIds, private_profile_id]);
 
   // Check if current user can access request management controls (resolve/close)
   const canAccessRequestControls = useMemo(() => {
@@ -1131,7 +1132,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
 
   const resolveRequest = useCallback(async () => {
     // For students, show resolution modal with status selection
-    if (role.role === "student") {
+    if (isStudent) {
       resolutionModal.openModal();
       return;
     }
@@ -1143,7 +1144,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
       status: "resolved"
     });
     await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
-  }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, role.role, resolutionModal]);
+  }, [helpRequests, request_id, private_profile_id, logActivityForAllStudents, isStudent, resolutionModal]);
 
   /**
    * Open feedback modal for closed/resolved requests without existing feedback from the currently-logged in student
@@ -1410,7 +1411,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
         </>
       )}
 
-      {role.role === "student" && (
+      {isStudent && (
         <>
           {/* Feedback modal for providing feedback on already resolved/closed requests */}
           <HelpRequestFeedbackModal

@@ -128,14 +128,11 @@ function ThreadActions({
   const [replyVisible, setReplyVisible] = useState(false);
   const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
   const errorPinModal = useModalManager<number>();
-  const { public_profile_id, private_profile_id, role } = useClassProfiles();
+  const { public_profile_id, private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   const { discussionThreadTeasers } = useCourseController();
-  const canEdit =
-    thread.author === public_profile_id ||
-    thread.author === private_profile_id ||
-    role.role === "instructor" ||
-    role.role === "grader";
-  const canPin = role.role === "instructor" || role.role === "grader";
+  const canEdit = thread.author === public_profile_id || thread.author === private_profile_id || isGraderOrInstructor;
+  const canPin = isGraderOrInstructor;
   const isRootThread = thread.root != null && thread.id === thread.root;
   const canMarkDuplicate = canPin && isRootThread && !thread.duplicate_original_subject;
 
