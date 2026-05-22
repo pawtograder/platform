@@ -329,10 +329,23 @@ const DiscussionThreadContent = memo(
                     </Text>
                     {authorProfile ? (
                       <HStack gap="1">
-                        <Text textStyle="sm" fontWeight="semibold">
-                          {authorProfile?.name}
-                          {authorProfile?.real_name && " (" + authorProfile?.real_name + " to self and instructors)"}
-                        </Text>
+                        {isGraderOrInstructor && authorProfile?.private_profile_id ? (
+                          <StudentSummaryTrigger
+                            student_id={authorProfile.private_profile_id}
+                            course_id={Number(course_id)}
+                          >
+                            <Text textStyle="sm" fontWeight="semibold">
+                              {authorProfile?.name}
+                              {authorProfile?.real_name &&
+                                " (" + authorProfile?.real_name + " to self and instructors)"}
+                            </Text>
+                          </StudentSummaryTrigger>
+                        ) : (
+                          <Text textStyle="sm" fontWeight="semibold">
+                            {authorProfile?.name}
+                            {authorProfile?.real_name && " (" + authorProfile?.real_name + " to self and instructors)"}
+                          </Text>
+                        )}
                         {authorProfile && <KarmaBadge karma={authorProfile.discussion_karma ?? 0} />}
                         {thread.author === originalPoster && (
                           <Badge ml="2" colorPalette="blue">
@@ -347,12 +360,6 @@ const DiscussionThreadContent = memo(
                       </HStack>
                     ) : (
                       <Skeleton width="100px" height="20px" />
-                    )}
-                    {isGraderOrInstructor && authorProfile?.private_profile_id && (
-                      <StudentSummaryTrigger
-                        student_id={authorProfile.private_profile_id}
-                        course_id={Number(course_id)}
-                      />
                     )}
                     {thread.id === root_thread?.answer && <Badge colorPalette="green">Answer to Question</Badge>}
                     {/* Ensure root_thread_id is valid before passing */}
