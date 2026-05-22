@@ -76,6 +76,26 @@ if [[ "${needs_restart:-false}" == "true" ]]; then
     docker logs --tail 50 "$CONTAINER" >&2 || true
     exit 1
   fi
+
+  # pg_isready only tells us Postgres is accepting connections. The
+  # Supabase stack (auth, kong, realtime, storage) all depend on the
+  # DB and need a few seconds to reconnect after a DB bounce. The next
+  # workflow step (`npx supabase status -o env`) fails fast if any of
+  # those still show as starting, so wait for the whole stack here.
+  echo "[setup-pg] waiting for full Supabase stack to recover"
+  cd "$ROOT"
+  stack_ready=false
+  for _ in $(seq 1 60); do
+    if npx supabase status >/dev/null 2>&1; then
+      stack_ready=true
+      break
+    fi
+    sleep 2
+  done
+  if [[ "$stack_ready" != "true" ]]; then
+    echo "[setup-pg] WARNING: supabase status still not healthy after 120s; continuing anyway" >&2
+    npx supabase status 2>&1 | head -20 >&2 || true
+  fi
 fi
 
 # --- Create extension + reset profiler -----------------------------------
