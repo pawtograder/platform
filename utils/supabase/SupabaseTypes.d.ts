@@ -1040,14 +1040,20 @@ export type Database = {
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
           permit_empty_submissions: boolean;
+          protect_block_force_push: boolean;
+          protect_require_pull_request: boolean;
+          protect_required_reviewers: number;
           regrade_deadline: string | null;
           release_date: string | null;
+          repo_mode: Database["public"]["Enums"]["assignment_repo_mode"];
           require_tokens_before_due_date: boolean;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
           show_leaderboard: boolean;
           slug: string | null;
+          source_assignment_id: number | null;
           student_repo_prefix: string | null;
+          submitted_via: string | null;
           template_repo: string | null;
           title: string;
           total_points: number | null;
@@ -1079,14 +1085,20 @@ export type Database = {
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
           permit_empty_submissions?: boolean;
+          protect_block_force_push?: boolean;
+          protect_require_pull_request?: boolean;
+          protect_required_reviewers?: number;
           regrade_deadline?: string | null;
           release_date?: string | null;
+          repo_mode?: Database["public"]["Enums"]["assignment_repo_mode"];
           require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
           show_leaderboard?: boolean;
           slug?: string | null;
+          source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
+          submitted_via?: string | null;
           template_repo?: string | null;
           title: string;
           total_points?: number | null;
@@ -1118,14 +1130,20 @@ export type Database = {
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
           permit_empty_submissions?: boolean;
+          protect_block_force_push?: boolean;
+          protect_require_pull_request?: boolean;
+          protect_required_reviewers?: number;
           regrade_deadline?: string | null;
           release_date?: string | null;
+          repo_mode?: Database["public"]["Enums"]["assignment_repo_mode"];
           require_tokens_before_due_date?: boolean;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;
           show_leaderboard?: boolean;
           slug?: string | null;
+          source_assignment_id?: number | null;
           student_repo_prefix?: string | null;
+          submitted_via?: string | null;
           template_repo?: string | null;
           title?: string;
           total_points?: number | null;
@@ -8919,12 +8937,12 @@ export type Database = {
           ordinal: number;
           profile_id: string | null;
           released: string | null;
-          repository: string;
+          repository: string | null;
           repository_check_run_id: number | null;
           repository_id: number | null;
           run_attempt: number;
           run_number: number;
-          sha: string;
+          sha: string | null;
         };
         Insert: {
           assignment_group_id?: number | null;
@@ -8939,12 +8957,12 @@ export type Database = {
           ordinal?: number;
           profile_id?: string | null;
           released?: string | null;
-          repository: string;
+          repository?: string | null;
           repository_check_run_id?: number | null;
           repository_id?: number | null;
           run_attempt: number;
           run_number: number;
-          sha: string;
+          sha?: string | null;
         };
         Update: {
           assignment_group_id?: number | null;
@@ -8959,12 +8977,12 @@ export type Database = {
           ordinal?: number;
           profile_id?: string | null;
           released?: string | null;
-          repository?: string;
+          repository?: string | null;
           repository_check_run_id?: number | null;
           repository_id?: number | null;
           run_attempt?: number;
           run_number?: number;
-          sha?: string;
+          sha?: string | null;
         };
         Relationships: [
           {
@@ -12751,6 +12769,11 @@ export type Database = {
       app_role: "admin" | "instructor" | "grader" | "student";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
+      assignment_repo_mode:
+        | "none"
+        | "template_only_staff"
+        | "template_with_student_forks"
+        | "fork_from_prior_assignment";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
         | "general"
@@ -12948,6 +12971,12 @@ export const Constants = {
       app_role: ["admin", "instructor", "grader", "student"],
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
+      assignment_repo_mode: [
+        "none",
+        "template_only_staff",
+        "template_with_student_forks",
+        "fork_from_prior_assignment"
+      ],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: [
         "general",

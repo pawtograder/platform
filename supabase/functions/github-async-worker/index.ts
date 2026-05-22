@@ -913,8 +913,18 @@ export async function processEnvelope(
         return true;
       }
       case "create_repo": {
-        const { org, repoName, templateRepo, isTemplateRepo, courseSlug, githubUsernames } =
-          envelope.args as CreateRepoArgs;
+        const {
+          org,
+          repoName,
+          templateRepo,
+          isTemplateRepo,
+          courseSlug,
+          githubUsernames,
+          creationMethod,
+          sourceRepo,
+          branchProtection,
+          studentTeamPermission
+        } = envelope.args as CreateRepoArgs;
         if (
           org === "pawtograder-playground" &&
           (courseSlug?.startsWith("e2e-ignore-") || repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))
@@ -924,12 +934,30 @@ export async function processEnvelope(
         }
         Sentry.addBreadcrumb({ message: `Creating repo ${repoName} for org ${org}`, level: "info" });
         const limiter = getCreateContentLimiter(org);
-        // createRepo patches repo settings after generate (squash merge on, template flag, branch ruleset, …).
+        // createRepo patches repo settings after generate/fork (squash merge on, template flag, branch ruleset, …).
+        const effectiveSource = sourceRepo ?? templateRepo;
         const headSha = await limiter.schedule(() =>
-          github.createRepo(org, repoName, templateRepo, { is_template_repo: isTemplateRepo }, scope)
+          github.createRepo(
+            org,
+            repoName,
+            effectiveSource,
+            {
+              is_template_repo: isTemplateRepo,
+              creation_method: creationMethod ?? "template",
+              branch_protection: branchProtection
+            },
+            scope
+          )
         );
         Sentry.addBreadcrumb({ message: `Repo created ${repoName} for org ${org}, head sha: ${headSha}` });
-        await github.syncRepoPermissions(org, repoName, courseSlug, githubUsernames, scope);
+        await github.syncRepoPermissions(
+          org,
+          repoName,
+          courseSlug,
+          githubUsernames,
+          scope,
+          studentTeamPermission ? { studentTeamPermission } : undefined
+        );
 
         // Update repository record using the repo_id if provided (preferred method)
         try {

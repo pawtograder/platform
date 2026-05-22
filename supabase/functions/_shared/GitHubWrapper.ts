@@ -33,6 +33,12 @@ export class PrimaryRateLimitError extends Error {
 
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
+import {
+  BRANCH_PROTECTION_RULESET_NAME,
+  type BranchProtectionConfig,
+  DEFAULT_BRANCH_PROTECTION,
+  planBranchProtectionAction
+} from "./branchProtection.ts";
 
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
@@ -762,18 +768,38 @@ export async function getRepos(org: string, scope?: Sentry.Scope) {
   return repos;
 }
 
+export type CreateRepoOptions = {
+  is_template_repo?: boolean;
+  /**
+   * "template" (default) uses GitHub's "Generate from template" API. "fork"
+   * uses the fork API so the new repo shares git history with the upstream
+   * — used for repo_mode=template_with_student_forks and
+   * fork_from_prior_assignment.
+   */
+  creation_method?: "template" | "fork";
+  /**
+   * Branch-protection ruleset to apply after the repo is created. Defaults to
+   * the historical { blockForcePush: true, ... } so legacy callers stay on
+   * the same behavior. Pass an explicit value (including all-false) when the
+   * assignment opts out of force-push protection.
+   */
+  branch_protection?: BranchProtectionConfig;
+};
+
 export async function createRepo(
   org: string,
   repoName: string,
   template_repo: string,
-  { is_template_repo }: { is_template_repo?: boolean } = {},
+  options: CreateRepoOptions = {},
   scope?: Sentry.Scope
 ): Promise<string> {
+  const { is_template_repo, creation_method = "template", branch_protection = DEFAULT_BRANCH_PROTECTION } = options;
   scope?.setTag("github_operation", "create_repo");
   scope?.setTag("org", org);
   scope?.setTag("repo_name", repoName);
   scope?.setTag("template_repo", template_repo);
   scope?.setTag("is_template", is_template_repo?.toString() || "false");
+  scope?.setTag("creation_method", creation_method);
 
   const octokit = await getOctoKit(org, scope);
   if (!octokit) {
@@ -788,21 +814,40 @@ export async function createRepo(
     scope?.setTag("template_owner", owner);
     scope?.setTag("repo_name", repoName);
     scope?.setTag("org", org);
-    console.log("Creating repo", template_repo, owner, repoName, org);
-    const resp = await retryWithBackoff(
-      () =>
-        octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
-          template_repo: repo,
-          template_owner: owner,
-          owner: org,
-          name: repoName,
-          private: true
-        }),
-      2, // maxRetries
-      5000, // baseDelayMs
-      scope
-    );
-    console.log(JSON.stringify(resp.headers, null, 2));
+    console.log("Creating repo", template_repo, owner, repoName, org, "via", creation_method);
+    if (creation_method === "fork") {
+      // Fork the upstream into our org with the chosen name. Forks are
+      // asynchronous on GitHub's side, so we poll for size > 0 below.
+      await retryWithBackoff(
+        () =>
+          octokit.request("POST /repos/{owner}/{repo}/forks", {
+            owner,
+            repo,
+            organization: org,
+            name: repoName,
+            default_branch_only: true
+          }),
+        2, // maxRetries
+        5000, // baseDelayMs
+        scope
+      );
+      await waitForRepoReady(octokit, org, repoName, scope);
+    } else {
+      const resp = await retryWithBackoff(
+        () =>
+          octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
+            template_repo: repo,
+            template_owner: owner,
+            owner: org,
+            name: repoName,
+            private: true
+          }),
+        2, // maxRetries
+        5000, // baseDelayMs
+        scope
+      );
+      console.log(JSON.stringify(resp.headers, null, 2));
+    }
     scope?.setTag("github_operation", "create_repo_request_done");
     // Enable squash merging; set template flag when applicable
     scope?.setTag("github_operation", "patch_repo_settings");
@@ -853,13 +898,13 @@ export async function createRepo(
     );
     scope?.setTag("head_sha", heads.data.object.sha);
 
-    // Create branch protection ruleset to prevent force pushes
+    // Apply branch protection ruleset per the assignment's configuration.
     scope?.setTag("github_operation", "create_branch_protection_ruleset");
     try {
-      await createBranchProtectionRuleset(org, repoName, scope);
+      await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
     } catch (rulesetError) {
       // Log but don't fail repo creation if ruleset creation fails
-      console.error("Error creating branch protection ruleset", rulesetError);
+      console.error("Error applying branch protection ruleset", rulesetError);
       scope?.setTag("ruleset_creation_failed", "true");
       Sentry.captureException(rulesetError, scope);
     }
@@ -974,67 +1019,134 @@ function checkIfDuplicateRulesetError(e: RequestError): boolean {
 }
 
 /**
- * Creates a branch protection ruleset to prevent force pushes on the default branch
- * Uses GitHub's repository rulesets API (newer approach)
+ * Apply (create, update, or delete) the per-assignment branch-protection
+ * ruleset on the default branch of a repo. Idempotent — looks up any existing
+ * ruleset by name and decides what to do via planBranchProtectionAction.
  */
-export async function createBranchProtectionRuleset(
+export async function applyBranchProtectionRuleset(
   org: string,
   repoName: string,
+  cfg: BranchProtectionConfig,
   scope?: Sentry.Scope
 ): Promise<void> {
-  scope?.setTag("github_operation", "create_branch_protection_ruleset");
+  scope?.setTag("github_operation", "apply_branch_protection_ruleset");
   scope?.setTag("org", org);
   scope?.setTag("repo_name", repoName);
+  scope?.setTag("block_force_push", String(cfg.blockForcePush));
+  scope?.setTag("require_pull_request", String(cfg.requirePullRequest));
+  scope?.setTag("required_reviewers", String(cfg.requiredReviewers));
 
   const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new UserVisibleError("No GitHub installation found for organization " + org);
   }
 
+  // Find an existing Pawtograder-managed ruleset by name. We don't touch
+  // rulesets users created themselves under a different name.
+  let existingRulesetId: number | null = null;
+  let existingRules: Parameters<typeof planBranchProtectionAction>[1] = null;
   try {
-    await retryWithBackoff(
-      () =>
-        octokit.request("POST /repos/{owner}/{repo}/rulesets", {
-          owner: org,
-          repo: repoName,
-          name: "Protect main branch",
-          target: "branch",
-          enforcement: "active",
-          bypass_actors: [],
-          conditions: {
-            ref_name: {
-              include: ["~DEFAULT_BRANCH"],
-              exclude: []
-            }
-          },
-          rules: [
-            {
-              type: "non_fast_forward"
-            }
-          ]
-        }),
-      3, // maxRetries
-      1000, // baseDelayMs
-      scope
-    );
-    scope?.setTag("ruleset_created", "true");
+    const existing = await octokit.paginate("GET /repos/{owner}/{repo}/rulesets", {
+      owner: org,
+      repo: repoName,
+      per_page: 100
+    });
+    const ours = existing.find((r) => r.name === BRANCH_PROTECTION_RULESET_NAME);
+    if (ours) {
+      existingRulesetId = ours.id;
+      const detail = await octokit.request("GET /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+        owner: org,
+        repo: repoName,
+        ruleset_id: ours.id
+      });
+      // detail.data.rules has the same shape we build. Cast to the helper type.
+      existingRules = (detail.data.rules ?? []) as NonNullable<typeof existingRules>;
+    }
+  } catch (e) {
+    if (e instanceof RequestError && e.status === 404) {
+      // No rulesets endpoint available (very old plan tier) — treat as absent.
+      existingRulesetId = null;
+      existingRules = null;
+    } else {
+      // List failures shouldn't kill repo creation. Fall through assuming none.
+      console.warn(`Could not list rulesets for ${org}/${repoName}:`, e);
+      Sentry.captureException(e, scope);
+      existingRulesetId = null;
+      existingRules = null;
+    }
+  }
+
+  const action = planBranchProtectionAction(cfg, existingRules);
+  scope?.setTag("ruleset_action", action.kind);
+  if (action.kind === "noop") {
+    return;
+  }
+
+  const body = (rules: typeof existingRules) => ({
+    owner: org,
+    repo: repoName,
+    name: BRANCH_PROTECTION_RULESET_NAME,
+    target: "branch" as const,
+    enforcement: "active" as const,
+    bypass_actors: [],
+    conditions: {
+      ref_name: {
+        include: ["~DEFAULT_BRANCH"],
+        exclude: [] as string[]
+      }
+    },
+    rules: (rules ?? []) as never
+  });
+
+  try {
+    if (action.kind === "create") {
+      await retryWithBackoff(
+        () => octokit.request("POST /repos/{owner}/{repo}/rulesets", body(action.rules)),
+        3,
+        1000,
+        scope
+      );
+      scope?.setTag("ruleset_created", "true");
+      return;
+    }
+    if (action.kind === "update" && existingRulesetId != null) {
+      await retryWithBackoff(
+        () =>
+          octokit.request("PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+            ...body(action.rules),
+            ruleset_id: existingRulesetId
+          }),
+        3,
+        1000,
+        scope
+      );
+      scope?.setTag("ruleset_updated", "true");
+      return;
+    }
+    if (action.kind === "delete" && existingRulesetId != null) {
+      await retryWithBackoff(
+        () =>
+          octokit.request("DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}", {
+            owner: org,
+            repo: repoName,
+            ruleset_id: existingRulesetId
+          }),
+        3,
+        1000,
+        scope
+      );
+      scope?.setTag("ruleset_deleted", "true");
+      return;
+    }
   } catch (e) {
     if (e instanceof RequestError) {
-      // Only suppress if this is explicitly a duplicate ruleset error
-      if (e.status === 422 || e.status === 409) {
-        const isDuplicateRuleset = checkIfDuplicateRulesetError(e);
-        if (isDuplicateRuleset) {
-          scope?.setTag("ruleset_already_exists", "true");
-          console.log(`Branch protection ruleset may already exist for ${org}/${repoName}`);
-          return;
-        }
-        // If it's 422/409 but not a duplicate error, rethrow so callers can handle it
+      // Treat duplicate-creation as success (race between create and an
+      // earlier worker invocation): the ruleset already exists.
+      if ((e.status === 422 || e.status === 409) && checkIfDuplicateRulesetError(e)) {
+        scope?.setTag("ruleset_already_exists", "true");
+        return;
       }
-
-      // Free GitHub accounts can't enable branch protection on private repositories.
-      // GitHub returns "Upgrade to GitHub Pro or make this repository public to enable
-      // this feature." — there's no way for the platform to satisfy this from server
-      // side, so swallow it: the repo is created and usable, just without the ruleset.
+      // Free GitHub accounts can't enable branch protection on private repos.
       const message = (e.message || "").toLowerCase();
       if (
         message.includes("upgrade to github pro") ||
@@ -1048,6 +1160,48 @@ export async function createBranchProtectionRuleset(
     }
     throw e;
   }
+}
+
+/**
+ * Back-compat shim for callers that historically just wanted to install the
+ * default "block force-push" ruleset (e.g. CheckBranchProtection.ts). New
+ * callers should use applyBranchProtectionRuleset directly with an explicit
+ * BranchProtectionConfig.
+ */
+export async function createBranchProtectionRuleset(
+  org: string,
+  repoName: string,
+  scope?: Sentry.Scope
+): Promise<void> {
+  return applyBranchProtectionRuleset(org, repoName, DEFAULT_BRANCH_PROTECTION, scope);
+}
+
+/**
+ * Poll GitHub until a freshly-forked repo has finished mirroring. Forks
+ * created via the API return 202 immediately but are not usable until the
+ * background mirroring completes; the same pattern is already used for
+ * template-generated repos in `assignment-create-all-repos`.
+ */
+async function waitForRepoReady(octokit: Octokit, org: string, repoName: string, scope?: Sentry.Scope): Promise<void> {
+  scope?.setTag("github_operation", "wait_for_repo_ready");
+  const maxAttempts = 30;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { data } = await octokit.request("GET /repos/{owner}/{repo}", {
+        owner: org,
+        repo: repoName
+      });
+      if (data && (data as { size?: number }).size && (data as { size?: number }).size! > 0) {
+        return;
+      }
+    } catch (e) {
+      if (!(e instanceof RequestError) || e.status !== 404) {
+        throw e;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new UserVisibleError(`Fork ${org}/${repoName} did not become ready in time`);
 }
 async function listFilesInRepoDirectory(
   octokit: Octokit,
@@ -1625,12 +1779,23 @@ async function updateGitHubUsernameForUser(
 
   return { oldUsername, newUsername: null };
 }
+export type SyncRepoPermissionsOptions = {
+  /**
+   * When set, also grants the `<courseSlug>-students` team this permission on
+   * the repo. Used by the handout-repo flow for repo_mode =
+   * template_with_student_forks so students can see the upstream they fork
+   * from. Default `null` keeps the existing staff-team-only behavior.
+   */
+  studentTeamPermission?: "pull" | null;
+};
+
 export async function syncRepoPermissions(
   org: string,
   repo: string,
   courseSlug: string,
   githubUsernamesMixedCase: string[],
-  _scope?: Sentry.Scope
+  _scope?: Sentry.Scope,
+  options: SyncRepoPermissionsOptions = {}
 ): Promise<{ madeChanges: boolean }> {
   let madeChanges = false;
   const scope = _scope?.clone();
@@ -1706,6 +1871,28 @@ export async function syncRepoPermissions(
       repo,
       permission: "maintain"
     });
+  }
+  // Optionally grant the students team read access (mode 2 handout repos).
+  if (options.studentTeamPermission) {
+    const studentsTeamSlug = `${courseSlug}-students`;
+    const hasStudentsTeam = teamsWithAccess.some(
+      (t) => t.slug === studentsTeamSlug && t.permission === options.studentTeamPermission
+    );
+    if (!hasStudentsTeam) {
+      madeChanges = true;
+      await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+        org,
+        team_slug: studentsTeamSlug,
+        owner: org,
+        repo,
+        permission: options.studentTeamPermission
+      });
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `${org}/${repo} granted ${studentsTeamSlug} team ${options.studentTeamPermission}`,
+        level: "info"
+      });
+    }
   }
   const desiredUsersNotInCachedOrg = githubUsernames.filter((u) => !allOrgMembers?.includes(u));
   console.log(`${org}/${repo} desired users not in cached org members: ${desiredUsersNotInCachedOrg.join(", ")}`);

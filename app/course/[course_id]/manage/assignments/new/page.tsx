@@ -24,7 +24,11 @@ export default function NewAssignmentPage() {
     defaultValues: {
       allow_not_graded_submissions: true,
       permit_empty_submissions: true,
-      require_tokens_before_due_date: true
+      require_tokens_before_due_date: true,
+      repo_mode: "template_only_staff",
+      protect_block_force_push: true,
+      protect_require_pull_request: false,
+      protect_required_reviewers: 0
     }
   });
   const router = useRouter();
@@ -78,6 +82,8 @@ export default function NewAssignmentPage() {
           return;
         }
 
+        const repoMode = getValues("repo_mode") || "template_only_staff";
+        const isFork = repoMode === "fork_from_prior_assignment";
         const { data, error } = await supabase
           .from("assignments")
           .insert({
@@ -107,7 +113,13 @@ export default function NewAssignmentPage() {
             self_review_setting_id: settings.data.id as number,
             group_formation_deadline: getValues("group_formation_deadline")
               ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
-              : null
+              : null,
+            repo_mode: repoMode,
+            source_assignment_id: isFork ? getValues("source_assignment_id") || null : null,
+            protect_block_force_push: repoMode === "none" ? false : getValues("protect_block_force_push") !== false,
+            protect_require_pull_request:
+              repoMode === "none" ? false : getValues("protect_require_pull_request") === true,
+            protect_required_reviewers: repoMode === "none" ? 0 : Number(getValues("protect_required_reviewers") || 0)
           })
           .select("id")
           .single();
@@ -117,14 +129,16 @@ export default function NewAssignmentPage() {
             description: error.message
           });
         } else {
-          await assignmentCreateHandoutRepo(
-            { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-            supabase
-          );
-          await assignmentCreateSolutionRepo(
-            { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-            supabase
-          );
+          if (repoMode !== "none") {
+            await assignmentCreateHandoutRepo(
+              { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+              supabase
+            );
+            await assignmentCreateSolutionRepo(
+              { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+              supabase
+            );
+          }
           //Potentially copy groups from another assignment
           if (getValues("copy_groups_from_assignment")) {
             await assignmentGroupCopyGroupsFromAssignment(

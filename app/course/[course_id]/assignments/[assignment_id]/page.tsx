@@ -232,9 +232,13 @@ export default function AssignmentPage() {
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
-                    <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
-                      {submission.sha.slice(0, 7)}
-                    </Link>
+                    {submission.sha && submission.repository ? (
+                      <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>
+                        {submission.sha.slice(0, 7)}
+                      </Link>
+                    ) : (
+                      <span>Upload</span>
+                    )}
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>

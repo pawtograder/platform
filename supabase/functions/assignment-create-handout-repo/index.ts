@@ -2,11 +2,15 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import {
+  applyBranchProtectionRuleset,
+  createRepo,
+  syncRepoPermissions,
+  updateAutograderWorkflowHash
+} from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructorOrServiceRole, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-
-const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
+import { resolveHandoutRepoAction, type HandoutSourceAssignment } from "../_shared/handoutRepoStrategy.ts";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
@@ -24,7 +28,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("slug,classes(slug,github_org)")
+    .select(
+      "id, slug, class_id, repo_mode, source_assignment_id, template_repo, latest_template_sha, " +
+        "protect_block_force_push, protect_require_pull_request, protect_required_reviewers, " +
+        "classes(slug,github_org)"
+    )
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -35,26 +43,123 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug", 400);
   }
-  const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
   const handoutRepoOrg = assignment.classes.github_org;
-  if (!handoutRepoOrg) {
+  if (!handoutRepoOrg && assignment.repo_mode !== "none") {
     throw new UserVisibleError("Class does not have a GitHub organization", 400);
   }
+  scope.setTag("repo_mode", assignment.repo_mode);
+
+  let sourceAssignment: HandoutSourceAssignment | null = null;
+  if (assignment.repo_mode === "fork_from_prior_assignment" && assignment.source_assignment_id) {
+    const { data: src } = await adminSupabase
+      .from("assignments")
+      .select("id, class_id, template_repo, latest_template_sha")
+      .eq("id", assignment.source_assignment_id)
+      .maybeSingle();
+    if (src) {
+      sourceAssignment = src as HandoutSourceAssignment;
+    }
+  }
+
+  const action = resolveHandoutRepoAction(
+    {
+      id: assignment.id,
+      class_id: assignment.class_id,
+      repo_mode: assignment.repo_mode,
+      source_assignment_id: assignment.source_assignment_id
+    },
+    sourceAssignment
+  );
+
+  if (action.kind === "noop") {
+    // repo_mode === "none". Clear template_repo so downstream consumers don't
+    // try to use a stale value, and skip GitHub entirely.
+    if (assignment.template_repo) {
+      await adminSupabase.from("assignments").update({ template_repo: null }).eq("id", assignment_id);
+    }
+    return {
+      repo_name: null,
+      org_name: null,
+      skipped: true,
+      repo_mode: assignment.repo_mode
+    };
+  }
+
+  if (action.kind === "inherit_from_source") {
+    // For fork_from_prior_assignment we don't create a new handout repo; the
+    // student repos fork from each student's prior-assignment repo. We still
+    // copy the source assignment's template_repo + latest_template_sha onto
+    // this assignment so the handout-history UI and template-SHA-driven sync
+    // continue to work.
+    await adminSupabase
+      .from("assignments")
+      .update({
+        template_repo: sourceAssignment!.template_repo,
+        latest_template_sha: sourceAssignment!.latest_template_sha ?? null
+      })
+      .eq("id", assignment_id);
+    return {
+      repo_name: sourceAssignment!.template_repo?.split("/")[1] ?? null,
+      org_name: sourceAssignment!.template_repo?.split("/")[0] ?? null,
+      inherited_from_source: true,
+      source_assignment_id: sourceAssignment!.id,
+      repo_mode: assignment.repo_mode
+    };
+  }
+
+  // action.kind === "create"
+  const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
+  scope.setTag("handout_repo_name", handoutRepoName);
+  scope.setTag("handout_repo_org", handoutRepoOrg!);
+
   await adminSupabase
     .from("assignments")
-    .update({
-      template_repo: `${handoutRepoOrg}/${handoutRepoName}`
-    })
+    .update({ template_repo: `${handoutRepoOrg}/${handoutRepoName}` })
     .eq("id", assignment_id);
-  scope.setTag("handout_repo_name", handoutRepoName);
-  scope.setTag("handout_repo_org", handoutRepoOrg);
-  await createRepo(handoutRepoOrg, handoutRepoName, TEMPLATE_HANDOUT_REPO_NAME, { is_template_repo: true }, scope);
-  await syncRepoPermissions(handoutRepoOrg, handoutRepoName, assignment.classes.slug, [], scope);
+
+  await createRepo(
+    handoutRepoOrg!,
+    handoutRepoName,
+    action.sourceRepo,
+    {
+      is_template_repo: action.isTemplateRepo,
+      creation_method: "template",
+      branch_protection: {
+        blockForcePush: assignment.protect_block_force_push,
+        requirePullRequest: assignment.protect_require_pull_request,
+        requiredReviewers: assignment.protect_required_reviewers
+      }
+    },
+    scope
+  );
+  await syncRepoPermissions(
+    handoutRepoOrg!,
+    handoutRepoName,
+    assignment.classes.slug,
+    [],
+    scope,
+    action.studentTeamPermission ? { studentTeamPermission: action.studentTeamPermission } : undefined
+  );
+  // applyBranchProtectionRuleset is already called inside createRepo with the
+  // same config, but invoking it here too keeps the call idempotent for the
+  // "repo already exists" branch and serves as a clear signal of the desired
+  // ruleset on the handout.
+  await applyBranchProtectionRuleset(
+    handoutRepoOrg!,
+    handoutRepoName,
+    {
+      blockForcePush: assignment.protect_block_force_push,
+      requirePullRequest: assignment.protect_require_pull_request,
+      requiredReviewers: assignment.protect_required_reviewers
+    },
+    scope
+  );
   await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
 
   return {
     repo_name: handoutRepoName,
-    org_name: handoutRepoOrg
+    org_name: handoutRepoOrg,
+    repo_mode: assignment.repo_mode
   };
 }
 

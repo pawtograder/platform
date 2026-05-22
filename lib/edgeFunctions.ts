@@ -124,6 +124,40 @@ export async function assignmentGroupInstructorMoveStudent(
 ) {
   return await invokeEdgeFunction(supabase, "assignment-group-instructor-move-student", { body: params });
 }
+export type NoRepoSubmissionFile = {
+  /** Display name (e.g. "presentation.pdf"). */
+  name: string;
+  /** Full path within the `submission-files` bucket. */
+  storage_key: string;
+  file_size: number;
+  mime_type: string | null;
+};
+
+/**
+ * Create a submission for an assignment with repo_mode='none'. The caller must
+ * upload each file to the `submission-files` storage bucket first; this RPC
+ * just inserts the submission row + the submission_files records referencing
+ * the storage keys. Returns the new submission id.
+ */
+export async function createNoRepoSubmission(
+  params: { assignment_id: number; files: NoRepoSubmissionFile[] },
+  supabase: SupabaseClient<Database>
+): Promise<number> {
+  const { data, error } = await (supabase.rpc as CallableFunction)("create_no_repo_submission", {
+    p_assignment_id: params.assignment_id,
+    p_files: params.files
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: "Failed to create no-repo submission",
+      recoverable: false
+    });
+  }
+  return data as number;
+}
+
 export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {
   const ret = await supabase.rpc("submission_set_active", { _submission_id: params.submission_id });
   if (ret.data) {

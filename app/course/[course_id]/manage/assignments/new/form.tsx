@@ -542,6 +542,168 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
   );
 }
 
+function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+  const { course_id } = useParams();
+  const {
+    register,
+    control,
+    watch,
+    formState: { errors }
+  } = form;
+
+  const repoMode = watch("repo_mode") ?? "template_only_staff";
+  const requirePR = watch("protect_require_pull_request") ?? false;
+
+  // Source assignment options for the fork-from-prior mode (issue #700).
+  // Exclude the current assignment when editing to prevent self-references.
+  const currentId = form.getValues("id");
+  const { data: priorAssignments } = useList<Assignment>({
+    resource: "assignments",
+    queryOptions: { enabled: !!course_id && repoMode === "fork_from_prior_assignment" },
+    filters: [
+      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
+      { field: "repo_mode", operator: "ne", value: "none" }
+    ],
+    pagination: { pageSize: 1000 }
+  });
+
+  const protectionDisabled = repoMode === "none";
+
+  return (
+    <CardRoot>
+      <CardHeader>
+        <CardTitle>Student Repositories</CardTitle>
+      </CardHeader>
+      <CardBody gap="5px">
+        <Fieldset.Content>
+          <Field
+            label="Repository configuration"
+            helperText="How student repositories are created and what they can see of the handout."
+            errorText={errors.repo_mode?.message?.toString()}
+            invalid={errors.repo_mode ? true : false}
+            required={true}
+          >
+            <NativeSelectRoot>
+              <NativeSelectField {...register("repo_mode", { required: true })}>
+                <option value="template_only_staff">Template repo (staff-only) — students get fresh copies</option>
+                <option value="template_with_student_forks">
+                  Template repo (visible to students) — students fork it
+                </option>
+                <option value="fork_from_prior_assignment">
+                  Fork from prior assignment — multi-checkpoint workflow
+                </option>
+                <option value="none">No repository — students upload submission files directly</option>
+              </NativeSelectField>
+            </NativeSelectRoot>
+          </Field>
+        </Fieldset.Content>
+        {repoMode === "fork_from_prior_assignment" && (
+          <Fieldset.Content>
+            <Field
+              label="Source assignment"
+              helperText="Each student's repository on this assignment will be a fork of their own repository on the chosen source assignment."
+              errorText={errors.source_assignment_id?.message?.toString()}
+              invalid={errors.source_assignment_id ? true : false}
+              required={true}
+            >
+              <NativeSelectRoot>
+                <NativeSelectField
+                  {...register("source_assignment_id", {
+                    required: "Required when forking from a prior assignment",
+                    valueAsNumber: true
+                  })}
+                >
+                  <option value="">Select an assignment...</option>
+                  {priorAssignments?.data
+                    ?.filter((a) => a.id !== currentId)
+                    .map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.title}
+                      </option>
+                    ))}
+                </NativeSelectField>
+              </NativeSelectRoot>
+            </Field>
+          </Fieldset.Content>
+        )}
+        <Box mt={3}>
+          <Text fontWeight="medium" mb={1} color={protectionDisabled ? "fg.subtle" : "fg.default"}>
+            Branch Protection
+          </Text>
+          <Text fontSize="sm" color="fg.muted" mb={3}>
+            {protectionDisabled
+              ? "Branch protection is unavailable when the assignment has no repository."
+              : "Rules applied to the default branch of every student/group repository for this assignment."}
+          </Text>
+          <Fieldset.Content>
+            <Field helperText="Block force-pushes (non-fast-forward updates) to the default branch.">
+              <Controller
+                name="protect_block_force_push"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value !== false}
+                    disabled={protectionDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Block force-push to default branch</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field helperText="Require changes to the default branch to go through a pull request.">
+              <Controller
+                name="protect_require_pull_request"
+                control={control}
+                render={({ field }) => (
+                  <Checkbox.Root
+                    checked={field.value === true}
+                    disabled={protectionDisabled}
+                    onCheckedChange={(checked) => field.onChange(!!checked.checked)}
+                  >
+                    <Checkbox.HiddenInput />
+                    <Checkbox.Control>
+                      <LuCheck />
+                    </Checkbox.Control>
+                    <Checkbox.Label>Require pull request to update default branch</Checkbox.Label>
+                  </Checkbox.Root>
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+          {requirePR && !protectionDisabled && (
+            <Fieldset.Content>
+              <Field
+                label="Required reviewers"
+                helperText="Minimum number of approving reviews before a pull request can be merged (0 = no minimum)."
+                errorText={errors.protect_required_reviewers?.message?.toString()}
+                invalid={errors.protect_required_reviewers ? true : false}
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={5}
+                  {...register("protect_required_reviewers", {
+                    valueAsNumber: true,
+                    min: { value: 0, message: "Must be at least 0" },
+                    max: { value: 5, message: "Must be at most 5" }
+                  })}
+                />
+              </Field>
+            </Fieldset.Content>
+          )}
+        </Box>
+      </CardBody>
+    </CardRoot>
+  );
+}
+
 export default function AssignmentForm({
   form,
   onSubmit
@@ -841,6 +1003,7 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <GroupConfigurationSubform form={form} timezone={timezone} />
+          <RepositoryConfigurationSubform form={form} />
           <SelfEvaluationSubform form={form} />
           <Fieldset.Content>
             <Field
