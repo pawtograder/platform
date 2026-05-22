@@ -1452,9 +1452,11 @@ function RubricMenu() {
 export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
   const unsortedRubrics = useRubrics();
   // Descriptions are collapsed by default for students (keeps the sidebar scannable) but shown for
-  // graders/instructors, who rely on them while grading. Either role can toggle.
+  // graders/instructors, who rely on them while grading. Derive the default from the role each
+  // render (so it picks up role state that hydrates after mount) and let a manual toggle override.
   const isGraderOrInstructorForDescriptions = useIsGraderOrInstructor();
-  const [showDescriptions, setShowDescriptions] = useState(isGraderOrInstructorForDescriptions);
+  const [descriptionsOverride, setDescriptionsOverride] = useState<boolean | null>(null);
+  const showDescriptions = descriptionsOverride ?? isGraderOrInstructorForDescriptions;
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
   const activeReviewAssignment = useActiveReviewAssignment();
   const rubrics = useMemo(() => {
@@ -1588,7 +1590,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
         <RubricMenu />
         <Switch
           checked={showDescriptions}
-          onCheckedChange={(e) => setShowDescriptions(e.checked)}
+          onCheckedChange={(e) => setDescriptionsOverride(e.checked)}
           size="sm"
           alignSelf="start"
         >
