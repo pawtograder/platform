@@ -150,7 +150,9 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
 
     logger.step(`Exporting assessment data for class: ${args.class}`);
     logger.info(`Output: ${outputDir}`);
-    logger.info(`Identity mode: ${mode}${mode === "opaque" ? " (random per-run salt, intra-dump only; tokens require server pepper to recompute)" : mode === "hash" ? " (same --salt joins dumps on this deployment; offline recompute requires server pepper)" : ""}`);
+    logger.info(
+      `Identity mode: ${mode}${mode === "opaque" ? " (random per-run salt, intra-dump only; tokens require server pepper to recompute)" : mode === "hash" ? " (same --salt joins dumps on this deployment; offline recompute requires server pepper)" : ""}`
+    );
     logger.info(`Dump id: ${dumpId}`);
     if (args.skipGradebook === true) {
       logger.info("Gradebook export: skipped (--skip-gradebook)");
@@ -435,21 +437,14 @@ async function streamAssignmentSection(
   section: string,
   extraParams: Record<string, unknown> = {}
 ): Promise<ReturnType<typeof consumeAssignmentStream>> {
-  return withTransientRetry(
-    () =>
-      consumeAssignmentStream(
-        { ...baseParams, section, ...extraParams },
-        slug
-      ),
-    {
-      onRetry: (attempt, err, delayMs) => {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.warning(
-          `assignment ${slug} [${section}]: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`
-        );
-      }
+  return withTransientRetry(() => consumeAssignmentStream({ ...baseParams, section, ...extraParams }, slug), {
+    onRetry: (attempt, err, delayMs) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warning(
+        `assignment ${slug} [${section}]: transient error on attempt ${attempt} (${message}); retrying in ${delayMs}ms`
+      );
     }
-  );
+  });
 }
 
 /**

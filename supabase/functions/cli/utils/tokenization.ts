@@ -67,13 +67,7 @@ export async function createTokenizer(salt: string, pepper: string): Promise<Tok
 
   const derivedKeyBytes = await crypto.subtle.sign("HMAC", pepperKey, encoder.encode(salt));
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    derivedKeyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
+  const key = await crypto.subtle.importKey("raw", derivedKeyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 
   const cache = new Map<string, string>();
 
