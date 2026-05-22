@@ -65,112 +65,131 @@ const nextConfig: NextConfig = {
       static: 300
     }
   },
-  ...(useLegacyWebpackTweaks
+  // Coverage builds need full source maps on BOTH client and server
+  // bundles. `productionBrowserSourceMaps: true` (above) handles client;
+  // for the server bundle Next 15 omits sourcemaps in production by
+  // default, so we force `devtool = source-map` via a webpack hook.
+  // Without this, `c8 report` over NODE_V8_COVERAGE has no way to map
+  // compiled `.next/server/app/.../page.js` back to its `.tsx` source
+  // and silently produces near-empty server coverage.
+  ...(coverageBuild
     ? {
-        // Keep legacy memory-optimized webpack behavior available via NEXT_BUNDLING_PROFILE=legacy.
-        webpack: (config, { isServer, dev }) => {
-          if (config.cache && !dev) {
-            config.cache = {
-              ...config.cache,
-              maxMemoryGenerations: 1
-            };
-          }
-
-          if (!isServer) {
-            config.optimization = {
-              ...config.optimization,
-              moduleIds: "deterministic",
-              splitChunks: {
-                chunks: "all",
-                maxInitialRequests: 25,
-                maxAsyncRequests: 30,
-                cacheGroups: {
-                  default: false,
-                  monaco: {
-                    name: "monaco-editor",
-                    test: /[\\/]node_modules[\\/](@monaco-editor|monaco-editor|monaco-yaml)[\\/]/,
-                    priority: 20,
-                    reuseExistingChunk: true,
-                    enforce: true
-                  },
-                  chakra: {
-                    name: "chakra-ui",
-                    test: /[\\/]node_modules[\\/]@chakra-ui[\\/]/,
-                    priority: 15,
-                    reuseExistingChunk: true,
-                    enforce: true
-                  },
-                  charts: {
-                    name: "charts",
-                    test: /[\\/]node_modules[\\/](recharts|@chakra-ui\/charts)[\\/]/,
-                    priority: 10,
-                    reuseExistingChunk: true,
-                    enforce: true
-                  },
-                  mdEditor: {
-                    name: "md-editor",
-                    test: /[\\/]node_modules[\\/]@uiw[\\/]react-md-editor[\\/]/,
-                    priority: 10,
-                    reuseExistingChunk: true,
-                    enforce: true
-                  },
-                  mathjs: {
-                    name: "mathjs",
-                    test: /[\\/]node_modules[\\/]mathjs[\\/]/,
-                    priority: 10,
-                    reuseExistingChunk: true,
-                    enforce: true
-                  }
-                }
-              }
-            };
-          }
-
-          if (config.optimization?.minimizer) {
-            config.optimization.minimizer = config.optimization.minimizer.map((plugin: unknown) => {
-              if (!plugin || typeof plugin !== "object" || !("constructor" in plugin)) {
-                return plugin;
-              }
-
-              const pluginName = plugin.constructor.name;
-
-              if (pluginName === "SwcMinify") {
-                return plugin;
-              }
-
-              if (pluginName === "TerserPlugin") {
-                const terserPlugin = plugin as {
-                  options?: { parallel?: boolean; terserOptions?: { compress?: { passes?: number } } };
-                };
-                if (terserPlugin.options) {
-                  terserPlugin.options.parallel = false;
-                  if (terserPlugin.options.terserOptions?.compress) {
-                    terserPlugin.options.terserOptions.compress.passes = 1;
-                  }
-                }
-                return plugin;
-              }
-
-              if (pluginName === "CssMinimizerPlugin") {
-                const cssPlugin = plugin as { options?: { parallel?: boolean } };
-                if (cssPlugin.options) {
-                  cssPlugin.options.parallel = false;
-                }
-                return plugin;
-              }
-
-              return plugin;
-            });
-          }
-
-          if (config.resolve) {
-            config.resolve.cache = false;
-          }
-
+        webpack: (config: { devtool?: string }, ctx: { isServer: boolean }) => {
+          // Only override server bundle. Client bundles get
+          // sourcemaps via `productionBrowserSourceMaps: true`
+          // above; setting devtool twice (here + the option)
+          // confuses Next's webpack pipeline and produces an
+          // empty `.next/static` directory.
+          if (ctx.isServer) config.devtool = "source-map";
           return config;
         }
       }
-    : {})
+    : useLegacyWebpackTweaks
+      ? {
+          // Keep legacy memory-optimized webpack behavior available via NEXT_BUNDLING_PROFILE=legacy.
+          webpack: (config, { isServer, dev }) => {
+            if (config.cache && !dev) {
+              config.cache = {
+                ...config.cache,
+                maxMemoryGenerations: 1
+              };
+            }
+
+            if (!isServer) {
+              config.optimization = {
+                ...config.optimization,
+                moduleIds: "deterministic",
+                splitChunks: {
+                  chunks: "all",
+                  maxInitialRequests: 25,
+                  maxAsyncRequests: 30,
+                  cacheGroups: {
+                    default: false,
+                    monaco: {
+                      name: "monaco-editor",
+                      test: /[\\/]node_modules[\\/](@monaco-editor|monaco-editor|monaco-yaml)[\\/]/,
+                      priority: 20,
+                      reuseExistingChunk: true,
+                      enforce: true
+                    },
+                    chakra: {
+                      name: "chakra-ui",
+                      test: /[\\/]node_modules[\\/]@chakra-ui[\\/]/,
+                      priority: 15,
+                      reuseExistingChunk: true,
+                      enforce: true
+                    },
+                    charts: {
+                      name: "charts",
+                      test: /[\\/]node_modules[\\/](recharts|@chakra-ui\/charts)[\\/]/,
+                      priority: 10,
+                      reuseExistingChunk: true,
+                      enforce: true
+                    },
+                    mdEditor: {
+                      name: "md-editor",
+                      test: /[\\/]node_modules[\\/]@uiw[\\/]react-md-editor[\\/]/,
+                      priority: 10,
+                      reuseExistingChunk: true,
+                      enforce: true
+                    },
+                    mathjs: {
+                      name: "mathjs",
+                      test: /[\\/]node_modules[\\/]mathjs[\\/]/,
+                      priority: 10,
+                      reuseExistingChunk: true,
+                      enforce: true
+                    }
+                  }
+                }
+              };
+            }
+
+            if (config.optimization?.minimizer) {
+              config.optimization.minimizer = config.optimization.minimizer.map((plugin: unknown) => {
+                if (!plugin || typeof plugin !== "object" || !("constructor" in plugin)) {
+                  return plugin;
+                }
+
+                const pluginName = plugin.constructor.name;
+
+                if (pluginName === "SwcMinify") {
+                  return plugin;
+                }
+
+                if (pluginName === "TerserPlugin") {
+                  const terserPlugin = plugin as {
+                    options?: { parallel?: boolean; terserOptions?: { compress?: { passes?: number } } };
+                  };
+                  if (terserPlugin.options) {
+                    terserPlugin.options.parallel = false;
+                    if (terserPlugin.options.terserOptions?.compress) {
+                      terserPlugin.options.terserOptions.compress.passes = 1;
+                    }
+                  }
+                  return plugin;
+                }
+
+                if (pluginName === "CssMinimizerPlugin") {
+                  const cssPlugin = plugin as { options?: { parallel?: boolean } };
+                  if (cssPlugin.options) {
+                    cssPlugin.options.parallel = false;
+                  }
+                  return plugin;
+                }
+
+                return plugin;
+              });
+            }
+
+            if (config.resolve) {
+              config.resolve.cache = false;
+            }
+
+            return config;
+          }
+        }
+      : {})
 };
 
 // Skip Sentry webpack integration when DSN is unset (local dev) or explicitly disabled (CI speed).
