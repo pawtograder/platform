@@ -1,5 +1,11 @@
 import { useGraderPseudonymousMode } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGrader, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import {
+  useClassProfiles,
+  useIsGrader,
+  useIsGraderOrInstructor,
+  useIsInstructor,
+  useIsReadOnly
+} from "@/hooks/useClassProfiles";
 import { useSubmissionController, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
 import {
   SubmissionFile,
@@ -42,6 +48,7 @@ export default function LineCommentForm({
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isInstructor = useIsInstructor();
   const isTaOnly = useIsGrader();
+  const isReadOnly = useIsReadOnly();
   const graderPseudonymousMode = useGraderPseudonymousMode();
   // Use public profile (pseudonym) when grader pseudonymous mode is enabled and user is staff
   const authorProfileId = isGraderOrInstructor && graderPseudonymousMode ? public_profile_id : private_profile_id;
@@ -123,6 +130,11 @@ export default function LineCommentForm({
 
   if (!submissionReviewId) {
     return <Skeleton height="100px" width="100%" />;
+  }
+
+  // Read-only: an instructor viewing as a student cannot post comments.
+  if (isReadOnly) {
+    return null;
   }
 
   return (

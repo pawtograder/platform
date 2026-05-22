@@ -32,7 +32,7 @@ export function FloatingHelpRequestWidget() {
   const router = useRouter();
   const pathname = usePathname();
   const { course_id } = useParams();
-  const { role, private_profile_id } = useClassProfiles();
+  const { role, private_profile_id, isReadOnly } = useClassProfiles();
   const featureEnabled = useFeatureEnabled(COURSE_FEATURES.OFFICE_HOURS);
   const { isOpen: isDrawerOpen, openDrawer, closeDrawer } = useHelpDrawer();
   const [isExpanded, setIsExpanded] = useState(false);
@@ -172,7 +172,7 @@ export function FloatingHelpRequestWidget() {
   );
 
   // Only show for students when feature is enabled
-  if (role.role !== "student" || !featureEnabled) {
+  if (role.role !== "student" || !featureEnabled || isReadOnly) {
     return null;
   }
 

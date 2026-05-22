@@ -6,7 +6,7 @@ import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
@@ -36,6 +36,7 @@ export function DiscussionThreadReply({
 }) {
   // const invalidate = useInvalidate();
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const isReadOnly = useIsReadOnly();
 
   // Focus the textarea when the reply becomes visible
   useEffect(() => {
@@ -75,7 +76,7 @@ export function DiscussionThreadReply({
     },
     [tableController, setVisible, thread]
   );
-  if (!visible) {
+  if (!visible || isReadOnly) {
     return <></>;
   }
   return (
@@ -175,6 +176,7 @@ const DiscussionThreadContent = memo(
 
     const [replyVisible, setReplyVisible] = useState(false);
     const isGraderOrInstructor = useIsGraderOrInstructor();
+    const isReadOnly = useIsReadOnly();
     const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
     const { role, private_profile_id } = useClassProfiles();
@@ -391,26 +393,30 @@ const DiscussionThreadContent = memo(
                   >
                     {formatRelative(thread.created_at, new Date())}
                   </Text>
-                  <Link onClick={showReply} color="fg.muted">
-                    Reply
-                  </Link>
-                  <Button variant="ghost" size="xs" onClick={toggleLike} loading={likeLoading} color="fg.muted">
-                    {thread.likes_count ?? 0} <Icon as={likeStatus ? FaHeart : FaRegHeart} />
-                  </Button>
-                  {canEdit && (
-                    <Link onClick={() => setIsEditing(true)} color="fg.muted">
-                      Edit
-                    </Link>
-                  )}
-                  {root_thread?.is_question && canEdit && !isAnswered && (
-                    <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
-                      Mark as Answer
-                    </Button>
-                  )}
-                  {canEdit && root_thread?.answer === thread.id && (
-                    <Link onClick={toggleAnswered} color="fg.muted">
-                      Unmark as answer
-                    </Link>
+                  {!isReadOnly && (
+                    <>
+                      <Link onClick={showReply} color="fg.muted">
+                        Reply
+                      </Link>
+                      <Button variant="ghost" size="xs" onClick={toggleLike} loading={likeLoading} color="fg.muted">
+                        {thread.likes_count ?? 0} <Icon as={likeStatus ? FaHeart : FaRegHeart} />
+                      </Button>
+                      {canEdit && (
+                        <Link onClick={() => setIsEditing(true)} color="fg.muted">
+                          Edit
+                        </Link>
+                      )}
+                      {root_thread?.is_question && canEdit && !isAnswered && (
+                        <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
+                          Mark as Answer
+                        </Button>
+                      )}
+                      {canEdit && root_thread?.answer === thread.id && (
+                        <Link onClick={toggleAnswered} color="fg.muted">
+                          Unmark as answer
+                        </Link>
+                      )}
+                    </>
                   )}
                 </HStack>
                 <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
