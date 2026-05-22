@@ -179,7 +179,7 @@ const DiscussionThreadContent = memo(
     const isReadOnly = useIsReadOnly();
     const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
-    const { role, private_profile_id } = useClassProfiles();
+    const { private_profile_id } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
     const canEdit = useMemo(() => {
       return authorProfile?.id === originalPoster || isGraderOrInstructor;
