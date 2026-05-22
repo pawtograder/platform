@@ -38,6 +38,8 @@ test.describe("Bulk CSV invitation import (#322)", () => {
       supabase.from("invitations") as unknown as { select: (c: string) => Promise<{ error: unknown }> }
     ).select("expires_at");
     expect(error).not.toBeNull();
+    const message = String((error as { message?: string } | null)?.message ?? error);
+    expect(message.toLowerCase()).toContain("expires_at");
   });
 
   test("SIS-ID mode creates a pending, manually-managed invitation for an unknown user", async () => {

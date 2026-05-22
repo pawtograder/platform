@@ -118,6 +118,8 @@ test.describe("Enrollment de-duplication (#390/#387)", () => {
       disabled: false
     });
     expect(error).not.toBeNull(); // idx_user_roles_one_active_per_class blocks it
+    expect(error?.code).toBe("23505"); // unique_violation
+    expect(error?.message ?? "").toContain("idx_user_roles_one_active_per_class");
   });
 
   test("merge_duplicate_class_enrollments collapses a pre-existing duplicate profile", async () => {

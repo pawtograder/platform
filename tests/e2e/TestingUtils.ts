@@ -361,13 +361,19 @@ export async function getEnrollmentRowsForSisUser(
     lab_section_id: number | null;
   }>
 > {
-  const { data: user } = await supabase.from("users").select("user_id").eq("sis_user_id", sis_user_id).maybeSingle();
+  const { data: user, error: userError } = await supabase
+    .from("users")
+    .select("user_id")
+    .eq("sis_user_id", sis_user_id)
+    .maybeSingle();
+  if (userError) throw new Error(`getEnrollmentRowsForSisUser: failed to fetch user: ${userError.message}`);
   if (!user?.user_id) return [];
-  const { data: rows } = await supabase
+  const { data: rows, error: rowsError } = await supabase
     .from("user_roles")
     .select("id, role, disabled, private_profile_id, public_profile_id, class_section_id, lab_section_id")
     .eq("class_id", class_id)
     .eq("user_id", user.user_id);
+  if (rowsError) throw new Error(`getEnrollmentRowsForSisUser: failed to fetch user_roles: ${rowsError.message}`);
   return (rows ?? []) as Array<{
     id: number;
     role: string;

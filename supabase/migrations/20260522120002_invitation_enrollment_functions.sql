@@ -173,12 +173,30 @@ BEGIN
     VALUES (v_user_name, v_avatar_url, p_class_id, true)
     RETURNING id INTO v_private_profile_id;
 
-    SELECT word INTO v_adjective FROM public.name_generation_words
-    WHERE is_adjective = true ORDER BY random() LIMIT 1;
-    SELECT word INTO v_noun FROM public.name_generation_words
-    WHERE is_noun = true ORDER BY random() LIMIT 1;
-    v_number := floor(random() * 1000)::integer;
-    v_public_name := COALESCE(v_adjective, 'random') || '-' || COALESCE(v_noun, 'user') || '-' || v_number;
+    -- Generate a public pseudonym, retrying to avoid reusing another student's
+    -- name in this class (matches create_invitation; profiles has no unique
+    -- (class_id, name) constraint, so this is a UX nicety, not a hard requirement).
+    DECLARE
+        v_attempts integer := 0;
+        v_exists boolean := true;
+    BEGIN
+        WHILE v_attempts < 20 LOOP
+            SELECT word INTO v_adjective FROM public.name_generation_words
+            WHERE is_adjective = true ORDER BY random() LIMIT 1;
+            SELECT word INTO v_noun FROM public.name_generation_words
+            WHERE is_noun = true ORDER BY random() LIMIT 1;
+            v_number := floor(random() * 1000)::integer;
+            v_public_name := COALESCE(v_adjective, 'random') || '-' || COALESCE(v_noun, 'user') || '-' || v_number;
+            SELECT EXISTS (
+                SELECT 1 FROM public.profiles WHERE class_id = p_class_id AND name = v_public_name
+            ) INTO v_exists;
+            IF NOT v_exists THEN EXIT; END IF;
+            v_attempts := v_attempts + 1;
+        END LOOP;
+        IF v_exists THEN
+            v_public_name := v_public_name || '-' || substr(md5(random()::text || clock_timestamp()::text), 1, 6);
+        END IF;
+    END;
 
     INSERT INTO public.profiles (name, avatar_url, class_id, is_private_profile)
     VALUES (
@@ -667,7 +685,6 @@ BEGIN
           p_class_id, rec.role, rec.sis_user_id, NULL, rec.name,
           v_admin_user_id, rec.class_section_id, rec.lab_section_id, true
         );
-        PERFORM v_inv_id;
         UPDATE tmp_change_counts SET invitations_created = invitations_created + 1 WHERE true;
       END IF;
     END LOOP;

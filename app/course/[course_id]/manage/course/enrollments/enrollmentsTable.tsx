@@ -1168,7 +1168,6 @@ export default function EnrollmentsTable() {
                                   options={[
                                     { label: "Enrolled", value: "Enrolled" },
                                     { label: "Pending", value: "pending" },
-                                    { label: "Accepted", value: "accepted" },
                                     { label: "Cancelled", value: "cancelled" },
                                     { label: "Dropped", value: "Dropped" }
                                   ]}

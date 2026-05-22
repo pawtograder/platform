@@ -32,6 +32,25 @@ DECLARE
   v_best_role public.app_role;
   v_any_active boolean;
 BEGIN
+  -- Discover every profiles(id) foreign key once (the catalog does not change
+  -- mid-run), rather than re-querying information_schema for each losing row.
+  DROP TABLE IF EXISTS tmp_profile_fks;
+  CREATE TEMP TABLE tmp_profile_fks (table_schema text, table_name text, column_name text) ON COMMIT DROP;
+  INSERT INTO tmp_profile_fks (table_schema, table_name, column_name)
+  SELECT tc.table_schema, tc.table_name, kcu.column_name
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.key_column_usage kcu
+    ON kcu.constraint_name = tc.constraint_name
+   AND kcu.constraint_schema = tc.constraint_schema
+  JOIN information_schema.constraint_column_usage ccu
+    ON ccu.constraint_name = tc.constraint_name
+   AND ccu.constraint_schema = tc.constraint_schema
+  WHERE tc.constraint_type = 'FOREIGN KEY'
+    AND ccu.table_schema = 'public'
+    AND ccu.table_name = 'profiles'
+    AND ccu.column_name = 'id'
+    AND NOT (tc.table_schema = 'public' AND tc.table_name = 'user_roles');
+
   FOR grp IN
     SELECT ur.user_id, ur.class_id
     FROM public.user_roles ur
@@ -70,20 +89,7 @@ BEGIN
       -- losing row we are about to delete) from the loser's profiles onto the
       -- canonical profiles. On a unique/FK collision the loser's row is redundant
       -- duplicate data, so we drop it instead.
-      FOR fk IN
-        SELECT tc.table_schema, tc.table_name, kcu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON kcu.constraint_name = tc.constraint_name
-         AND kcu.constraint_schema = tc.constraint_schema
-        JOIN information_schema.constraint_column_usage ccu
-          ON ccu.constraint_name = tc.constraint_name
-         AND ccu.constraint_schema = tc.constraint_schema
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND ccu.table_schema = 'public'
-          AND ccu.table_name = 'profiles'
-          AND ccu.column_name = 'id'
-          AND NOT (tc.table_schema = 'public' AND tc.table_name = 'user_roles')
+      FOR fk IN SELECT table_schema, table_name, column_name FROM tmp_profile_fks
       LOOP
         -- private profile references
         BEGIN
@@ -91,6 +97,8 @@ BEGIN
             fk.table_schema, fk.table_name, fk.column_name, fk.column_name)
           USING v_canon_private, loser.private_profile_id;
         EXCEPTION WHEN unique_violation OR foreign_key_violation THEN
+          RAISE NOTICE 'merge_duplicate_class_enrollments: dropping conflicting rows in %.% (%) referencing loser private profile %',
+            fk.table_schema, fk.table_name, fk.column_name, loser.private_profile_id;
           EXECUTE format('DELETE FROM %I.%I WHERE %I = $1',
             fk.table_schema, fk.table_name, fk.column_name)
           USING loser.private_profile_id;
@@ -102,6 +110,8 @@ BEGIN
             fk.table_schema, fk.table_name, fk.column_name, fk.column_name)
           USING v_canon_public, loser.public_profile_id;
         EXCEPTION WHEN unique_violation OR foreign_key_violation THEN
+          RAISE NOTICE 'merge_duplicate_class_enrollments: dropping conflicting rows in %.% (%) referencing loser public profile %',
+            fk.table_schema, fk.table_name, fk.column_name, loser.public_profile_id;
           EXECUTE format('DELETE FROM %I.%I WHERE %I = $1',
             fk.table_schema, fk.table_name, fk.column_name)
           USING loser.public_profile_id;
