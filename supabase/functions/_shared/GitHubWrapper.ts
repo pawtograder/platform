@@ -2187,6 +2187,92 @@ export async function getCommit(
   return commit.data;
 }
 
+/**
+ * Sync a forked repo with its upstream parent via GitHub's native
+ * fork-sync endpoint (POST /repos/{owner}/{repo}/merge-upstream).
+ *
+ * Returns:
+ *   - { kind: "synced", mergedSha }   if GitHub fast-forwarded / merged the upstream HEAD
+ *   - { kind: "already_up_to_date" }  if the fork was already at the same SHA
+ *   - { kind: "dirty" }               if the working branch has diverged and GitHub
+ *                                     refuses to merge — caller should fall back to the
+ *                                     template_pr path.
+ *   - { kind: "not_a_fork" }          if GitHub reports the repo is not a fork of the
+ *                                     expected upstream. Caller should fall back.
+ *
+ * Note: the GitHub endpoint does not accept an upstream parameter — it uses the
+ * fork's tracked parent. `expectedUpstreamFullName` is only used for a pre-flight
+ * sanity check + logging so we don't silently merge from the wrong upstream when
+ * a repo was rewired.
+ */
+export async function mergeForkUpstream(
+  repoFullName: string,
+  branch: string,
+  expectedUpstreamFullName: string | null,
+  scope?: Sentry.Scope
+): Promise<
+  | { kind: "synced"; mergedSha: string; message: string }
+  | { kind: "already_up_to_date"; mergedSha: string; message: string }
+  | { kind: "dirty"; message: string }
+  | { kind: "not_a_fork"; reason: string }
+> {
+  scope?.setTag("github_operation", "merge_fork_upstream");
+  scope?.setTag("repository", repoFullName);
+  scope?.setTag("branch", branch);
+  if (expectedUpstreamFullName) {
+    scope?.setTag("expected_upstream", expectedUpstreamFullName);
+  }
+
+  const [org, repo] = repoFullName.split("/");
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+
+  // Pre-flight: confirm GitHub still considers this a fork of the expected upstream.
+  // If not, abort so the caller can fall back to the PR-based sync.
+  const repoMeta = await octokit.request("GET /repos/{owner}/{repo}", { owner: org, repo });
+  if (!repoMeta.data.fork) {
+    return { kind: "not_a_fork", reason: `${repoFullName} is not a fork` };
+  }
+  const actualUpstream = repoMeta.data.parent?.full_name ?? null;
+  if (expectedUpstreamFullName && actualUpstream && actualUpstream !== expectedUpstreamFullName) {
+    return {
+      kind: "not_a_fork",
+      reason: `${repoFullName} parent is ${actualUpstream}, expected ${expectedUpstreamFullName}`
+    };
+  }
+
+  try {
+    const res = await octokit.request("POST /repos/{owner}/{repo}/merge-upstream", {
+      owner: org,
+      repo,
+      branch
+    });
+    // The response doesn't include the resulting SHA directly. Fetch the branch
+    // tip so callers can persist synced_repo_sha / synced_handout_sha.
+    const branchRes = await octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", {
+      owner: org,
+      repo,
+      branch
+    });
+    const tipSha = branchRes.data.commit.sha;
+    const merge_type = (res.data as { merge_type?: string }).merge_type;
+    if (merge_type === "none") {
+      return { kind: "already_up_to_date", mergedSha: tipSha, message: res.data.message ?? "up to date" };
+    }
+    return { kind: "synced", mergedSha: tipSha, message: res.data.message ?? "merged" };
+  } catch (e) {
+    // GitHub returns 409 when the branch has diverged and a fast-forward / merge
+    // can't happen without a conflict. Fall back to template_pr in that case.
+    const err = e as { status?: number; message?: string };
+    if (err.status === 409) {
+      return { kind: "dirty", message: err.message ?? "merge-upstream returned 409 (diverged)" };
+    }
+    throw e;
+  }
+}
+
 export async function triggerWorkflow(
   repo_full_name: string,
   sha: string,

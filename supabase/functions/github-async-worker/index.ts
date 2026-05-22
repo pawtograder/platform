@@ -1163,16 +1163,27 @@ export async function processEnvelope(
         return true;
       }
       case "sync_repo_to_handout": {
-        const { repository_id, repository_full_name, template_repo, from_sha, to_sha } =
-          envelope.args as SyncRepoToHandoutArgs;
+        const {
+          repository_id,
+          repository_full_name,
+          template_repo,
+          from_sha,
+          to_sha,
+          sync_strategy,
+          upstream_repo_full_name
+        } = envelope.args as SyncRepoToHandoutArgs;
 
         scope.setTag("repository_id", String(repository_id));
         scope.setTag("repository", repository_full_name);
         scope.setTag("template_repo", template_repo);
         scope.setTag("to_sha", to_sha);
+        scope.setTag("sync_strategy", sync_strategy ?? "template_pr");
+        if (upstream_repo_full_name) {
+          scope.setTag("upstream_repo_full_name", upstream_repo_full_name);
+        }
 
         Sentry.addBreadcrumb({
-          message: `Syncing ${repository_full_name} to handout SHA ${to_sha}`,
+          message: `Syncing ${repository_full_name} to handout SHA ${to_sha} via ${sync_strategy ?? "template_pr"}`,
           level: "info"
         });
 
@@ -1207,10 +1218,65 @@ export async function processEnvelope(
                 started_at: new Date().toISOString(),
                 msg_id: meta.msg_id,
                 from_sha,
-                to_sha
+                to_sha,
+                sync_strategy: sync_strategy ?? "template_pr"
               }
             })
             .eq("id", repository_id);
+
+          // For fork-based assignments (mode 2 / mode 3) GitHub already knows the
+          // upstream — one call to POST /repos/{owner}/{repo}/merge-upstream
+          // fast-forwards or merges the fork. Skip the PR-based handout-sync
+          // flow entirely on success. Fall back to template_pr if GitHub reports
+          // the branch has diverged or the repo is no longer a fork.
+          if (sync_strategy === "fork_merge_upstream") {
+            const merge = await github.mergeForkUpstream(
+              repository_full_name,
+              "main",
+              upstream_repo_full_name ?? null,
+              scope
+            );
+            if (merge.kind === "synced" || merge.kind === "already_up_to_date") {
+              const { error: updateError } = await adminSupabase
+                .from("repositories")
+                .update({
+                  synced_handout_sha: to_sha,
+                  synced_repo_sha: merge.mergedSha,
+                  desired_handout_sha: to_sha,
+                  sync_data: {
+                    last_sync_attempt: new Date().toISOString(),
+                    status: merge.kind === "synced" ? "merged_via_fork_sync" : "no_changes_needed",
+                    sync_strategy: "fork_merge_upstream",
+                    upstream_repo_full_name: upstream_repo_full_name ?? null,
+                    merge_sha: merge.mergedSha
+                  }
+                })
+                .eq("id", repository_id);
+              if (updateError) throw updateError;
+              recordMetric(
+                adminSupabase,
+                {
+                  method: envelope.method,
+                  status_code: 200,
+                  class_id: envelope.class_id,
+                  debug_id: envelope.debug_id,
+                  enqueued_at: meta.enqueued_at,
+                  log_id: envelope.log_id
+                },
+                scope
+              );
+              return true;
+            }
+            // dirty / not_a_fork → fall through to the template_pr path so the
+            // student can resolve conflicts via PR review.
+            scope.setTag("fork_merge_upstream_fallback", merge.kind);
+            Sentry.addBreadcrumb({
+              message:
+                `fork_merge_upstream returned ${merge.kind} for ${repository_full_name}; ` +
+                `falling back to template_pr sync`,
+              level: "warning"
+            });
+          }
 
           // Get syncedRepoSha - either from DB or fetch first commit if not set
           let syncedRepoSha = currentRepo?.synced_repo_sha;
