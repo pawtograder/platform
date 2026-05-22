@@ -66,7 +66,14 @@ function urlToLocalPath(entryUrl: string, baseURL: URL): string | null {
   }
   if (u.origin !== baseURL.origin) return null;
   if (!u.pathname.startsWith("/_next/")) return null;
-  return path.join(REPO_ROOT, ".next", u.pathname.slice("/_next/".length));
+  // URL.pathname keeps percent-encoded characters (so `[course_id]`
+  // arrives as `%5Bcourse_id%5D`). Decode so the path matches the
+  // bracketed directory names Next.js writes to disk for dynamic
+  // route segments. Without this, every dynamic-route page chunk
+  // (assignments/[id], course/[course_id], etc.) silently fails to
+  // load its source map.
+  const decoded = decodeURIComponent(u.pathname);
+  return path.join(REPO_ROOT, ".next", decoded.slice("/_next/".length));
 }
 
 async function loadSourceMap(jsPath: string): Promise<unknown | null> {
