@@ -6,14 +6,14 @@ import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
 import { PageContainer } from "@/components/ui/page-container";
 import { ResponsiveTable } from "@/components/ui/responsive-table";
-import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
+import { createClient } from "@/utils/supabase/client";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { InputGroup } from "@/components/ui/input-group";
 import { Box, EmptyState, Heading, Icon, Input, Skeleton, Stack, Table, Text } from "@chakra-ui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BsSearch } from "react-icons/bs";
 import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
@@ -43,12 +43,8 @@ type AssignmentUnit = {
   group: string;
 };
 
-export type AssignmentsForStudentDashboard = Omit<
-  Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"],
-  "id"
-> & {
-  id: number;
-};
+export type AssignmentsForStudentDashboard =
+  Database["public"]["Functions"]["get_assignments_for_student_dashboard"]["Returns"][number];
 
 function formatLatestSubmissionLabel(assignment: AssignmentsForStudentDashboard): string {
   if (!assignment.submission_id) {
@@ -70,16 +66,11 @@ function formatLatestSubmissionLabel(assignment: AssignmentsForStudentDashboard)
 export default function StudentPage() {
   const { identities } = useIdentity();
   const { course_id } = useParams();
-  const { user } = useAuthState();
   const { role } = useClassProfiles();
   const course = role.classes;
   const [query, setQuery] = useState("");
 
   const private_profile_id = role.private_profile_id;
-  // Use the effective role's user id (not `user?.id`) so the dashboard filter still matches
-  // when an instructor is viewing as a student — `useAuthState` is always the real signed-in
-  // user, while `role` from `useClassProfiles` follows view-as.
-  const effective_user_id = role.user_id;
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
     meta: {
@@ -95,23 +86,40 @@ export default function StudentPage() {
   });
   const groups: AssignmentGroupMemberWithGroupAndRepo[] | null = groupsData?.data ?? null;
 
-  const { data: assignmentsData, isLoading } = useList<AssignmentsForStudentDashboard>({
-    resource: "assignments_for_student_dashboard",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "student_user_id", operator: "eq", value: effective_user_id },
-      { field: "student_profile_id", operator: "eq", value: private_profile_id }
-    ],
-    pagination: {
-      pageSize: 1000
-    },
-    queryOptions: {
-      enabled: !!user && !!private_profile_id
-    },
-    sorters: [{ field: "due_date", order: "desc" }]
-  });
-
-  const assignments = assignmentsData?.data ?? null;
+  // Dashboard data via SECURITY DEFINER RPC. The function checks authorization at the
+  // top (caller is either the student themselves or an instructor/grader of the class)
+  // and returns the student's assignment dashboard rows. Replaces the prior
+  // `useList({ resource: "assignments_for_student_dashboard" })` on a view whose
+  // security_invoker scoping couldn't accommodate the instructor read-only view-as path.
+  const [assignments, setAssignments] = useState<AssignmentsForStudentDashboard[] | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  useEffect(() => {
+    if (!course_id || !private_profile_id) {
+      return;
+    }
+    const supabase = createClient();
+    let cancelled = false;
+    setIsLoading(true);
+    supabase
+      .rpc("get_assignments_for_student_dashboard", {
+        p_class_id: Number(course_id),
+        p_student_profile_id: private_profile_id
+      })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to load assignments dashboard:", error);
+          setAssignments(null);
+        } else {
+          setAssignments(data ?? []);
+        }
+        setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [course_id, private_profile_id]);
 
   const githubIdentity: UserIdentity | null = identities?.find((identity) => identity.provider === "github") ?? null;
 
