@@ -278,10 +278,7 @@ function patchDeletesEntireFile(patch: string): boolean {
 
 function isGitHubNotFound(error: unknown): boolean {
   return (
-    error !== null &&
-    typeof error === "object" &&
-    "status" in error &&
-    (error as { status: number }).status === 404
+    error !== null && typeof error === "object" && "status" in error && (error as { status: number }).status === 404
   );
 }
 
@@ -914,12 +911,7 @@ export async function createBranchAndCommit(
         }
 
         try {
-          const { content: templateContent } = await fetchTextFileAtRef(
-            templateRepo,
-            file.path,
-            templateSha,
-            scope
-          );
+          const { content: templateContent } = await fetchTextFileAtRef(templateRepo, file.path, templateSha, scope);
           const encoded = btoa(templateContent);
           const { data: blob } = await octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
             owner,
