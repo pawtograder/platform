@@ -41,8 +41,13 @@ const stubServer = {
   addr: { hostname: "127.0.0.1", port: 0, transport: "tcp" as const }
 };
 
-// deno-lint-ignore no-explicit-any
-(Deno as any).serve = (...args: unknown[]): unknown => {
+// In Deno 2.x `Deno.serve` is exposed as a getter-only accessor on the
+// `Deno` namespace object, so a bare `Deno.serve = ...` assignment
+// throws TypeError ("Cannot set property serve of #<Object> which has
+// only a getter"). Object.defineProperty redefines the property in
+// place. The descriptor must be configurable so the override sticks
+// even if Deno re-defines it later in its bootstrap.
+const patchedServe = (...args: unknown[]): unknown => {
   // Supported signatures we need to accept:
   //   Deno.serve(handler)
   //   Deno.serve(options, handler)
@@ -69,6 +74,12 @@ const stubServer = {
   handlers.set(currentlyLoading, handler);
   return stubServer;
 };
+
+Object.defineProperty(Deno, "serve", {
+  value: patchedServe,
+  writable: true,
+  configurable: true
+});
 
 async function listFunctionDirs(): Promise<string[]> {
   const names: string[] = [];
