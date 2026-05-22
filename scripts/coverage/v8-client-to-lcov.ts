@@ -143,6 +143,12 @@ async function main(): Promise<void> {
     name: "next-client",
     outputDir,
     reports: [["lcovonly", { file: outputFileName }]],
+    // CRITICAL: monocart's `clean` option defaults to TRUE and wipes
+    // the entire outputDir before generating reports. Our outputDir is
+    // `coverage/`, which by this point contains edge.lcov, server.lcov,
+    // postgres.lcov (or .pg-ready) — all written by earlier steps in
+    // collect.sh. Without this flag, monocart silently deletes them.
+    clean: false,
     cleanCache: true,
     logging: "warn",
     entryFilter: (entry: { url?: string }) => {
