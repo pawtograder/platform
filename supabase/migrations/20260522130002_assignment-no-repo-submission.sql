@@ -79,6 +79,20 @@ begin
    where ag.assignment_id = p_assignment_id and agm.profile_id = v_profile_id
    limit 1;
 
+  -- Serialize concurrent creates for this assignment + submitter scope so we
+  -- can't produce duplicate ordinals or end up with multiple active rows.
+  perform pg_advisory_xact_lock(
+    hashtextextended(
+      format(
+        'create_no_repo_submission:%s:%s:%s',
+        p_assignment_id,
+        coalesce(v_assignment_group_id::text, ''),
+        coalesce(v_profile_id::text, '')
+      ),
+      0
+    )
+  );
+
   -- Deactivate any prior active submission for this profile/group on this assignment.
   update public.submissions
      set is_active = false
@@ -194,6 +208,20 @@ begin
         p_assignment_group_id, v_group_assignment_id, p_assignment_id;
     end if;
   end if;
+
+  -- Serialize concurrent creates for this assignment + submitter scope so we
+  -- can't produce duplicate ordinals or end up with multiple active rows.
+  perform pg_advisory_xact_lock(
+    hashtextextended(
+      format(
+        'create_manual_submission:%s:%s:%s',
+        p_assignment_id,
+        coalesce(p_assignment_group_id::text, ''),
+        coalesce(p_profile_id::text, '')
+      ),
+      0
+    )
+  );
 
   -- Reuse the existing active submission if one is already in place — keeps
   -- the call idempotent so instructors can re-trigger setup without making

@@ -1873,8 +1873,8 @@ export async function syncRepoPermissions(
     });
   }
   // Optionally grant the students team read access (mode 2 handout repos).
+  const studentsTeamSlug = `${courseSlug}-students`;
   if (options.studentTeamPermission) {
-    const studentsTeamSlug = `${courseSlug}-students`;
     const hasStudentsTeam = teamsWithAccess.some(
       (t) => t.slug === studentsTeamSlug && t.permission === options.studentTeamPermission
     );
@@ -1890,6 +1890,23 @@ export async function syncRepoPermissions(
       scope?.addBreadcrumb({
         category: "github",
         message: `${org}/${repo} granted ${studentsTeamSlug} team ${options.studentTeamPermission}`,
+        level: "info"
+      });
+    }
+  } else {
+    // No student access desired — revoke any stale students-team grant.
+    const hasStudentsTeamAccess = teamsWithAccess.some((t) => t.slug === studentsTeamSlug);
+    if (hasStudentsTeamAccess) {
+      madeChanges = true;
+      await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+        org,
+        team_slug: studentsTeamSlug,
+        owner: org,
+        repo
+      });
+      scope?.addBreadcrumb({
+        category: "github",
+        message: `${org}/${repo} removed ${studentsTeamSlug} team access`,
         level: "info"
       });
     }

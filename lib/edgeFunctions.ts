@@ -155,7 +155,14 @@ export async function createNoRepoSubmission(
       recoverable: false
     });
   }
-  return data as number;
+  if (typeof data !== "number" || !Number.isFinite(data)) {
+    throw new EdgeFunctionError({
+      details: `Unexpected RPC result: ${JSON.stringify(data)}`,
+      message: "Failed to create no-repo submission",
+      recoverable: false
+    });
+  }
+  return data;
 }
 
 /**

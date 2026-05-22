@@ -112,10 +112,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg!);
 
-  await adminSupabase
-    .from("assignments")
-    .update({ template_repo: `${handoutRepoOrg}/${handoutRepoName}` })
-    .eq("id", assignment_id);
+  const branchProtection = {
+    blockForcePush: assignment.protect_block_force_push ?? true,
+    requirePullRequest: assignment.protect_require_pull_request ?? false,
+    requiredReviewers: assignment.protect_required_reviewers ?? 0
+  };
 
   await createRepo(
     handoutRepoOrg!,
@@ -124,11 +125,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     {
       is_template_repo: action.isTemplateRepo,
       creation_method: "template",
-      branch_protection: {
-        blockForcePush: assignment.protect_block_force_push,
-        requirePullRequest: assignment.protect_require_pull_request,
-        requiredReviewers: assignment.protect_required_reviewers
-      }
+      branch_protection: branchProtection
     },
     scope
   );
@@ -144,17 +141,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   // same config, but invoking it here too keeps the call idempotent for the
   // "repo already exists" branch and serves as a clear signal of the desired
   // ruleset on the handout.
-  await applyBranchProtectionRuleset(
-    handoutRepoOrg!,
-    handoutRepoName,
-    {
-      blockForcePush: assignment.protect_block_force_push,
-      requirePullRequest: assignment.protect_require_pull_request,
-      requiredReviewers: assignment.protect_required_reviewers
-    },
-    scope
-  );
+  await applyBranchProtectionRuleset(handoutRepoOrg!, handoutRepoName, branchProtection, scope);
   await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
+
+  // Only persist the template_repo pointer after GitHub creation + permission
+  // sync succeed, so a partial failure does not leave the assignment pointing
+  // at a repo that does not exist.
+  await adminSupabase
+    .from("assignments")
+    .update({ template_repo: `${handoutRepoOrg}/${handoutRepoName}` })
+    .eq("id", assignment_id);
 
   return {
     repo_name: handoutRepoName,

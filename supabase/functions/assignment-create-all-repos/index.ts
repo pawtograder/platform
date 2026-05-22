@@ -227,11 +227,14 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   // new repo can fork the right upstream.
   let sourceAssignmentRepos: SourceRepoRow[] = [];
   if (assignment.repo_mode === "fork_from_prior_assignment" && assignment.source_assignment_id) {
-    const { data: priorRepos } = await adminSupabase
+    const { data: priorRepos, error: priorReposError } = await adminSupabase
       .from("repositories")
       .select("repository, profile_id, assignment_group_id, assignment_groups(name)")
       .eq("assignment_id", assignment.source_assignment_id)
       .limit(2000);
+    if (priorReposError) {
+      throw new UserVisibleError(`Error fetching source assignment repositories: ${priorReposError.message}`);
+    }
     sourceAssignmentRepos = (priorRepos ?? []).map((r) => ({
       repository: r.repository,
       profile_id: r.profile_id,

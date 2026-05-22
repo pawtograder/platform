@@ -194,6 +194,13 @@ begin
     raise exception 'Assignment % is missing template_repo for mode %', v_assignment_id, v_repo_mode;
   end if;
 
+  -- The assignments_source_assignment_iff_fork check should already prevent
+  -- this, but fail explicitly here so a broken config can't silently no-op
+  -- the per-student/group enqueue loops below.
+  if v_repo_mode = 'fork_from_prior_assignment' and v_source_assignment_id is null then
+    raise exception 'Assignment % has repo_mode=fork_from_prior_assignment but no source_assignment_id', v_assignment_id;
+  end if;
+
   v_creation_method := case
     when v_repo_mode = 'template_only_staff' then 'template'
     else 'fork'

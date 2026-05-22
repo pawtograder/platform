@@ -39,10 +39,15 @@ export default function NewAssignmentPage() {
   const { mutateAsync } = useCreate();
   const onSubmit = useCallback(async () => {
     async function create() {
+      const repoMode = getValues("repo_mode") || "template_only_staff";
+      const willCreateRepos = repoMode !== "none";
+
       // Show loading toast before starting the process
       const loadingToast = toaster.create({
         title: "Creating Assignment",
-        description: "Creating GitHub repositories for handout and grader... This may take a few moments.",
+        description: willCreateRepos
+          ? "Creating GitHub repositories for handout and grader... This may take a few moments."
+          : "Setting up assignment...",
         type: "loading"
       });
 
@@ -82,7 +87,6 @@ export default function NewAssignmentPage() {
           return;
         }
 
-        const repoMode = getValues("repo_mode") || "template_only_staff";
         const isFork = repoMode === "fork_from_prior_assignment";
         const { data, error } = await supabase
           .from("assignments")
@@ -156,7 +160,9 @@ export default function NewAssignmentPage() {
           toaster.dismiss(loadingToast);
           toaster.create({
             title: "Assignment Created Successfully",
-            description: "GitHub repositories have been created and the assignment is ready.",
+            description: willCreateRepos
+              ? "GitHub repositories have been created and the assignment is ready."
+              : "The assignment is ready.",
             type: "success"
           });
 

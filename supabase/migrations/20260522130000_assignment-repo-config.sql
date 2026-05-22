@@ -45,6 +45,9 @@ alter table public.assignments
       and protect_require_pull_request = false
       and protect_required_reviewers = 0
     )
+  ),
+  add constraint assignments_submitted_via_valid check (
+    submitted_via is null or submitted_via in ('git', 'upload', 'manual')
   );
 
 -- Source assignment must live in the same class (FK alone can't express this).
@@ -88,6 +91,12 @@ create trigger assignments_source_assignment_same_class
 -- non-null values; new no-repo submissions can omit both.
 alter table public.submissions alter column repository drop not null;
 alter table public.submissions alter column sha drop not null;
+
+-- Enforce repository/sha as both-present or both-absent. The upload-based
+-- (no-repo) flow inserts both as null; everything else must carry both.
+alter table public.submissions
+  add constraint submissions_repository_and_sha_match
+  check ((repository is null) = (sha is null));
 
 -- Comment on the new columns so the generated TS types carry intent.
 comment on column public.assignments.repo_mode is

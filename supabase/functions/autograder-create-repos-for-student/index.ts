@@ -32,11 +32,14 @@ async function fetchSourceAssignmentRepos(
   if (assignment.repo_mode !== "fork_from_prior_assignment" || !assignment.source_assignment_id) {
     return [];
   }
-  const { data } = await adminSupabase
+  const { data, error } = await adminSupabase
     .from("repositories")
     .select("repository, profile_id, assignment_group_id, assignment_groups(name)")
     .eq("assignment_id", assignment.source_assignment_id)
     .limit(2000);
+  if (error) {
+    throw new Error(`Error fetching source assignment repositories: ${error.message}`);
+  }
   return (data ?? []).map((r) => ({
     repository: r.repository,
     profile_id: r.profile_id,

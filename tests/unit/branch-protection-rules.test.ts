@@ -8,7 +8,7 @@ import {
   buildBranchProtectionRules,
   diffBranchProtectionRules,
   planBranchProtectionAction
-} from "../../supabase/functions/_shared/branchProtection";
+} from "@/supabase/functions/_shared/branchProtection";
 
 describe("buildBranchProtectionRules", () => {
   it("returns an empty list when no flags are set", () => {

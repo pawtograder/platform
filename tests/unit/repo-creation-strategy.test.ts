@@ -7,8 +7,8 @@ import {
   resolveRepoCreationStrategy,
   type AssignmentForRepoCreation,
   type SourceRepoRow
-} from "../../supabase/functions/_shared/repoCreationStrategy";
-import { DEFAULT_BRANCH_PROTECTION } from "../../supabase/functions/_shared/branchProtection";
+} from "@/supabase/functions/_shared/repoCreationStrategy";
+import { DEFAULT_BRANCH_PROTECTION } from "@/supabase/functions/_shared/branchProtection";
 
 const baseAssignment: AssignmentForRepoCreation = {
   id: 42,

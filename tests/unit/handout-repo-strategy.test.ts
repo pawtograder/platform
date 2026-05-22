@@ -6,7 +6,7 @@ import {
   TEMPLATE_HANDOUT_REPO_NAME,
   resolveHandoutRepoAction,
   type HandoutSourceAssignment
-} from "../../supabase/functions/_shared/handoutRepoStrategy";
+} from "@/supabase/functions/_shared/handoutRepoStrategy";
 
 const baseAssignment = {
   id: 42,
