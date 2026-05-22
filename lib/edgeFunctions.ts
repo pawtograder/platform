@@ -158,6 +158,32 @@ export async function createNoRepoSubmission(
   return data as number;
 }
 
+/**
+ * Create an instructor-authored stub submission for an assignment with
+ * repo_mode='no_submission' (e.g. presentations / oral exams). Returns the
+ * submission id — either the newly-created one or, if a manual submission was
+ * already active for that profile/group, the existing one.
+ */
+export async function createManualSubmission(
+  params: { assignment_id: number; profile_id?: string; assignment_group_id?: number },
+  supabase: SupabaseClient<Database>
+): Promise<number> {
+  const { data, error } = await (supabase.rpc as CallableFunction)("create_manual_submission", {
+    p_assignment_id: params.assignment_id,
+    p_profile_id: params.profile_id ?? null,
+    p_assignment_group_id: params.assignment_group_id ?? null
+  });
+  if (error) {
+    Sentry.captureException(error);
+    throw new EdgeFunctionError({
+      details: error.message,
+      message: "Failed to create manual submission",
+      recoverable: false
+    });
+  }
+  return data as number;
+}
+
 export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {
   const ret = await supabase.rpc("submission_set_active", { _submission_id: params.submission_id });
   if (ret.data) {

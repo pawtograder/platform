@@ -555,19 +555,21 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   const requirePR = watch("protect_require_pull_request") ?? false;
 
   // Source assignment options for the fork-from-prior mode (issue #700).
-  // Exclude the current assignment when editing to prevent self-references.
+  // Exclude the current assignment when editing to prevent self-references,
+  // and exclude any assignment that doesn't have per-student repos to fork.
   const currentId = form.getValues("id");
   const { data: priorAssignments } = useList<Assignment>({
     resource: "assignments",
     queryOptions: { enabled: !!course_id && repoMode === "fork_from_prior_assignment" },
     filters: [
       { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "repo_mode", operator: "ne", value: "none" }
+      { field: "repo_mode", operator: "nin", value: ["none", "no_submission"] }
     ],
     pagination: { pageSize: 1000 }
   });
 
-  const protectionDisabled = repoMode === "none";
+  // Branch protection only makes sense when a repository is actually created.
+  const protectionDisabled = repoMode === "none" || repoMode === "no_submission";
 
   return (
     <CardRoot>
@@ -593,6 +595,9 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                   Fork from prior assignment — multi-checkpoint workflow
                 </option>
                 <option value="none">No repository — students upload submission files directly</option>
+                <option value="no_submission">
+                  No submission — graded manually, no artifact (e.g. presentations, oral exams)
+                </option>
               </NativeSelectField>
             </NativeSelectRoot>
           </Field>
@@ -632,7 +637,9 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
           </Text>
           <Text fontSize="sm" color="fg.muted" mb={3}>
             {protectionDisabled
-              ? "Branch protection is unavailable when the assignment has no repository."
+              ? repoMode === "no_submission"
+                ? "Branch protection is unavailable: this assignment has no repository and no student submission."
+                : "Branch protection is unavailable when the assignment has no repository."
               : "Rules applied to the default branch of every student/group repository for this assignment."}
           </Text>
           <Fieldset.Content>

@@ -20,6 +20,10 @@ describe("resolveHandoutRepoAction", () => {
     expect(resolveHandoutRepoAction({ ...baseAssignment, repo_mode: "none" }, null)).toEqual({ kind: "noop" });
   });
 
+  it("returns noop for repo_mode='no_submission' (manual grading, no artifact)", () => {
+    expect(resolveHandoutRepoAction({ ...baseAssignment, repo_mode: "no_submission" }, null)).toEqual({ kind: "noop" });
+  });
+
   it("creates a template-flagged staff-only handout for the default mode", () => {
     expect(resolveHandoutRepoAction(baseAssignment, null)).toEqual({
       kind: "create",

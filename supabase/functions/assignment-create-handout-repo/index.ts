@@ -44,7 +44,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     throw new UserVisibleError("Class does not have a slug", 400);
   }
   const handoutRepoOrg = assignment.classes.github_org;
-  if (!handoutRepoOrg && assignment.repo_mode !== "none") {
+  if (!handoutRepoOrg && assignment.repo_mode !== "none" && assignment.repo_mode !== "no_submission") {
     throw new UserVisibleError("Class does not have a GitHub organization", 400);
   }
   scope.setTag("repo_mode", assignment.repo_mode);
@@ -72,8 +72,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   );
 
   if (action.kind === "noop") {
-    // repo_mode === "none". Clear template_repo so downstream consumers don't
-    // try to use a stale value, and skip GitHub entirely.
+    // repo_mode in ('none', 'no_submission'). Clear template_repo so downstream
+    // consumers don't try to use a stale value, and skip GitHub entirely.
     if (assignment.template_repo) {
       await adminSupabase.from("assignments").update({ template_repo: null }).eq("id", assignment_id);
     }

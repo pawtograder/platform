@@ -9,7 +9,8 @@ export type AssignmentRepoMode =
   | "none"
   | "template_only_staff"
   | "template_with_student_forks"
-  | "fork_from_prior_assignment";
+  | "fork_from_prior_assignment"
+  | "no_submission";
 
 export type AssignmentForRepoCreation = {
   id: number;
@@ -70,6 +71,9 @@ export function resolveRepoCreationStrategy(
 ): RepoCreationStrategy {
   switch (assignment.repo_mode) {
     case "none":
+    case "no_submission":
+      // Neither mode creates per-student repos. 'none' lets students upload
+      // submission files; 'no_submission' has no student artifact at all.
       return { kind: "skip", reason: "no_repo_mode" };
 
     case "template_only_staff":

@@ -183,8 +183,8 @@ begin
     raise exception 'Invalid class/assignment (class_id %, assignment_id %)', course_id, assignment_id;
   end if;
 
-  if v_repo_mode = 'none' then
-    raise notice 'Assignment % has repo_mode=none; nothing to enqueue', v_assignment_id;
+  if v_repo_mode in ('none', 'no_submission') then
+    raise notice 'Assignment % has repo_mode=%; nothing to enqueue', v_assignment_id, v_repo_mode;
     return;
   end if;
 
@@ -377,7 +377,7 @@ begin
     join public.user_roles ur on ur.class_id = c.id
     where ur.user_id = v_user_id
       and (v_class_id is null or c.id = v_class_id)
-      and a.repo_mode <> 'none'
+      and a.repo_mode not in ('none', 'no_submission')
       and a.group_config <> 'groups'
       and (
         a.repo_mode = 'fork_from_prior_assignment'

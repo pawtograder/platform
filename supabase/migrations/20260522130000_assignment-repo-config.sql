@@ -1,7 +1,7 @@
 -- Issues #698, #699, #700: Unified per-assignment student-repository configuration.
 --
---   * repo_mode picks one of four strategies for how student repos relate to a
---     handout (or whether there is a repo at all).
+--   * repo_mode picks one of five strategies for how student repos relate to a
+--     handout (or whether there is a repo / submission at all).
 --   * source_assignment_id is required only for the "fork from prior assignment"
 --     mode (#700) — students get a fork of their own prior repo.
 --   * protect_* columns map 1:1 to GitHub branch-protection ruleset rules
@@ -9,12 +9,21 @@
 --   * Existing rows are backfilled implicitly via the column defaults — they
 --     keep the current behavior (template-only, staff-only, block force push,
 --     block deletion).
+--
+-- The two no-repo modes:
+--   * 'none' — no git repository, but students upload submission files
+--     directly via storage (see create_no_repo_submission).
+--   * 'no_submission' — no git repository AND no student-uploaded artifact
+--     (e.g. presentations, oral exams). Submissions are created by
+--     instructors via create_manual_submission so the grading flow still has
+--     a row to attach reviews to.
 
 create type public.assignment_repo_mode as enum (
   'none',
   'template_only_staff',
   'template_with_student_forks',
-  'fork_from_prior_assignment'
+  'fork_from_prior_assignment',
+  'no_submission'
 );
 
 alter table public.assignments
@@ -31,7 +40,7 @@ alter table public.assignments
     or (repo_mode <> 'fork_from_prior_assignment' and source_assignment_id is null)
   ),
   add constraint assignments_no_protection_when_no_repo check (
-    repo_mode <> 'none' or (
+    repo_mode not in ('none', 'no_submission') or (
       protect_block_force_push = false
       and protect_require_pull_request = false
       and protect_required_reviewers = 0
@@ -82,7 +91,7 @@ alter table public.submissions alter column sha drop not null;
 
 -- Comment on the new columns so the generated TS types carry intent.
 comment on column public.assignments.repo_mode is
-  'How student repositories relate to the handout: none, template_only_staff, template_with_student_forks, or fork_from_prior_assignment.';
+  'How student repositories relate to the handout: none (no repo, upload-based submission), template_only_staff, template_with_student_forks, fork_from_prior_assignment, or no_submission (no repo and no student-uploaded artifact; instructor creates submissions for manual grading).';
 comment on column public.assignments.source_assignment_id is
   'When repo_mode = fork_from_prior_assignment, the assignment whose per-student/group repos are forked to create this assignment''s repos.';
 comment on column public.assignments.protect_block_force_push is
@@ -92,4 +101,4 @@ comment on column public.assignments.protect_require_pull_request is
 comment on column public.assignments.protect_required_reviewers is
   'GitHub ruleset: minimum required approving reviews on the pull request (only enforced when protect_require_pull_request is true).';
 comment on column public.assignments.submitted_via is
-  'Submission origin marker: null/git for repo-pushed submissions, "upload" for no-repo file uploads. Used by graders to route processing.';
+  'Submission origin marker: null/git for repo-pushed submissions, "upload" for no-repo file uploads, "manual" for instructor-created stubs on no_submission assignments. Used by graders to route processing.';

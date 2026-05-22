@@ -12773,7 +12773,8 @@ export type Database = {
         | "none"
         | "template_only_staff"
         | "template_with_student_forks"
-        | "fork_from_prior_assignment";
+        | "fork_from_prior_assignment"
+        | "no_submission";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
       discord_channel_type:
         | "general"
@@ -12975,7 +12976,8 @@ export const Constants = {
         "none",
         "template_only_staff",
         "template_with_student_forks",
-        "fork_from_prior_assignment"
+        "fork_from_prior_assignment",
+        "no_submission"
       ],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
       discord_channel_type: [

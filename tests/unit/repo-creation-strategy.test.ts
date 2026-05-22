@@ -26,6 +26,14 @@ describe("resolveRepoCreationStrategy", () => {
     expect(result).toEqual({ kind: "skip", reason: "no_repo_mode" });
   });
 
+  it("skips entirely for repo_mode='no_submission'", () => {
+    const result = resolveRepoCreationStrategy(
+      { ...baseAssignment, repo_mode: "no_submission", template_repo: null },
+      { profile_id: "p-1" }
+    );
+    expect(result).toEqual({ kind: "skip", reason: "no_repo_mode" });
+  });
+
   it("creates via template for the default mode", () => {
     const result = resolveRepoCreationStrategy(baseAssignment, { profile_id: "p-1" });
     expect(result).toEqual({

@@ -46,7 +46,9 @@ export function resolveHandoutRepoAction(
   source: HandoutSourceAssignment | null
 ): HandoutRepoAction {
   const mode: AssignmentRepoMode = assignment.repo_mode;
-  if (mode === "none") {
+  // 'none' (upload) and 'no_submission' (no artifact) both opt out of any
+  // handout repo on GitHub.
+  if (mode === "none" || mode === "no_submission") {
     return { kind: "noop" };
   }
   if (mode === "template_only_staff") {

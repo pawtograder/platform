@@ -203,9 +203,10 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
   scope.setTag("template_repo", assignment.template_repo || "none");
   scope.setTag("repo_mode", assignment.repo_mode || "template_only_staff");
 
-  // Mode 'none' has no per-student repos to create.
-  if (assignment.repo_mode === "none") {
-    console.log("Assignment has repo_mode=none; skipping per-student repo creation");
+  // Modes 'none' (upload) and 'no_submission' (manual grading, no artifact)
+  // have no per-student repos to create.
+  if (assignment.repo_mode === "none" || assignment.repo_mode === "no_submission") {
+    console.log(`Assignment has repo_mode=${assignment.repo_mode}; skipping per-student repo creation`);
     return;
   }
 

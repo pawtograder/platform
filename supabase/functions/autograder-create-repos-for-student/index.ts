@@ -348,6 +348,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const assignments = allAssignments.filter(
     (a) =>
       a.repo_mode !== "none" &&
+      a.repo_mode !== "no_submission" &&
       a.template_repo?.includes("/") &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")) &&
