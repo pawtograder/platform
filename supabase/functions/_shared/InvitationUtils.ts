@@ -32,7 +32,6 @@ export interface InvitationResult {
   name?: string;
   status: string;
   created_at: string;
-  expires_at: string;
   class_section_id?: number;
   lab_section_id?: number;
 }
@@ -246,7 +245,6 @@ async function processInvitation(
         name,
         status,
         created_at,
-        expires_at,
         class_section_id,
         lab_section_id
       `
@@ -288,7 +286,6 @@ async function processInvitation(
         name: createdInvitation.name || undefined,
         status: createdInvitation.status,
         created_at: createdInvitation.created_at,
-        expires_at: createdInvitation.expires_at || "",
         class_section_id: createdInvitation.class_section_id || undefined,
         lab_section_id: createdInvitation.lab_section_id || undefined
       }

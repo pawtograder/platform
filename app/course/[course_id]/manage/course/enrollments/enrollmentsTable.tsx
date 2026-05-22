@@ -197,7 +197,7 @@ export default function EnrollmentsTable() {
         .select("*")
         .eq("class_id", parseInt(course_id as string))
         .neq("status", "accepted")
-        .neq("status", "expired")
+        .neq("status", "dropped")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -289,21 +289,14 @@ export default function EnrollmentsTable() {
         cell: ({ row }) => {
           if (row.original.type === "invitation") {
             const invitation = row.original;
-            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
             const statusColor =
-              invitation.status === "pending"
-                ? isExpired
-                  ? "orange.500"
-                  : "blue.500"
-                : invitation.status === "accepted"
-                  ? "green.500"
-                  : "red.500";
+              invitation.status === "pending" ? "blue.500" : invitation.status === "accepted" ? "green.500" : "red.500";
 
             return (
               <Flex alignItems="center" gap={2}>
                 <Icon as={FaClock} color={statusColor} />
                 <Text color={statusColor} fontWeight="medium">
-                  {invitation.status === "pending" && isExpired ? "Expired" : invitation.status}
+                  {invitation.status}
                 </Text>
               </Flex>
             );
@@ -333,9 +326,7 @@ export default function EnrollmentsTable() {
 
           if (row.original.type === "invitation") {
             const invitation = row.original;
-            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
-            const status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
-            return values.includes(status.toLowerCase());
+            return values.includes(invitation.status.toLowerCase());
           }
           if (row.original.disabled) {
             return values.includes("dropped");
@@ -749,9 +740,7 @@ export default function EnrollmentsTable() {
         cell: ({ row }) => {
           if (row.original.type === "invitation") {
             const invitation = row.original;
-            const isPending = invitation.status === "pending";
-            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
-            const canCancel = isPending && !isExpired;
+            const canCancel = invitation.status === "pending";
 
             return (
               <HStack gap={2} justifyContent="center">
@@ -768,7 +757,7 @@ export default function EnrollmentsTable() {
                 )}
                 {!canCancel && (
                   <Text fontSize="sm" color="gray.500">
-                    {isExpired ? "Expired" : invitation.status}
+                    {invitation.status}
                   </Text>
                 )}
               </HStack>
@@ -996,9 +985,7 @@ export default function EnrollmentsTable() {
       // Get status
       let status = "Enrolled";
       if (original.type === "invitation") {
-        const invitation = original;
-        const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
-        status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
+        status = original.status;
       }
       if ("disabled" in original && original.disabled) {
         status = "Dropped";
@@ -1183,7 +1170,6 @@ export default function EnrollmentsTable() {
                                     { label: "Pending", value: "pending" },
                                     { label: "Accepted", value: "accepted" },
                                     { label: "Cancelled", value: "cancelled" },
-                                    { label: "Expired", value: "Expired" },
                                     { label: "Dropped", value: "Dropped" }
                                   ]}
                                   placeholder="Filter by status..."

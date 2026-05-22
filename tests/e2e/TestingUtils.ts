@@ -245,11 +245,11 @@ export type SimulatedSISRosterEntry = {
 export type SISSyncEnrollmentResult = {
   success: boolean;
   class_id: number;
-  expire_missing: boolean;
+  drop_missing: boolean;
   counts: {
     invitations_created: number;
     invitations_updated: number;
-    invitations_expired: number;
+    invitations_dropped: number;
     invitations_reactivated: number;
     enrollments_created: number;
     enrollments_updated: number;
@@ -262,12 +262,12 @@ export type SISSyncEnrollmentResult = {
 export async function simulateSISSync({
   class_id,
   roster,
-  expire_missing = true,
+  drop_missing = true,
   section_updates
 }: {
   class_id: number;
   roster: SimulatedSISRosterEntry[];
-  expire_missing?: boolean;
+  drop_missing?: boolean;
   section_updates?: Array<{
     section_type: "class" | "lab";
     sis_crn: number;
@@ -283,7 +283,7 @@ export async function simulateSISSync({
     p_class_id: class_id,
     p_roster_data: roster,
     p_sync_options: {
-      expire_missing,
+      drop_missing,
       section_updates: section_updates ?? []
     }
   });
@@ -341,6 +341,42 @@ export async function getEnrollmentState(
   }
 
   return { user: user ?? undefined, user_role, invitation: invitation ?? null };
+}
+
+/**
+ * Returns ALL user_roles for the account with this sis_user_id in a class (not
+ * just one). Used to assert there are no duplicate enrollments/profiles (#390).
+ */
+export async function getEnrollmentRowsForSisUser(
+  class_id: number,
+  sis_user_id: number
+): Promise<
+  Array<{
+    id: number;
+    role: string;
+    disabled: boolean;
+    private_profile_id: string;
+    public_profile_id: string;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  }>
+> {
+  const { data: user } = await supabase.from("users").select("user_id").eq("sis_user_id", sis_user_id).maybeSingle();
+  if (!user?.user_id) return [];
+  const { data: rows } = await supabase
+    .from("user_roles")
+    .select("id, role, disabled, private_profile_id, public_profile_id, class_section_id, lab_section_id")
+    .eq("class_id", class_id)
+    .eq("user_id", user.user_id);
+  return (rows ?? []) as Array<{
+    id: number;
+    role: string;
+    disabled: boolean;
+    private_profile_id: string;
+    public_profile_id: string;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  }>;
 }
 
 export async function setUserSisId(user_id: string, sis_user_id: number) {
