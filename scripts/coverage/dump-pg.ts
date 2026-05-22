@@ -80,6 +80,13 @@ async function buildFunctionIndex(): Promise<Map<string, FuncIndexEntry>> {
         const m = lines[j].match(DOLLAR_OPEN_RE);
         if (m) {
           dollarTag = m[1];
+          // PostgreSQL dollar-quote tags are PG identifiers — letters,
+          // digits, underscores only. Validate before regex construction
+          // to avoid ReDoS on a pathological migration.
+          if (!/^[A-Za-z0-9_]*$/.test(dollarTag)) {
+            console.warn(`[dump-pg] skipping function at ${file}:${j + 1}: unsafe dollar tag "${dollarTag}"`);
+            break;
+          }
           bodyStart = j + 1; // 1-based, on the line AFTER the AS $tag$
           // Search for the matching closing $tag$ on a subsequent line.
           const closeRe = new RegExp(`\\$${dollarTag}\\$`);
@@ -139,8 +146,11 @@ type ProfilerRow = {
 
 async function fetchProfilerData(client: Client): Promise<ProfilerRow[]> {
   // For every plpgsql function in our schemas, unnest the per-statement
-  // profiler array. plpgsql_profiler_function_tb returns a setof rows
-  // already, so we just join via lateral.
+  // profiler array. The plpgsql_check extension installs into `public`
+  // in current Supabase images (verified via pg_extension), so the
+  // function is reachable via the default search_path. If a future
+  // version moves it to its own schema, that schema is already on the
+  // default search_path too.
   const sql = `
     SELECT
       n.nspname  AS schema,
@@ -151,7 +161,7 @@ async function fetchProfilerData(client: Client): Promise<ProfilerRow[]> {
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
     JOIN pg_language l ON l.oid = p.prolang
-    LEFT JOIN LATERAL plpgsql_check.plpgsql_profiler_function_tb(p.oid) AS prof ON true
+    LEFT JOIN LATERAL plpgsql_profiler_function_tb(p.oid) AS prof ON true
     WHERE l.lanname = 'plpgsql'
       AND n.nspname = ANY($1)
       AND prof.lineno IS NOT NULL

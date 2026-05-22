@@ -9,12 +9,12 @@
 
 CREATE EXTENSION IF NOT EXISTS plpgsql_check;
 
--- Profiler must be enabled per-session by callers. We just reset the
--- shared state here so each E2E run starts from zero.
-SELECT plpgsql_check.plpgsql_profiler_reset_all();
+-- plpgsql_check installs into the `public` schema in current Supabase
+-- images. `public` is on the default search_path so we call the
+-- function unqualified.
+SELECT plpgsql_profiler_reset_all();
 
--- A coverage run is opt-in: this GUC tells callers (the dump script) that
--- profiling was active for the most recent run, and any client driving
--- the DB during the E2E should set `plpgsql_check.profiler = on` in its
--- session. We do that in init-pg-session.sql below; init-pg.sql only
--- handles the shared/global reset.
+-- This file only resets the shared profiler state. Global profiler
+-- enablement (`plpgsql_check.profiler = on`) is handled by setup-pg.sh,
+-- which writes it to postgresql.auto.conf and restarts the container so
+-- every subsequent session inherits the setting.

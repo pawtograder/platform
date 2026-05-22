@@ -86,8 +86,9 @@ async function listFunctionDirs(): Promise<string[]> {
   return names.sort();
 }
 
-async function loadAll(): Promise<void> {
+async function loadAll(): Promise<{ failed: string[] }> {
   const names = await listFunctionDirs();
+  const failed: string[] = [];
   console.log(`[coverage-bootstrap] loading ${names.length} functions`);
   for (const name of names) {
     currentlyLoading = name;
@@ -95,15 +96,27 @@ async function loadAll(): Promise<void> {
       await import(`../${name}/index.ts`);
     } catch (err) {
       console.error(`[coverage-bootstrap] failed to load ${name}:`, err);
-      // Continue — we'd rather collect coverage for the functions that DO
-      // load than abort the whole run for one broken module.
+      failed.push(name);
     }
   }
   currentlyLoading = "";
   console.log(`[coverage-bootstrap] registered ${handlers.size} handlers`);
+  if (failed.length > 0) {
+    console.error(`[coverage-bootstrap] ${failed.length} function(s) failed to load: ${failed.join(", ")}`);
+  }
+  return { failed };
 }
 
-await loadAll();
+const { failed } = await loadAll();
+// In CI we want bootstrap startup to fail visibly if any function
+// module errored at import time — silent partial registration produces
+// misleading "function not covered" results that look like a test
+// problem. Set ALLOW_PARTIAL_LOAD=1 for local debugging when a
+// dependency is intentionally missing (e.g., GITHUB_PRIVATE_KEY_STRING).
+if (failed.length > 0 && Deno.env.get("ALLOW_PARTIAL_LOAD") !== "1") {
+  console.error(`[coverage-bootstrap] aborting: ${failed.length} module(s) failed to load`);
+  Deno.exit(1);
+}
 
 realServe({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   const url = new URL(req.url);
@@ -126,8 +139,10 @@ realServe({ port: PORT, hostname: "0.0.0.0" }, async (req) => {
   try {
     return await handler(req, {});
   } catch (err) {
+    // Log the real error server-side; return a generic body to the
+    // caller so we don't leak stack traces (flagged by CodeQL).
     console.error(`[coverage-bootstrap] handler ${name} threw:`, err);
-    return new Response(JSON.stringify({ error: String(err) }), {
+    return new Response(JSON.stringify({ error: "internal server error" }), {
       status: 500,
       headers: { "content-type": "application/json" }
     });

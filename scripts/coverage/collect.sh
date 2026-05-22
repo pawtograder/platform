@@ -62,9 +62,16 @@ else
 fi
 
 # --- Postgres (plpgsql_check) ---------------------------------------------
-echo "[collect] dump-pg"
-npx tsx scripts/coverage/dump-pg.ts > coverage/postgres.lcov 2> coverage/postgres.log \
-  || { echo "[collect] WARN: postgres dump failed — see coverage/postgres.log"; cat coverage/postgres.log; }
+# Gated on the sentinel written by setup-pg.sh. If you ran the E2E
+# without enabling the Postgres profiler, this would just produce an
+# empty lcov; skip cleanly.
+if [[ -f coverage/.pg-ready ]]; then
+  echo "[collect] dump-pg"
+  npx tsx scripts/coverage/dump-pg.ts > coverage/postgres.lcov 2> coverage/postgres.log \
+    || { echo "[collect] WARN: postgres dump failed — see coverage/postgres.log"; cat coverage/postgres.log; }
+else
+  echo "[collect] skip: coverage/.pg-ready missing (run \`npm run coverage:setup-pg\` first)"
+fi
 
 echo "[collect] done"
 ls -la coverage/*.lcov coverage/jest/lcov.info 2>/dev/null || true

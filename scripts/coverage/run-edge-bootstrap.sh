@@ -21,7 +21,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 exec deno run \
-  --allow-env --allow-net --allow-read --allow-write --allow-sys --allow-ffi \
+  --allow-env --allow-net --allow-read --allow-write --allow-sys \
   --coverage=coverage/edge \
   --env-file="$ENV_FILE" \
   --import-map=supabase/functions/_coverage/deno.json \

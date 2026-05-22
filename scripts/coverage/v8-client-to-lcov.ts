@@ -101,8 +101,10 @@ async function main() {
             source: entry.source
           },
           (filepath: string) => {
-            // Filter source files: keep app code, drop node_modules + webpack
-            // runtime + RSC payloads.
+            // v8-to-istanbul filter: return `true` to EXCLUDE a file,
+            // `false` to INCLUDE it (inverted from Array.filter). We
+            // exclude node_modules, webpack runtime, and any source not
+            // under the repo root (RSC payloads, build internals).
             const norm = filepath.replace(/^file:\/\//, "");
             if (norm.includes("/node_modules/")) return true;
             if (norm.includes("/webpack/")) return true;

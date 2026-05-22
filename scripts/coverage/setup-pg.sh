@@ -1,59 +1,95 @@
 #!/usr/bin/env bash
 # One-time setup of the local Supabase Postgres container for coverage runs.
-# Adds `plpgsql_check` to shared_preload_libraries so the profiler stores
-# coverage in shared memory (works across all sessions, not just the one
-# that enables it). Restarts the DB container afterwards.
+# - Ensures `plpgsql_check` is preloaded (already is in current Supabase
+#   images, but we still install the extension and set the profiler GUC).
+# - Resets the profiler so coverage starts from a clean state.
+# - Persists `plpgsql_check.profiler = on` globally so every session
+#   Playwright opens contributes to coverage.
+# - Writes a sentinel file (coverage/.pg-ready) consumed by collect.sh.
 #
-# Run this once after `npx supabase start`, then re-run only if you re-run
-# `npx supabase stop --no-backup` (which discards the container).
-#
-# Idempotent.
+# Idempotent. Re-run after `supabase stop --no-backup` (which discards
+# the container).
 
 set -euo pipefail
 
 CONTAINER="${SUPABASE_DB_CONTAINER:-supabase_db_pawtograder-platform}"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   echo "[setup-pg] $CONTAINER is not running — start Supabase first (\`npx supabase start\`)" >&2
   exit 1
 fi
 
-# Check whether plpgsql_check is already in shared_preload_libraries.
+# --- Ensure plpgsql_check is preloaded -----------------------------------
 existing=$(docker exec -i "$CONTAINER" psql -U postgres -d postgres -tA \
   -c "SHOW shared_preload_libraries;" 2>/dev/null || echo "")
 
 if echo "$existing" | grep -q "plpgsql_check"; then
-  echo "[setup-pg] plpgsql_check already in shared_preload_libraries (\"$existing\")"
+  echo "[setup-pg] plpgsql_check already in shared_preload_libraries"
+  needs_restart=false
 else
-  # Append (don't replace) — Supabase already preloads pgsodium, supabase_vault, etc.
   new_value="${existing:+$existing,}plpgsql_check"
   echo "[setup-pg] setting shared_preload_libraries = '$new_value'"
-  docker exec -i "$CONTAINER" psql -U postgres -d postgres \
-    -c "ALTER SYSTEM SET shared_preload_libraries = '$new_value';" >/dev/null
+  # Try ALTER SYSTEM first; some Supabase images run postgres as a
+  # non-superuser, in which case we fall back to editing
+  # postgresql.auto.conf directly via docker exec.
+  if docker exec -i "$CONTAINER" psql -U postgres -d postgres \
+    -c "ALTER SYSTEM SET shared_preload_libraries = '$new_value';" >/dev/null 2>&1; then
+    needs_restart=true
+  else
+    echo "[setup-pg] ALTER SYSTEM denied — falling back to direct postgresql.auto.conf write"
+    docker exec -i "$CONTAINER" bash -c \
+      "echo \"shared_preload_libraries = '$new_value'\" >> /var/lib/postgresql/data/postgresql.auto.conf"
+    needs_restart=true
+  fi
+fi
 
-  # ALTER SYSTEM requires restart to apply shared_preload_libraries changes.
-  echo "[setup-pg] restarting $CONTAINER to apply shared_preload_libraries"
+# --- Enable profiler GUC globally ----------------------------------------
+# plpgsql_check.profiler is PGC_SUSET in some versions; ALTER SYSTEM fails
+# for non-superusers. Detect that and write the auto.conf file directly.
+echo "[setup-pg] setting plpgsql_check.profiler = on"
+if ! docker exec -i "$CONTAINER" psql -U postgres -d postgres \
+  -c "ALTER SYSTEM SET plpgsql_check.profiler = on;" >/dev/null 2>&1; then
+  echo "[setup-pg] ALTER SYSTEM denied — appending to postgresql.auto.conf directly"
+  # Remove any pre-existing entry to keep idempotency clean, then append.
+  docker exec -i "$CONTAINER" bash -c "
+    sed -i '/^plpgsql_check\\.profiler/d' /var/lib/postgresql/data/postgresql.auto.conf 2>/dev/null || true
+    echo \"plpgsql_check.profiler = 'on'\" >> /var/lib/postgresql/data/postgresql.auto.conf
+  "
+  needs_restart=true
+fi
+
+# --- Restart if any config changed ---------------------------------------
+if [[ "${needs_restart:-false}" == "true" ]]; then
+  echo "[setup-pg] restarting $CONTAINER"
   docker restart "$CONTAINER" >/dev/null
-
-  # Wait for it to come back.
+  ready=false
   for _ in $(seq 1 30); do
     if docker exec -i "$CONTAINER" pg_isready -U postgres >/dev/null 2>&1; then
+      ready=true
       break
     fi
     sleep 1
   done
+  if [[ "$ready" != "true" ]]; then
+    echo "[setup-pg] ERROR: $CONTAINER did not become ready within 30s after restart" >&2
+    docker logs --tail 50 "$CONTAINER" >&2 || true
+    exit 1
+  fi
 fi
 
-# Now safe to create the extension and reset the profiler.
-docker exec -i "$CONTAINER" psql -U postgres -d postgres \
-  -f - < "$(dirname "$0")/init-pg.sql"
+# --- Create extension + reset profiler -----------------------------------
+# Functions are unqualified-callable because plpgsql_check installs into
+# `public` (in Supabase images today) and `public` is in the default
+# search_path.
+docker exec -i "$CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+CREATE EXTENSION IF NOT EXISTS plpgsql_check;
+SELECT plpgsql_profiler_reset_all();
+SHOW plpgsql_check.profiler;
+SQL
 
-# Persist the profiler ON across all sessions. Without this, callers would
-# need to `SET plpgsql_check.profiler = on` in every connection — error-prone
-# across the dozens of pool clients Supabase opens.
-docker exec -i "$CONTAINER" psql -U postgres -d postgres \
-  -c "ALTER SYSTEM SET plpgsql_check.profiler = on;" >/dev/null
-docker exec -i "$CONTAINER" psql -U postgres -d postgres \
-  -c "SELECT pg_reload_conf();" >/dev/null
+# --- Sentinel for collect.sh ---------------------------------------------
+mkdir -p "$ROOT/coverage"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$ROOT/coverage/.pg-ready"
 
 echo "[setup-pg] done — profiler is ON, plpgsql_check is preloaded"

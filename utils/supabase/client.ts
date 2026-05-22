@@ -20,6 +20,12 @@ function applyFunctionsUrlOverride<T>(client: T): T {
     c.functionsUrl = new URL(FUNCTIONS_URL_OVERRIDE);
     if (c.functions) c.functions.url = FUNCTIONS_URL_OVERRIDE;
   } catch (err) {
+    // In coverage mode this MUST work — silent fallback would still
+    // send requests, but to the real Supabase functions URL, producing
+    // zero edge coverage that looks like a test problem. Surface it.
+    if (typeof process !== "undefined" && process.env?.COVERAGE === "1") {
+      throw new Error(`[coverage] failed to override functions URL: ${err}`);
+    }
     if (typeof console !== "undefined") {
       console.warn("[coverage] failed to override functions URL:", err);
     }
