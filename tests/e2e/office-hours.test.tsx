@@ -106,10 +106,16 @@ test.describe("Office Hours", () => {
   test("Student can request help", async ({ page }) => {
     // This test does a magic-link login plus two full request flows and two axe
     // scans. Under CI parallelism the login retry loop can spend up to ~5×15s
-    // recovering from transient GoTrue contention, which alone can exceed the
-    // default 60s budget and time the test out mid-login. Allow extra headroom so
-    // a slow-but-successful login doesn't surface as a flake.
-    test.slow();
+    // recovering from transient GoTrue contention, AND the new-help-request
+    // form fans out several writes before router.push (helpRequests +
+    // helpRequestStudents are now load-bearing, others fire-and-forget after
+    // navigation). Each write is a network round-trip; under CI realtime
+    // backpressure the cumulative cost of the two private + public submit
+    // flows plus the two queue-chat sends has been measured north of 3
+    // minutes on the worst tail. test.slow() only buys 180s — not enough.
+    // Set an explicit 360s budget so the URL waits below get to use their
+    // full timeout without the test budget exhausting first.
+    test.setTimeout(360_000);
     await loginAsUser(page, student!, course);
     const navRegion = page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
