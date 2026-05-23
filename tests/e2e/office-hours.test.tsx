@@ -142,20 +142,30 @@ async function waitForHelpRequestUrlOrFallback(
     if (req?.id && req?.help_queue) {
       await page.goto(`/course/${courseId}/office-hours/${req.help_queue}/${req.id}`);
     } else {
-      // Surface enough state to disambiguate "row was never created" from
-      // "row was created but our query doesn't match what was stored". The
-      // latter is what bites us in CI: helpRequests.create returns success
-      // (per OH-DEBUG) yet the description-based lookup finds nothing.
+      // Narrow the lookup so we can tell which assumption is breaking:
+      //   - rows for *this* test's class
+      //   - rows in *any* class (catches a class_id mismatch in the admin
+      //     client's view)
+      //   - what the admin client thinks the current sequence value /
+      //     URL is (catches a wrong-supabase-instance mismatch)
+      const { data: inCourse } = await supabase
+        .from("help_requests")
+        .select("id, request, class_id")
+        .eq("class_id", courseId)
+        .order("id", { ascending: false })
+        .limit(5);
       const { data: latest } = await supabase
         .from("help_requests")
-        .select("id, request, class_id, created_by")
+        .select("id, class_id, request")
         .order("id", { ascending: false })
         .limit(3);
-      const summary = (latest ?? [])
-        .map((r) => `id=${r.id} cls=${r.class_id} req=${JSON.stringify(((r.request as string) ?? "").slice(0, 50))}`)
-        .join(" | ");
+      const fmt = (r: { id: number; class_id: number; request: string }) =>
+        `id=${r.id} cls=${r.class_id} req=${JSON.stringify(((r.request as string) ?? "").slice(0, 40))}`;
+      const courseRows = (inCourse ?? []).map(fmt).join(" | ") || "(none)";
+      const globalRows = (latest ?? []).map(fmt).join(" | ") || "(none)";
       throw new Error(
-        `help_request not yet visible by description ${JSON.stringify(requestText.slice(0, 40))}; latest 3 rows: ${summary || "(none)"}`
+        `help_request not yet visible by description ${JSON.stringify(requestText.slice(0, 40))}; ` +
+          `courseId=${courseId} in-course: ${courseRows}; global latest: ${globalRows}; admin URL=${process.env.SUPABASE_URL ?? "?"}`
       );
     }
   }).toPass({ timeout: fallbackTotalMs });
