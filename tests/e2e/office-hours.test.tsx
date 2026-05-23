@@ -266,17 +266,24 @@ test.describe("Office Hours", () => {
     // bookkeeping is unambiguous and any failure here surfaces as
     // "submit never became clickable" instead of a downstream
     // "row not in DB" timeout three minutes later.
-    // Retry-loop requestSubmit() until the form's onSubmit handler
+    // Retry-loop the submit dispatch until the form's onSubmit handler
     // actually fires. CI debug runs showed that on a contended runner
-    // a single `form.requestSubmit()` (or `button.click()`) can land
-    // before React has hydrated the form's onSubmit listener — the
-    // submit event dispatches but no handler is attached, so the form
+    // a single submit dispatch (button click OR form.requestSubmit) can
+    // land before React has hydrated the form's onSubmit listener — the
+    // DOM event dispatches but no handler is attached, so the form
     // does nothing. The detectable side-effect when onSubmit DOES run
     // is `setIsSubmittingGuard(true)` (line ~398 of newRequestForm.tsx),
-    // which transitions the Submit Request button to its loading state.
-    // Re-dispatch every 500ms until that transition happens.
+    // which disables the Submit Request button.
+    //
+    // We alternate between Playwright's click (which generates real mouse
+    // events) and form.requestSubmit() so whichever dispatch happens to
+    // land on a hydrated handler wins. 180s budget — under contended CI
+    // we've seen first-handler-attachment take more than the 30s the
+    // shorter retry loop budgeted.
     await expect(page.getByRole("button", { name: "Submit Request" })).toBeVisible({ timeout: 180_000 });
+    let attempt = 0;
     await expect(async () => {
+      attempt += 1;
       const stateBefore = await page.evaluate(() => {
         const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
         if (!form) return { hasForm: false, alreadySubmitting: false };
@@ -284,25 +291,27 @@ test.describe("Office Hours", () => {
         return { hasForm: true, alreadySubmitting: btn?.disabled === true };
       });
       if (!stateBefore.hasForm) throw new Error("New Help Request Form not in DOM yet");
-      if (stateBefore.alreadySubmitting) return; // onSubmit already running
-      await page.evaluate(() => {
-        const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
-        if (form) form.requestSubmit();
-      });
-      // Give React a tick to process the submit event, then check if it
-      // landed in onSubmit (button disabled means setIsSubmittingGuard(true)
-      // fired).
-      await page.waitForTimeout(500);
+      if (stateBefore.alreadySubmitting) return;
+      if (attempt % 2 === 1) {
+        await page
+          .getByRole("button", { name: "Submit Request" })
+          .click({ force: true })
+          .catch(() => {});
+      } else {
+        await page.evaluate(() => {
+          const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
+          if (form) form.requestSubmit();
+        });
+      }
+      await page.waitForTimeout(750);
       const stateAfter = await page.evaluate(() => {
         const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
         const btn = form?.querySelector('button[type="submit"]') as HTMLButtonElement | null;
         return { disabled: btn?.disabled === true, formStillThere: !!form };
       });
-      // If the form navigated away already (router.push fired), the form
-      // element will be gone — that's success.
       if (!stateAfter.formStillThere) return;
-      if (!stateAfter.disabled) throw new Error("submit didn't take; retrying");
-    }).toPass({ timeout: 30_000, intervals: [500, 500, 1000, 2000] });
+      if (!stateAfter.disabled) throw new Error(`submit didn't take (attempt ${attempt}); retrying`);
+    }).toPass({ timeout: 180_000, intervals: [200, 500, 1000, 2000, 3000] });
 
     // Two-stage wait. (1) Wait for router.push to land on the new request
     // URL — that's the production-correct happy path and what we want to
