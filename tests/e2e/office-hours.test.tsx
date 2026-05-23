@@ -268,7 +268,14 @@ test.describe("Office Hours", () => {
     // "row not in DB" timeout three minutes later.
     const submitBtn = page.getByRole("button", { name: "Submit Request" });
     await expect(submitBtn).toBeEnabled({ timeout: 180_000 });
-    await submitBtn.click();
+    // force:true skips actionability re-checks inside click(). The button
+    // can flap disabled momentarily when realtime delivers updates between
+    // toBeEnabled() and click(), and the default click() would then
+    // silently wait for it to re-enable. force-clicking dispatches the
+    // synthetic mouse events unconditionally — combined with the page.tsx
+    // unmount fix in 52c98d6a (the form now stays mounted across realtime
+    // blips), the click reliably reaches the form's onSubmit.
+    await submitBtn.click({ force: true });
 
     // Two-stage wait. (1) Wait for router.push to land on the new request
     // URL — that's the production-correct happy path and what we want to
