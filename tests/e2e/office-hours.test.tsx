@@ -266,21 +266,43 @@ test.describe("Office Hours", () => {
     // bookkeeping is unambiguous and any failure here surfaces as
     // "submit never became clickable" instead of a downstream
     // "row not in DB" timeout three minutes later.
-    // Wait for the submit button to exist (proxy for "form is rendered, not
-    // in the Loading... state"), then dispatch the form's submit event
-    // directly. Going through page.click() has been observed to land on
-    // moments when the React tree was mid-rerender on a contended CI
-    // runner, dropping the event without triggering the form's onSubmit.
-    // `form.requestSubmit()` fires the same submit event React listens to,
-    // does not require the button to be enabled at the call site (the form's
-    // own validation guards still apply and toast errors), and produces a
-    // deterministic submit on every attempt.
+    // Retry-loop requestSubmit() until the form's onSubmit handler
+    // actually fires. CI debug runs showed that on a contended runner
+    // a single `form.requestSubmit()` (or `button.click()`) can land
+    // before React has hydrated the form's onSubmit listener — the
+    // submit event dispatches but no handler is attached, so the form
+    // does nothing. The detectable side-effect when onSubmit DOES run
+    // is `setIsSubmittingGuard(true)` (line ~398 of newRequestForm.tsx),
+    // which transitions the Submit Request button to its loading state.
+    // Re-dispatch every 500ms until that transition happens.
     await expect(page.getByRole("button", { name: "Submit Request" })).toBeVisible({ timeout: 180_000 });
-    await page.evaluate(() => {
-      const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
-      if (!form) throw new Error("New Help Request Form not in DOM");
-      form.requestSubmit();
-    });
+    await expect(async () => {
+      const stateBefore = await page.evaluate(() => {
+        const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
+        if (!form) return { hasForm: false, alreadySubmitting: false };
+        const btn = form.querySelector('button[type="submit"]') as HTMLButtonElement | null;
+        return { hasForm: true, alreadySubmitting: btn?.disabled === true };
+      });
+      if (!stateBefore.hasForm) throw new Error("New Help Request Form not in DOM yet");
+      if (stateBefore.alreadySubmitting) return; // onSubmit already running
+      await page.evaluate(() => {
+        const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
+        if (form) form.requestSubmit();
+      });
+      // Give React a tick to process the submit event, then check if it
+      // landed in onSubmit (button disabled means setIsSubmittingGuard(true)
+      // fired).
+      await page.waitForTimeout(500);
+      const stateAfter = await page.evaluate(() => {
+        const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
+        const btn = form?.querySelector('button[type="submit"]') as HTMLButtonElement | null;
+        return { disabled: btn?.disabled === true, formStillThere: !!form };
+      });
+      // If the form navigated away already (router.push fired), the form
+      // element will be gone — that's success.
+      if (!stateAfter.formStillThere) return;
+      if (!stateAfter.disabled) throw new Error("submit didn't take; retrying");
+    }).toPass({ timeout: 30_000, intervals: [500, 500, 1000, 2000] });
 
     // Two-stage wait. (1) Wait for router.push to land on the new request
     // URL — that's the production-correct happy path and what we want to
