@@ -702,9 +702,7 @@ export default function HelpRequestForm({
         };
 
         // eslint-disable-next-line no-console
-        console.log(
-          `[OH-DEBUG] entering handleSubmit; isSubmittingGuard=${isSubmittingGuard} rhf-errors=${JSON.stringify(Object.keys(errors))}`
-        );
+        console.log(`[OH-DEBUG] entering handleSubmit; isSubmittingGuard=${isSubmittingGuard}`);
         await handleSubmit(customOnFinish)();
         // eslint-disable-next-line no-console
         console.log(`[OH-DEBUG] handleSubmit returned; navigated=${navigated}`);
@@ -774,12 +772,6 @@ export default function HelpRequestForm({
       </Box>
     );
   }
-
-  // Compute hasErrors, ignoring empty root object left by React Hook Form
-  const hasErrors = Object.keys(errors).some(
-    (key) =>
-      key !== "root" || (key === "root" && Object.keys((errors as Record<string, unknown>).root || {}).length > 0)
-  );
 
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
@@ -1315,7 +1307,18 @@ export default function HelpRequestForm({
         <Button
           type="submit"
           loading={isSubmitting || isSubmittingGuard}
-          disabled={isSubmitting || isSubmittingGuard || hasErrors}
+          // Intentionally NOT disabled-by-hasErrors. The "not currently
+          // staffed" manual error in errors.help_queue is set from a
+          // realtime-derived signal (queueIdsWithActiveStaff via
+          // useActiveHelpQueueAssignments) and that signal flaps under
+          // load — a brief realtime hiccup would disable the submit
+          // button right under a click event, dropping the form submit
+          // and stranding the student. The form's own onSubmit guard
+          // (line ~448) still rejects submissions when the queue isn't
+          // staffed and toasts an error explaining why, so we don't
+          // lose the validation — we just move it from "preemptively
+          // hide the button" to "submit, validate, toast on failure".
+          disabled={isSubmitting || isSubmittingGuard}
           mt={4}
         >
           Submit Request
