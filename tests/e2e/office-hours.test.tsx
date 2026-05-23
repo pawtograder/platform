@@ -168,7 +168,7 @@ test.describe("Office Hours", () => {
     // minutes on the worst tail. test.slow() only buys 180s — not enough.
     // Set an explicit 360s budget so the URL waits below get to use their
     // full timeout without the test budget exhausting first.
-    test.setTimeout(360_000);
+    test.setTimeout(600_000);
 
     // Instrumentation: when this test repeatedly fails in CI with "URL never
     // changed + no row in DB + no error toast surfaced", we can't tell from
@@ -228,30 +228,23 @@ test.describe("Office Hours", () => {
     }).toPass({ timeout: 10_000 });
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
     await visualScreenshot(page, "Office Hours - Submit a Private Request");
-    // The form has a `queueIdsWithActiveStaff` realtime gate
-    // (useActiveHelpQueueAssignments) that refuses to submit if the active
-    // staff assignment hasn't been delivered yet. The test inserts that
-    // assignment in beforeAll via the admin client, but on a contended CI
-    // runner the realtime channel can lag long enough that the student's
-    // browser still has an empty set by the time it reaches the new-request
-    // form. Confirm the row exists from the admin side (the test created it
-    // synchronously, so it must), then give realtime a beat to propagate
-    // into the form's controller. Without this the submit click silently
-    // hits the "queue not currently staffed" guard and helpRequests.create
-    // never runs, so the URL never changes and the row never lands in the
-    // DB for the fallback to find.
-    await expect(async () => {
-      const { data: assignments } = await supabase
-        .from("help_queue_assignments")
-        .select("id")
-        .eq("class_id", course.id)
-        .eq("is_active", true)
-        .is("ended_at", null)
-        .limit(1);
-      expect(assignments?.length ?? 0).toBeGreaterThan(0);
-    }).toPass({ timeout: 15_000 });
-    await page.waitForTimeout(2_000);
-    await page.getByRole("button", { name: "Submit Request" }).click();
+    // The Submit Request button is disabled while `errors.help_queue` is
+    // set (the form's validation effect at newRequestForm.tsx ~line 379
+    // sets that error when the queue isn't yet known to have active
+    // staff). Realtime delivers the active-staff row from the
+    // help_queue_assignments insert we did in beforeAll; under CI
+    // contention that delivery can lag for *minutes*. If we just call
+    // page.click() it auto-waits for enabled, but the wait counts
+    // against the test budget and ends up consuming so much of it that
+    // the post-submit URL waits time out.
+    //
+    // Wait for enabled explicitly with a generous timeout so the budget
+    // bookkeeping is unambiguous and any failure here surfaces as
+    // "submit never became clickable" instead of a downstream
+    // "row not in DB" timeout three minutes later.
+    const submitBtn = page.getByRole("button", { name: "Submit Request" });
+    await expect(submitBtn).toBeEnabled({ timeout: 180_000 });
+    await submitBtn.click();
 
     // Two-stage wait. (1) Wait for router.push to land on the new request
     // URL — that's the production-correct happy path and what we want to
