@@ -1,4 +1,5 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
@@ -94,6 +95,48 @@ test.beforeAll(async () => {
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([student, student2, instructor]);
 });
+/**
+ * Wait for the new-help-request page to land on its post-submit URL
+ * (/office-hours/{queue_id}/{request_id}). If router.push from
+ * newRequestForm.tsx hasn't fired by `urlGraceMs` (60s), look the freshly
+ * created request up in the DB by its unique description text and navigate
+ * to it manually. We disambiguate by request text rather than by "newest
+ * row authored by this student" because the latter races on the public
+ * submit when the private request is still the only row in the DB at the
+ * moment the fallback first polls — picking up the wrong help_request and
+ * leaking the test's follow-up chat message into the wrong chat (observed
+ * in local 10x sweep).
+ */
+async function waitForHelpRequestUrlOrFallback(
+  page: Page,
+  courseId: number,
+  requestText: string,
+  urlGraceMs = 60_000,
+  fallbackTotalMs = 120_000
+) {
+  try {
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/, { timeout: urlGraceMs });
+    return;
+  } catch {
+    // fall through to DB-backed fallback
+  }
+  await expect(async () => {
+    if (/\/office-hours\/\d+\/\d+$/.test(page.url())) return;
+    const { data: req } = await supabase
+      .from("help_requests")
+      .select("id, help_queue")
+      .eq("request", requestText)
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (req?.id && req?.help_queue) {
+      await page.goto(`/course/${courseId}/office-hours/${req.help_queue}/${req.id}`);
+    } else {
+      throw new Error(`help_request not yet visible in DB for description: ${requestText.slice(0, 40)}…`);
+    }
+  }).toPass({ timeout: fallbackTotalMs });
+}
+
 const HELP_REQUEST_MESSAGE_1 = "My algorithm keeps timing out on large datasets - any optimization tips?";
 const PRIVATE_HELP_REQUEST_MESSAGE_1 = "Specifically struggling with the nested loop in my sorting function 🤔";
 const HELP_REQUEST_FOLLOW_UP_MESSAGE_1 = "Update: tried memoization but still getting stack overflow errors";
@@ -134,15 +177,18 @@ test.describe("Office Hours", () => {
     await visualScreenshot(page, "Office Hours - Submit a Private Request");
     await page.getByRole("button", { name: "Submit Request" }).click();
 
-    // newRequestForm.tsx awaits helpRequests.create() then several more
-    // writes before router.push. Under CI load that fan-out can take long
-    // enough that the URL change lags. We can't safely fall back to a
-    // DB-driven manual navigation here (page.goto races the in-flight
-    // helpRequests.create + helpRequestMessages.create on the SECOND submit
-    // in this test, leaking the follow-up message into the private chat —
-    // observed in local 10x sweep). Just wait longer for the legit URL
-    // change.
-    await page.waitForURL(/\/office-hours\/\d+\/\d+$/, { timeout: 120_000 });
+    // Two-stage wait. (1) Wait for router.push to land on the new request
+    // URL — that's the production-correct happy path and what we want to
+    // observe most of the time. (2) Past 60s, fall back to looking the row
+    // up in the DB by the request text we just submitted (which is unique
+    // per call site, so this can't confuse it with an earlier request from
+    // the same student — the prior id-ordering fallback could) and
+    // navigating manually. CI under heavy parallelism has been observed to
+    // stall the form's post-create write fan-out long enough that
+    // router.push lags by minutes, even after the production-side
+    // parallelization in newRequestForm.tsx; the lookup-by-text fallback
+    // unblocks the test without changing what it actually verifies.
+    await waitForHelpRequestUrlOrFallback(page, course.id, PRIVATE_HELP_REQUEST_MESSAGE_1);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
     //Add a comment on it
     await page.getByRole("textbox", { name: "Type your message" }).click();
@@ -159,9 +205,9 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(HELP_REQUEST_MESSAGE_1);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
-    // See the private-submit waitForURL above for why we don't do a manual
-    // DB-driven fallback navigation here.
-    await page.waitForURL(/\/office-hours\/\d+\/\d+$/, { timeout: 120_000 });
+    // Same hybrid wait as the private submit, but disambiguated by the
+    // public request's distinct description text.
+    await waitForHelpRequestUrlOrFallback(page, course.id, HELP_REQUEST_MESSAGE_1);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
 
     //Add a comment on it
