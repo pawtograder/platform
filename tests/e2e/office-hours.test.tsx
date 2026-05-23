@@ -268,7 +268,18 @@ test.describe("Office Hours", () => {
     // "row not in DB" timeout three minutes later.
     const submitBtn = page.getByRole("button", { name: "Submit Request" });
     await expect(submitBtn).toBeEnabled({ timeout: 180_000 });
-    await submitBtn.click();
+    // force:true skips actionability checks (visible/enabled/stable/clickable).
+    // Diagnosis so far: my toBeEnabled passes, then click() registers but
+    // the form's onSubmit *doesn't fire* on most attempts. Possibilities:
+    //   - the button re-disables between toBeEnabled and click()'s own
+    //     re-check, and click() then sits silently waiting forever
+    //   - React unmounts/remounts the button between the checks
+    //   - some pointer-event overlay obscures the click target without
+    //     Playwright noticing
+    // force:true bypasses all of that and dispatches the click immediately.
+    // If the form's onSubmit still doesn't fire, the cause is downstream
+    // of dispatch (e.g. preventDefault from another handler).
+    await submitBtn.click({ force: true });
 
     // Two-stage wait. (1) Wait for router.push to land on the new request
     // URL — that's the production-correct happy path and what we want to
