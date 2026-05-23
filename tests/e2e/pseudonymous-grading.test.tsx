@@ -184,7 +184,7 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
     await page.getByRole("button", { name: "Add Check" }).click();
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await assertStudentPageAccessible(page, "pseudonymous self-review completed");
@@ -247,8 +247,8 @@ test.describe("Pseudonymous grading - graders appear as pseudonyms to students",
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release selected submission reviews (select all in filtered view, then release)

@@ -252,7 +252,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     //Wait for the textbox to disappear
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
@@ -331,9 +331,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release selected submission reviews (select all in filtered view, then release)
@@ -608,7 +608,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review Assignment" }).click();
+    await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
   });
 });
