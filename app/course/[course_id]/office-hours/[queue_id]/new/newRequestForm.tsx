@@ -533,7 +533,33 @@ export default function HelpRequestForm({
           try {
             const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
             // eslint-disable-next-line no-console
-            console.log(`[OH-DEBUG] helpRequests.create returned id=${createdHelpRequest?.id}`);
+            console.log(
+              `[OH-DEBUG] helpRequests.create returned id=${createdHelpRequest?.id} class_id=${createdHelpRequest?.class_id} request=${JSON.stringify(((createdHelpRequest?.request as string) ?? "").slice(0, 50))}`
+            );
+            // Diagnostic: round-trip the row through a fresh SELECT to verify
+            // it actually persisted to the DB visible to other supabase
+            // clients. If this returns null/empty, the row exists only in
+            // PostgREST's optimistic return but not in the table — that's
+            // the failure mode the test's admin client keeps hitting.
+            try {
+              const verifyResponse = await fetch(
+                `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/help_requests?id=eq.${createdHelpRequest.id}&select=id,class_id,request`,
+                {
+                  headers: {
+                    apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+                    Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""}`
+                  }
+                }
+              );
+              const verifyText = await verifyResponse.text();
+              // eslint-disable-next-line no-console
+              console.log(`[OH-DEBUG] verify-by-id status=${verifyResponse.status} body=${verifyText.slice(0, 200)}`);
+            } catch (verifyErr) {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[OH-DEBUG] verify-by-id threw: ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`
+              );
+            }
             const helpRequestMessages = controller.loadMessagesForHelpRequest(createdHelpRequest.id);
             // Get current selected students from ref to avoid closure issues
             const currentSelectedStudents = selectedStudentsRef.current;
