@@ -134,7 +134,7 @@ async function waitForHelpRequestUrlOrFallback(
     if (/\/office-hours\/\d+\/\d+$/.test(page.url())) return;
     const { data: req } = await supabase
       .from("help_requests")
-      .select("id, help_queue")
+      .select("id, help_queue, class_id, created_by, request")
       .eq("request", requestText)
       .order("id", { ascending: false })
       .limit(1)
@@ -142,7 +142,21 @@ async function waitForHelpRequestUrlOrFallback(
     if (req?.id && req?.help_queue) {
       await page.goto(`/course/${courseId}/office-hours/${req.help_queue}/${req.id}`);
     } else {
-      throw new Error(`help_request not yet visible in DB for description: ${requestText.slice(0, 40)}…`);
+      // Surface enough state to disambiguate "row was never created" from
+      // "row was created but our query doesn't match what was stored". The
+      // latter is what bites us in CI: helpRequests.create returns success
+      // (per OH-DEBUG) yet the description-based lookup finds nothing.
+      const { data: latest } = await supabase
+        .from("help_requests")
+        .select("id, request, class_id, created_by")
+        .order("id", { ascending: false })
+        .limit(3);
+      const summary = (latest ?? [])
+        .map((r) => `id=${r.id} cls=${r.class_id} req=${JSON.stringify(((r.request as string) ?? "").slice(0, 50))}`)
+        .join(" | ");
+      throw new Error(
+        `help_request not yet visible by description ${JSON.stringify(requestText.slice(0, 40))}; latest 3 rows: ${summary || "(none)"}`
+      );
     }
   }).toPass({ timeout: fallbackTotalMs });
 }
