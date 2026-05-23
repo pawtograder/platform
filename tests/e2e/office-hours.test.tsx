@@ -169,6 +169,33 @@ test.describe("Office Hours", () => {
     // Set an explicit 360s budget so the URL waits below get to use their
     // full timeout without the test budget exhausting first.
     test.setTimeout(360_000);
+
+    // Instrumentation: when this test repeatedly fails in CI with "URL never
+    // changed + no row in DB + no error toast surfaced", we can't tell from
+    // the failure context whether the submit click actually triggered
+    // onSubmit, which validation path it took, or whether the POST request
+    // even fired. Tee browser-side console output and every network
+    // request/response into the test's stdout so the trace + CI logs hold
+    // enough evidence to root-cause the next failure. (Cheap and only runs
+    // while this test runs — the suite ends each test's page context.)
+    page.on("console", (msg) => {
+      console.log(`[browser:${msg.type()}] ${msg.text()}`);
+    });
+    page.on("pageerror", (err) => {
+      console.log(`[browser:pageerror] ${err.message}`);
+    });
+    page.on("request", (req) => {
+      if (req.url().includes("/rest/v1/help_requests") || req.url().includes("/rest/v1/help_request_")) {
+        console.log(`[network:request] ${req.method()} ${req.url()}`);
+      }
+    });
+    page.on("response", (res) => {
+      const url = res.url();
+      if (url.includes("/rest/v1/help_requests") || url.includes("/rest/v1/help_request_")) {
+        console.log(`[network:response] ${res.status()} ${res.request().method()} ${url}`);
+      }
+    });
+
     await loginAsUser(page, student!, course);
     const navRegion = page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();

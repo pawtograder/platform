@@ -393,8 +393,20 @@ export default function HelpRequestForm({
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
 
+      // TODO(remove after office-hours CI flake is root-caused): diagnostic
+      // breadcrumbs so we can see which guard, if any, the form bailed on
+      // when this test fails in CI with "no row, no toast, no error".
+      // eslint-disable-next-line no-console
+      console.log(
+        `[OH-DEBUG] onSubmit fired guard=${isSubmittingGuard} ppid=${private_profile_id} students=${selectedStudents.length} templates=${templates.length} activeStaff=${queueIdsWithActiveStaff.size}`
+      );
+
       // Lightweight re-entrancy guard to prevent double submissions from rapid clicks
-      if (isSubmittingGuard) return;
+      if (isSubmittingGuard) {
+        // eslint-disable-next-line no-console
+        console.log("[OH-DEBUG] bailed: already submitting");
+        return;
+      }
       setIsSubmittingGuard(true);
       // Tell the parent page a submission is in flight so its "queue closed" redirect
       // effect stands down — otherwise that router.replace can race the router.push below.
@@ -406,6 +418,8 @@ export default function HelpRequestForm({
       let navigated = false;
       try {
         if (!private_profile_id) {
+          // eslint-disable-next-line no-console
+          console.log("[OH-DEBUG] bailed: no private_profile_id");
           toaster.error({
             title: "Error",
             description: "You must be logged in to submit a help request"
@@ -415,6 +429,8 @@ export default function HelpRequestForm({
 
         // Check if selected students are valid
         if (selectedStudents.length === 0) {
+          // eslint-disable-next-line no-console
+          console.log("[OH-DEBUG] bailed: no students selected");
           toaster.error({
             title: "Error",
             description: "At least one student must be selected for the help request."
@@ -430,6 +446,8 @@ export default function HelpRequestForm({
         if (templates.length > 0) {
           const selectedTemplateId = getValues("template_id");
           if (!selectedTemplateId) {
+            // eslint-disable-next-line no-console
+            console.log(`[OH-DEBUG] bailed: ${templates.length} templates exist, none selected`);
             toaster.error({
               title: "Error",
               description: "You must select a template for this help request."
@@ -446,6 +464,10 @@ export default function HelpRequestForm({
         const selectedQueueId = getValues("help_queue");
         const selectedQueue = helpQueues.find((q) => q.id === selectedQueueId);
         if (selectedQueueId && !selectedQueue?.is_demo && !queueIdsWithActiveStaff.has(selectedQueueId)) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[OH-DEBUG] bailed: queue ${selectedQueueId} not in activeStaff set (${[...queueIdsWithActiveStaff].join(",")})`
+          );
           toaster.error({
             title: "Error",
             description: "This queue is not currently staffed. Please select a queue with active staff members."
@@ -502,8 +524,12 @@ export default function HelpRequestForm({
             is_private: values.is_private || false
           };
 
+          // eslint-disable-next-line no-console
+          console.log(`[OH-DEBUG] customOnFinish reached, calling helpRequests.create with queue=${values.help_queue}`);
           try {
             const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
+            // eslint-disable-next-line no-console
+            console.log(`[OH-DEBUG] helpRequests.create returned id=${createdHelpRequest?.id}`);
             const helpRequestMessages = controller.loadMessagesForHelpRequest(createdHelpRequest.id);
             // Get current selected students from ref to avoid closure issues
             const currentSelectedStudents = selectedStudentsRef.current;
@@ -671,7 +697,13 @@ export default function HelpRequestForm({
           }
         };
 
+        // eslint-disable-next-line no-console
+        console.log(
+          `[OH-DEBUG] entering handleSubmit; isSubmittingGuard=${isSubmittingGuard} rhf-errors=${JSON.stringify(Object.keys(errors))}`
+        );
         await handleSubmit(customOnFinish)();
+        // eslint-disable-next-line no-console
+        console.log(`[OH-DEBUG] handleSubmit returned; navigated=${navigated}`);
       } finally {
         // Only reset on the non-navigating paths (validation bail / create failure). On the
         // success path the component is unmounting into the new request; a trailing setState
