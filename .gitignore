@@ -69,6 +69,7 @@ axe-debug/
 /logs/
 /screenshots/
 /screenshots-*/
+/sweep-results-*/
 /.e2e-*.done
 /.build.done
 /screenshot-diff-report.json

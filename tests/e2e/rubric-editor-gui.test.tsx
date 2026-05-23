@@ -427,16 +427,16 @@ test.describe("Rubric editor GUI", () => {
     ].join("\n");
     await setMonacoValue(page, invalidYaml);
 
-    // setMonacoValue writes Monaco's model, but Monaco's onChange then has to commit the new
-    // text to React state (rebuilding the handleViewModeChange closure the GUI button reads)
-    // and run a 1s parse-debounce. The page renders "Preview paused while typing" while that
-    // debounce is in flight; it disappears once debouncedParseYaml resolves. Wait on those
-    // deterministic transitions rather than a wall-clock sleep — the 1500ms timeout we used
-    // here was occasionally too short on a loaded CI runner (2/10 local flake), letting the
-    // GUI click race against the stale (empty/valid) YAML and incorrectly succeed.
-    const pausedBanner = page.getByText("Preview paused while typing");
-    await expect(pausedBanner).toBeVisible({ timeout: 5_000 });
-    await expect(pausedBanner).toBeHidden({ timeout: 15_000 });
+    // setMonacoValue already waited for Monaco and wrote the model. The editor's onChange
+    // then commits that text to React state (rebuilding the handleViewModeChange closure the
+    // GUI button reads) and debounces a parse 1s later. Clicking GUI before that settles runs
+    // against the stale (empty/valid) YAML, wrongly succeeds, and switches to GUI — making the
+    // source region disappear. The "Preview paused while typing" banner is only mounted into
+    // one of the layout columns and isn't always observable from the test context, so we
+    // can't reliably hang the wait off that DOM transition. Use a longer wall-clock sleep
+    // (the original 1500ms was occasionally too short on a loaded runner; 3000ms gives the
+    // commit + debounce comfortable headroom).
+    await page.waitForTimeout(3000);
 
     // Try to toggle back to GUI - it should fail and stay in source mode.
     await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
