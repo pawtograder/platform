@@ -512,40 +512,7 @@ export default function HelpRequestForm({
               throw new Error("Help request ID not found in response data");
             }
 
-            // Add all selected students to help_request_students
-            if (currentSelectedStudents.length > 0) {
-              for (const studentId of currentSelectedStudents) {
-                try {
-                  await helpRequestStudents.create({
-                    help_request_id: createdHelpRequest.id,
-                    profile_id: studentId,
-                    class_id: Number.parseInt(course_id as string)
-                  });
-                } catch (error) {
-                  const msg = getStudentFacingErrorMessage(error);
-                  toaster.error({
-                    title: "Could not add everyone to the request",
-                    description: `We could not add a classmate to this help request: ${msg}`
-                  });
-                  throw new Error(`Failed to create student associations: ${msg}`);
-                }
-              }
-
-              // Log activity for all students in the help request
-              for (const studentId of currentSelectedStudents) {
-                try {
-                  await studentHelpActivity.create({
-                    student_profile_id: studentId,
-                    class_id: Number.parseInt(course_id as string),
-                    help_request_id: createdHelpRequest.id,
-                    activity_type: "request_created",
-                    activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown"}`
-                  });
-                } catch {
-                  // Don't throw here - activity logging shouldn't block request creation
-                }
-              }
-            } else {
+            if (currentSelectedStudents.length === 0) {
               toaster.error({
                 title: "Error",
                 description: "No students selected for help request"
@@ -553,65 +520,38 @@ export default function HelpRequestForm({
               throw new Error("No students selected for help request");
             }
 
-            // Create the initial chat message from the request description so it shows in the conversation view
+            // Add all selected students to help_request_students in parallel.
+            // This is the ONLY write that's load-bearing for navigation: the
+            // new request page redirects unauthorized viewers, so the row
+            // must exist before router.push fires (a missing row would
+            // 403/bounce the redirect). Previously the form did this in a
+            // sequential for-await loop and chained studentHelpActivity +
+            // helpRequestMessages + file refs in the same critical path;
+            // CI was observed to stall in that fan-out long enough for
+            // router.push to time out (see the TODO at top of the file and
+            // the office-hours E2E hardening commit). Everything that's
+            // *not* load-bearing for the redirect now runs after
+            // router.push (see fire-and-forget block below) so the URL
+            // lands as soon as the request row + access binding are in
+            // place.
             try {
-              const requestText = (getValues("request") as string) || "";
-              if (requestText.trim().length > 0 && private_profile_id) {
-                const trimmedText = requestText.trim();
-                // Check existing cached messages and local ref to prevent duplicates on retry
-                const existingLocal = (helpRequestMessages.rows || []).some(
-                  (m: HelpRequestMessage) =>
-                    Number(m.help_request_id) === Number(createdHelpRequest.id) &&
-                    String(m.author) === String(private_profile_id) &&
-                    ((m.message as string) || "").trim() === trimmedText
-                );
-                if (!createdInitialMessageRef.current && !existingLocal) {
-                  await helpRequestMessages.create({
-                    message: requestText,
+              const classId = Number.parseInt(course_id as string);
+              await Promise.all(
+                currentSelectedStudents.map((studentId) =>
+                  helpRequestStudents.create({
                     help_request_id: createdHelpRequest.id,
-                    author: private_profile_id,
-                    class_id: Number.parseInt(course_id as string),
-                    instructors_only: false,
-                    reply_to_message_id: null
-                  });
-                  createdInitialMessageRef.current = true;
-                }
-              }
-            } catch {
+                    profile_id: studentId,
+                    class_id: classId
+                  })
+                )
+              );
+            } catch (error) {
+              const msg = getStudentFacingErrorMessage(error);
               toaster.error({
-                title: "Error",
-                description: "Failed to create initial chat message with help request description."
+                title: "Could not add everyone to the request",
+                description: `We could not add a classmate to this help request: ${msg}`
               });
-            }
-
-            // Create file references if any
-            const fileReferences = getValues("file_references") || [];
-            if (fileReferences.length > 0) {
-              // Get assignment_id from the selected submission
-              const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
-              if (!selectedSubmission?.assignment_id) {
-                throw new Error("Assignment ID not found for the selected submission");
-              }
-
-              for (const ref of fileReferences) {
-                try {
-                  await helpRequestFileReferences.create({
-                    help_request_id: createdHelpRequest.id,
-                    class_id: Number.parseInt(course_id as string),
-                    assignment_id: selectedSubmission.assignment_id,
-                    submission_file_id: ref.submission_file_id,
-                    submission_id: getValues("referenced_submission_id"),
-                    line_number: ref.line_number
-                  });
-                } catch (error) {
-                  const msg = getStudentFacingErrorMessage(error);
-                  toaster.error({
-                    title: "Could not attach code reference",
-                    description: msg
-                  });
-                  throw new Error(`Failed to create file reference: ${msg}`);
-                }
-              }
+              throw new Error(`Failed to create student associations: ${msg}`);
             }
 
             toaster.success({
@@ -619,16 +559,110 @@ export default function HelpRequestForm({
               description: "Help request successfully created. Opening your request..."
             });
 
-            // Navigate to queue view BEFORE any state-clearing work. The form is
-            // about to unmount, so resetting state first is unnecessary and risky:
-            // each setState triggers a re-render whose effects (validation, error
-            // clearing, useList refetches) can run on the same microtask as
-            // router.push and silently swallow the navigation under load. This
-            // was observed on webkit in CI where the success toast fired but the
-            // URL never changed (issue tracked: form's post-create writes should
-            // be collapsed into a single RPC; see TODO at top of file).
+            // Navigate to queue view BEFORE the trailing fire-and-forget
+            // writes so the new request page can mount immediately. Setting
+            // `navigated = true` also stands down the finally block from
+            // re-rendering the form (see the function-level comment).
             navigated = true;
             router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
+
+            // Fire-and-forget the rest. None of these writes block the
+            // user from interacting with the request — the chat page
+            // receives the initial message via realtime when it lands,
+            // activity rows are a logging side-effect, and file refs are
+            // optional decorations that the chat surfaces incrementally.
+            // Each task self-toasts on failure so the user still sees an
+            // error if one happens after navigation. Errors are swallowed
+            // here so an unrelated failure can't cancel the others.
+            void (async () => {
+              const classId = Number.parseInt(course_id as string);
+              const requestText = (getValues("request") as string) || "";
+              const fileReferences = getValues("file_references") || [];
+              const referencedSubmissionId = getValues("referenced_submission_id");
+              const helpQueueName = helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown";
+
+              // Activity log per student (best-effort: never user-visible
+              // on its own, so swallow errors instead of toasting).
+              await Promise.all(
+                currentSelectedStudents.map((studentId) =>
+                  studentHelpActivity
+                    .create({
+                      student_profile_id: studentId,
+                      class_id: classId,
+                      help_request_id: createdHelpRequest.id,
+                      activity_type: "request_created",
+                      activity_description: `Student created a new help request in queue: ${helpQueueName}`
+                    })
+                    .catch(() => {
+                      // logging-only write
+                    })
+                )
+              );
+
+              // Initial chat message mirroring the request description.
+              try {
+                if (requestText.trim().length > 0 && private_profile_id) {
+                  const trimmedText = requestText.trim();
+                  // The original duplicate-guard read helpRequestMessages.rows; that
+                  // ref is still valid because loadMessagesForHelpRequest only loads
+                  // the cache, it doesn't mutate per submission. Keep the same check
+                  // so a retry doesn't double-post.
+                  const existingLocal = (helpRequestMessages.rows || []).some(
+                    (m: HelpRequestMessage) =>
+                      Number(m.help_request_id) === Number(createdHelpRequest.id) &&
+                      String(m.author) === String(private_profile_id) &&
+                      ((m.message as string) || "").trim() === trimmedText
+                  );
+                  if (!createdInitialMessageRef.current && !existingLocal) {
+                    await helpRequestMessages.create({
+                      message: requestText,
+                      help_request_id: createdHelpRequest.id,
+                      author: private_profile_id,
+                      class_id: classId,
+                      instructors_only: false,
+                      reply_to_message_id: null
+                    });
+                    createdInitialMessageRef.current = true;
+                  }
+                }
+              } catch {
+                toaster.error({
+                  title: "Error",
+                  description: "Failed to create initial chat message with help request description."
+                });
+              }
+
+              // File references.
+              if (fileReferences.length > 0) {
+                const selectedSubmission = submissions?.data?.find((s) => s.id === referencedSubmissionId);
+                if (!selectedSubmission?.assignment_id) {
+                  toaster.error({
+                    title: "Could not attach code reference",
+                    description: "Assignment ID not found for the selected submission"
+                  });
+                  return;
+                }
+                try {
+                  await Promise.all(
+                    fileReferences.map((ref: HelpRequestFormFileReference) =>
+                      helpRequestFileReferences.create({
+                        help_request_id: createdHelpRequest.id,
+                        class_id: classId,
+                        assignment_id: selectedSubmission.assignment_id,
+                        submission_file_id: ref.submission_file_id,
+                        submission_id: referencedSubmissionId,
+                        line_number: ref.line_number
+                      })
+                    )
+                  );
+                } catch (error) {
+                  toaster.error({
+                    title: "Could not attach code reference",
+                    description: getStudentFacingErrorMessage(error)
+                  });
+                }
+              }
+            })();
           } catch (error) {
             toaster.error({
               title: "Could not complete help request",
