@@ -185,6 +185,29 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
     await visualScreenshot(page, "Office Hours - Submit a Private Request");
+    // The form has a `queueIdsWithActiveStaff` realtime gate
+    // (useActiveHelpQueueAssignments) that refuses to submit if the active
+    // staff assignment hasn't been delivered yet. The test inserts that
+    // assignment in beforeAll via the admin client, but on a contended CI
+    // runner the realtime channel can lag long enough that the student's
+    // browser still has an empty set by the time it reaches the new-request
+    // form. Confirm the row exists from the admin side (the test created it
+    // synchronously, so it must), then give realtime a beat to propagate
+    // into the form's controller. Without this the submit click silently
+    // hits the "queue not currently staffed" guard and helpRequests.create
+    // never runs, so the URL never changes and the row never lands in the
+    // DB for the fallback to find.
+    await expect(async () => {
+      const { data: assignments } = await supabase
+        .from("help_queue_assignments")
+        .select("id")
+        .eq("class_id", course.id)
+        .eq("is_active", true)
+        .is("ended_at", null)
+        .limit(1);
+      expect(assignments?.length ?? 0).toBeGreaterThan(0);
+    }).toPass({ timeout: 15_000 });
+    await page.waitForTimeout(2_000);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
     // Two-stage wait. (1) Wait for router.push to land on the new request
