@@ -1,5 +1,4 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
-import type { Page } from "@playwright/test";
 import { test, expect } from "../global-setup";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
@@ -95,82 +94,6 @@ test.beforeAll(async () => {
 test.afterEach(async ({ logMagicLinksOnFailure }) => {
   await logMagicLinksOnFailure([student, student2, instructor]);
 });
-/**
- * Wait for the new-help-request page to land on its post-submit URL
- * (/office-hours/{queue_id}/{request_id}). If router.push from
- * newRequestForm.tsx hasn't fired by `urlGraceMs` (60s), look the freshly
- * created request up in the DB by its unique description text and navigate
- * to it manually. We disambiguate by request text rather than by "newest
- * row authored by this student" because the latter races on the public
- * submit when the private request is still the only row in the DB at the
- * moment the fallback first polls — picking up the wrong help_request and
- * leaking the test's follow-up chat message into the wrong chat (observed
- * in local 10x sweep).
- */
-async function waitForHelpRequestUrlOrFallback(
-  page: Page,
-  courseId: number,
-  requestText: string,
-  urlGraceMs = 60_000,
-  fallbackTotalMs = 180_000
-) {
-  try {
-    await page.waitForURL(/\/office-hours\/\d+\/\d+$/, { timeout: urlGraceMs });
-    return;
-  } catch {
-    // fall through to DB-backed fallback
-  }
-  // If we get here, router.push hasn't fired within urlGraceMs. Surface
-  // what the form actually shows so the failure mode is identifiable
-  // beyond "URL never changed". A user-visible error toaster from the
-  // form's catch block (e.g. RLS / circuit breaker / invalid payload) is
-  // a deterministic answer; a re-click attempt under that observation is
-  // counter-productive.
-  const errorToasts = await page.locator('[data-scope="toast"][data-type="error"]').allTextContents();
-  if (errorToasts.length > 0) {
-    throw new Error(`new-help-request form errored: ${errorToasts.join(" | ")}`);
-  }
-  await expect(async () => {
-    if (/\/office-hours\/\d+\/\d+$/.test(page.url())) return;
-    const { data: req } = await supabase
-      .from("help_requests")
-      .select("id, help_queue, class_id, created_by, request")
-      .eq("request", requestText)
-      .order("id", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (req?.id && req?.help_queue) {
-      await page.goto(`/course/${courseId}/office-hours/${req.help_queue}/${req.id}`);
-    } else {
-      // Narrow the lookup so we can tell which assumption is breaking:
-      //   - rows for *this* test's class
-      //   - rows in *any* class (catches a class_id mismatch in the admin
-      //     client's view)
-      //   - what the admin client thinks the current sequence value /
-      //     URL is (catches a wrong-supabase-instance mismatch)
-      const { data: inCourse } = await supabase
-        .from("help_requests")
-        .select("id, request, class_id")
-        .eq("class_id", courseId)
-        .order("id", { ascending: false })
-        .limit(5);
-      const { data: latest } = await supabase
-        .from("help_requests")
-        .select("id, class_id, request")
-        .order("id", { ascending: false })
-        .limit(3);
-      const fmt = (r: { id: number; class_id: number; request: string }) =>
-        `id=${r.id} cls=${r.class_id} req=${JSON.stringify(((r.request as string) ?? "").slice(0, 40))}`;
-      const courseRows = (inCourse ?? []).map(fmt).join(" | ") || "(none)";
-      const globalRows = (latest ?? []).map(fmt).join(" | ") || "(none)";
-      throw new Error(
-        `help_request not yet visible by description ${JSON.stringify(requestText.slice(0, 40))}; ` +
-          `courseId=${courseId} in-course: ${courseRows}; global latest: ${globalRows}; admin URL=${process.env.SUPABASE_URL ?? "?"}`
-      );
-    }
-  }).toPass({ timeout: fallbackTotalMs });
-}
-
 const HELP_REQUEST_MESSAGE_1 = "My algorithm keeps timing out on large datasets - any optimization tips?";
 const PRIVATE_HELP_REQUEST_MESSAGE_1 = "Specifically struggling with the nested loop in my sorting function 🤔";
 const HELP_REQUEST_FOLLOW_UP_MESSAGE_1 = "Update: tried memoization but still getting stack overflow errors";
@@ -183,43 +106,10 @@ test.describe("Office Hours", () => {
   test("Student can request help", async ({ page }) => {
     // This test does a magic-link login plus two full request flows and two axe
     // scans. Under CI parallelism the login retry loop can spend up to ~5×15s
-    // recovering from transient GoTrue contention, AND the new-help-request
-    // form fans out several writes before router.push (helpRequests +
-    // helpRequestStudents are now load-bearing, others fire-and-forget after
-    // navigation). Each write is a network round-trip; under CI realtime
-    // backpressure the cumulative cost of the two private + public submit
-    // flows plus the two queue-chat sends has been measured north of 3
-    // minutes on the worst tail. test.slow() only buys 180s — not enough.
-    // Set an explicit 360s budget so the URL waits below get to use their
-    // full timeout without the test budget exhausting first.
-    test.setTimeout(600_000);
-
-    // Instrumentation: when this test repeatedly fails in CI with "URL never
-    // changed + no row in DB + no error toast surfaced", we can't tell from
-    // the failure context whether the submit click actually triggered
-    // onSubmit, which validation path it took, or whether the POST request
-    // even fired. Tee browser-side console output and every network
-    // request/response into the test's stdout so the trace + CI logs hold
-    // enough evidence to root-cause the next failure. (Cheap and only runs
-    // while this test runs — the suite ends each test's page context.)
-    page.on("console", (msg) => {
-      console.log(`[browser:${msg.type()}] ${msg.text()}`);
-    });
-    page.on("pageerror", (err) => {
-      console.log(`[browser:pageerror] ${err.message}`);
-    });
-    page.on("request", (req) => {
-      if (req.url().includes("/rest/v1/help_requests") || req.url().includes("/rest/v1/help_request_")) {
-        console.log(`[network:request] ${req.method()} ${req.url()}`);
-      }
-    });
-    page.on("response", (res) => {
-      const url = res.url();
-      if (url.includes("/rest/v1/help_requests") || url.includes("/rest/v1/help_request_")) {
-        console.log(`[network:response] ${res.status()} ${res.request().method()} ${url}`);
-      }
-    });
-
+    // recovering from transient GoTrue contention, which alone can exceed the
+    // default 60s budget and time the test out mid-login. Allow extra headroom so
+    // a slow-but-successful login doesn't surface as a flake.
+    test.slow();
     await loginAsUser(page, student!, course);
     const navRegion = page.locator("#course-nav");
     await navRegion.getByRole("link").filter({ hasText: "Office Hours" }).click();
@@ -234,97 +124,14 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).click();
     await assertStudentPageAccessible(page, "office hours - new help request form");
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
-    // Defensive: react-hook-form here is configured with `defaultValues:
-    // async () => ...` — if that async default resolves AFTER the test's
-    // .fill() above, RHF re-applies defaults and resets the textbox to
-    // empty. The form then submits with an empty `request` and the
-    // fallback's `.eq("request", text)` finds no match, manifesting as
-    // "help_request not yet visible" 3 minutes later. Re-assert the value
-    // stuck so any race surfaces here with a clear "expected X, got
-    // empty" rather than a black-hole DB lookup. Use toHaveValue with a
-    // toPass to absorb a single defaults-clobber by re-filling.
-    await expect(async () => {
-      const description = page.getByRole("textbox", { name: "Help Request Description" });
-      if ((await description.inputValue()) !== PRIVATE_HELP_REQUEST_MESSAGE_1) {
-        await description.fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
-      }
-      await expect(description).toHaveValue(PRIVATE_HELP_REQUEST_MESSAGE_1);
-    }).toPass({ timeout: 10_000 });
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
     await visualScreenshot(page, "Office Hours - Submit a Private Request");
-    // The Submit Request button is disabled while `errors.help_queue` is
-    // set (the form's validation effect at newRequestForm.tsx ~line 379
-    // sets that error when the queue isn't yet known to have active
-    // staff). Realtime delivers the active-staff row from the
-    // help_queue_assignments insert we did in beforeAll; under CI
-    // contention that delivery can lag for *minutes*. If we just call
-    // page.click() it auto-waits for enabled, but the wait counts
-    // against the test budget and ends up consuming so much of it that
-    // the post-submit URL waits time out.
-    //
-    // Wait for enabled explicitly with a generous timeout so the budget
-    // bookkeeping is unambiguous and any failure here surfaces as
-    // "submit never became clickable" instead of a downstream
-    // "row not in DB" timeout three minutes later.
-    // Retry-loop the submit dispatch until the form's onSubmit handler
-    // actually fires. CI debug runs showed that on a contended runner
-    // a single submit dispatch (button click OR form.requestSubmit) can
-    // land before React has hydrated the form's onSubmit listener — the
-    // DOM event dispatches but no handler is attached, so the form
-    // does nothing. The detectable side-effect when onSubmit DOES run
-    // is `setIsSubmittingGuard(true)` (line ~398 of newRequestForm.tsx),
-    // which disables the Submit Request button.
-    //
-    // We alternate between Playwright's click (which generates real mouse
-    // events) and form.requestSubmit() so whichever dispatch happens to
-    // land on a hydrated handler wins. 180s budget — under contended CI
-    // we've seen first-handler-attachment take more than the 30s the
-    // shorter retry loop budgeted.
-    await expect(page.getByRole("button", { name: "Submit Request" })).toBeVisible({ timeout: 180_000 });
-    let attempt = 0;
-    await expect(async () => {
-      attempt += 1;
-      const stateBefore = await page.evaluate(() => {
-        const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
-        if (!form) return { hasForm: false, alreadySubmitting: false };
-        const btn = form.querySelector('button[type="submit"]') as HTMLButtonElement | null;
-        return { hasForm: true, alreadySubmitting: btn?.disabled === true };
-      });
-      if (!stateBefore.hasForm) throw new Error("New Help Request Form not in DOM yet");
-      if (stateBefore.alreadySubmitting) return;
-      if (attempt % 2 === 1) {
-        await page
-          .getByRole("button", { name: "Submit Request" })
-          .click({ force: true })
-          .catch(() => {});
-      } else {
-        await page.evaluate(() => {
-          const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
-          if (form) form.requestSubmit();
-        });
-      }
-      await page.waitForTimeout(750);
-      const stateAfter = await page.evaluate(() => {
-        const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
-        const btn = form?.querySelector('button[type="submit"]') as HTMLButtonElement | null;
-        return { disabled: btn?.disabled === true, formStillThere: !!form };
-      });
-      if (!stateAfter.formStillThere) return;
-      if (!stateAfter.disabled) throw new Error(`submit didn't take (attempt ${attempt}); retrying`);
-    }).toPass({ timeout: 180_000, intervals: [200, 500, 1000, 2000, 3000] });
+    await page.getByRole("button", { name: "Submit Request" }).click();
 
-    // Two-stage wait. (1) Wait for router.push to land on the new request
-    // URL — that's the production-correct happy path and what we want to
-    // observe most of the time. (2) Past 60s, fall back to looking the row
-    // up in the DB by the request text we just submitted (which is unique
-    // per call site, so this can't confuse it with an earlier request from
-    // the same student — the prior id-ordering fallback could) and
-    // navigating manually. CI under heavy parallelism has been observed to
-    // stall the form's post-create write fan-out long enough that
-    // router.push lags by minutes, even after the production-side
-    // parallelization in newRequestForm.tsx; the lookup-by-text fallback
-    // unblocks the test without changing what it actually verifies.
-    await waitForHelpRequestUrlOrFallback(page, course.id, PRIVATE_HELP_REQUEST_MESSAGE_1);
+    // newRequestForm.tsx awaits helpRequests.create() then router.push() to
+    // /office-hours/{queue_id}/{request_id}. The router.push must land — if
+    // it doesn't, the user is stuck on the form (production bug).
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
     //Add a comment on it
     await page.getByRole("textbox", { name: "Type your message" }).click();
@@ -341,9 +148,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(HELP_REQUEST_MESSAGE_1);
     await page.getByRole("button", { name: "Submit Request" }).click();
 
-    // Same hybrid wait as the private submit, but disambiguated by the
-    // public request's distinct description text.
-    await waitForHelpRequestUrlOrFallback(page, course.id, HELP_REQUEST_MESSAGE_1);
+    await page.waitForURL(/\/office-hours\/\d+\/\d+$/);
     await expect(page.getByText("Your position in the queue")).toBeVisible();
 
     //Add a comment on it
