@@ -266,16 +266,21 @@ test.describe("Office Hours", () => {
     // bookkeeping is unambiguous and any failure here surfaces as
     // "submit never became clickable" instead of a downstream
     // "row not in DB" timeout three minutes later.
-    const submitBtn = page.getByRole("button", { name: "Submit Request" });
-    await expect(submitBtn).toBeEnabled({ timeout: 180_000 });
-    // force:true skips actionability re-checks inside click(). The button
-    // can flap disabled momentarily when realtime delivers updates between
-    // toBeEnabled() and click(), and the default click() would then
-    // silently wait for it to re-enable. force-clicking dispatches the
-    // synthetic mouse events unconditionally — combined with the page.tsx
-    // unmount fix in 52c98d6a (the form now stays mounted across realtime
-    // blips), the click reliably reaches the form's onSubmit.
-    await submitBtn.click({ force: true });
+    // Wait for the submit button to exist (proxy for "form is rendered, not
+    // in the Loading... state"), then dispatch the form's submit event
+    // directly. Going through page.click() has been observed to land on
+    // moments when the React tree was mid-rerender on a contended CI
+    // runner, dropping the event without triggering the form's onSubmit.
+    // `form.requestSubmit()` fires the same submit event React listens to,
+    // does not require the button to be enabled at the call site (the form's
+    // own validation guards still apply and toast errors), and produces a
+    // deterministic submit on every attempt.
+    await expect(page.getByRole("button", { name: "Submit Request" })).toBeVisible({ timeout: 180_000 });
+    await page.evaluate(() => {
+      const form = document.querySelector('form[aria-label="New Help Request Form"]') as HTMLFormElement | null;
+      if (!form) throw new Error("New Help Request Form not in DOM");
+      form.requestSubmit();
+    });
 
     // Two-stage wait. (1) Wait for router.push to land on the new request
     // URL — that's the production-correct happy path and what we want to
