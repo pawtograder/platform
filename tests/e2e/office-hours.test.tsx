@@ -112,13 +112,23 @@ async function waitForHelpRequestUrlOrFallback(
   courseId: number,
   requestText: string,
   urlGraceMs = 60_000,
-  fallbackTotalMs = 120_000
+  fallbackTotalMs = 180_000
 ) {
   try {
     await page.waitForURL(/\/office-hours\/\d+\/\d+$/, { timeout: urlGraceMs });
     return;
   } catch {
     // fall through to DB-backed fallback
+  }
+  // If we get here, router.push hasn't fired within urlGraceMs. Surface
+  // what the form actually shows so the failure mode is identifiable
+  // beyond "URL never changed". A user-visible error toaster from the
+  // form's catch block (e.g. RLS / circuit breaker / invalid payload) is
+  // a deterministic answer; a re-click attempt under that observation is
+  // counter-productive.
+  const errorToasts = await page.locator('[data-scope="toast"][data-type="error"]').allTextContents();
+  if (errorToasts.length > 0) {
+    throw new Error(`new-help-request form errored: ${errorToasts.join(" | ")}`);
   }
   await expect(async () => {
     if (/\/office-hours\/\d+\/\d+$/.test(page.url())) return;
