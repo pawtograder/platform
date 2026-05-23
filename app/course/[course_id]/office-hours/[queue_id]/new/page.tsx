@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHelpQueue, useActiveHelpQueueAssignments } from "@/hooks/useOfficeHoursRealtime";
 import { Box, Card, Container, Text, Button } from "@chakra-ui/react";
 
@@ -25,11 +25,41 @@ export default function NewRequestPage() {
   // Check if queue is available for new requests (both available flag AND has active staff, unless demo)
   const isQueueOpen = helpQueue?.is_demo || (helpQueue?.available && hasActiveAssignment);
 
-  // Set while the form is submitting/navigating to its newly created request, so the
-  // redirect below stands down and can't race (and swallow) the form's router.push.
+  // Latch the "open" signal: once we've ever observed the queue as open in
+  // this session, keep treating it as open even if the realtime channel
+  // briefly drops the active-assignment row (re-subscribe / cache invalidate
+  // can flap it false→true→false within a single render cycle). Unlatching
+  // requires a fresh page mount.
+  //
+  // Without this, an in-flight click on Submit Request gets stranded:
+  //   1. button is enabled, user clicks
+  //   2. React queues the synthetic submit event for our onSubmit
+  //   3. a realtime tick momentarily empties activeHelpQueueAssignments
+  //   4. isQueueOpen flips false, parent re-renders, the early-return
+  //      branch below unmounts <HelpRequestForm>
+  //   5. React tries to dispatch the queued submit to a now-unmounted
+  //      component; onSubmit never runs, no row is created, no toast
+  //
+  // Tracked down via the office-hours E2E CI flake on PR 785 — the
+  // failing attempts showed ZERO OH-DEBUG events from inside onSubmit
+  // despite Playwright's click() returning success.
+  const [hasEverBeenOpen, setHasEverBeenOpen] = useState(false);
+  useEffect(() => {
+    if (isQueueOpen) setHasEverBeenOpen(true);
+  }, [isQueueOpen]);
+  const treatAsOpen = isQueueOpen || hasEverBeenOpen;
+
+  // Track whether the form is mid-submit. Use both a ref (so the
+  // useEffect below can read it without rerunning on every toggle) and
+  // useState (so the render-time guard below actually picks up the flip
+  // — refs don't trigger renders). The form calls onSubmittingChange
+  // before any await in its handler, so by the time anything downstream
+  // observes !treatAsOpen we already know the form is committed.
   const isSubmittingRef = useRef(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const handleSubmittingChange = useCallback((submitting: boolean) => {
     isSubmittingRef.current = submitting;
+    setIsSubmitting(submitting);
   }, []);
 
   useEffect(() => {
@@ -41,14 +71,19 @@ export default function NewRequestPage() {
     // realtime data loads (and can blip undefined on re-subscribe), which would briefly make
     // the queue look closed and fire a spurious redirect.
     if (activeHelpQueueAssignments === undefined) return;
-    if (helpQueue && !isQueueOpen) {
+    // Once we've observed the queue as open we don't redirect away from
+    // /new even if realtime briefly says otherwise — see the
+    // hasEverBeenOpen latch comment above.
+    if (helpQueue && !treatAsOpen) {
       // Redirect back to queue page if queue is not open for new requests
       router.replace(`/course/${course_id}/office-hours/${queue_id}`);
     }
-  }, [helpQueue, isQueueOpen, activeHelpQueueAssignments, router, course_id, queue_id]);
+  }, [helpQueue, treatAsOpen, activeHelpQueueAssignments, router, course_id, queue_id]);
 
-  // Show error message if queue is not open for new requests
-  if (helpQueue && !isQueueOpen) {
+  // Show error message if queue is not open for new requests. Gate with
+  // the same guards as the useEffect so a transient realtime blip can't
+  // unmount the form mid-submit (see hasEverBeenOpen comment).
+  if (helpQueue && !treatAsOpen && !isSubmitting && activeHelpQueueAssignments !== undefined) {
     const reason = !helpQueue.available
       ? "This queue is not currently accepting new requests."
       : "This queue is not currently staffed.";
