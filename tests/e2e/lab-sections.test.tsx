@@ -86,24 +86,22 @@ test.describe("Lab Sections Page", () => {
     // where an "Enrollments" menuitem subtree intercepted pointer events for
     // 60s).
     //
-    // The chakra menu's *positioner* is a popper container that stays in the
-    // DOM regardless of menu open/closed (no `data-state` on it). The actual
-    // closed signal is on `Menu.Content`: when the menu closes, zag-js sets
-    // `hidden` and `data-state="closed"` on the content (see
-    // node_modules/@zag-js/menu/dist/index.js getContentProps). Asserting the
-    // positioner toBeHidden() is therefore a brittle proxy that depends on
-    // browser-specific bbox semantics — webkit has been observed to keep the
-    // empty positioner reported as "visible" for >20s. Wait on the
-    // authoritative content `data-state="closed"` instead.
+    // Confirm the dropdown has finished closing before clicking through to the
+    // lab-sections page. Under webkit contention the menu positioner has been
+    // seen to linger after the new page has rendered, intercepting clicks on
+    // the "Manage lab sections" link below (see CI run #24943326970 retry #2,
+    // where an "Enrollments" menuitem subtree intercepted pointer events for
+    // 60s).
     //
-    // Scope to the Course Settings menu specifically: the page also mounts a
-    // UserMenu via `dynamicCourseNav`, and a bare `[data-part="content"]
-    // [data-scope="menu"]` selector matches both, tripping Playwright's
-    // strict-mode check on `toHaveAttribute`. Filtering by a menuitem only
-    // present in this menu uniquely identifies it.
-    await expect(
-      page.locator('[data-part="content"][data-scope="menu"]').filter({ hasText: "Lab Sections" })
-    ).toHaveAttribute("data-state", "closed");
+    // The cleanest closed signal that works across all renderer states is the
+    // menuitem itself. While the menu is open, "Lab Sections" is a real
+    // accessible menuitem; once it closes, Chakra/zag-js unmounts the
+    // menu.Content (no transition delay because tests/global-setup.ts disables
+    // animations in visual mode), removing the menuitem from the a11y tree.
+    // `toBeHidden` is satisfied by both "hidden attribute set" and "node
+    // missing", so it handles both the visible-but-closed (data-state=closed)
+    // and unmounted variants of the close.
+    await expect(page.getByRole("menuitem", { name: "Lab Sections" })).toBeHidden({ timeout: 20_000 });
 
     // Menu click navigates to lab-roster; only THEN does the "Manage lab sections"
     // link render. Don't trust `Loading lab roster... toBeHidden()` as a readiness

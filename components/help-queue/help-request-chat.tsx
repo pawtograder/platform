@@ -1225,7 +1225,13 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                 Private
               </Badge>
             )}
-            <Text fontSize="xs" color="fg.muted" flexShrink={0}>
+            <Text
+              fontSize="xs"
+              color="fg.muted"
+              flexShrink={0}
+              data-visual-test="transparent"
+              data-visual-placeholder="relative-time"
+            >
               {createdTimeAgo}
             </Text>
           </HStack>

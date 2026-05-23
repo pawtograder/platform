@@ -447,6 +447,36 @@ async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supa
   throw new Error(`generateMagicLinkWithRetry: exhausted retries (${lastErrMsg})`);
 }
 
+// Verify an admin-generated magic link with bounded retries. Both steps —
+// generateLink AND verifyOtp — fail transiently under CI parallelism (rate
+// limits, occasional 5xx from gotrue), so each call must own its retry
+// loop. Without this, the non-browser helpers (getAuthTokenForUser /
+// createAuthenticatedClient) had only generateMagicLinkWithRetry covering
+// the first hop; the second hop (verifyOtp) was a single-shot point of
+// flake.
+async function verifyOtpWithRetry<T>(
+  email: string,
+  doVerify: () => Promise<{ data: T; error: Error | null | { message?: string } | null }>
+): Promise<T> {
+  const delaysMs = [400, 1200, 3500];
+  let lastErrMsg = "";
+  for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+    try {
+      const { data, error } = await doVerify();
+      if (!error) return data;
+      lastErrMsg = (error as { message?: string })?.message || JSON.stringify(error) || "unknown";
+      if (attempt === delaysMs.length) {
+        throw new Error(`Failed to verify magic link for ${email}: ${lastErrMsg}`);
+      }
+    } catch (err) {
+      lastErrMsg = err instanceof Error ? err.message : String(err);
+      if (attempt === delaysMs.length) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt] + Math.floor(Math.random() * 250)));
+  }
+  throw new Error(`verifyOtpWithRetry: exhausted retries (${lastErrMsg})`);
+}
+
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
@@ -455,21 +485,22 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
     (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
   );
 
-  // Generate magic link using admin client (same as TestingUtils.ts does)
-  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-
-  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
-    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
-  }
-
-  // Verify the OTP to get a session
-  const { data, error } = await userSupabase.auth.verifyOtp({
-    token_hash: magicLinkData.properties.hashed_token,
-    type: "magiclink"
+  // Each attempt regenerates the magic link (single-use, expires quickly) and
+  // re-verifies — keeps generation and verification as a single retried unit
+  // so a stale/used token from a prior partial attempt can't poison the next.
+  const data = await verifyOtpWithRetry(testingUser.email, async () => {
+    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+    if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+      return { data: null as never, error: magicLinkError ?? new Error("missing hashed_token") };
+    }
+    return userSupabase.auth.verifyOtp({
+      token_hash: magicLinkData.properties.hashed_token,
+      type: "magiclink"
+    });
   });
 
-  if (error || !data.session) {
-    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  if (!data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: no session returned`);
   }
 
   return data.session.access_token;
@@ -485,21 +516,19 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
     (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
   );
 
-  // Generate magic link using admin client
-  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-
-  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
-    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
-  }
-
-  // Verify the OTP to get a session
-  const { data, error } = await userSupabase.auth.verifyOtp({
-    token_hash: magicLinkData.properties.hashed_token,
-    type: "magiclink"
+  const data = await verifyOtpWithRetry(testingUser.email, async () => {
+    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+    if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+      return { data: null as never, error: magicLinkError ?? new Error("missing hashed_token") };
+    }
+    return userSupabase.auth.verifyOtp({
+      token_hash: magicLinkData.properties.hashed_token,
+      type: "magiclink"
+    });
   });
 
-  if (error || !data.session) {
-    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  if (!data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: no session returned`);
   }
 
   await userSupabase.auth.setSession(data.session);
@@ -703,9 +732,32 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
   }
 
   if (course) {
-    await page.waitForLoadState("networkidle");
-    await page.goto(`/course/${course.id}`);
-    await page.waitForLoadState("networkidle");
+    // Don't waitForLoadState("networkidle") here: Realtime websockets and
+    // periodic heartbeats keep network traffic non-idle indefinitely, so an
+    // unbounded networkidle wait sits through every keepalive frame and can
+    // consume the test budget on slow lanes for no benefit. Use the explicit
+    // UI signal downstream actions already depend on: the <main> region
+    // becomes visible as soon as React hydrates the course route. (Course
+    // pages render headings at varying levels — h1, h2 — depending on the
+    // user's role and feature flag state, so we don't pin to a specific
+    // level here.)
+    await page.goto(`/course/${course.id}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    if (dismissTimezoneDialog) {
+      // Wait for the course page to actually render. <main> is the cheapest
+      // hydration signal and downstream test actions all depend on it
+      // existing. We do this inside toPass so a mid-load timezone modal can
+      // be dismissed in-line without losing the readiness check.
+      await expect(async () => {
+        await dismissTimeZonePreferenceModal(page, 6_000);
+        await expect(page.getByRole("main")).toBeVisible({ timeout: 8_000 });
+      }).toPass({ timeout: 30_000 });
+    } else {
+      // The caller (timezone-preferences tests) wants to *see* the modal —
+      // they assert on the dialog as the first observable signal. Don't
+      // wait on <main> here: Chakra's Dialog sets aria-hidden on everything
+      // else while it's open, so getByRole("main") finds nothing until the
+      // dialog closes, which we promised the caller not to do.
+    }
   }
 
   if (dismissTimezoneDialog) {
