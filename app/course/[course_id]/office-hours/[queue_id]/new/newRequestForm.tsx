@@ -525,7 +525,11 @@ export default function HelpRequestForm({
           };
 
           // eslint-disable-next-line no-console
-          console.log(`[OH-DEBUG] customOnFinish reached, calling helpRequests.create with queue=${values.help_queue}`);
+          console.log(
+            `[OH-DEBUG] customOnFinish reached: queue=${values.help_queue} request=${JSON.stringify(
+              ((values.request as string) ?? "").slice(0, 60)
+            )} is_private=${values.is_private}`
+          );
           try {
             const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
             // eslint-disable-next-line no-console

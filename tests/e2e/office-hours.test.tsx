@@ -210,6 +210,22 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Help Request Description" }).click();
     await assertStudentPageAccessible(page, "office hours - new help request form");
     await page.getByRole("textbox", { name: "Help Request Description" }).fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
+    // Defensive: react-hook-form here is configured with `defaultValues:
+    // async () => ...` — if that async default resolves AFTER the test's
+    // .fill() above, RHF re-applies defaults and resets the textbox to
+    // empty. The form then submits with an empty `request` and the
+    // fallback's `.eq("request", text)` finds no match, manifesting as
+    // "help_request not yet visible" 3 minutes later. Re-assert the value
+    // stuck so any race surfaces here with a clear "expected X, got
+    // empty" rather than a black-hole DB lookup. Use toHaveValue with a
+    // toPass to absorb a single defaults-clobber by re-filling.
+    await expect(async () => {
+      const description = page.getByRole("textbox", { name: "Help Request Description" });
+      if ((await description.inputValue()) !== PRIVATE_HELP_REQUEST_MESSAGE_1) {
+        await description.fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
+      }
+      await expect(description).toHaveValue(PRIVATE_HELP_REQUEST_MESSAGE_1);
+    }).toPass({ timeout: 10_000 });
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
     await visualScreenshot(page, "Office Hours - Submit a Private Request");
     // The form has a `queueIdsWithActiveStaff` realtime gate
