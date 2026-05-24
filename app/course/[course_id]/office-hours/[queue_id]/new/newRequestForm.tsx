@@ -1,5 +1,6 @@
 "use client";
 
+import { createClient } from "@/utils/supabase/client";
 import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
 import { OfficeHoursDiscussionBrowser } from "@/components/help-queue/office-hours-discussion-browser";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,7 +24,6 @@ import {
   Assignment,
   HelpRequest,
   HelpRequestLocationType,
-  HelpRequestMessage,
   HelpRequestTemplate,
   HelpRequestWithStudentCount,
   Submission,
@@ -69,8 +69,6 @@ export default function HelpRequestForm({
 
   // Use ref to avoid closure issues with selectedStudents in async callbacks
   const selectedStudentsRef = useRef<string[]>([]);
-  // Track if we've created the initial message to avoid duplicates on retries
-  const createdInitialMessageRef = useRef<boolean>(false);
 
   // Update ref whenever selectedStudents changes
   useEffect(() => {
@@ -114,8 +112,9 @@ export default function HelpRequestForm({
   const { private_profile_id } = useClassProfiles();
 
   // Get table controllers from office hours controller
+  // Only used here to warm the message cache for the about-to-mount chat
+  // page; the actual writes happen inside the RPC.
   const controller = useOfficeHoursController();
-  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity } = controller;
 
   // Get available help queues using individual hook
   const allHelpQueues = useHelpQueues();
@@ -484,74 +483,73 @@ export default function HelpRequestForm({
         }
         // Group requests are always allowed - no validation needed
 
-        // Create a custom onFinish function that excludes file_references and adds required fields
+        // Submit through a single atomic Postgres RPC. The RPC creates
+        // help_requests + help_request_students + help_request_messages +
+        // help_request_file_references + student_help_activity in one
+        // transaction with SECURITY DEFINER auth checks. Replaces the
+        // legacy 4–5 sequential client-side writes that left the door
+        // open for partially-created requests under realtime backpressure
+        // (see the TODO at the top of this file and migration
+        // 20260524000944_create_help_request_with_participants_rpc.sql).
         const customOnFinish = async (values: Record<string, unknown>) => {
-          // Exclude file_references from the submission data since it's not a column in help_requests table
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { _intended_privacy, file_references, ...helpRequestData } = values;
+          const currentSelectedStudents = selectedStudentsRef.current;
+          if (currentSelectedStudents.length === 0) {
+            toaster.error({
+              title: "Error",
+              description: "No students selected for help request"
+            });
+            throw new Error("No students selected for help request");
+          }
 
-          // Add required fields that may not be set in the form
-          const finalData = {
-            ...helpRequestData,
-            assignee: null,
-            class_id: Number.parseInt(course_id as string),
-            created_by: private_profile_id, // Set the created_by field
-            // Ensure these fields have proper defaults
-            status: "open" as const,
-            is_video_live: false,
-            is_private: values.is_private || false
-          };
+          // Build the file-references payload the RPC expects. We only
+          // include refs once we've resolved their assignment_id, which
+          // comes from the selected submission. If a submission is
+          // referenced without an assignment we drop the file refs (the
+          // legacy code threw on this — RPC-side it's a quiet skip).
+          const requestText = ((values.request as string) ?? "").trim();
+          const formFileRefs = (getValues("file_references") ?? []) as HelpRequestFormFileReference[];
+          const referencedSubmissionId = getValues("referenced_submission_id") as number | null | undefined;
+          const selectedSubmission =
+            referencedSubmissionId != null
+              ? submissions?.data?.find((s) => s.id === referencedSubmissionId)
+              : undefined;
+          const fileReferencesPayload =
+            formFileRefs.length > 0 && selectedSubmission?.assignment_id
+              ? formFileRefs.map((ref) => ({
+                  submission_file_id: ref.submission_file_id,
+                  line_number: ref.line_number,
+                  assignment_id: selectedSubmission.assignment_id,
+                  submission_id: referencedSubmissionId
+                }))
+              : [];
 
           try {
-            const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
-            const helpRequestMessages = controller.loadMessagesForHelpRequest(createdHelpRequest.id);
-            // Get current selected students from ref to avoid closure issues
-            const currentSelectedStudents = selectedStudentsRef.current;
-
-            if (!createdHelpRequest.id) {
-              throw new Error("Help request ID not found in response data");
-            }
-
-            if (currentSelectedStudents.length === 0) {
+            const supabase = createClient();
+            const { data: createdHelpRequestId, error: rpcError } = await supabase.rpc(
+              "create_help_request_with_participants",
+              {
+                p_help_queue_id: Number.parseInt(queue_id as string),
+                p_request: requestText,
+                p_is_private: Boolean(values.is_private),
+                p_location_type: (values.location_type as HelpRequestLocationType) ?? "remote",
+                p_student_profile_ids: currentSelectedStudents,
+                p_template_id: (values.template_id as number | null | undefined) ?? undefined,
+                p_referenced_submission_id: referencedSubmissionId ?? undefined,
+                p_file_references: fileReferencesPayload as never
+              }
+            );
+            if (rpcError) {
+              const isRls = rpcError.code === "42501";
               toaster.error({
-                title: "Error",
-                description: "No students selected for help request"
+                title: isRls ? "Permission issue" : "Could not complete help request",
+                description: isRls
+                  ? "You don't have permission to create this help request with these settings. Try making the request public instead of private, or contact your instructor."
+                  : getStudentFacingErrorMessage(rpcError)
               });
-              throw new Error("No students selected for help request");
+              throw rpcError;
             }
-
-            // Add all selected students to help_request_students in parallel.
-            // This is the ONLY write that's load-bearing for navigation: the
-            // new request page redirects unauthorized viewers, so the row
-            // must exist before router.push fires (a missing row would
-            // 403/bounce the redirect). Previously the form did this in a
-            // sequential for-await loop and chained studentHelpActivity +
-            // helpRequestMessages + file refs in the same critical path;
-            // CI was observed to stall in that fan-out long enough for
-            // router.push to time out (see the TODO at top of the file and
-            // the office-hours E2E hardening commit). Everything that's
-            // *not* load-bearing for the redirect now runs after
-            // router.push (see fire-and-forget block below) so the URL
-            // lands as soon as the request row + access binding are in
-            // place.
-            try {
-              const classId = Number.parseInt(course_id as string);
-              await Promise.all(
-                currentSelectedStudents.map((studentId) =>
-                  helpRequestStudents.create({
-                    help_request_id: createdHelpRequest.id,
-                    profile_id: studentId,
-                    class_id: classId
-                  })
-                )
-              );
-            } catch (error) {
-              const msg = getStudentFacingErrorMessage(error);
-              toaster.error({
-                title: "Could not add everyone to the request",
-                description: `We could not add a classmate to this help request: ${msg}`
-              });
-              throw new Error(`Failed to create student associations: ${msg}`);
+            if (createdHelpRequestId == null) {
+              throw new Error("create_help_request_with_participants did not return an id");
             }
 
             toaster.success({
@@ -559,115 +557,22 @@ export default function HelpRequestForm({
               description: "Help request successfully created. Opening your request..."
             });
 
-            // Navigate to queue view BEFORE the trailing fire-and-forget
-            // writes so the new request page can mount immediately. Setting
-            // `navigated = true` also stands down the finally block from
-            // re-rendering the form (see the function-level comment).
+            // Realtime will deliver the new row to the chat page, but
+            // pre-load the messages controller so the chat mounts with
+            // the initial message already cached.
+            controller.loadMessagesForHelpRequest(createdHelpRequestId);
+
             navigated = true;
-            router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
-
-            // Fire-and-forget the rest. None of these writes block the
-            // user from interacting with the request — the chat page
-            // receives the initial message via realtime when it lands,
-            // activity rows are a logging side-effect, and file refs are
-            // optional decorations that the chat surfaces incrementally.
-            // Each task self-toasts on failure so the user still sees an
-            // error if one happens after navigation. Errors are swallowed
-            // here so an unrelated failure can't cancel the others.
-            void (async () => {
-              const classId = Number.parseInt(course_id as string);
-              const requestText = (getValues("request") as string) || "";
-              const fileReferences = getValues("file_references") || [];
-              const referencedSubmissionId = getValues("referenced_submission_id");
-              const helpQueueName = helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown";
-
-              // Activity log per student (best-effort: never user-visible
-              // on its own, so swallow errors instead of toasting).
-              await Promise.all(
-                currentSelectedStudents.map((studentId) =>
-                  studentHelpActivity
-                    .create({
-                      student_profile_id: studentId,
-                      class_id: classId,
-                      help_request_id: createdHelpRequest.id,
-                      activity_type: "request_created",
-                      activity_description: `Student created a new help request in queue: ${helpQueueName}`
-                    })
-                    .catch(() => {
-                      // logging-only write
-                    })
-                )
-              );
-
-              // Initial chat message mirroring the request description.
-              try {
-                if (requestText.trim().length > 0 && private_profile_id) {
-                  const trimmedText = requestText.trim();
-                  // The original duplicate-guard read helpRequestMessages.rows; that
-                  // ref is still valid because loadMessagesForHelpRequest only loads
-                  // the cache, it doesn't mutate per submission. Keep the same check
-                  // so a retry doesn't double-post.
-                  const existingLocal = (helpRequestMessages.rows || []).some(
-                    (m: HelpRequestMessage) =>
-                      Number(m.help_request_id) === Number(createdHelpRequest.id) &&
-                      String(m.author) === String(private_profile_id) &&
-                      ((m.message as string) || "").trim() === trimmedText
-                  );
-                  if (!createdInitialMessageRef.current && !existingLocal) {
-                    await helpRequestMessages.create({
-                      message: requestText,
-                      help_request_id: createdHelpRequest.id,
-                      author: private_profile_id,
-                      class_id: classId,
-                      instructors_only: false,
-                      reply_to_message_id: null
-                    });
-                    createdInitialMessageRef.current = true;
-                  }
-                }
-              } catch {
-                toaster.error({
-                  title: "Error",
-                  description: "Failed to create initial chat message with help request description."
-                });
-              }
-
-              // File references.
-              if (fileReferences.length > 0) {
-                const selectedSubmission = submissions?.data?.find((s) => s.id === referencedSubmissionId);
-                if (!selectedSubmission?.assignment_id) {
-                  toaster.error({
-                    title: "Could not attach code reference",
-                    description: "Assignment ID not found for the selected submission"
-                  });
-                  return;
-                }
-                try {
-                  await Promise.all(
-                    fileReferences.map((ref: HelpRequestFormFileReference) =>
-                      helpRequestFileReferences.create({
-                        help_request_id: createdHelpRequest.id,
-                        class_id: classId,
-                        assignment_id: selectedSubmission.assignment_id,
-                        submission_file_id: ref.submission_file_id,
-                        submission_id: referencedSubmissionId,
-                        line_number: ref.line_number
-                      })
-                    )
-                  );
-                } catch (error) {
-                  toaster.error({
-                    title: "Could not attach code reference",
-                    description: getStudentFacingErrorMessage(error)
-                  });
-                }
-              }
-            })();
+            router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequestId}`);
           } catch (error) {
-            toaster.error({
-              title: "Could not complete help request",
-              description: getStudentFacingErrorMessage(error)
-            });
+            // RPC error path already toasted above; this catches non-RPC
+            // throws (e.g. the empty-students guard re-throwing).
+            if (!(error && typeof error === "object" && "code" in error)) {
+              toaster.error({
+                title: "Could not complete help request",
+                description: getStudentFacingErrorMessage(error)
+              });
+            }
           }
         };
 
@@ -696,14 +601,10 @@ export default function HelpRequestForm({
       getValues,
       selectedStudents,
       helpQueues,
-      helpRequestFileReferences,
-      helpRequests,
-      helpRequestStudents,
       queue_id,
       controller,
       router,
       submissions?.data,
-      studentHelpActivity,
       templates.length
     ]
   );
