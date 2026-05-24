@@ -49,9 +49,25 @@ export default function RequestDetailPage() {
     }
     let cancelled = false;
     setLoadState("pending");
-    controller.helpRequests.invalidate(requestIdNum).catch(() => {
-      if (!cancelled) setLoadState("not_found");
-    });
+    controller.helpRequests
+      .invalidate(requestIdNum)
+      .then(() => {
+        if (cancelled) return;
+        // `invalidate` resolves successfully both when the row was found
+        // (and added to cache — `useQueueData` will pick it up via its
+        // listener and the effect will re-run with `request` truthy)
+        // AND when the row was not found (single() returned data:null
+        // without an explicit error, e.g. RLS filtered it out). Only
+        // flip to "not_found" if the row really isn't in cache; never
+        // flip a transient "not_found" between the cache write and the
+        // re-render, which would cause a flash of the error state.
+        if (!controller.helpRequests.getById(requestIdNum).data) {
+          setLoadState("not_found");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoadState("not_found");
+      });
     return () => {
       cancelled = true;
     };
