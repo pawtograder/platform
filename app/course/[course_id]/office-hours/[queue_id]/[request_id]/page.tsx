@@ -3,9 +3,12 @@
 import { useParams } from "next/navigation";
 import CurrentRequest from "../currentRequest";
 import { useQueueData } from "@/hooks/useQueueData";
-import { useMemo, useState } from "react";
-import { Box, Flex, useBreakpointValue } from "@chakra-ui/react";
+import { useEffect, useMemo, useState } from "react";
+import { Box, Flex, Spinner, useBreakpointValue } from "@chakra-ui/react";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
+import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+
+type LoadState = "pending" | "loaded" | "not_found";
 
 export default function RequestDetailPage() {
   const { queue_id, course_id, request_id } = useParams();
@@ -18,11 +21,41 @@ export default function RequestDetailPage() {
     queueId: Number(queue_id)
   });
 
+  const requestIdNum = Number(request_id);
+
   // Find the specific request - could be from user's requests or queue requests
   const request = useMemo(() => {
-    const requestIdNum = Number(request_id);
     return userRequests.find((req) => req.id === requestIdNum) || queueRequests.find((req) => req.id === requestIdNum);
-  }, [userRequests, queueRequests, request_id]);
+  }, [userRequests, queueRequests, requestIdNum]);
+
+  // The realtime-backed help_requests controller is populated by an
+  // initial query plus realtime INSERT broadcasts. If a user lands here
+  // via a deep link, a freshly-created request whose realtime broadcast
+  // hasn't arrived yet, or a navigation that races the initial query,
+  // `request` is undefined and we used to render a flat "Request not
+  // found." — which is wrong for the loading case and surfaces as an
+  // e2e flake. Distinguish "not yet loaded" from "definitively missing"
+  // by issuing a one-shot single-row fetch on mount; only flip to
+  // not_found once that fetch has resolved and the row is still absent.
+  // The fetch writes through the controller's cache, so the existing
+  // useQueueData / useHelpRequests hooks pick it up via their normal
+  // notification path.
+  const controller = useOfficeHoursController();
+  const [loadState, setLoadState] = useState<LoadState>(request ? "loaded" : "pending");
+  useEffect(() => {
+    if (request) {
+      setLoadState("loaded");
+      return;
+    }
+    let cancelled = false;
+    setLoadState("pending");
+    controller.helpRequests.invalidate(requestIdNum).catch(() => {
+      if (!cancelled) setLoadState("not_found");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [request, controller, requestIdNum]);
 
   // Calculate position in queue for active requests
   const position = useMemo(() => {
@@ -33,7 +66,14 @@ export default function RequestDetailPage() {
   }, [request, queueRequests]);
 
   if (!request) {
-    return <div>Request not found.</div>;
+    if (loadState === "not_found") {
+      return <div>Request not found.</div>;
+    }
+    return (
+      <Flex justify="center" align="center" py={12}>
+        <Spinner />
+      </Flex>
+    );
   }
 
   return (

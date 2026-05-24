@@ -557,32 +557,14 @@ export default function HelpRequestForm({
               description: "Help request successfully created. Opening your request..."
             });
 
-            // The legacy `helpRequests.create(...)` call used to push the
-            // new row into the controller's local cache synchronously (its
-            // optimistic-add path), so the chat page found the row in
-            // `useHelpRequests()` the moment it mounted. The SECURITY
-            // DEFINER RPC bypasses that path — the row only arrives via
-            // realtime broadcast, which on slow CI runs can lag the
-            // router.push by several seconds. The chat page renders
-            // "Request not found." in the gap, which fails E2E waits on
-            // "Your position in the queue".
-            //
-            // Warm the help_requests cache by fetching the new row
-            // directly through the controller's public `invalidate(id)`.
-            // Race against a short timeout so a slow or stuck REST
-            // round-trip can't block router.push — realtime is still
-            // the authoritative fallback. Without the timeout race a
-            // hung invalidate strands the user on the form (observed as
-            // a 180s waitForURL timeout in PR 785's CI run on commit
-            // 74bf1696). `loadMessagesForHelpRequest` is synchronous
-            // (returns the messages TableController) so it's called
-            // separately without an await.
-            await Promise.race([
-              controller.helpRequests.invalidate(createdHelpRequestId).catch(() => {
-                // Realtime will catch up; nothing to do here.
-              }),
-              new Promise<void>((resolve) => setTimeout(resolve, 2000))
-            ]);
+            // Pre-load the messages controller so the chat page mounts
+            // with the initial message already cached. The chat page
+            // itself handles fetching the help_requests row on mount if
+            // realtime hasn't delivered it yet (see RequestDetailPage's
+            // invalidate-on-mount effect) — we deliberately don't fetch
+            // it here because we'd just be racing the same realtime
+            // broadcast from the wrong side, and an awaited fetch can
+            // stall router.push if the REST round-trip is slow.
             controller.loadMessagesForHelpRequest(createdHelpRequestId);
 
             navigated = true;
