@@ -732,32 +732,9 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
   }
 
   if (course) {
-    // Don't waitForLoadState("networkidle") here: Realtime websockets and
-    // periodic heartbeats keep network traffic non-idle indefinitely, so an
-    // unbounded networkidle wait sits through every keepalive frame and can
-    // consume the test budget on slow lanes for no benefit. Use the explicit
-    // UI signal downstream actions already depend on: the <main> region
-    // becomes visible as soon as React hydrates the course route. (Course
-    // pages render headings at varying levels — h1, h2 — depending on the
-    // user's role and feature flag state, so we don't pin to a specific
-    // level here.)
-    await page.goto(`/course/${course.id}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    if (dismissTimezoneDialog) {
-      // Wait for the course page to actually render. <main> is the cheapest
-      // hydration signal and downstream test actions all depend on it
-      // existing. We do this inside toPass so a mid-load timezone modal can
-      // be dismissed in-line without losing the readiness check.
-      await expect(async () => {
-        await dismissTimeZonePreferenceModal(page, 6_000);
-        await expect(page.getByRole("main")).toBeVisible({ timeout: 8_000 });
-      }).toPass({ timeout: 30_000 });
-    } else {
-      // The caller (timezone-preferences tests) wants to *see* the modal —
-      // they assert on the dialog as the first observable signal. Don't
-      // wait on <main> here: Chakra's Dialog sets aria-hidden on everything
-      // else while it's open, so getByRole("main") finds nothing until the
-      // dialog closes, which we promised the caller not to do.
-    }
+    await page.waitForLoadState("networkidle");
+    await page.goto(`/course/${course.id}`);
+    await page.waitForLoadState("networkidle");
   }
 
   if (dismissTimezoneDialog) {

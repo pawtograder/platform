@@ -427,20 +427,40 @@ test.describe("Rubric editor GUI", () => {
     ].join("\n");
     await setMonacoValue(page, invalidYaml);
 
-    // setMonacoValue already waited for Monaco and wrote the model. The editor's onChange
-    // then commits that text to React state (rebuilding the handleViewModeChange closure the
-    // GUI button reads) and debounces a parse 1s later. Clicking GUI before that settles runs
-    // against the stale (empty/valid) YAML, wrongly succeeds, and switches to GUI — making the
-    // source region disappear. Wait out the 1s change-debounce so the click sees the committed
-    // mutex-violating YAML and correctly refuses to switch.
-    await page.waitForTimeout(1500);
-
-    // Try to toggle back to GUI - it should fail and stay in source mode.
-    await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
-    // Source pane is still the active region.
-    await expect(rubricEditor(page).getByRole("region", { name: "Rubric YAML Source" })).toBeVisible();
-    // No part regions exist (GUI never rendered).
-    await expect(rubricEditor(page).getByRole("region", { name: /^Part 1:/ })).toHaveCount(0);
+    // setMonacoValue already waited for Monaco and wrote the model. The
+    // editor's onChange commits that text to React state (rebuilding the
+    // handleViewModeChange closure the GUI button reads) and then debounces
+    // a parse ~1s later. Clicking GUI before that settles runs against the
+    // stale YAML, wrongly succeeds, and switches to GUI — making the source
+    // region disappear. The "Preview paused while typing" banner that
+    // tracks the debounce is mounted in a different layout column and
+    // isn't always observable from the test context, so we can't hang the
+    // wait off it.
+    //
+    // Instead, wrap the toggle + assertion together in toPass. On each
+    // retry we re-ensure we're in source mode, click GUI, and assert the
+    // toggle was refused. If an attempt fires before the YAML parse
+    // settles, the toggle accidentally succeeds (source region gone),
+    // the assertion fails, toPass switches back to source and retries.
+    // Once the parse-debounce has run, the toggle is refused and the
+    // assertion sticks.
+    await expect(async () => {
+      // If we're currently in GUI mode (e.g. a previous attempt succeeded
+      // incorrectly), switch back to source first so the GUI button is
+      // actually a toggle target.
+      const sourceVisible = await rubricEditor(page)
+        .getByRole("region", { name: "Rubric YAML Source" })
+        .isVisible()
+        .catch(() => false);
+      if (!sourceVisible) {
+        await rubricEditor(page).getByRole("button", { name: "YAML source" }).click();
+      }
+      await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
+      await expect(rubricEditor(page).getByRole("region", { name: "Rubric YAML Source" })).toBeVisible({
+        timeout: 1000
+      });
+      await expect(rubricEditor(page).getByRole("region", { name: /^Part 1:/ })).toHaveCount(0);
+    }).toPass({ timeout: 20_000, intervals: [500, 1000, 1500] });
   });
 
   test("References round-trip through GUI and YAML", async ({ page }) => {
