@@ -359,6 +359,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
+    // This test does a magic-link login, full assignment navigation, and an
+    // axe accessibility scan plus rubric assertions. On webkit under CI
+    // load loginAsUser's retry loop alone can spend ~5×15s recovering from
+    // transient GoTrue contention, leaving little budget for the autograder
+    // results wait at line ~373. Triple the active timeout so a slow login
+    // doesn't surface as a "Lint Results: Passed" waitFor flake.
+    test.slow();
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
