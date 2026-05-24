@@ -80,9 +80,7 @@ export function DiscussionThreadReply({
       // realtime is the authoritative path — and we don't want a slow
       // REST round-trip stalling the close transition.
       void courseController.discussionThreadWatchers
-        .getOneByFilters([
-          { column: "discussion_thread_root_id", operator: "eq", value: thread.root || thread.id }
-        ])
+        .getOneByFilters([{ column: "discussion_thread_root_id", operator: "eq", value: thread.root || thread.id }])
         .catch(() => {
           // Realtime will catch up.
         });
