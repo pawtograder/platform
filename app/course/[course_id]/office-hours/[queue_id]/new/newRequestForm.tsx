@@ -557,9 +557,28 @@ export default function HelpRequestForm({
               description: "Help request successfully created. Opening your request..."
             });
 
-            // Realtime will deliver the new row to the chat page, but
-            // pre-load the messages controller so the chat mounts with
-            // the initial message already cached.
+            // The legacy `helpRequests.create(...)` call used to push the
+            // new row into the controller's local cache synchronously (its
+            // optimistic-add path), so the chat page found the row in
+            // `useHelpRequests()` the moment it mounted. The SECURITY
+            // DEFINER RPC bypasses that path — the row only arrives via
+            // realtime broadcast, which on slow CI runs can lag the
+            // router.push by several seconds. The chat page renders
+            // "Request not found." in the gap, which fails E2E waits on
+            // "Your position in the queue".
+            //
+            // Warm the help_requests cache by fetching the new row
+            // directly through the controller's public `invalidate(id)`.
+            // Swallow errors so a transient REST blip doesn't block
+            // navigation — realtime is still authoritative; this just
+            // removes the empty-cache flash. `loadMessagesForHelpRequest`
+            // is synchronous (returns the messages TableController) so
+            // it's called separately without an await.
+            try {
+              await controller.helpRequests.invalidate(createdHelpRequestId);
+            } catch {
+              // Realtime will catch up; nothing to do here.
+            }
             controller.loadMessagesForHelpRequest(createdHelpRequestId);
 
             navigated = true;
