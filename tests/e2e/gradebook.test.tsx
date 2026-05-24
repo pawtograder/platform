@@ -1174,10 +1174,12 @@ test.describe("Gradebook Page - Comprehensive", () => {
     await expect(page.getByTestId("expression-builder-overlay")).toBeHidden();
 
     await addDialog.getByRole("button", { name: /^Cancel$/ }).click();
-    // The Chakra dialog flips data-state="closed" the instant the close
-    // dispatches, but `toBeHidden` waits for the bounding box to collapse,
-    // which on webkit can lag the exit animation enough to time out.
-    await expect(addDialog).toHaveAttribute("data-state", "closed");
+    // With CSS animations disabled in visual mode (tests/global-setup.ts), the
+    // dialog unmounts immediately on close — querying `data-state` then trips
+    // "element not found" instead of seeing "closed". `toBeHidden` is satisfied
+    // by both the hidden-attribute and the unmounted-from-DOM variants, so it
+    // works in both webkit-animation-lag and zero-animation cases.
+    await expect(addDialog).toBeHidden({ timeout: 20_000 });
 
     // Sanity: no column named "Validated Column" leaked into the DB.
     const { data: leaked } = await supabase

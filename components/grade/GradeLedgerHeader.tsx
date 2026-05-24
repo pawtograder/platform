@@ -30,19 +30,21 @@ function SubmissionMeta({
   submissionOrdinal: number | null;
   submittedAt: string | null;
 }) {
-  const parts: string[] = [];
-  if (submissionOrdinal !== null) {
-    parts.push(`Submission #${submissionOrdinal}`);
-  }
-  if (submittedAt) {
-    parts.push(`submitted ${formatRelative(new Date(submittedAt), new Date())}`);
-  }
-  if (parts.length === 0) {
+  if (submissionOrdinal === null && !submittedAt) {
     return null;
   }
   return (
     <Text fontSize="sm" color="fg.muted">
-      {parts.join(" · ")}
+      {submissionOrdinal !== null && <>Submission #{submissionOrdinal}</>}
+      {submissionOrdinal !== null && submittedAt && " · "}
+      {submittedAt && (
+        <>
+          submitted{" "}
+          <Text as="span" data-visual-test="transparent" data-visual-placeholder="relative-time">
+            {formatRelative(new Date(submittedAt), new Date())}
+          </Text>
+        </>
+      )}
     </Text>
   );
 }

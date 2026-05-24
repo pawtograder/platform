@@ -217,6 +217,64 @@ const VISUAL_TEST_CSS = `
     top: 200px !important;
     left: 200px !important;
   }
+
+  /*
+   * Universal animation / transition kill switch. Any in-flight animation
+   * (Chakra Skeleton shimmer, route loading skeletons, button hover
+   * transitions, focus rings, NavigationProgressBar's keyframed shimmer,
+   * lucide icon spinners, etc.) lands at a non-deterministic frame depending
+   * on when Playwright captures the page. Forcing every animation/transition
+   * to a zero duration paints the steady-state on the first frame, so the
+   * screenshot is reproducible.
+   *
+   * 'caret-color: transparent' removes the blinking text-cursor inside any
+   * focused input — its position is captured intermittently by fullPage
+   * screenshots even when the rest of the page is otherwise idle.
+   */
+  html[data-visual-tests] *,
+  html[data-visual-tests] *::before,
+  html[data-visual-tests] *::after {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+
+  html[data-visual-tests] input,
+  html[data-visual-tests] textarea,
+  html[data-visual-tests] [contenteditable="true"] {
+    caret-color: transparent !important;
+  }
+
+  /*
+   * Skeletons paint a shimmering linear-gradient via @chakra-ui/react that
+   * cycles every ~1.2s. Zeroing animations above stops the cycle, but a
+   * frozen gradient stop still differs run-to-run depending on which frame
+   * the browser had advanced to when the screenshot was taken. Replace the
+   * gradient with a flat fill in visual mode so the painted skeleton is
+   * byte-identical between runs.
+   */
+  html[data-visual-tests] .chakra-skeleton,
+  html[data-visual-tests] [data-part="skeleton"],
+  html[data-visual-tests] [data-scope="skeleton"] {
+    background: var(--chakra-colors-bg-muted, #e2e8f0) !important;
+    background-image: none !important;
+  }
+
+  /*
+   * The NavigationProgressBar overlays the top 2-3px of the viewport with a
+   * keyframed shimmer for ~600ms after every client-side route change. It
+   * shows up as a thin colored band in the top edge of fullPage screenshots
+   * captured just after a navigation. Hide it entirely in visual mode — the
+   * production code path is unchanged.
+   */
+  html[data-visual-tests] [data-navigation-progress],
+  html[data-visual-tests] .nav-progress-bar {
+    display: none !important;
+  }
+
 `;
 
 // Function to inject visual test setup

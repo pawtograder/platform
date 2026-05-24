@@ -171,9 +171,29 @@ function SubmissionReviewScoreTweak({ showSplitStudentTotals }: { showSplitStude
   const assignmentGroupWithMembers = useAssignmentGroupWithMembers({
     assignment_group_id: submission.assignment_group_id
   });
+  const courseController = useCourseController();
+  const allProfilesForSort = useTableControllerTableValues(courseController.profiles);
+  const profileNamesByIdForSort = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of allProfilesForSort) map.set(p.id, (p as { name?: string }).name ?? "");
+    return map;
+  }, [allProfilesForSort]);
+  // Sort by display name. Profile IDs are UUIDs that vary across test runs,
+  // so sorting by id put the per-student "Extra tweak" rows in a different
+  // order between visual screenshot runs (see flakiness diff in run1 vs
+  // run2). Matching the sibling "Scores by student" panel keeps both lists
+  // in the same deterministic order.
   const groupMemberIds = useMemo(
-    () => (assignmentGroupWithMembers?.assignment_groups_members ?? []).map((m) => m.profile_id).sort(),
-    [assignmentGroupWithMembers?.assignment_groups_members]
+    () =>
+      [...(assignmentGroupWithMembers?.assignment_groups_members ?? [])]
+        .map((m) => m.profile_id)
+        .sort((a, b) => {
+          const nameA = profileNamesByIdForSort.get(a) ?? a;
+          const nameB = profileNamesByIdForSort.get(b) ?? b;
+          const byName = nameA.localeCompare(nameB);
+          return byName !== 0 ? byName : a.localeCompare(b);
+        }),
+    [assignmentGroupWithMembers?.assignment_groups_members, profileNamesByIdForSort]
   );
 
   const [tweakValue, setTweakValue] = useState<number | undefined>(review?.tweak);

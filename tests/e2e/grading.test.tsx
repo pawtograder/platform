@@ -252,7 +252,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     //Wait for the textbox to disappear
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await visualScreenshot(page, "Self-Review Rubric completed", { stabilizeRubric: "Self-Review Rubric" });
@@ -331,9 +331,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review" }).click();
+    await page.getByRole("button", { name: "Complete Review" }).first().click();
     await visualScreenshot(page, "Instructor completes the grading review", { stabilizeRubric: "Grading Rubric" });
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release selected submission reviews (select all in filtered view, then release)
@@ -359,6 +359,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Released to studentYes")).toBeVisible({ timeout: 30_000 });
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
+    // This test does a magic-link login, full assignment navigation, and an
+    // axe accessibility scan plus rubric assertions. On webkit under CI
+    // load loginAsUser's retry loop alone can spend ~5×15s recovering from
+    // transient GoTrue contention, leaving little budget for the autograder
+    // results wait at line ~373. Triple the active timeout so a slow login
+    // doesn't surface as a "Lint Results: Passed" waitFor flake.
+    test.slow();
     await loginAsUser(page, student!, course);
 
     await expect(page.getByRole("heading", { name: /Upcoming Assignments|Assignment Grading Overview/ })).toBeVisible();
@@ -608,7 +615,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Complete Review Assignment" }).click();
+    await page.getByRole("button", { name: "Complete Review Assignment" }).first().click();
     await page.getByRole("button", { name: "Mark Review Assignment as" }).click();
   });
 });
