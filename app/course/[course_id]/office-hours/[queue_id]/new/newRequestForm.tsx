@@ -569,16 +569,20 @@ export default function HelpRequestForm({
             //
             // Warm the help_requests cache by fetching the new row
             // directly through the controller's public `invalidate(id)`.
-            // Swallow errors so a transient REST blip doesn't block
-            // navigation — realtime is still authoritative; this just
-            // removes the empty-cache flash. `loadMessagesForHelpRequest`
-            // is synchronous (returns the messages TableController) so
-            // it's called separately without an await.
-            try {
-              await controller.helpRequests.invalidate(createdHelpRequestId);
-            } catch {
-              // Realtime will catch up; nothing to do here.
-            }
+            // Race against a short timeout so a slow or stuck REST
+            // round-trip can't block router.push — realtime is still
+            // the authoritative fallback. Without the timeout race a
+            // hung invalidate strands the user on the form (observed as
+            // a 180s waitForURL timeout in PR 785's CI run on commit
+            // 74bf1696). `loadMessagesForHelpRequest` is synchronous
+            // (returns the messages TableController) so it's called
+            // separately without an await.
+            await Promise.race([
+              controller.helpRequests.invalidate(createdHelpRequestId).catch(() => {
+                // Realtime will catch up; nothing to do here.
+              }),
+              new Promise<void>((resolve) => setTimeout(resolve, 2000))
+            ]);
             controller.loadMessagesForHelpRequest(createdHelpRequestId);
 
             navigated = true;
