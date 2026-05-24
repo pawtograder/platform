@@ -8,7 +8,7 @@ import { Box, Flex, Spinner, useBreakpointValue } from "@chakra-ui/react";
 import { HelpRequestSidebar } from "@/components/help-queue/help-request-sidebar";
 import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 
-type LoadState = "pending" | "loaded" | "not_found";
+type LoadState = "pending" | "loaded" | "not_found" | "error";
 
 export default function RequestDetailPage() {
   const { queue_id, course_id, request_id } = useParams();
@@ -66,7 +66,11 @@ export default function RequestDetailPage() {
         }
       })
       .catch(() => {
-        if (!cancelled) setLoadState("not_found");
+        // Distinct from "not_found": this fires when the REST round-trip
+        // itself fails (network blip, auth glitch, 5xx). Rendering
+        // "Request not found." in those cases is misleading — the row
+        // may very well exist, we just couldn't fetch it.
+        if (!cancelled) setLoadState("error");
       });
     return () => {
       cancelled = true;
@@ -84,6 +88,9 @@ export default function RequestDetailPage() {
   if (!request) {
     if (loadState === "not_found") {
       return <div>Request not found.</div>;
+    }
+    if (loadState === "error") {
+      return <div>Unable to load this request right now. Please try again in a moment.</div>;
     }
     return (
       <Flex justify="center" align="center" py={12}>
