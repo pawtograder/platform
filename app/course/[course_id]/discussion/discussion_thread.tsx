@@ -65,25 +65,27 @@ export function DiscussionThreadReply({
         body: message
       });
 
+      if (close) {
+        setVisible(false);
+      }
+
       // Replying auto-follows the thread via a server-side trigger that
       // INSERTs into discussion_thread_watchers. The Follow→Unfollow
       // button transition reads that row through a realtime-backed
       // TableController, and on slow CI runs realtime delivery of the
       // new watcher row lags the reply create by several seconds, during
       // which the button keeps saying "Follow". Warm the watcher cache
-      // directly so the UI flips without waiting on the broadcast.
-      // Best-effort; realtime is still the authoritative path.
-      try {
-        await courseController.discussionThreadWatchers.getOneByFilters([
+      // directly so the UI flips without waiting on the broadcast. Run
+      // this after the composer close because it's best-effort —
+      // realtime is the authoritative path — and we don't want a slow
+      // REST round-trip stalling the close transition.
+      void courseController.discussionThreadWatchers
+        .getOneByFilters([
           { column: "discussion_thread_root_id", operator: "eq", value: thread.root || thread.id }
-        ]);
-      } catch {
-        // Realtime will catch up.
-      }
-
-      if (close) {
-        setVisible(false);
-      }
+        ])
+        .catch(() => {
+          // Realtime will catch up.
+        });
     },
     [tableController, courseController, setVisible, thread]
   );
