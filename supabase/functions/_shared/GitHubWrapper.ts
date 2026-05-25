@@ -821,9 +821,11 @@ async function recordE2eGithubCall(fn: string, args: unknown, scope?: Sentry.Sco
     // generated bundles; cast through unknown so production/staging compiles
     // even before the type bump lands.
     const tag = scope ? (scope as unknown as { _tags?: Record<string, string> })._tags?.debug_id : undefined;
-    await (adminSupabase as unknown as {
-      from: (t: string) => { insert: (row: Record<string, unknown>) => Promise<{ error: unknown }> };
-    })
+    await (
+      adminSupabase as unknown as {
+        from: (t: string) => { insert: (row: Record<string, unknown>) => Promise<{ error: unknown }> };
+      }
+    )
       .from("e2e_github_calls")
       .insert({ fn, args, scope: tag ?? null });
   } catch (e) {
@@ -2326,11 +2328,7 @@ export async function mergeForkUpstream(
   // the intent. PAWTOGRADER_GITHUB_STUB_MERGE_RESULT can flip the outcome so
   // tests can exercise the dirty / not_a_fork / already_up_to_date branches.
   if (isGithubStubEnabled()) {
-    await recordE2eGithubCall(
-      "mergeForkUpstream",
-      { repoFullName, branch, expectedUpstreamFullName },
-      scope
-    );
+    await recordE2eGithubCall("mergeForkUpstream", { repoFullName, branch, expectedUpstreamFullName }, scope);
     const override = Deno.env.get("PAWTOGRADER_GITHUB_STUB_MERGE_RESULT");
     const fakeSha = stubFakeSha("e2e-stub-merge-", repoFullName.split("/").slice(-1)[0] ?? repoFullName);
     switch (override) {

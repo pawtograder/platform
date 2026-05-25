@@ -76,7 +76,8 @@ async function readGithubCalls(sinceCursor: string | number, opts: { minRows?: n
   // back-to-back tests where the DB clock may differ from the node clock.
   while (true) {
     const query = supabase.from("e2e_github_calls").select("id, created_at, fn, args, scope");
-    const filtered = typeof sinceCursor === "number" ? query.gt("id", sinceCursor) : query.gt("created_at", sinceCursor);
+    const filtered =
+      typeof sinceCursor === "number" ? query.gt("id", sinceCursor) : query.gt("created_at", sinceCursor);
     const { data, error } = await filtered.order("id", { ascending: true });
     if (error) {
       throw new Error(`Failed to read e2e_github_calls: ${error.message}`);
@@ -323,10 +324,7 @@ test.describe("fork_from_prior_assignment + fork_merge_upstream (PR #781)", () =
     test.skip(!stubActive, "stub not active");
     test.skip(!assignmentBId, "Assignment B from test #2 not initialized");
     const edgeSecret = process.env.EDGE_FUNCTION_SECRET ?? process.env.EDGE_FUNCTION_SECRET_OVERRIDE;
-    test.skip(
-      !edgeSecret,
-      "EDGE_FUNCTION_SECRET not set in test env — required to invoke github-async-worker"
-    );
+    test.skip(!edgeSecret, "EDGE_FUNCTION_SECRET not set in test env — required to invoke github-async-worker");
 
     // Insert a repositories row for Alice on Assignment B. The repo name uses
     // pawtograder-playground/ — note the worker would short-circuit if we

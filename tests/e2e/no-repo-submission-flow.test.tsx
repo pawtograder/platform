@@ -29,18 +29,14 @@ type NoRepoSubmissionFile = {
 };
 
 /** Local helper: call the RPC via the given (student-scoped) authenticated client. */
-async function callRpc(
-  client: SupabaseClient<Database>,
-  assignmentId: number,
-  files: NoRepoSubmissionFile[]
-) {
+async function callRpc(client: SupabaseClient<Database>, assignmentId: number, files: NoRepoSubmissionFile[]) {
   // The wrapper in lib/edgeFunctions.ts (createNoRepoSubmission) throws on
   // error, but we want to inspect the raw error in negative tests, so call
   // the RPC directly here.
-  return await (client.rpc as CallableFunction)("create_no_repo_submission", {
+  return (await (client.rpc as CallableFunction)("create_no_repo_submission", {
     p_assignment_id: assignmentId,
     p_files: files
-  }) as { data: number | null; error: { message: string; code?: string } | null };
+  })) as { data: number | null; error: { message: string; code?: string } | null };
 }
 
 test.describe.configure({ mode: "serial" });
@@ -200,17 +196,10 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
     expect(submission!.assignment_group_id).toBeNull();
 
     // Also assert submitted_via via a separate select (generated types lag).
-    const { data: viaRow } = await supabase
-      .from("submissions")
-      .select("*")
-      .eq("id", submissionId)
-      .single();
+    const { data: viaRow } = await supabase.from("submissions").select("*").eq("id", submissionId).single();
     expect((viaRow as unknown as { submitted_via: string }).submitted_via).toBe("upload");
 
-    const { data: files } = await supabase
-      .from("submission_files")
-      .select("id")
-      .eq("submission_id", submissionId);
+    const { data: files } = await supabase.from("submission_files").select("id").eq("submission_id", submissionId);
     expect(files).toHaveLength(0);
   });
 
@@ -242,11 +231,7 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
     expect(typeof newId).toBe("number");
 
     // Old one is now inactive.
-    const { data: oldRow } = await supabase
-      .from("submissions")
-      .select("is_active, ordinal")
-      .eq("id", priorId)
-      .single();
+    const { data: oldRow } = await supabase.from("submissions").select("is_active, ordinal").eq("id", priorId).single();
     expect(oldRow!.is_active).toBe(false);
     expect(oldRow!.ordinal).toBe(priorOrdinal);
 
@@ -334,18 +319,16 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
       process.env.SUPABASE_URL!,
       (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
     );
-    const { data, error } = await (anonClient.rpc as CallableFunction)("create_no_repo_submission", {
+    const { data, error } = (await (anonClient.rpc as CallableFunction)("create_no_repo_submission", {
       p_assignment_id: happyPathAssignmentId,
       p_files: []
-    }) as { data: number | null; error: { message: string; code?: string } | null };
+    })) as { data: number | null; error: { message: string; code?: string } | null };
 
     expect(data).toBeNull();
     expect(error).not.toBeNull();
     // Either the explicit "Must be authenticated" raise OR a 42501 code from PostgREST.
     const msgOrCode = `${error!.message} ${error!.code ?? ""}`.toLowerCase();
-    expect(
-      msgOrCode.includes("authenticated") || msgOrCode.includes("42501") || msgOrCode.includes("auth")
-    ).toBe(true);
+    expect(msgOrCode.includes("authenticated") || msgOrCode.includes("42501") || msgOrCode.includes("auth")).toBe(true);
   });
 
   test("auth gating: authenticated user from a different class is rejected", async () => {
@@ -439,11 +422,7 @@ test.describe("create_no_repo_submission RPC (PR #781)", () => {
     expect(typeof subB).toBe("number");
 
     // A's submission now inactive.
-    const { data: rowA2 } = await supabase
-      .from("submissions")
-      .select("is_active")
-      .eq("id", subA!)
-      .single();
+    const { data: rowA2 } = await supabase.from("submissions").select("is_active").eq("id", subA!).single();
     expect(rowA2!.is_active).toBe(false);
 
     // B's submission active, group scoped, ordinal=2.

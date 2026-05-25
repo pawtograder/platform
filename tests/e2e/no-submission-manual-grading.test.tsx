@@ -60,11 +60,7 @@ type ManualSubmissionRow = {
 };
 
 async function fetchSubmission(submissionId: number): Promise<ManualSubmissionRow> {
-  const { data, error } = await supabase
-    .from("submissions")
-    .select("*")
-    .eq("id", submissionId)
-    .single();
+  const { data, error } = await supabase.from("submissions").select("*").eq("id", submissionId).single();
   if (error) throw new Error(`Failed to fetch submission ${submissionId}: ${error.message}`);
   return data as unknown as ManualSubmissionRow;
 }
@@ -73,7 +69,9 @@ async function fetchActiveSubmissionsFor(params: {
   assignment_id: number;
   profile_id?: string;
   assignment_group_id?: number;
-}): Promise<Array<Pick<ManualSubmissionRow, "id" | "profile_id" | "assignment_group_id" | "is_active" | "submitted_via">>> {
+}): Promise<
+  Array<Pick<ManualSubmissionRow, "id" | "profile_id" | "assignment_group_id" | "is_active" | "submitted_via">>
+> {
   let q = supabase
     .from("submissions")
     .select("id, profile_id, assignment_group_id, is_active")
@@ -218,10 +216,7 @@ test.describe("Manual submission RPC (repo_mode='no_submission')", () => {
     });
 
     test("no submission_files rows are created for a manual submission", async () => {
-      const { data, error } = await supabase
-        .from("submission_files")
-        .select("id")
-        .eq("submission_id", submissionId);
+      const { data, error } = await supabase.from("submission_files").select("id").eq("submission_id", submissionId);
       expect(error).toBeNull();
       expect(data ?? []).toHaveLength(0);
     });

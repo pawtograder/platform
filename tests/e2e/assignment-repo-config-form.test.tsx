@@ -55,10 +55,7 @@ function toDateTimeLocal(date: Date): string {
 async function fillBaselineAssignmentFields(page: Page, slug: string) {
   await page.getByLabel("Slug", { exact: false }).fill(slug);
   // Release date input (datetime-local) — labelled "Release Date (America/New_York)"
-  await page
-    .locator('input[type="datetime-local"]')
-    .first()
-    .fill(toDateTimeLocal(futureRelease));
+  await page.locator('input[type="datetime-local"]').first().fill(toDateTimeLocal(futureRelease));
   // Due Date input is the second datetime-local
   await page.locator('input[type="datetime-local"]').nth(1).fill(toDateTimeLocal(futureDue));
   await page.getByLabel("Points Possible", { exact: false }).fill("100");
@@ -172,9 +169,7 @@ test.describe("Assignment repo configuration form", () => {
     await expect(forcePushCheckbox).toBeDisabled();
     await expect(requirePRCheckbox).toBeDisabled();
     await expect(
-      page.getByText(
-        "Branch protection is unavailable: this assignment has no repository and no student submission."
-      )
+      page.getByText("Branch protection is unavailable: this assignment has no repository and no student submission.")
     ).toBeVisible();
 
     // Re-select staff — everything re-enables

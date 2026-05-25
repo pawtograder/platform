@@ -1627,9 +1627,7 @@ export async function insertAssignment({
     grader_pseudonymous_mode: grader_pseudonymous_mode || false,
     show_leaderboard: show_leaderboard || false,
     ...(repo_mode !== undefined ? { repo_mode } : {}),
-    ...(repo_mode === "fork_from_prior_assignment"
-      ? { source_assignment_id: source_assignment_id ?? null }
-      : {}),
+    ...(repo_mode === "fork_from_prior_assignment" ? { source_assignment_id: source_assignment_id ?? null } : {}),
     ...protectionFields
   };
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
@@ -1881,8 +1879,7 @@ export async function updateAssignmentRepoConfig(
   const payload: Record<string, unknown> = {};
   if (fields.repo_mode !== undefined) payload.repo_mode = fields.repo_mode;
   if (fields.source_assignment_id !== undefined) payload.source_assignment_id = fields.source_assignment_id;
-  if (fields.protect_block_force_push !== undefined)
-    payload.protect_block_force_push = fields.protect_block_force_push;
+  if (fields.protect_block_force_push !== undefined) payload.protect_block_force_push = fields.protect_block_force_push;
   if (fields.protect_require_pull_request !== undefined)
     payload.protect_require_pull_request = fields.protect_require_pull_request;
   if (fields.protect_required_reviewers !== undefined)
