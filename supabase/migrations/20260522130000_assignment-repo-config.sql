@@ -32,7 +32,6 @@ alter table public.assignments
   add column protect_block_force_push     boolean not null default true,
   add column protect_require_pull_request boolean not null default false,
   add column protect_required_reviewers   smallint not null default 0,
-  add column submitted_via                text     null,
   add constraint assignments_required_reviewers_range
     check (protect_required_reviewers between 0 and 5),
   add constraint assignments_source_assignment_iff_fork check (
@@ -45,9 +44,6 @@ alter table public.assignments
       and protect_require_pull_request = false
       and protect_required_reviewers = 0
     )
-  ),
-  add constraint assignments_submitted_via_valid check (
-    submitted_via is null or submitted_via in ('git', 'upload', 'manual')
   );
 
 -- Source assignment must live in the same class (FK alone can't express this).
@@ -98,6 +94,16 @@ alter table public.submissions
   add constraint submissions_repository_and_sha_match
   check ((repository is null) = (sha is null));
 
+-- Submission origin marker. null/git for repo-pushed submissions (current
+-- behaviour), "upload" for no-repo file uploads (create_no_repo_submission),
+-- "manual" for instructor-created stubs on no_submission assignments
+-- (create_manual_submission). Used by graders to route processing.
+alter table public.submissions
+  add column submitted_via text null,
+  add constraint submissions_submitted_via_valid check (
+    submitted_via is null or submitted_via in ('git', 'upload', 'manual')
+  );
+
 -- Comment on the new columns so the generated TS types carry intent.
 comment on column public.assignments.repo_mode is
   'How student repositories relate to the handout: none (no repo, upload-based submission), template_only_staff, template_with_student_forks, fork_from_prior_assignment, or no_submission (no repo and no student-uploaded artifact; instructor creates submissions for manual grading).';
@@ -109,5 +115,5 @@ comment on column public.assignments.protect_require_pull_request is
   'GitHub ruleset: require a pull request to update the default branch.';
 comment on column public.assignments.protect_required_reviewers is
   'GitHub ruleset: minimum required approving reviews on the pull request (only enforced when protect_require_pull_request is true).';
-comment on column public.assignments.submitted_via is
+comment on column public.submissions.submitted_via is
   'Submission origin marker: null/git for repo-pushed submissions, "upload" for no-repo file uploads, "manual" for instructor-created stubs on no_submission assignments. Used by graders to route processing.';

@@ -581,6 +581,10 @@ export async function removePushWebhook(repoName: string, webhookId: number, sco
 }
 
 export async function updateAutograderWorkflowHash(repoName: string) {
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("updateAutograderWorkflowHash", { repoName });
+    return null;
+  }
   const file = (await getFileFromRepo(repoName, ".github/workflows/grade.yml")) as { content: string };
   const hash = createHash("sha256");
   if (!file.content) {
@@ -786,6 +790,55 @@ export type CreateRepoOptions = {
   branch_protection?: BranchProtectionConfig;
 };
 
+// -----------------------------------------------------------------------------
+// E2E stub seam.
+//
+// When PAWTOGRADER_GITHUB_STUB=1 is set, the GitHub-touching helpers below
+// (createRepo, applyBranchProtectionRuleset, mergeForkUpstream) short-circuit
+// and record a row into public.e2e_github_calls instead of calling GitHub.
+// Tests in tests/e2e assert against that table to confirm what would have
+// happened. The seam is entirely gated on env vars — in production behavior
+// is identical to before.
+//
+// Companion env vars:
+//   PAWTOGRADER_GITHUB_STUB                = "1" to enable
+//   PAWTOGRADER_GITHUB_STUB_MERGE_RESULT   = "synced" (default) | "already_up_to_date"
+//                                          | "dirty" | "not_a_fork" — override
+//                                            mergeForkUpstream return shape so
+//                                            tests can exercise the fallback.
+// -----------------------------------------------------------------------------
+function isGithubStubEnabled(): boolean {
+  return Deno.env.get("PAWTOGRADER_GITHUB_STUB") === "1";
+}
+
+async function recordE2eGithubCall(fn: string, args: unknown, scope?: Sentry.Scope): Promise<void> {
+  try {
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL") || "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    );
+    // The Database type may not yet know about e2e_github_calls in older
+    // generated bundles; cast through unknown so production/staging compiles
+    // even before the type bump lands.
+    const tag = scope ? (scope as unknown as { _tags?: Record<string, string> })._tags?.debug_id : undefined;
+    await (adminSupabase as unknown as {
+      from: (t: string) => { insert: (row: Record<string, unknown>) => Promise<{ error: unknown }> };
+    })
+      .from("e2e_github_calls")
+      .insert({ fn, args, scope: tag ?? null });
+  } catch (e) {
+    // Recording is best-effort — never fail the stubbed flow because of it.
+    console.warn("[github-stub] failed to record call", fn, e);
+  }
+}
+
+function stubFakeSha(prefix: string, keyForHash: string): string {
+  // Deterministic-ish per repo so repeated calls produce stable shas, but
+  // unique enough that two repos in the same test get distinct values.
+  const safe = keyForHash.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 32);
+  return `${prefix}${safe}`;
+}
+
 export async function createRepo(
   org: string,
   repoName: string,
@@ -800,6 +853,26 @@ export async function createRepo(
   scope?.setTag("template_repo", template_repo);
   scope?.setTag("is_template", is_template_repo?.toString() || "false");
   scope?.setTag("creation_method", creation_method);
+
+  // E2E stub seam: skip every GitHub call (template-generate, fork, wait-ready,
+  // PATCH settings, enable Actions, GET head, applyBranchProtectionRuleset).
+  // Record the intent and return a deterministic fake SHA so downstream code
+  // (which inserts the repositories row itself) keeps flowing.
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall(
+      "createRepo",
+      {
+        org,
+        repoName,
+        template_repo,
+        is_template_repo: !!is_template_repo,
+        creation_method,
+        branch_protection
+      },
+      scope
+    );
+    return stubFakeSha("e2e-stub-", repoName);
+  }
 
   const octokit = await getOctoKit(org, scope);
   if (!octokit) {
@@ -967,6 +1040,18 @@ export async function createRepo(
           scope?.setTag("enable_actions_failed", "true");
           Sentry.captureException(actionsErr, scope);
         }
+        // Apply branch protection on the pre-existing repo too — the fresh-create
+        // branch does this just before returning (line ~973). Without this call,
+        // re-running repo creation against an already-existing repo would leave
+        // its ruleset stale relative to the assignment config.
+        scope?.setTag("github_operation", "create_branch_protection_ruleset_existing");
+        try {
+          await applyBranchProtectionRuleset(org, repoName, branch_protection, scope);
+        } catch (rulesetError) {
+          console.error("Error applying branch protection ruleset on existing repo", rulesetError);
+          scope?.setTag("ruleset_creation_failed", "true");
+          Sentry.captureException(rulesetError, scope);
+        }
         return heads.data.object.sha as string;
       } else {
         throw e;
@@ -1035,6 +1120,12 @@ export async function applyBranchProtectionRuleset(
   scope?.setTag("block_force_push", String(cfg.blockForcePush));
   scope?.setTag("require_pull_request", String(cfg.requirePullRequest));
   scope?.setTag("required_reviewers", String(cfg.requiredReviewers));
+
+  // E2E stub seam — record the intent and skip the GitHub round-trip.
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall("applyBranchProtectionRuleset", { org, repoName, cfg }, scope);
+    return;
+  }
 
   const octokit = await getOctoKit(org, scope);
   if (!octokit) {
@@ -1797,6 +1888,14 @@ export async function syncRepoPermissions(
   _scope?: Sentry.Scope,
   options: SyncRepoPermissionsOptions = {}
 ): Promise<{ madeChanges: boolean }> {
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall(
+      "syncRepoPermissions",
+      { org, repo, courseSlug, githubUsernames: githubUsernamesMixedCase, options },
+      _scope
+    );
+    return { madeChanges: false };
+  }
   let madeChanges = false;
   const scope = _scope?.clone();
   const githubUsernames = githubUsernamesMixedCase.map((u) => u.toLowerCase());
@@ -2221,6 +2320,32 @@ export async function mergeForkUpstream(
   scope?.setTag("branch", branch);
   if (expectedUpstreamFullName) {
     scope?.setTag("expected_upstream", expectedUpstreamFullName);
+  }
+
+  // E2E stub seam — return a deterministic shape (default "synced") and record
+  // the intent. PAWTOGRADER_GITHUB_STUB_MERGE_RESULT can flip the outcome so
+  // tests can exercise the dirty / not_a_fork / already_up_to_date branches.
+  if (isGithubStubEnabled()) {
+    await recordE2eGithubCall(
+      "mergeForkUpstream",
+      { repoFullName, branch, expectedUpstreamFullName },
+      scope
+    );
+    const override = Deno.env.get("PAWTOGRADER_GITHUB_STUB_MERGE_RESULT");
+    const fakeSha = stubFakeSha("e2e-stub-merge-", repoFullName.split("/").slice(-1)[0] ?? repoFullName);
+    switch (override) {
+      case "already_up_to_date":
+        return { kind: "already_up_to_date", mergedSha: fakeSha, message: "stub: up to date" };
+      case "dirty":
+        return { kind: "dirty", message: "stub: dirty (forced)" };
+      case "not_a_fork":
+        return { kind: "not_a_fork", reason: "stub: not_a_fork (forced)" };
+      case "synced":
+      case undefined:
+      case "":
+      default:
+        return { kind: "synced", mergedSha: fakeSha, message: "stub: merged" };
+    }
   }
 
   const [org, repo] = repoFullName.split("/");

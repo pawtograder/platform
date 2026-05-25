@@ -40,7 +40,8 @@ export default function NewAssignmentPage() {
   const onSubmit = useCallback(async () => {
     async function create() {
       const repoMode = getValues("repo_mode") || "template_only_staff";
-      const willCreateRepos = repoMode !== "none";
+      const isNoRepo = repoMode === "none" || repoMode === "no_submission";
+      const willCreateRepos = !isNoRepo;
 
       // Show loading toast before starting the process
       const loadingToast = toaster.create({
@@ -104,7 +105,7 @@ export default function NewAssignmentPage() {
             allow_not_graded_submissions: getValues("allow_not_graded_submissions"),
             permit_empty_submissions: getValues("permit_empty_submissions") !== false,
             total_points: getValues("total_points"),
-            template_repo: getValues("template_repo"),
+            template_repo: isNoRepo ? null : getValues("template_repo"),
             submission_files: getValues("submission_files"),
             has_autograder: true,
             has_handgrader: true,
@@ -120,10 +121,12 @@ export default function NewAssignmentPage() {
               : null,
             repo_mode: repoMode,
             source_assignment_id: isFork ? getValues("source_assignment_id") || null : null,
-            protect_block_force_push: repoMode === "none" ? false : getValues("protect_block_force_push") !== false,
-            protect_require_pull_request:
-              repoMode === "none" ? false : getValues("protect_require_pull_request") === true,
-            protect_required_reviewers: repoMode === "none" ? 0 : Number(getValues("protect_required_reviewers") || 0)
+            // DB constraint `assignments_no_protection_when_no_repo` rejects non-default
+            // protect_* when repo_mode is none/no_submission, so coerce here rather than
+            // surfacing a constraint error from the disabled-but-still-set checkboxes.
+            protect_block_force_push: isNoRepo ? false : getValues("protect_block_force_push") !== false,
+            protect_require_pull_request: isNoRepo ? false : getValues("protect_require_pull_request") === true,
+            protect_required_reviewers: isNoRepo ? 0 : Number(getValues("protect_required_reviewers") || 0)
           })
           .select("id")
           .single();
@@ -133,7 +136,7 @@ export default function NewAssignmentPage() {
             description: error.message
           });
         } else {
-          if (repoMode !== "none") {
+          if (!isNoRepo) {
             await assignmentCreateHandoutRepo(
               { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
               supabase

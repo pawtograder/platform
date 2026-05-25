@@ -737,7 +737,11 @@ export async function processEnvelope(
     switch (envelope.method) {
       case "sync_student_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          args.org === "pawtograder-playground" &&
+          args.courseSlug?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }
@@ -827,7 +831,11 @@ export async function processEnvelope(
       }
       case "sync_staff_team": {
         const args = envelope.args as SyncTeamArgs;
-        if (args.org === "pawtograder-playground" && args.courseSlug?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          args.org === "pawtograder-playground" &&
+          args.courseSlug?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }
@@ -925,7 +933,13 @@ export async function processEnvelope(
           branchProtection,
           studentTeamPermission
         } = envelope.args as CreateRepoArgs;
+        // The e2e-ignore short-circuit avoids hitting real GitHub for the
+        // pawtograder-playground org's e2e test fixtures. When the github stub
+        // is active we WANT the call to fall through (the stub records it for
+        // assertions and returns a fake SHA), so only skip when the stub is
+        // disabled.
         if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
           org === "pawtograder-playground" &&
           (courseSlug?.startsWith("e2e-ignore-") || repoName.startsWith("test-e2e") || repoName.startsWith("e2e-test"))
         ) {
@@ -1025,7 +1039,11 @@ export async function processEnvelope(
         if (repoName.startsWith(org + "/")) {
           repoName = repoName.substring(org.length + 1);
         }
-        if (org === "pawtograder-playground" && courseSlug?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          org === "pawtograder-playground" &&
+          courseSlug?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }
@@ -1058,7 +1076,11 @@ export async function processEnvelope(
       }
       case "archive_repo_and_lock": {
         const { org, repo } = envelope.args as ArchiveRepoAndLockArgs;
-        if (org === "pawtograder-playground" && repo?.startsWith("e2e-ignore-")) {
+        if (
+          Deno.env.get("PAWTOGRADER_GITHUB_STUB") !== "1" &&
+          org === "pawtograder-playground" &&
+          repo?.startsWith("e2e-ignore-")
+        ) {
           //No action, no metrics, no logging
           return true;
         }

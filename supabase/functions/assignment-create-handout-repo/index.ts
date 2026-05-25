@@ -3,7 +3,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import {
-  applyBranchProtectionRuleset,
   createRepo,
   syncRepoPermissions,
   updateAutograderWorkflowHash
@@ -137,11 +136,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope,
     action.studentTeamPermission ? { studentTeamPermission: action.studentTeamPermission } : undefined
   );
-  // applyBranchProtectionRuleset is already called inside createRepo with the
-  // same config, but invoking it here too keeps the call idempotent for the
-  // "repo already exists" branch and serves as a clear signal of the desired
-  // ruleset on the handout.
-  await applyBranchProtectionRuleset(handoutRepoOrg!, handoutRepoName, branchProtection, scope);
+  // Branch protection is applied inside createRepo (both the fresh-create and
+  // the pre-existing-repo branches), so we no longer need a redundant call here.
   await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
 
   // Only persist the template_repo pointer after GitHub creation + permission

@@ -557,16 +557,19 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
   // Source assignment options for the fork-from-prior mode (issue #700).
   // Exclude the current assignment when editing to prevent self-references,
   // and exclude any assignment that doesn't have per-student repos to fork.
+  // We filter the no-repo modes client-side because @refinedev/supabase emits
+  // a malformed PostgREST filter for `operator: "nin"` (missing parens around
+  // the value list), which PostgREST then rejects with a parse error.
   const currentId = form.getValues("id");
   const { data: priorAssignments } = useList<Assignment>({
     resource: "assignments",
     queryOptions: { enabled: !!course_id && repoMode === "fork_from_prior_assignment" },
-    filters: [
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "repo_mode", operator: "nin", value: ["none", "no_submission"] }
-    ],
+    filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }],
     pagination: { pageSize: 1000 }
   });
+  const eligibleSourceAssignments = priorAssignments?.data?.filter(
+    (a) => a.repo_mode !== "none" && a.repo_mode !== "no_submission"
+  );
 
   // Branch protection only makes sense when a repository is actually created.
   const protectionDisabled = repoMode === "none" || repoMode === "no_submission";
@@ -619,7 +622,7 @@ function RepositoryConfigurationSubform({ form }: { form: UseFormReturnType<Assi
                   })}
                 >
                   <option value="">Select an assignment...</option>
-                  {priorAssignments?.data
+                  {eligibleSourceAssignments
                     ?.filter((a) => a.id !== currentId)
                     .map((a) => (
                       <option key={a.id} value={a.id}>
