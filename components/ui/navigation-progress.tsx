@@ -49,6 +49,7 @@ function NavigationProgressBar() {
 
   return (
     <Box
+      data-navigation-progress
       position="absolute"
       bottom="0"
       left="0"
