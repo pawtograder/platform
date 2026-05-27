@@ -192,6 +192,9 @@ const DiscussionThreadContent = memo(
 
     const toggleLike = useCallback(async () => {
       if (!private_profile_id) return;
+      // View-as student is read-only; the surrounding HStack already hides the heart
+      // button via isReadOnly, but gate the callback too so any future caller is safe.
+      if (isReadOnly) return;
       setLikeLoading(true);
       try {
         if (likeStatus) {
@@ -210,7 +213,7 @@ const DiscussionThreadContent = memo(
       } finally {
         setLikeLoading(false);
       }
-    }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers]);
+    }, [thread.id, likeStatus, private_profile_id, discussionThreadLikes, discussionThreadTeasers, isReadOnly]);
 
     const outerBorders = useCallback(
       (present: string): JSX.Element => {

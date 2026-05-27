@@ -9,7 +9,7 @@ import {
   useCourseController,
   usePrefetchDiscussionThreadOnHover
 } from "@/hooks/useCourseController";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -84,6 +84,7 @@ function PostRowComponent({
 
   const topicColor = topic?.color ? `${topic.color}.500` : "gray.400";
 
+  const isReadOnly = useIsReadOnly();
   const likeStatus = useDiscussionThreadLikes(threadId);
   const { discussionThreadLikes, discussionThreadTeasers } = useCourseController();
   const [likeLoading, setLikeLoading] = useState(false);
@@ -97,6 +98,9 @@ function PostRowComponent({
 
     if (!thread) return;
     if (!private_profile_id) return;
+    // View-as student: bail before posting a like row attributed to the masqueraded
+    // student under the instructor's auth.uid().
+    if (isReadOnly) return;
     setLikeLoading(true);
     try {
       if (likeStatus) {
@@ -117,6 +121,7 @@ function PostRowComponent({
   const toggleFollow = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (isReadOnly) return;
     try {
       await setThreadFollowStatus(!isFollowing);
     } catch (error) {
