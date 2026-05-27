@@ -1,5 +1,5 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import { test, expect } from "../global-setup";
+import { test, expect } from "@/tests/global-setup";
 import dotenv from "dotenv";
 import { createClass, createUsersInClass, insertAssignment, loginAsUser, TestingUser } from "@/tests/e2e/TestingUtils";
 import { visualScreenshot } from "@/tests/e2e/VisualTestUtils";

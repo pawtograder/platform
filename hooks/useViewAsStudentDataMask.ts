@@ -9,7 +9,7 @@ import {
   studentProfileIdSet,
   type StudentProfileIds
 } from "@/lib/viewAsStudentDataMask";
-import { useClassProfiles } from "./useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 /**
  * Helpers for masking instructor-only data while viewing the course as a student.
