@@ -25,7 +25,11 @@ export default async function ManageLayout({
   if (!identity) {
     redirect("/");
   }
-  if (identity.isViewingAs) {
+  // Real students enroll with a non-null identity (isViewingAs === false), so the previous
+  // gate let them render /manage/* relying on each child page to re-check auth. Block any
+  // non-staff identity at the layout boundary as well, so manage pages always assume staff.
+  const isStaff = identity.realRole === "instructor" || identity.realRole === "grader";
+  if (!isStaff || identity.isViewingAs) {
     redirect(`/course/${course_id}`);
   }
 
