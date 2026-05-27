@@ -1448,7 +1448,21 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
 function TestResults() {
   const submission = useSubmission();
   const pathname = usePathname();
-  const testResults = submission.grader_results?.grader_result_tests;
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const rawTestResults = submission.grader_results?.grader_result_tests;
+  // Student view (including view-as) must hide tests that are flagged not-released or
+  // hide_score — these are present in the row because RLS doesn't strip them, but
+  // AutograderSection (the Grade tab) already applies the same filter. Use the same rule
+  // here so the submission sidebar's "Automated Check Results" matches.
+  const testResults = useMemo(() => {
+    if (!rawTestResults) return rawTestResults;
+    if (isGraderOrInstructor) return rawTestResults;
+    return rawTestResults.filter((t) => {
+      const extra = t.extra_data as GraderResultTestExtraData | null;
+      return extra?.hide_score !== "true" && t.is_released;
+    });
+  }, [rawTestResults, isGraderOrInstructor]);
+  const hiddenTestCount = (rawTestResults?.length ?? 0) - (testResults?.length ?? 0);
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
@@ -1556,6 +1570,11 @@ function TestResults() {
           </Box>
         );
       })}
+      {hiddenTestCount > 0 && (
+        <Text fontSize="xs" color="text.muted" mt={2}>
+          {hiddenTestCount} hidden test{hiddenTestCount === 1 ? "" : "s"} not yet released.
+        </Text>
+      )}
       {/* Show matches for submission-level (no specific test) */}
       {matches.has(null) && matches.get(null)!.length > 0 && (
         <Box mt={2}>

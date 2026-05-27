@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
 import { Switch } from "@/components/ui/switch";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -219,11 +220,16 @@ export default function GraderResults() {
     }
   });
   const isObfuscatedGradesMode = useObfuscatedGradesMode();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   const { matches: errorPinMatches } = useErrorPinMatches(Number(submissions_id));
-  const [showHiddenOutput, setShowHiddenOutput] = useState(!isObfuscatedGradesMode);
+  // Default to hidden-output on for staff (the actual instructor identity) and off for
+  // students. In view-as student, isGraderOrInstructor flips to false so the toggle
+  // starts off and the toggle itself is hidden below — preventing the masquerader from
+  // surfacing instructor-only debug output or unreleased test stdout.
+  const [showHiddenOutput, setShowHiddenOutput] = useState(isGraderOrInstructor && !isObfuscatedGradesMode);
   useEffect(() => {
-    setShowHiddenOutput(!isObfuscatedGradesMode);
-  }, [isObfuscatedGradesMode]);
+    setShowHiddenOutput(isGraderOrInstructor && !isObfuscatedGradesMode);
+  }, [isObfuscatedGradesMode, isGraderOrInstructor]);
   if (query.isLoading) {
     return (
       <Box>
@@ -405,21 +411,25 @@ export default function GraderResults() {
       >
         <Tabs.List>
           {!hasBuildError && <Tabs.Trigger value="tests">Test Results</Tabs.Trigger>}
-          {data.grader_results?.grader_result_output?.map((output) => (
-            <Tabs.Trigger key={output.id} value={output.visibility}>
-              {data.grader_results?.grader_result_output.length === 1
-                ? "Output"
-                : output.visibility === "visible"
-                  ? "Student Visible Output"
-                  : "Instructor-Only Debug Output"}
-            </Tabs.Trigger>
-          ))}
+          {data.grader_results?.grader_result_output
+            ?.filter((output) => isGraderOrInstructor || output.visibility === "visible")
+            .map((output) => (
+              <Tabs.Trigger key={output.id} value={output.visibility}>
+                {data.grader_results?.grader_result_output.length === 1
+                  ? "Output"
+                  : output.visibility === "visible"
+                    ? "Student Visible Output"
+                    : "Instructor-Only Debug Output"}
+              </Tabs.Trigger>
+            ))}
         </Tabs.List>
-        {data.grader_results?.grader_result_output?.map((output) => (
-          <Tabs.Content key={output.id} value={output.visibility}>
-            {format_output(output)}
-          </Tabs.Content>
-        ))}
+        {data.grader_results?.grader_result_output
+          ?.filter((output) => isGraderOrInstructor || output.visibility === "visible")
+          .map((output) => (
+            <Tabs.Content key={output.id} value={output.visibility}>
+              {format_output(output)}
+            </Tabs.Content>
+          ))}
         {!hasBuildError && (
           <Tabs.Content value="tests">
             {/* Show submission-level error pins (not tied to specific tests) */}
@@ -442,7 +452,7 @@ export default function GraderResults() {
             )}
             <Heading size="md">Test Results</Heading>
             <HStack w="100%" justifyContent="flex-end">
-              {hasHiddenOutput && (
+              {hasHiddenOutput && isGraderOrInstructor && (
                 <Switch
                   checked={showHiddenOutput}
                   onChange={() => setShowHiddenOutput(!showHiddenOutput)}
