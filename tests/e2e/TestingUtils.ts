@@ -17,6 +17,13 @@ dotenv.config({ path: ".env.local", quiet: true });
 
 const DEFAULT_RATE_LIMIT_MANAGER = new RateLimitManager(DEFAULT_RATE_LIMITS);
 export const supabase = createAdminClient<Database>();
+
+/** True when `dual_active_invariants_version` RPC exists (migration 20260424200000_prevent_dual_active_submissions.sql). */
+export async function isDualActiveSubmissionGuardsMigrated(): Promise<boolean> {
+  const { data, error } = await supabase.rpc("dual_active_invariants_version");
+  if (error) return false;
+  return data === 1;
+}
 // export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
 export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
 
@@ -238,11 +245,11 @@ export type SimulatedSISRosterEntry = {
 export type SISSyncEnrollmentResult = {
   success: boolean;
   class_id: number;
-  expire_missing: boolean;
+  drop_missing: boolean;
   counts: {
     invitations_created: number;
     invitations_updated: number;
-    invitations_expired: number;
+    invitations_dropped: number;
     invitations_reactivated: number;
     enrollments_created: number;
     enrollments_updated: number;
@@ -255,12 +262,12 @@ export type SISSyncEnrollmentResult = {
 export async function simulateSISSync({
   class_id,
   roster,
-  expire_missing = true,
+  drop_missing = true,
   section_updates
 }: {
   class_id: number;
   roster: SimulatedSISRosterEntry[];
-  expire_missing?: boolean;
+  drop_missing?: boolean;
   section_updates?: Array<{
     section_type: "class" | "lab";
     sis_crn: number;
@@ -276,7 +283,7 @@ export async function simulateSISSync({
     p_class_id: class_id,
     p_roster_data: roster,
     p_sync_options: {
-      expire_missing,
+      drop_missing,
       section_updates: section_updates ?? []
     }
   });
@@ -334,6 +341,48 @@ export async function getEnrollmentState(
   }
 
   return { user: user ?? undefined, user_role, invitation: invitation ?? null };
+}
+
+/**
+ * Returns ALL user_roles for the account with this sis_user_id in a class (not
+ * just one). Used to assert there are no duplicate enrollments/profiles (#390).
+ */
+export async function getEnrollmentRowsForSisUser(
+  class_id: number,
+  sis_user_id: number
+): Promise<
+  Array<{
+    id: number;
+    role: string;
+    disabled: boolean;
+    private_profile_id: string;
+    public_profile_id: string;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  }>
+> {
+  const { data: user, error: userError } = await supabase
+    .from("users")
+    .select("user_id")
+    .eq("sis_user_id", sis_user_id)
+    .maybeSingle();
+  if (userError) throw new Error(`getEnrollmentRowsForSisUser: failed to fetch user: ${userError.message}`);
+  if (!user?.user_id) return [];
+  const { data: rows, error: rowsError } = await supabase
+    .from("user_roles")
+    .select("id, role, disabled, private_profile_id, public_profile_id, class_section_id, lab_section_id")
+    .eq("class_id", class_id)
+    .eq("user_id", user.user_id);
+  if (rowsError) throw new Error(`getEnrollmentRowsForSisUser: failed to fetch user_roles: ${rowsError.message}`);
+  return (rows ?? []) as Array<{
+    id: number;
+    role: string;
+    disabled: boolean;
+    private_profile_id: string;
+    public_profile_id: string;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  }>;
 }
 
 export async function setUserSisId(user_id: string, sis_user_id: number) {
@@ -398,6 +447,36 @@ async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supa
   throw new Error(`generateMagicLinkWithRetry: exhausted retries (${lastErrMsg})`);
 }
 
+// Verify an admin-generated magic link with bounded retries. Both steps —
+// generateLink AND verifyOtp — fail transiently under CI parallelism (rate
+// limits, occasional 5xx from gotrue), so each call must own its retry
+// loop. Without this, the non-browser helpers (getAuthTokenForUser /
+// createAuthenticatedClient) had only generateMagicLinkWithRetry covering
+// the first hop; the second hop (verifyOtp) was a single-shot point of
+// flake.
+async function verifyOtpWithRetry<T>(
+  email: string,
+  doVerify: () => Promise<{ data: T; error: Error | null | { message?: string } | null }>
+): Promise<T> {
+  const delaysMs = [400, 1200, 3500];
+  let lastErrMsg = "";
+  for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+    try {
+      const { data, error } = await doVerify();
+      if (!error) return data;
+      lastErrMsg = (error as { message?: string })?.message || JSON.stringify(error) || "unknown";
+      if (attempt === delaysMs.length) {
+        throw new Error(`Failed to verify magic link for ${email}: ${lastErrMsg}`);
+      }
+    } catch (err) {
+      lastErrMsg = err instanceof Error ? err.message : String(err);
+      if (attempt === delaysMs.length) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt] + Math.floor(Math.random() * 250)));
+  }
+  throw new Error(`verifyOtpWithRetry: exhausted retries (${lastErrMsg})`);
+}
+
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
@@ -406,21 +485,22 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
     (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
   );
 
-  // Generate magic link using admin client (same as TestingUtils.ts does)
-  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-
-  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
-    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
-  }
-
-  // Verify the OTP to get a session
-  const { data, error } = await userSupabase.auth.verifyOtp({
-    token_hash: magicLinkData.properties.hashed_token,
-    type: "magiclink"
+  // Each attempt regenerates the magic link (single-use, expires quickly) and
+  // re-verifies — keeps generation and verification as a single retried unit
+  // so a stale/used token from a prior partial attempt can't poison the next.
+  const data = await verifyOtpWithRetry(testingUser.email, async () => {
+    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+    if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+      return { data: null as never, error: magicLinkError ?? new Error("missing hashed_token") };
+    }
+    return userSupabase.auth.verifyOtp({
+      token_hash: magicLinkData.properties.hashed_token,
+      type: "magiclink"
+    });
   });
 
-  if (error || !data.session) {
-    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  if (!data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: no session returned`);
   }
 
   return data.session.access_token;
@@ -436,21 +516,19 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
     (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
   );
 
-  // Generate magic link using admin client
-  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-
-  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
-    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
-  }
-
-  // Verify the OTP to get a session
-  const { data, error } = await userSupabase.auth.verifyOtp({
-    token_hash: magicLinkData.properties.hashed_token,
-    type: "magiclink"
+  const data = await verifyOtpWithRetry(testingUser.email, async () => {
+    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+    if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+      return { data: null as never, error: magicLinkError ?? new Error("missing hashed_token") };
+    }
+    return userSupabase.auth.verifyOtp({
+      token_hash: magicLinkData.properties.hashed_token,
+      type: "magiclink"
+    });
   });
 
-  if (error || !data.session) {
-    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  if (!data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: no session returned`);
   }
 
   await userSupabase.auth.setSession(data.session);
@@ -524,50 +602,99 @@ export async function gotoCourseUrlWhenHeadingVisible(
   }).toPass({ timeout: assertTimeout });
 }
 
-async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 3) {
-  try {
-    // Generate magic link on-demand for authentication
-    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-    if (magicLinkError) {
-      throw new Error(`Failed to generate magic link: ${magicLinkError.message}`);
-    }
+async function signInWithMagicLinkAndRetry(page: Page, testingUser: TestingUser, retriesRemaining: number = 4) {
+  // Track outcomes across retries so the final error message names every distinct
+  // failure mode the loop encountered, instead of just the last one.
+  const attemptOutcomes: string[] = [];
+  let attempt = 0;
+  const maxAttempts = retriesRemaining + 1;
 
-    const magicLink = `/auth/magic-link?token_hash=${encodeURIComponent(magicLinkData.properties?.hashed_token ?? "")}`;
+  while (attempt < maxAttempts) {
+    attempt++;
 
-    // Use magic link for login
-    await page.goto(magicLink);
-    await page.getByRole("button", { name: "Sign in with magic link" }).click();
-
-    // On slower machines (especially in dev mode), redirect can lag after submit.
-    // Wait for either successful course navigation or explicit expired-link message.
-    let outcome: "success" | "expired" | "unknown" = "unknown";
-    try {
-      await page.waitForURL(/\/course(\/|$)/, { timeout: 30_000 });
-      outcome = "success";
-    } catch {
-      const expiredMessage = page.getByText(/Email link is invalid or has expired/i);
+    // Reset browser auth state before each attempt. The verifyOtp action drops
+    // partial Supabase cookies on failure; carrying those into the next attempt
+    // can make GoTrue reject the next token with the same "invalid" error
+    // because the cookie-bound session is in a half-set state. Cleared cookies
+    // give each attempt a clean slate. Clearing requires being on an actual
+    // origin (page.context can't clear before any navigation has happened), so
+    // do a no-cost goto first on retries — initial attempts come in from a
+    // page.goto("/") above us.
+    if (attempt > 1) {
       try {
-        await expiredMessage.waitFor({ state: "visible", timeout: 2_000 });
-        outcome = "expired";
+        await page.context().clearCookies();
+        await page.evaluate(() => {
+          try {
+            window.localStorage.clear();
+            window.sessionStorage.clear();
+          } catch {
+            // Some pages (e.g. error pages) restrict storage access; ignore.
+          }
+        });
       } catch {
-        outcome = "unknown";
+        // Best-effort — if the page is in a weird state, just continue.
       }
     }
 
-    if (outcome === "success") {
-      return;
+    try {
+      const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+      if (magicLinkError) {
+        attemptOutcomes.push(`gen-error:${magicLinkError.message}`);
+      } else {
+        const tokenHash = magicLinkData.properties?.hashed_token ?? "";
+        const magicLink = `/auth/magic-link?token_hash=${encodeURIComponent(tokenHash)}`;
+        await page.goto(magicLink);
+        await page.getByRole("button", { name: "Sign in with magic link" }).click();
+
+        // Race success against known failure surfaces. The verifyOtp action
+        // either redirects to /course (success) or back to /auth/magic-link
+        // with an `error_description` query (failure). Sequencing waitForURL
+        // ahead of error detection used to burn the full 30s timeout on every
+        // failed attempt — which made the per-test budget run out before we
+        // could try more than once. Racing turns a failure into a sub-second
+        // signal so the retries actually get a chance to fire.
+        const success = page.waitForURL(/\/course(\/|$)/, { timeout: 15_000 }).then(() => "success" as const);
+        const expired = page
+          .getByText(/Email link is invalid or has expired/i)
+          .waitFor({ state: "visible", timeout: 15_000 })
+          .then(() => "expired" as const);
+        const rateLimited = page
+          .getByText(/rate limit|too many requests/i)
+          .waitFor({ state: "visible", timeout: 15_000 })
+          .then(() => "rate-limited" as const);
+        // All three branches map their rejection to null so a timeout doesn't
+        // get recorded as the literal string "timeout" — instead the
+        // `outcome ?? unknown(<url>)` fallback below captures the actual page
+        // URL, which is far more useful when triaging an unclassified failure.
+        const outcome = await Promise.race([
+          success.catch(() => null),
+          expired.catch(() => null),
+          rateLimited.catch(() => null)
+        ]);
+        if (outcome === "success") {
+          return;
+        }
+        attemptOutcomes.push(outcome ?? `unknown(${page.url()})`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      attemptOutcomes.push(`exception:${message}`);
     }
-    if (retriesRemaining > 0) {
-      return await signInWithMagicLinkAndRetry(page, testingUser, retriesRemaining - 1);
+
+    if (attempt < maxAttempts) {
+      // Jittered backoff: most magic-link failures we see are transient GoTrue
+      // races under CI parallelism. A small wait between attempts lets the
+      // contention clear without meaningfully extending the happy path
+      // (which returns before ever reaching this branch).
+      const baseDelayMs = 250 * attempt;
+      const jitter = Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs + jitter));
     }
-    if (outcome === "expired") {
-      throw new Error("Magic link expired and no retries remaining");
-    }
-    throw new Error(`Magic link sign-in did not complete (final URL: ${page.url()})`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to sign in with magic link: ${message}`);
   }
+
+  throw new Error(
+    `Failed to sign in with magic link after ${maxAttempts} attempts. Outcomes: ${attemptOutcomes.join("; ")}`
+  );
 }
 export async function generateMagicLink(user: TestingUser): Promise<string> {
   const { data, error } = await generateMagicLinkWithRetry(user.email);
@@ -627,6 +754,7 @@ export async function createUserInClass({
   lab_section_id,
   randomSuffix,
   name,
+  public_profile_name: requested_public_profile_name,
   email,
   rateLimitManager,
   useMagicLink = false
@@ -637,6 +765,7 @@ export async function createUserInClass({
   lab_section_id?: number;
   randomSuffix?: string;
   name?: string;
+  public_profile_name?: string;
   email?: string;
   rateLimitManager?: RateLimitManager;
   useMagicLink?: boolean;
@@ -645,9 +774,11 @@ export async function createUserInClass({
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
   const resolvedEmail = email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const resolvedName = name ? name : `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
-  const public_profile_name = name
-    ? `Pseudonym #${userIdx[role]}`
-    : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+  const public_profile_name =
+    requested_public_profile_name ??
+    (name
+      ? `Pseudonym #${userIdx[role]}`
+      : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
   const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
   // Try to create user, if it fails due to existing email, try to get the existing user
@@ -834,6 +965,7 @@ export async function createUsersInClass(
     lab_section_id?: number;
     randomSuffix?: string;
     name?: string;
+    public_profile_name?: string;
     email?: string;
     rateLimitManager?: RateLimitManager;
     useMagicLink?: boolean;
@@ -842,19 +974,20 @@ export async function createUsersInClass(
 ): Promise<TestingUser[]> {
   // Resolve all emails first
   const resolvedRequests = userRequests.map((req) => {
+    const roleOrdinal = userIdx[req.role];
     const extra_randomness = req.randomSuffix ?? Math.random().toString(36).substring(2, 20);
     const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-    const resolvedEmail =
-      req.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${userIdx[req.role]}@pawtograder.net`;
+    const resolvedEmail = req.email ?? `${req.role}-${workerIndex}-${extra_randomness}-${roleOrdinal}@pawtograder.net`;
     const resolvedName = req.name
       ? req.name
-      : `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${userIdx[req.role]}Test`;
+      : `${req.role.charAt(0).toUpperCase()}${req.role.slice(1)} #${roleOrdinal}Test`;
     userIdx[req.role]++;
 
     return {
       ...req,
       resolvedEmail,
-      resolvedName
+      resolvedName,
+      roleOrdinal
     };
   });
 
@@ -880,9 +1013,11 @@ export async function createUsersInClass(
   for (const request of resolvedRequests) {
     const { role, class_id, section_id, lab_section_id, resolvedEmail, resolvedName, useMagicLink = false } = request;
 
-    const public_profile_name = request.name
-      ? `Pseudonym #${userIdx[role] - 1}`
-      : `Pseudonym #${userIdx[role] - 1} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+    const public_profile_name =
+      request.public_profile_name ??
+      (request.name
+        ? `Pseudonym #${request.roleOrdinal}`
+        : `Pseudonym #${request.roleOrdinal} ${role.charAt(0).toUpperCase()}${role.slice(1)}`);
     const private_profile_name = resolvedName;
 
     let userId: string;
@@ -1672,6 +1807,7 @@ export async function insertSubmissionViaAPI({
   assignment_group_id,
   sha,
   commit_message,
+  triggered_by,
   assignment_id = 1,
   class_id,
   repositorySuffix,
@@ -1682,6 +1818,7 @@ export async function insertSubmissionViaAPI({
   assignment_group_id?: number;
   sha?: string;
   commit_message?: string;
+  triggered_by?: string;
   assignment_id?: number;
   class_id: number;
   repositorySuffix?: string;
@@ -1729,7 +1866,8 @@ export async function insertSubmissionViaAPI({
         check_run_id: 1,
         status: "{}",
         sha: sha || "HEAD",
-        commit_message: commit_message || "none"
+        commit_message: commit_message || "none",
+        triggered_by
       })
       .select("id")
   );
@@ -2023,7 +2161,7 @@ export async function createRegradeRequest(
   grader_profile_id: string,
   rubric_check_id: number,
   class_id: number,
-  status: "opened" | "resolved" | "closed",
+  status: "draft" | "opened" | "resolved" | "escalated" | "closed",
   options?: {
     commentPoints?: number;
     initialPoints?: number;
@@ -2056,20 +2194,29 @@ export async function createRegradeRequest(
     throw new Error(`Failed to create submission comment: ${commentError.message}`);
   }
 
+  const nowIso = new Date().toISOString();
+  const openedAt = status === "draft" ? null : nowIso;
+  const resolvedBy = status === "resolved" || status === "closed" ? grader_profile_id : null;
+  const resolvedAt = status === "resolved" || status === "closed" ? nowIso : null;
+  const escalatedAt = status === "escalated" ? nowIso : null;
+  const escalatedBy = status === "escalated" ? student_profile_id : null;
+
   const { data: regradeData, error: regradeError } = await supabase
     .from("submission_regrade_requests")
     .insert({
       submission_id: submission_id,
       class_id: class_id,
       assignment_id: assignment_id,
-      opened_at: new Date().toISOString(),
+      opened_at: openedAt,
       created_by: student_profile_id,
       assignee: grader_profile_id,
       closed_by: status === "closed" ? grader_profile_id : null,
-      closed_at: status === "closed" ? new Date().toISOString() : null,
+      closed_at: status === "closed" ? nowIso : null,
       status: status,
-      resolved_by: status === "resolved" || status === "closed" ? grader_profile_id : null,
-      resolved_at: status === "resolved" || status === "closed" ? new Date().toISOString() : null,
+      resolved_by: resolvedBy,
+      resolved_at: resolvedAt,
+      escalated_at: escalatedAt,
+      escalated_by: escalatedBy,
       submission_comment_id: commentData.id, // Reference the comment we just created
       initial_points: options?.initialPoints ?? Math.floor(Math.random() * 100),
       resolved_points:
@@ -2077,7 +2224,7 @@ export async function createRegradeRequest(
           ? (options?.resolvedPoints ?? Math.floor(Math.random() * 100))
           : null,
       closed_points: status === "closed" ? (options?.closedPoints ?? Math.floor(Math.random() * 100)) : null,
-      last_updated_at: new Date().toISOString()
+      last_updated_at: nowIso
     })
     .select("*")
     .single();

@@ -22,7 +22,7 @@ import {
   pushMissingDependenciesToContext,
   type IncompleteValuesAdvice
 } from "@/supabase/functions/gradebook-column-recalculate/expression/shared";
-import type { FunctionNode, MathNode } from "mathjs";
+import type { AssignmentNode, FunctionNode, MathNode } from "mathjs";
 import { minimatch } from "minimatch";
 import type { GradebookController } from "@/hooks/useGradebook";
 
@@ -168,11 +168,16 @@ type MathJSInstance = ReturnType<MathJSNS["create"]>;
 
 function shouldCaptureNode(node: MathNode): boolean {
   const t = node.type;
-  // Skip pure leaves (constants / bare symbol lookups) — the overlay for
-  // `score * 2` should not repeat the constant `2` next to itself. We also
-  // skip `FunctionAssignmentNode` (e.g. `f(x) = ...`) because its value is a
-  // function reference, not a scalar worth displaying, and we never recurse
-  // into its body either (see `collectNodes`).
+  // Skip constants — the overlay for `score * 2` should not repeat `2`.
+  // We skip `FunctionAssignmentNode` (e.g. `f(x) = ...`) because its value is
+  // a function reference, and we never recurse into its body (see `collectNodes`).
+  // `SymbolNode` is included so hover can show values for bare identifiers (`IND`).
+  // The synthetic `context` symbol injected into context-aware calls must not
+  // appear in intermediates (tests assert sources never contain `context`).
+  if (t === "SymbolNode") {
+    const name = (node as { name?: string }).name;
+    return name !== "context";
+  }
   return (
     t === "FunctionNode" ||
     t === "OperatorNode" ||
@@ -288,7 +293,16 @@ function collectNodes(root: MathNode): MathNode[] {
   const walk = (node: MathNode) => {
     out.push(node);
     if (node.type === "FunctionAssignmentNode") return;
-    (node as unknown as { forEach?: (cb: (child: MathNode) => void) => void }).forEach?.(walk);
+    const skip = new Set<MathNode>();
+    if (node.type === "FunctionNode") {
+      skip.add((node as FunctionNode).fn);
+    }
+    if (node.type === "AssignmentNode") {
+      skip.add((node as AssignmentNode).object);
+    }
+    (node as unknown as { forEach?: (cb: (child: MathNode) => void) => void }).forEach?.((child: MathNode) => {
+      if (!skip.has(child)) walk(child);
+    });
   };
   walk(root);
   return out;
@@ -688,6 +702,10 @@ export function evaluateForStudent(params: {
    *  normally omits from `ResultSet.entries` — still produce a value for
    *  the overlay. */
   let blockEntries: unknown[] = [];
+  /** Final evaluation scope after running top-level blocks (bindings + context).
+   *  Used to evaluate hover intermediates so `largerEq(T, 900)` sees `T` from a
+   *  prior line. Single-expression input uses `{ context }` only. */
+  let intermediateEvalScope: Record<string, unknown> = { context };
   try {
     const topLevelAny = transformed as unknown as {
       type?: string;
@@ -698,7 +716,7 @@ export function evaluateForStudent(params: {
       // assignments from earlier statements (e.g. `T = 930`) are visible to
       // later ones (e.g. `T * 2`). `context` is still read from the same
       // synthetic object we passed to the AST transform.
-      const scope = { context };
+      const scope: Record<string, unknown> = { context };
       for (const block of topLevelAny.blocks) {
         try {
           const v = unwrapResultSet(block.node.evaluate(scope));
@@ -712,11 +730,13 @@ export function evaluateForStudent(params: {
           break;
         }
       }
+      intermediateEvalScope = scope;
       rawResult = blockEntries.length > 0 ? blockEntries[blockEntries.length - 1] : undefined;
     } else {
       // Single-expression (non-block) input.
       rawResult = unwrapResultSet(transformed.evaluate({ context }));
       blockEntries = [rawResult];
+      intermediateEvalScope = { context };
     }
     resultStr = formatValueForOverlay(rawResult);
   } catch (e) {
@@ -814,7 +834,7 @@ export function evaluateForStudent(params: {
       let value: unknown;
       let nodeError: string | undefined;
       try {
-        value = unwrapResultSet(node.evaluate({ context }));
+        value = unwrapResultSet(node.evaluate(intermediateEvalScope));
       } catch (e) {
         nodeError = e instanceof Error ? e.message : String(e);
       }

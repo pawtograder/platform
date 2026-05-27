@@ -128,7 +128,7 @@ export default function FinalizeSubmissionEarly({
       <PopConfirm
         triggerLabel="Finalize Submission Early"
         trigger={
-          <Button variant="surface" colorPalette="green" loading={loading} disabled={!enabled}>
+          <Button variant="solid" colorPalette="green" loading={loading} disabled={!enabled}>
             Finalize Submission Early
           </Button>
         }

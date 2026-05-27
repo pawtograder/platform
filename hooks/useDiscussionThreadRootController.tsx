@@ -1,10 +1,10 @@
 import TableController, {
-  useListTableControllerValues,
+  useIndexedTableControllerValues,
   useTableControllerTableValues,
   useTableControllerValueById
 } from "@/lib/TableController";
 import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourseController } from "./useCourseController";
 import { DiscussionThreadRealTimeController } from "@/lib/DiscussionThreadRealTimeController";
 
@@ -23,8 +23,11 @@ export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus 
 export function useDiscussionThreadRoot() {
   const controller = useDiscussionThreadsController();
   const rootThread = useTableControllerValueById(controller.tableController, controller.root_id);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === rootThread?.id, [rootThread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  // Indexed on `parent`: every PostRow that mounted in this thread tree used
+  // to register its own predicate-scan list-listener, so each row mutation
+  // re-scanned every row × every listener (O(N²) per write). The indexed
+  // path fans out only to the listener whose `value` actually matches.
+  const children = useIndexedTableControllerValues(controller.tableController, "parent", rootThread?.id);
   const ret = useMemo(() => {
     if (!rootThread) return undefined;
     return {
@@ -42,8 +45,9 @@ export function useDiscussionThreadRoot() {
 export default function useDiscussionThreadChildren(threadId: number): DiscussionThreadWithChildren | undefined {
   const controller = useDiscussionThreadsController();
   const thread = useTableControllerValueById(controller.tableController, threadId);
-  const childrenPredicate = useCallback((t: DiscussionThread) => t.parent === thread?.id, [thread]);
-  const children = useListTableControllerValues(controller.tableController, childrenPredicate);
+  // See `useDiscussionThreadRoot` above — indexed by `parent` to avoid
+  // O(listeners × rows) predicate scans on every reply mutation.
+  const children = useIndexedTableControllerValues(controller.tableController, "parent", thread?.id);
 
   // Stable sort order: capture initial order on first render, maintain it during session
   // Reset when threadId changes (component remounts)
@@ -231,7 +235,15 @@ export function DiscussionThreadsControllerProvider({
       });
     });
 
-    // Create TableController with BOTH class and thread-specific realtime controllers
+    // Create TableController with BOTH class and thread-specific realtime controllers.
+    //
+    // Hot path: rehydrate from the per-course LRU cache so the second
+    // (and subsequent) visits to a thread skip the SELECT round trip
+    // entirely. The TableController will still do a since-watermark
+    // refetch once the realtime channel joins, picking up any replies
+    // that arrived while the user was off this thread — see
+    // `_needsCatchUpAfterInitialDataHydration` in TableController.
+    const cachedRows = courseController.getCachedDiscussionThreadRows(root_id);
     const tableController = new TableController({
       client: courseController.client,
       table: "discussion_threads",
@@ -243,7 +255,8 @@ export function DiscussionThreadsControllerProvider({
       classRealTimeController: courseController.classRealTimeController,
       additionalRealTimeControllers: [threadRealTimeController],
       realtimeFilter: { root: root_id },
-      loadEntireTable: true
+      loadEntireTable: true,
+      initialData: cachedRows
     });
 
     // Create DiscussionThreadsController
@@ -259,6 +272,13 @@ export function DiscussionThreadsControllerProvider({
 
     return () => {
       if (controllersRef.current) {
+        // Snapshot rows BEFORE closing — `close()` clears `_rows`. Caching
+        // these means the next mount for the same `root_id` rehydrates
+        // synchronously and skips the REST round trip.
+        const snapshot = controllersRef.current.tableController.rows as DiscussionThread[];
+        if (snapshot.length > 0) {
+          courseController.cacheDiscussionThreadRows(root_id, snapshot);
+        }
         // threadController.close() already closes the realtime controller
         // (DiscussionThreadsController.close at line ~168), so no explicit
         // threadRealTimeController.close here.

@@ -110,7 +110,7 @@ export function ChoiceDistributionChart({
               );
             }}
           />
-          <Bar dataKey="count" fill={barColor} radius={[0, 4, 4, 0]} />
+          <Bar isAnimationActive={false} dataKey="count" fill={barColor} radius={[0, 4, 4, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </Box>

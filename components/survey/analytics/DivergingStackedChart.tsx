@@ -329,6 +329,7 @@ export function DivergingStackedChart({
               const rawVal = match ? Number(match[1] ?? match[2]) : 0;
               return (
                 <Bar
+                  isAnimationActive={false}
                   key={key}
                   dataKey={key}
                   stackId="stack"
@@ -342,6 +343,7 @@ export function DivergingStackedChart({
               const rawVal = match ? Number(match[1] ?? match[2]) : 0;
               return (
                 <Bar
+                  isAnimationActive={false}
                   key={key}
                   dataKey={key}
                   stackId="stack"

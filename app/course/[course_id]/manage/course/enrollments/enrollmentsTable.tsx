@@ -9,6 +9,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassSections, useLabSections, useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
+import { useVirtualizedRowWindow } from "@/hooks/useVirtualizedRowWindow";
 import useTags from "@/hooks/useTags";
 import { createClient } from "@/utils/supabase/client";
 import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
@@ -42,7 +43,7 @@ import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport } from "react-icons/fa";
+import { FaEdit, FaLink, FaTrash, FaUserCog, FaClock, FaTimes, FaFileExport, FaGithub } from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
@@ -50,6 +51,7 @@ import RemoveStudentModal from "./removeStudentModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import AddSingleCourseMember from "./addSingleCourseMember";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
+import GitHubDiagnosticsModal from "@/app/course/[course_id]/manage/course/enrollments/githubDiagnosticsModal";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -61,6 +63,10 @@ type RemoveStudentModalData = {
   userRoleId: string;
   userName: string | null | undefined;
   role: UserRoleWithPrivateProfileAndUser["role"];
+};
+type GitHubDiagnosticsModalData = {
+  userRoleId: number;
+  userName: string | null | undefined;
 };
 
 // Invitation type for display
@@ -126,6 +132,13 @@ export default function EnrollmentsTable() {
     closeModal: closeRemoveStudentModal
   } = useModalManager<RemoveStudentModalData>();
 
+  const {
+    isOpen: isGitHubDiagnosticsModalOpen,
+    modalData: githubDiagnosticsData,
+    openModal: openGitHubDiagnosticsModal,
+    closeModal: closeGitHubDiagnosticsModal
+  } = useModalManager<GitHubDiagnosticsModalData>();
+
   const [pageCount, setPageCount] = useState(0);
 
   const handleConfirmRemoveStudent = useCallback(
@@ -184,7 +197,7 @@ export default function EnrollmentsTable() {
         .select("*")
         .eq("class_id", parseInt(course_id as string))
         .neq("status", "accepted")
-        .neq("status", "expired")
+        .neq("status", "dropped")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -276,21 +289,14 @@ export default function EnrollmentsTable() {
         cell: ({ row }) => {
           if (row.original.type === "invitation") {
             const invitation = row.original;
-            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
             const statusColor =
-              invitation.status === "pending"
-                ? isExpired
-                  ? "orange.500"
-                  : "blue.500"
-                : invitation.status === "accepted"
-                  ? "green.500"
-                  : "red.500";
+              invitation.status === "pending" ? "blue.500" : invitation.status === "accepted" ? "green.500" : "red.500";
 
             return (
               <Flex alignItems="center" gap={2}>
                 <Icon as={FaClock} color={statusColor} />
                 <Text color={statusColor} fontWeight="medium">
-                  {invitation.status === "pending" && isExpired ? "Expired" : invitation.status}
+                  {invitation.status}
                 </Text>
               </Flex>
             );
@@ -320,9 +326,7 @@ export default function EnrollmentsTable() {
 
           if (row.original.type === "invitation") {
             const invitation = row.original;
-            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
-            const status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
-            return values.includes(status.toLowerCase());
+            return values.includes(invitation.status.toLowerCase());
           }
           if (row.original.disabled) {
             return values.includes("dropped");
@@ -736,9 +740,7 @@ export default function EnrollmentsTable() {
         cell: ({ row }) => {
           if (row.original.type === "invitation") {
             const invitation = row.original;
-            const isPending = invitation.status === "pending";
-            const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
-            const canCancel = isPending && !isExpired;
+            const canCancel = invitation.status === "pending";
 
             return (
               <HStack gap={2} justifyContent="center">
@@ -755,7 +757,7 @@ export default function EnrollmentsTable() {
                 )}
                 {!canCancel && (
                   <Text fontSize="sm" color="gray.500">
-                    {isExpired ? "Expired" : invitation.status}
+                    {invitation.status}
                   </Text>
                 )}
               </HStack>
@@ -768,6 +770,7 @@ export default function EnrollmentsTable() {
           const userRoleEntry = row.original;
           const isCurrentUserRow = currentUser?.id === userRoleEntry.user_id;
           const isTargetInstructor = userRoleEntry.role === "instructor";
+          const canDiagnoseGitHub = userRoleEntry.role === "student";
 
           const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
           let editRoleTooltipContent = "Edit user role";
@@ -789,6 +792,23 @@ export default function EnrollmentsTable() {
             <HStack gap={2} justifyContent="center">
               {profile && studentProfileId && (
                 <StudentSummaryTrigger student_id={studentProfileId} course_id={Number(course_id)} />
+              )}
+              {canDiagnoseGitHub && (
+                <Tooltip content="Diagnose GitHub errors">
+                  <Icon
+                    as={FaGithub}
+                    aria-label="Diagnose GitHub errors"
+                    cursor="pointer"
+                    color="purple.500"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openGitHubDiagnosticsModal({
+                        userRoleId: userRoleEntry.id,
+                        userName: profile?.name
+                      });
+                    }}
+                  />
+                </Tooltip>
               )}
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
@@ -849,6 +869,7 @@ export default function EnrollmentsTable() {
       course_id,
       openEditProfileModal,
       openEditUserRoleModal,
+      openGitHubDiagnosticsModal,
       openRemoveStudentModal,
       tagData,
       handleSingleCheckboxChange,
@@ -915,6 +936,11 @@ export default function EnrollmentsTable() {
   const previousPage = table.previousPage;
   const setPageSize = table.setPageSize;
   const getPrePaginationRowModel = table.getPrePaginationRowModel;
+  const tableRows = getRowModel().rows;
+  const rowWindow = useVirtualizedRowWindow(tableRows, {
+    estimatedRowHeight: 72,
+    minRowsForVirtualization: 80
+  });
 
   const nRows = getRowCount();
   const pageSize = getState().pagination.pageSize;
@@ -959,9 +985,7 @@ export default function EnrollmentsTable() {
       // Get status
       let status = "Enrolled";
       if (original.type === "invitation") {
-        const invitation = original;
-        const isExpired = invitation.expires_at && new Date(invitation.expires_at) < new Date();
-        status = invitation.status === "pending" && isExpired ? "Expired" : invitation.status;
+        status = original.status;
       }
       if ("disabled" in original && original.disabled) {
         status = "Dropped";
@@ -1087,289 +1111,301 @@ export default function EnrollmentsTable() {
           </HStack>
         </Box>
 
-        <Table.Root>
-          <Table.Header>
-            {getHeaderGroups().map((headerGroup) => (
-              <Table.Row bg="bg.subtle" key={headerGroup.id}>
-                {headerGroup.headers
-                  .filter((h) => h.id !== "class_id")
-                  .map((header) => {
-                    return (
-                      <Table.ColumnHeader key={header.id}>
-                        {header.isPlaceholder ? null : (
-                          <>
-                            <Text
-                              onClick={header.column.getToggleSortingHandler()}
-                              textAlign={header.id === "actions" || header.id === "checkbox" ? "center" : undefined}
-                            >
-                              {flexRender(header.column.columnDef.header, header.getContext())}
-                              {{
-                                asc: " 🔼",
-                                desc: " 🔽"
-                              }[header.column.getIsSorted() as string] ?? " 🔄"}
-                            </Text>
-                            {header.id === "checkbox" && (
-                              <Checkbox.Root
-                                checked={checkedBoxes.size === getRowModel().rows.length}
-                                onCheckedChange={(checked) => {
-                                  if (checked.checked.valueOf() === true) {
-                                    getRowModel()
-                                      .rows.map((row) => row.original)
-                                      .forEach((row) => {
-                                        checkedBoxesRef.current.add(row);
-                                      });
-                                    setCheckedBoxes(new Set(checkedBoxesRef.current));
-                                  } else {
-                                    checkboxClear();
-                                  }
-                                }}
+        <Box ref={rowWindow.containerRef} onScroll={rowWindow.onScroll} overflowY="auto" maxH="70vh" w="100%">
+          <Table.Root>
+            <Table.Header>
+              {getHeaderGroups().map((headerGroup) => (
+                <Table.Row bg="bg.subtle" key={headerGroup.id}>
+                  {headerGroup.headers
+                    .filter((h) => h.id !== "class_id")
+                    .map((header) => {
+                      return (
+                        <Table.ColumnHeader key={header.id}>
+                          {header.isPlaceholder ? null : (
+                            <>
+                              <Text
+                                onClick={header.column.getToggleSortingHandler()}
+                                textAlign={header.id === "actions" || header.id === "checkbox" ? "center" : undefined}
                               >
-                                <Checkbox.HiddenInput />
-                                <Checkbox.Control>
-                                  {" "}
-                                  <CheckIcon></CheckIcon>
-                                </Checkbox.Control>
-                              </Checkbox.Root>
-                            )}
-                            {header.id === "status" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={[
-                                  { label: "Enrolled", value: "Enrolled" },
-                                  { label: "Pending", value: "pending" },
-                                  { label: "Accepted", value: "accepted" },
-                                  { label: "Cancelled", value: "cancelled" },
-                                  { label: "Expired", value: "Expired" },
-                                  { label: "Dropped", value: "Dropped" }
-                                ]}
-                                placeholder="Filter by status..."
-                              />
-                            )}
-                            {header.id === "profiles.name" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={Array.from(
-                                  combinedData
-                                    .reduce((map, row) => {
-                                      const name =
-                                        row.type === "invitation"
-                                          ? row.name || `${row.sis_user_id}` || "N/A"
-                                          : row.profiles?.name || "N/A";
-                                      if (name && !map.has(name)) {
-                                        map.set(name, name);
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((name) => ({ label: name, value: name }))}
-                                placeholder="Filter by name..."
-                              />
-                            )}
-                            {header.id === "users.email" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={Array.from(
-                                  combinedData
-                                    .reduce((map, row) => {
-                                      const email =
-                                        row.type === "invitation" ? row.email || "N/A" : row.users?.email || "N/A";
-                                      if (email && !map.has(email)) {
-                                        map.set(email, email);
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((email) => ({ label: email, value: email }))}
-                                placeholder="Filter by email..."
-                              />
-                            )}
-                            {header.id === "role" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={Array.from(
-                                  combinedData
-                                    .reduce((map, row) => {
-                                      if (row.role && !map.has(row.role)) {
-                                        map.set(row.role, row.role);
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((role) => ({ label: role, value: role }))}
-                                placeholder="Filter by role..."
-                              />
-                            )}
-                            {header.id === "class_section" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={[
-                                  ...Array.from(
-                                    classSections
-                                      .reduce((map, section) => {
-                                        const name = section.name || `Section ${section.id}`;
-                                        if (!map.has(name)) {
+                                {flexRender(header.column.columnDef.header, header.getContext())}
+                                {{
+                                  asc: " 🔼",
+                                  desc: " 🔽"
+                                }[header.column.getIsSorted() as string] ?? " 🔄"}
+                              </Text>
+                              {header.id === "checkbox" && (
+                                <Checkbox.Root
+                                  checked={checkedBoxes.size === getRowModel().rows.length}
+                                  onCheckedChange={(checked) => {
+                                    if (checked.checked.valueOf() === true) {
+                                      getRowModel()
+                                        .rows.map((row) => row.original)
+                                        .forEach((row) => {
+                                          checkedBoxesRef.current.add(row);
+                                        });
+                                      setCheckedBoxes(new Set(checkedBoxesRef.current));
+                                    } else {
+                                      checkboxClear();
+                                    }
+                                  }}
+                                >
+                                  <Checkbox.HiddenInput />
+                                  <Checkbox.Control>
+                                    {" "}
+                                    <CheckIcon></CheckIcon>
+                                  </Checkbox.Control>
+                                </Checkbox.Root>
+                              )}
+                              {header.id === "status" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={[
+                                    { label: "Enrolled", value: "Enrolled" },
+                                    { label: "Pending", value: "pending" },
+                                    { label: "Cancelled", value: "cancelled" },
+                                    { label: "Dropped", value: "Dropped" }
+                                  ]}
+                                  placeholder="Filter by status..."
+                                />
+                              )}
+                              {header.id === "profiles.name" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={Array.from(
+                                    combinedData
+                                      .reduce((map, row) => {
+                                        const name =
+                                          row.type === "invitation"
+                                            ? row.name || `${row.sis_user_id}` || "N/A"
+                                            : row.profiles?.name || "N/A";
+                                        if (name && !map.has(name)) {
                                           map.set(name, name);
                                         }
                                         return map;
                                       }, new Map())
                                       .values()
-                                  ).map((name) => ({ label: name, value: name })),
-                                  { label: "Not assigned", value: "Not assigned" }
-                                ]}
-                                placeholder="Filter by class section..."
-                              />
-                            )}
-                            {header.id === "lab_section" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={[
-                                  ...Array.from(
-                                    labSections
-                                      .reduce((map, section) => {
-                                        const name = section.name || `Lab ${section.id}`;
-                                        if (!map.has(name)) {
-                                          map.set(name, name);
+                                  ).map((name) => ({ label: name, value: name }))}
+                                  placeholder="Filter by name..."
+                                />
+                              )}
+                              {header.id === "users.email" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={Array.from(
+                                    combinedData
+                                      .reduce((map, row) => {
+                                        const email =
+                                          row.type === "invitation" ? row.email || "N/A" : row.users?.email || "N/A";
+                                        if (email && !map.has(email)) {
+                                          map.set(email, email);
                                         }
                                         return map;
                                       }, new Map())
                                       .values()
-                                  ).map((name) => ({ label: name, value: name })),
-                                  { label: "Not assigned", value: "Not assigned" }
-                                ]}
-                                placeholder="Filter by lab section..."
-                              />
-                            )}
-                            {header.id === "github_username" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={Array.from(
-                                  combinedData
-                                    .filter((row) => row.type === "enrollment")
-                                    .map((row) => row as UserRoleWithPrivateProfileAndUser & { type: "enrollment" })
-                                    .reduce((map, row) => {
-                                      const username = row.users?.github_username || "N/A";
-                                      if (!map.has(username)) {
-                                        map.set(username, username);
-                                      }
-                                      return map;
-                                    }, new Map())
-                                    .values()
-                                ).map((username) => ({ label: username, value: username }))}
-                                placeholder="Filter by GitHub username..."
-                              />
-                            )}
-                            {header.id === "github_org_confirmed" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={[
-                                  { label: "Joined", value: "Joined" },
-                                  { label: "Not joined", value: "Not joined" },
-                                  { label: "N/A", value: "N/A" }
-                                ]}
-                                placeholder="Filter by GitHub org status..."
-                              />
-                            )}
-                            {header.id === "tags" && (
-                              <Select
-                                isMulti={true}
-                                id={header.id}
-                                onChange={(e) => {
-                                  const values = Array.isArray(e) ? e.map((item) => item.value) : [];
-                                  header.column.setFilterValue(values.length > 0 ? values : undefined);
-                                  checkboxClear();
-                                }}
-                                options={[
-                                  ...Array.from(
-                                    tagData
-                                      .reduce((map, p) => {
-                                        if (!map.has(p.name)) {
-                                          map.set(p.name, p.name);
+                                  ).map((email) => ({ label: email, value: email }))}
+                                  placeholder="Filter by email..."
+                                />
+                              )}
+                              {header.id === "role" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={Array.from(
+                                    combinedData
+                                      .reduce((map, row) => {
+                                        if (row.role && !map.has(row.role)) {
+                                          map.set(row.role, row.role);
                                         }
                                         return map;
                                       }, new Map())
                                       .values()
-                                  ).map((name) => ({ label: name, value: name })),
-                                  { label: "N/A (Pending)", value: "N/A (Pending)" }
-                                ]}
-                                placeholder="Filter by tags..."
-                              />
-                            )}
-                          </>
-                        )}
-                      </Table.ColumnHeader>
-                    );
-                  })}
-              </Table.Row>
-            ))}
-          </Table.Header>
-          <Table.Body>
-            {getRowModel().rows.map((row) => (
-              <Table.Row
-                key={row.id}
-                onClick={row.getToggleSelectedHandler()}
-                cursor="pointer"
-                bg={row.getIsSelected() ? "bg.subtle" : undefined}
-              >
-                {row
-                  .getVisibleCells()
-                  .filter((cell) => cell.column.id !== "class_id")
-                  .map((cell) => {
-                    return (
-                      <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                    );
-                  })}
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
+                                  ).map((role) => ({ label: role, value: role }))}
+                                  placeholder="Filter by role..."
+                                />
+                              )}
+                              {header.id === "class_section" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={[
+                                    ...Array.from(
+                                      classSections
+                                        .reduce((map, section) => {
+                                          const name = section.name || `Section ${section.id}`;
+                                          if (!map.has(name)) {
+                                            map.set(name, name);
+                                          }
+                                          return map;
+                                        }, new Map())
+                                        .values()
+                                    ).map((name) => ({ label: name, value: name })),
+                                    { label: "Not assigned", value: "Not assigned" }
+                                  ]}
+                                  placeholder="Filter by class section..."
+                                />
+                              )}
+                              {header.id === "lab_section" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={[
+                                    ...Array.from(
+                                      labSections
+                                        .reduce((map, section) => {
+                                          const name = section.name || `Lab ${section.id}`;
+                                          if (!map.has(name)) {
+                                            map.set(name, name);
+                                          }
+                                          return map;
+                                        }, new Map())
+                                        .values()
+                                    ).map((name) => ({ label: name, value: name })),
+                                    { label: "Not assigned", value: "Not assigned" }
+                                  ]}
+                                  placeholder="Filter by lab section..."
+                                />
+                              )}
+                              {header.id === "github_username" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={Array.from(
+                                    combinedData
+                                      .filter((row) => row.type === "enrollment")
+                                      .map((row) => row as UserRoleWithPrivateProfileAndUser & { type: "enrollment" })
+                                      .reduce((map, row) => {
+                                        const username = row.users?.github_username || "N/A";
+                                        if (!map.has(username)) {
+                                          map.set(username, username);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((username) => ({ label: username, value: username }))}
+                                  placeholder="Filter by GitHub username..."
+                                />
+                              )}
+                              {header.id === "github_org_confirmed" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={[
+                                    { label: "Joined", value: "Joined" },
+                                    { label: "Not joined", value: "Not joined" },
+                                    { label: "N/A", value: "N/A" }
+                                  ]}
+                                  placeholder="Filter by GitHub org status..."
+                                />
+                              )}
+                              {header.id === "tags" && (
+                                <Select
+                                  isMulti={true}
+                                  id={header.id}
+                                  onChange={(e) => {
+                                    const values = Array.isArray(e) ? e.map((item) => item.value) : [];
+                                    header.column.setFilterValue(values.length > 0 ? values : undefined);
+                                    checkboxClear();
+                                  }}
+                                  options={[
+                                    ...Array.from(
+                                      tagData
+                                        .reduce((map, p) => {
+                                          if (!map.has(p.name)) {
+                                            map.set(p.name, p.name);
+                                          }
+                                          return map;
+                                        }, new Map())
+                                        .values()
+                                    ).map((name) => ({ label: name, value: name })),
+                                    { label: "N/A (Pending)", value: "N/A (Pending)" }
+                                  ]}
+                                  placeholder="Filter by tags..."
+                                />
+                              )}
+                            </>
+                          )}
+                        </Table.ColumnHeader>
+                      );
+                    })}
+                </Table.Row>
+              ))}
+            </Table.Header>
+            <Table.Body>
+              {rowWindow.shouldVirtualize && rowWindow.paddingTop > 0 ? (
+                <Table.Row>
+                  <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingTop}px`} />
+                </Table.Row>
+              ) : null}
+              {rowWindow.visibleRows.map((row) => (
+                <Table.Row
+                  key={row.id}
+                  onClick={row.getToggleSelectedHandler()}
+                  cursor="pointer"
+                  bg={row.getIsSelected() ? "bg.subtle" : undefined}
+                >
+                  {row
+                    .getVisibleCells()
+                    .filter((cell) => cell.column.id !== "class_id")
+                    .map((cell) => {
+                      return (
+                        <Table.Cell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </Table.Cell>
+                      );
+                    })}
+                </Table.Row>
+              ))}
+              {rowWindow.shouldVirtualize && rowWindow.paddingBottom > 0 ? (
+                <Table.Row>
+                  <Table.Cell colSpan={columns.length} p={0} border="none" h={`${rowWindow.paddingBottom}px`} />
+                </Table.Row>
+              ) : null}
+            </Table.Body>
+          </Table.Root>
+        </Box>
         <Flex marginLeft="15px" flexDir={"row"} alignItems={"center"} fontSize="var(--chakra-font-sizes-sm)">
           <PiArrowBendLeftUpBold width={"30px"} height={"30px"} />
           Select people
@@ -1642,6 +1678,15 @@ export default function EnrollmentsTable() {
           userRoleId={removingStudentData.userRoleId}
           onConfirmRemove={handleConfirmRemoveStudent}
           isLoading={isDeletingUserRole}
+        />
+      )}
+      {githubDiagnosticsData && (
+        <GitHubDiagnosticsModal
+          isOpen={isGitHubDiagnosticsModalOpen}
+          onClose={closeGitHubDiagnosticsModal}
+          courseId={Number(course_id)}
+          userRoleId={githubDiagnosticsData.userRoleId}
+          studentName={githubDiagnosticsData.userName}
         />
       )}
     </VStack>

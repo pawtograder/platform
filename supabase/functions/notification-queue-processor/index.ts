@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
-import type { Notification } from "../_shared/FunctionTypes.d.ts";
+import type { DiscussionThreadNotification, Notification, NotificationEnvelope } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -31,24 +31,6 @@ export type QueueMessage<T> = {
   enqueued_at: string;
   message: T;
 };
-export type NotificationEnvelope = {
-  type: string;
-};
-export type DiscussionThreadNotification = NotificationEnvelope & {
-  type: "discussion_thread";
-  action: "new_post" | "reply";
-  new_comment_number: number;
-  new_comment_id: number;
-  root_thread_id: number;
-  reply_author_profile_id: string;
-  teaser: string;
-  message_body?: string;
-  thread_name: string;
-  reply_author_name: string;
-  topic_id?: number;
-  notification_reason?: "topic_follow" | "thread_watch";
-};
-
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {
   type: "assignment_group_member";
   action: "join" | "leave";
@@ -188,11 +170,25 @@ function getEmailTemplate(body: NotificationEnvelope, scope: Sentry.Scope): { su
     return null;
   }
 
-  if ("action" in body && body.action) {
-    emailTemplate = emailTemplate[body.action as keyof typeof emailTemplate];
+  const action = "action" in body ? (body as { action?: unknown }).action : undefined;
+  if (action) {
+    emailTemplate = emailTemplate[action as keyof typeof emailTemplate];
   } else if (body.type === "discussion_thread") {
     // Default to "reply" for backward compatibility with old notifications
     emailTemplate = emailTemplate["reply" as keyof typeof emailTemplate];
+  }
+
+  if (emailTemplate == null || typeof emailTemplate !== "object") {
+    const error = new Error(
+      `No email template found for type=${body.type} action=${action == null ? "(none)" : String(action)}`
+    );
+    scope.setContext("error_details", {
+      missing_template_for_type: body.type,
+      missing_template_for_action: action ?? null
+    });
+    Sentry.captureException(error, scope);
+    console.error(`No email template found for type=${body.type} action=${action == null ? "(none)" : String(action)}`);
+    return null;
   }
 
   if (!("subject" in emailTemplate)) {
@@ -252,7 +248,15 @@ function buildEmailUrls(
   }
 
   if ("root_thread_id" in body) {
-    urls.thread_url = `https://${Deno.env.get("APP_URL")}/course/${classId}/discussion/${body.root_thread_id}`;
+    const d = body as DiscussionThreadNotification;
+    const hash =
+      d.type === "discussion_thread" &&
+      d.action === "marked_duplicate" &&
+      d.duplicate_thread_ordinal != null &&
+      d.duplicate_thread_ordinal !== undefined
+        ? `#post-${d.duplicate_thread_ordinal}`
+        : "";
+    urls.thread_url = `https://${Deno.env.get("APP_URL")}/course/${classId}/discussion/${body.root_thread_id}${hash}`;
   }
 
   if ("regrade_request_id" in body) {
@@ -851,11 +855,13 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       return false;
     }
     const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
+    const isPostmarkEmail = Deno.env.get("SMTP_PORT") === "2525";
     const transporter = nodemailer.createTransport({
       pool: true,
       host: Deno.env.get("SMTP_HOST") || "",
       port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
-      secure: isInbucketEmail ? false : true, // use TLS
+      secure: isInbucketEmail || isPostmarkEmail ? false : true, // use TLS
+      requireTLS: isPostmarkEmail ? true : false,
       ignoreTLS: isInbucketEmail,
       auth: {
         user: Deno.env.get("SMTP_USER") || "",

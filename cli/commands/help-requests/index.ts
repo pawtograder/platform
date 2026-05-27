@@ -7,7 +7,7 @@
  */
 
 import type { Argv } from "yargs";
-import { logger } from "../../utils/logger";
+import { logger } from "@/cli/utils/logger";
 
 export const command = "help-requests <action>";
 export const describe = "Manage help requests";

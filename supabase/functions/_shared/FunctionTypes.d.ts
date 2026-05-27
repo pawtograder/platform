@@ -27,6 +27,31 @@ export type OutputFormat = "text" | "markdown" | "ansi";
 
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
 export type Notification = Database["public"]["Tables"]["notifications"]["Row"];
+
+export type NotificationEnvelope = {
+  type: string;
+};
+
+export type DiscussionThreadNotification = NotificationEnvelope & {
+  type: "discussion_thread";
+  action: "new_post" | "reply" | "marked_duplicate";
+  new_comment_number?: number;
+  new_comment_id?: number;
+  root_thread_id: number;
+  reply_author_profile_id?: string;
+  teaser?: string;
+  message_body?: string;
+  thread_name?: string;
+  reply_author_name?: string;
+  topic_id?: number;
+  notification_reason?: "topic_follow" | "thread_watch";
+  duplicate_thread_id?: number;
+  original_thread_subject?: string;
+  duplicate_original_subject?: string;
+  marked_by_user_id?: string;
+  marked_by_name?: string;
+  duplicate_thread_ordinal?: number;
+};
 export type OutputVisibility =
   | "hidden" // Never shown to students
   | "visible" // Always shown to students
@@ -197,6 +222,63 @@ export type GenericResponse = {
   };
 };
 
+export type GitHubMembershipStatus = {
+  state: "active" | "pending" | "not_found" | "unknown";
+  isMember: boolean;
+  error?: string;
+};
+
+export type InstructorGitHubDiagnoseRequest = {
+  action: "diagnose";
+  courseId: number;
+  userRoleId: number;
+};
+
+export type InstructorGitHubSyncRequest = {
+  action: "sync";
+  courseId: number;
+  userRoleId: number;
+};
+
+export type InstructorGitHubUnlinkRequest = {
+  action: "unlink";
+  courseId: number;
+  userRoleId: number;
+};
+
+export type GitHubLinkStatus = {
+  courseId: number;
+  userRoleId: number;
+  userId: string;
+  email: string | null;
+  githubUsername: string | null;
+  githubUserId: string | null;
+  currentGithubUsername: string | null;
+  usernameChanged: boolean;
+  classOrg: string | null;
+  studentTeamSlug: string | null;
+  githubOrgConfirmed: boolean;
+  lastGithubUserSync: string | null;
+  orgMembership: GitHubMembershipStatus;
+  teamMembership: GitHubMembershipStatus;
+};
+
+export type InstructorGitHubDiagnoseResponse = {
+  status: GitHubLinkStatus;
+};
+
+export type InstructorGitHubSyncResponse = {
+  message: string;
+  status: GitHubLinkStatus;
+};
+
+export type InstructorGitHubUnlinkResponse = {
+  message: string;
+  removedFromOrg: boolean;
+  unlinkedIdentity: boolean;
+  status: GitHubLinkStatus;
+};
+
 export type AssignmentGroupJoinRequest = {
   assignment_group_id: number;
 };
@@ -229,6 +311,10 @@ export type AutograderTriggerGradingWorkflowRequest = {
   sha: string;
   class_id: number;
 };
+export type AutograderTriggerGradingWorkflowResponse = {
+  message: string;
+  repository_check_run_id: number;
+};
 
 export type AutograderRerunGraderRequest = {
   submission_ids: number[];
@@ -247,6 +333,8 @@ export type CheckRunStatus = {
   conclusion?: string;
   submission_id?: number;
   requested_at?: string;
+  workflow_triggered_at?: string;
+  check_run_marked_in_progress_at?: string;
 };
 
 export type AssignmentGroupInstructorCreateRequest = {
@@ -295,6 +383,11 @@ export type AssignmentDeleteRequest = {
 
 export type AssignmentDeleteResponse = {
   message: string;
+  github_cleanup_strategy?: "delete_synchronously" | "archive_asynchronously";
+  github_repositories_total?: number;
+  github_repositories_deleted?: number;
+  github_repositories_queued_for_archive?: number;
+  github_repositories_skipped?: number;
 };
 
 // Course Import SIS Types
@@ -397,7 +490,6 @@ export type CreateInvitationResponse = {
     name?: string;
     status: string;
     created_at: string;
-    expires_at: string;
     class_section_id?: number;
     lab_section_id?: number;
   }>;
@@ -406,3 +498,29 @@ export type CreateInvitationResponse = {
     error: string;
   }>;
 };
+
+// ─── Rubric reference types (shared between cli/ and any Edge Function that
+// imports/exports rubric YAML). Mirrors `YamlReference` in
+// `utils/supabase/DatabaseTypes.d.ts`; kept duplicate-but-aligned because the
+// frontend runs on Node and Edge Functions run on Deno.
+
+export type YamlReference = {
+  review_round?: string;
+  part?: string;
+  criterion?: string;
+  check?: string;
+  id?: number;
+};
+
+export type IndexedCheck = {
+  checkId: number;
+  checkName: string;
+  partName: string;
+  criterionName: string;
+  reviewRound: string | null;
+  rubricId: number;
+  assignmentId: number;
+  classId: number;
+};
+
+export type ResolveOutcome = { ok: true; target: IndexedCheck } | { ok: false; reason: string };

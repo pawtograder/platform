@@ -48,11 +48,10 @@ export default async function AssignmentLayout({
     }
   }
 
-  // Pre-fetch all assignment controller data on the server with caching
-  const initialData = await fetchAssignmentControllerData(
-    assignmentId,
-    role.role === "instructor" || role.role === "grader"
-  );
+  // Keep instructor/grader assignment pages responsive for very large classes by
+  // skipping heavyweight SSR prefetch. Students retain SSR prefetch for faster first paint.
+  const isStaff = role.role === "instructor" || role.role === "grader";
+  const initialData = isStaff ? undefined : await fetchAssignmentControllerData(assignmentId, false);
   return (
     <AssignmentProvider assignment_id={assignmentId} initialData={initialData}>
       {children}

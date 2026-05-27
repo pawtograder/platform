@@ -1,20 +1,39 @@
 "use client";
 
 import { Label } from "@/components/ui/label";
+import { useColorMode } from "@/components/ui/color-mode";
 import { useAllStudentRoles } from "@/hooks/useCourseController";
 import { useGradebookColumns, useGradebookController, useGradebookExpressionPrefix } from "@/hooks/useGradebook";
 import {
   evaluateForStudent,
   evaluateRenderExpression,
   formatValueForOverlay,
-  type LineResult,
+  validateExpressionString,
+  type IntermediateValue,
   type RenderExpressionResult,
   type ValidationResult
 } from "@/lib/gradebookExpressionTester";
+import {
+  GRADEBOOK_EXPRESSION_LANGUAGE_ID,
+  registerGradebookExpressionEditorFeatures,
+  registerGradebookExpressionLanguage
+} from "@/lib/gradebookExpressionMonaco";
 import { Badge, Box, Button, Flex, HStack, Icon, Input, Text, Textarea, VStack } from "@chakra-ui/react";
+import type { Monaco } from "@monaco-editor/react";
+import dynamic from "next/dynamic";
 import type * as MathJSType from "mathjs";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LuArrowLeftRight, LuCheck, LuCircleAlert, LuMaximize2, LuMinimize2, LuUser } from "react-icons/lu";
+import type { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
+
+const ExpressionMonacoEditor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
+  ssr: false,
+  loading: () => (
+    <Text fontSize="sm" color="fg.muted" px={3} py={2}>
+      Loading editor…
+    </Text>
+  )
+});
 
 type MathJSNS = typeof MathJSType;
 
@@ -120,6 +139,27 @@ export function ExpressionBuilder(props: Props) {
     () => gradebookColumns.map((c) => `${c.id}:${c.slug ?? ""}`).join("|"),
     [gradebookColumns]
   );
+
+  /**
+   * When expanded, intermediates + hover spans are recomputed only after this
+   * catches up to `expression` (debounced). The evaluator always runs on the
+   * current text for scores/line values; this only gates the expensive per-node
+   * intermediate pass.
+   */
+  const [debouncedExpression, setDebouncedExpression] = useState(expression);
+  useEffect(() => {
+    if (!isExpanded || !selectedStudentId) {
+      setDebouncedExpression(expression);
+      return;
+    }
+    if (expression.trim() === "") {
+      setDebouncedExpression(expression);
+      return;
+    }
+    const id = window.setTimeout(() => setDebouncedExpression(expression), 220);
+    return () => window.clearTimeout(id);
+  }, [expression, isExpanded, selectedStudentId]);
+
   const validation = useMemo<ValidationResult>(() => {
     const isEmpty = expression.trim().length === 0;
     if (mathLoadError) {
@@ -144,14 +184,37 @@ export function ExpressionBuilder(props: Props) {
         evaluation: null
       };
     }
+    const trimmed = expression.trim();
+    if (trimmed) {
+      const quick = validateExpressionString(math, gradebookController, trimmed, editingColumnId);
+      if (quick.parseError) {
+        return {
+          isValid: false,
+          isEmpty: false,
+          parseError: quick.parseError,
+          dependencyError: null,
+          evaluation: null
+        };
+      }
+      if (quick.dependencyError) {
+        return {
+          isValid: false,
+          isEmpty: false,
+          parseError: null,
+          dependencyError: quick.dependencyError,
+          evaluation: null
+        };
+      }
+    }
     try {
+      const intermediatesCatchUp = trimmed === debouncedExpression.trim();
       return evaluateForStudent({
         math,
         gradebookController,
         expression,
         studentId: isExpanded ? selectedStudentId : "",
         editingColumnId,
-        captureIntermediates: isExpanded
+        captureIntermediates: isExpanded && intermediatesCatchUp
       });
     } catch (e) {
       return {
@@ -170,6 +233,7 @@ export function ExpressionBuilder(props: Props) {
     mathLoadError,
     gradebookController,
     expression,
+    debouncedExpression,
     selectedStudentId,
     editingColumnId,
     isExpanded,
@@ -247,7 +311,7 @@ export function ExpressionBuilder(props: Props) {
         </Button>
       </HStack>
 
-      <Flex gap={4} direction={{ base: "column", lg: "row" }} align="stretch" flex={1}>
+      <Flex gap={4} direction={{ base: "column", lg: "row" }} align="flex-start">
         {/* Left: Student picker */}
         <Box
           flex="0 0 280px"
@@ -324,6 +388,7 @@ export function ExpressionBuilder(props: Props) {
             onExpressionChange={onExpressionChange}
             validation={validation}
             hasStudent={Boolean(selectedStudentId)}
+            gradebookColumns={gradebookColumns}
           />
 
           <ValidationStatus validation={validation} expression={expression} />
@@ -404,50 +469,141 @@ function FinalResultBadges({
   );
 }
 
+const GRADEBOOK_EXPR_MONACO_STYLE_ID = "gradebook-expression-monaco-decoration-styles";
+
 /**
- * The full-screen editor surface. A monospace `<textarea>` is layered over a
- * pre-rendered mirror that shows the same text line-by-line, plus a
- * right-aligned `= value` annotation on every line that ends a top-level
- * statement. Both layers share the same font metrics, padding, and line
- * height so the cursor in the textarea lines up exactly with the values in
- * the mirror; the textarea is transparent and painted on top, so the user
- * edits normally while seeing per-line evaluations as inline hints.
+ * Full-screen editor: Monaco with completion, hover on intermediates, and
+ * inline `= value` decorations on lines that end a top-level statement.
  */
 function InlineLineAnnotatedEditor({
   expression,
   onExpressionChange,
   validation,
-  hasStudent
+  hasStudent,
+  gradebookColumns
 }: {
   expression: string;
   onExpressionChange: (value: string) => void;
   validation: ValidationResult;
   hasStudent: boolean;
+  gradebookColumns: GradebookColumn[];
 }) {
+  const { colorMode } = useColorMode();
+  const monacoTheme = colorMode === "dark" ? "vs-dark" : "vs";
   const evaluation = validation.evaluation;
-
-  // Build an O(1) lookup from line-index to annotation value.
-  const lineResultsByIndex = useMemo(() => {
-    const map = new Map<number, LineResult>();
-    for (const lr of evaluation?.lineResults ?? []) {
-      map.set(lr.lineIndex, lr);
-    }
-    return map;
-  }, [evaluation?.lineResults]);
-
   const lines = useMemo(() => expression.split("\n"), [expression]);
-  const rows = Math.max(6, Math.min(24, lines.length + 2));
+  const lineCount = Math.max(6, Math.min(24, lines.length + 2));
+  const editorHeightPx = Math.min(Math.max(lineCount * 20 + 24, 120), 560);
 
-  // Keep the textarea and the mirror in sync on scroll. The user might type
-  // more lines than the textarea's visible height, in which case both layers
-  // need to scroll together so the annotations stay aligned with the code.
-  const scrollSync = (e: React.UIEvent<HTMLTextAreaElement>) => {
-    if (mirrorRef.current) {
-      mirrorRef.current.scrollTop = e.currentTarget.scrollTop;
-      mirrorRef.current.scrollLeft = e.currentTarget.scrollLeft;
-    }
+  const columnItems = useMemo(
+    () =>
+      gradebookColumns
+        .filter((c): c is GradebookColumn & { slug: string } => Boolean(c.slug))
+        .map((c) => ({
+          slug: c.slug,
+          detail: [c.name, c.max_score != null ? `max ${c.max_score}` : undefined].filter(Boolean).join(" · ")
+        })),
+    [gradebookColumns]
+  );
+
+  const providerDataRef = useRef({
+    columns: columnItems,
+    intermediates: [] as IntermediateValue[]
+  });
+  providerDataRef.current = {
+    columns: columnItems,
+    intermediates: evaluation?.intermediates ?? []
   };
-  const mirrorRef = React.useRef<HTMLPreElement | null>(null);
+
+  const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
+  const providersDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  const decorationIdsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const ok = colorMode === "dark" ? "#4ade80" : "var(--chakra-colors-green-600, #15803d)";
+    const err = colorMode === "dark" ? "#f87171" : "var(--chakra-colors-red-500, #dc2626)";
+    const css = `
+      .gradebook-expr-line-anno-ok { color: ${ok} !important; font-weight: 600; }
+      .gradebook-expr-line-anno-err { color: ${err} !important; font-weight: 600; }
+    `;
+    let style = document.getElementById(GRADEBOOK_EXPR_MONACO_STYLE_ID) as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = GRADEBOOK_EXPR_MONACO_STYLE_ID;
+      document.head.appendChild(style);
+    }
+    style.textContent = css;
+  }, [colorMode]);
+
+  useEffect(() => {
+    return () => {
+      providersDisposableRef.current?.dispose();
+      providersDisposableRef.current = null;
+    };
+  }, []);
+
+  const handleBeforeMount = useCallback((monaco: Monaco) => {
+    monacoRef.current = monaco;
+    // Expose the Monaco namespace globally so E2E tests (and devtools) can
+    // reach the editor models without us having to plumb a custom helper
+    // through the React tree. This is a no-op for normal users — `monaco` is
+    // already a global symbol when the editor loads via AMD; we only re-add
+    // it because our webpack-bundled build keeps it module-local.
+    (window as unknown as { monaco?: Monaco }).monaco = monaco;
+    window.MonacoEnvironment = {
+      getWorker(_moduleId, label) {
+        if (label === "editorWorkerService") {
+          return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
+        }
+        throw new Error(`Unknown Monaco worker label: ${label}`);
+      }
+    };
+    registerGradebookExpressionLanguage(monaco);
+    providersDisposableRef.current?.dispose();
+    providersDisposableRef.current = registerGradebookExpressionEditorFeatures(monaco, {
+      getColumnSlugs: () => providerDataRef.current.columns,
+      getIntermediates: () => providerDataRef.current.intermediates
+    });
+  }, []);
+
+  const handleMount = useCallback((editor: import("monaco-editor").editor.IStandaloneCodeEditor, monaco: Monaco) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+    editor.updateOptions({ padding: { top: 8, bottom: 8 } });
+    // Force LF line endings: mathjs only treats `\n` as a top-level statement
+    // separator, so a CRLF-EOL model would make multi-line expressions fail
+    // validation with a parse error on the `\r` left at the end of every line.
+    editor.getModel()?.setEOL(monaco.editor.EndOfLineSequence.LF);
+  }, []);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (!model) return;
+
+    const lineResults = evaluation?.lineResults ?? [];
+    const newDecs: import("monaco-editor").editor.IModelDeltaDecoration[] = [];
+    for (const lr of lineResults) {
+      if (lr.kind !== "value" && lr.kind !== "error") continue;
+      const lineNumber = lr.lineIndex + 1;
+      if (lineNumber < 1 || lineNumber > model.getLineCount()) continue;
+      const maxCol = model.getLineMaxColumn(lineNumber);
+      const content = lr.kind === "value" ? `  = ${lr.display}` : `  ⚠ ${lr.display}`;
+      const inlineClassName = lr.kind === "value" ? "gradebook-expr-line-anno-ok" : "gradebook-expr-line-anno-err";
+      newDecs.push({
+        range: new monaco.Range(lineNumber, maxCol, lineNumber, maxCol),
+        options: {
+          after: { content, inlineClassName },
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+        }
+      });
+    }
+    decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, newDecs);
+  }, [evaluation?.lineResults, expression, evaluation?.error]);
 
   const borderColor =
     validation.parseError || validation.dependencyError || validation.evaluation?.error
@@ -466,97 +622,65 @@ function InlineLineAnnotatedEditor({
       overflow="hidden"
       data-testid="expression-builder-overlay"
     >
-      {/* Mirror layer: renders the user's text plus the per-line values. */}
-      <Box
-        as="pre"
-        ref={mirrorRef as React.RefObject<HTMLPreElement>}
-        aria-hidden="true"
-        position="absolute"
-        inset={0}
-        m={0}
-        px={3}
-        py={2}
-        fontFamily="mono"
-        fontSize="sm"
-        lineHeight="1.5"
-        color="fg"
-        whiteSpace="pre"
-        overflow="auto"
-        pointerEvents="none"
-      >
-        {lines.map((line, idx) => {
-          const lr = lineResultsByIndex.get(idx);
-          return (
-            <Box
-              key={idx}
-              as="div"
-              display="flex"
-              justifyContent="space-between"
-              gap={4}
-              data-testid={lr?.kind === "value" ? "expression-line-value" : undefined}
-            >
-              {/* The text content must match the textarea exactly — including
-                  trailing whitespace — so the invisible textarea text lines
-                  up underneath. Use a non-breaking content for empty lines
-                  so the div retains its height. */}
-              <Box as="span" color="transparent" whiteSpace="pre">
-                {line.length ? line : "\u200B"}
-              </Box>
-              {lr?.kind === "value" ? (
-                <Box
-                  as="span"
-                  color={lr.display === "undefined" ? "orange.500" : "green.600"}
-                  fontWeight="semibold"
-                  whiteSpace="pre"
-                  pl={2}
-                >
-                  {"= "}
-                  {lr.display}
-                </Box>
-              ) : lr?.kind === "error" ? (
-                <Box as="span" color="red.500" fontWeight="semibold" whiteSpace="pre" pl={2}>
-                  {"⚠ "}
-                  {lr.display}
-                </Box>
-              ) : null}
-            </Box>
-          );
-        })}
-      </Box>
+      <ExpressionMonacoEditor
+        height={editorHeightPx}
+        width="100%"
+        theme={monacoTheme}
+        path="gradebook-score-expression"
+        language={GRADEBOOK_EXPRESSION_LANGUAGE_ID}
+        value={expression}
+        onChange={(v) => onExpressionChange((v ?? "").replace(/\r\n?/g, "\n"))}
+        beforeMount={handleBeforeMount}
+        onMount={handleMount}
+        wrapperProps={{
+          id: "scoreExpressionFull"
+        }}
+        options={{
+          minimap: { enabled: false },
+          fontSize: 13,
+          fontFamily: "var(--chakra-fonts-mono, ui-monospace, monospace)",
+          lineNumbers: "off",
+          scrollBeyondLastLine: false,
+          folding: false,
+          glyphMargin: false,
+          wordWrap: "off",
+          fixedOverflowWidgets: true,
+          automaticLayout: true,
+          tabSize: 2,
+          renderLineHighlight: "none",
+          overviewRulerLanes: 0,
+          hideCursorInOverviewRuler: true,
+          scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+          // Default is strings: false — without this, slug completions never fire inside "…".
+          quickSuggestions: { other: true, comments: false, strings: true },
+          wordBasedSuggestions: "off",
+          suggestOnTriggerCharacters: true,
+          acceptSuggestionOnCommitCharacter: true
+        }}
+      />
 
-      {/* Real editor: invisible background so the mirror shines through, but
-          the textarea itself holds the caret, selection, and IME focus. */}
-      <Box position="relative">
-        <Textarea
-          id="scoreExpressionFull"
-          value={expression}
-          onChange={(e) => onExpressionChange(e.target.value)}
-          onScroll={scrollSync}
-          placeholder="Score Expression"
-          rows={rows}
-          fontFamily="mono"
-          fontSize="sm"
-          lineHeight="1.5"
-          px={3}
-          py={2}
-          border="none"
-          rounded="none"
-          bg="transparent"
-          color="fg"
-          resize="vertical"
-          whiteSpace="pre"
-          overflow="auto"
-          spellCheck={false}
-          _focus={{ boxShadow: "none", outline: "none" }}
-          /* Hide the textarea's own text so only the mirror's per-line
-             layout (with its trailing annotations) is visible — the
-             textarea retains the caret and keeps accepting input. */
-          css={{
-            color: "transparent",
-            caretColor: "var(--chakra-colors-fg)",
-            "&::placeholder": { color: "var(--chakra-colors-fg-muted)" }
-          }}
-        />
+      {/* Preserve e2e + accessibility hooks for per-statement values (Monaco
+          decorations are not in the React tree). Use a visually-hidden
+          (clipped) box rather than `width:0;height:0;overflow:hidden` so the
+          spans are still considered "rendered" — WebKit excludes zero-sized
+          collapsed elements from `innerText`, which broke the e2e assertions
+          that look for `= value` annotations on the overlay. */}
+      <Box
+        position="absolute"
+        w="1px"
+        h="1px"
+        overflow="hidden"
+        clipPath="inset(50%)"
+        whiteSpace="nowrap"
+        aria-hidden="true"
+      >
+        {(evaluation?.lineResults ?? []).map((lr) =>
+          lr.kind === "value" ? (
+            <span key={`lv-${lr.lineIndex}`} data-testid="expression-line-value">
+              {` = ${lr.display} `}
+            </span>
+          ) : null
+        )}
       </Box>
 
       {!hasStudent && (

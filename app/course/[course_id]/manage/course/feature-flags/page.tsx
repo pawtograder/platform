@@ -11,7 +11,7 @@ import {
 import { createClient } from "@/utils/supabase/client";
 import { CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Card, Heading, Text, VStack } from "@chakra-ui/react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 function buildFlagsFromRole(
@@ -26,6 +26,7 @@ function buildFlagsFromRole(
 
 export default function CourseFeatureFlagsPage() {
   const { course_id } = useParams();
+  const router = useRouter();
   const { role } = useClassProfiles();
   const courseIdNum = Number.parseInt(course_id as string, 10);
   const features = (role.classes as CourseWithFeatures).features;
@@ -68,6 +69,7 @@ export default function CourseFeatureFlagsPage() {
           throw new Error(error.message);
         }
         setFlags((prev) => ({ ...prev, [name]: checked }));
+        router.refresh();
         toaster.success({ title: "Saved" });
       } catch (e) {
         toaster.error({
@@ -79,7 +81,7 @@ export default function CourseFeatureFlagsPage() {
         setSavingName(null);
       }
     },
-    [courseIdNum, features]
+    [courseIdNum, features, router]
   );
 
   if (!role || role.role !== "instructor") {
@@ -96,8 +98,8 @@ export default function CourseFeatureFlagsPage() {
         <Box>
           <Heading size="lg">Feature flags</Heading>
           <Text fontSize="sm" color="fg.muted" mt={1}>
-            Turn course features on or off. Navigation and student tools respect these flags; staff may need direct URLs
-            when a menu entry is hidden. Changes apply after people refresh the page.
+            Turn course features on or off. Navigation, dashboards, and student tools update automatically when these
+            flags change; staff may need direct URLs when a menu entry is hidden.
           </Text>
         </Box>
 

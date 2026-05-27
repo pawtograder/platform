@@ -326,6 +326,7 @@ export default function AssignmentsTable({
   const [columnVisibility, setColumnVisibility] = useState(() => {
     return {
       groupname: false,
+      commit_history: true,
       assignment_group_mentor_name: false,
       class_section_name: false,
       lab_section_name: false,
@@ -955,6 +956,7 @@ export default function AssignmentsTable({
                           h.id === "autograder_score" ||
                           h.id === "total_score" ||
                           h.id === "released" ||
+                          h.id === "commit_history" ||
                           (h.id === "assignment_group_mentor_name" &&
                             showGroupMentorColumn &&
                             columnVisibility.assignment_group_mentor_name) ||
@@ -1321,6 +1323,7 @@ export default function AssignmentsTable({
                                 header.id === "autograder_score" ||
                                 header.id === "total_score" ||
                                 header.id === "released" ||
+                                header.id === "commit_history" ||
                                 (header.id === "assignment_group_mentor_name" &&
                                   showGroupMentorColumn &&
                                   columnVisibility.assignment_group_mentor_name) ||
@@ -1380,6 +1383,7 @@ export default function AssignmentsTable({
                               c.column.id === "autograder_score" ||
                               c.column.id === "total_score" ||
                               c.column.id === "released" ||
+                              c.column.id === "commit_history" ||
                               (c.column.id === "assignment_group_mentor_name" &&
                                 showGroupMentorColumn &&
                                 columnVisibility.assignment_group_mentor_name) ||

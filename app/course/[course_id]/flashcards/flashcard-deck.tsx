@@ -29,8 +29,8 @@ export const FlashcardDeckCardSkeleton = () => {
       transition="all 0.3s ease-in-out"
       borderRadius="xl"
       overflow="hidden"
-      height="336px"
-      width="240px"
+      minH="336px"
+      w="100%"
     >
       <Card.Body p={8}>
         <Box mb={6} display="flex" justifyContent="center">
@@ -66,8 +66,8 @@ export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardP
         }}
         borderRadius="xl"
         overflow="hidden"
-        height="336px"
-        width="240px"
+        minH="336px"
+        w="100%"
         borderWidth="1px"
         position="relative"
         role="group"

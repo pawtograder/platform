@@ -7,7 +7,7 @@
  */
 
 import type { Argv } from "yargs";
-import { logger } from "../../utils/logger";
+import { logger } from "@/cli/utils/logger";
 import { buildCommentsCommands } from "./comments";
 import { buildArtifactsCommands } from "./artifacts";
 

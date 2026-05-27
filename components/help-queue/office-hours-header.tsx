@@ -299,7 +299,15 @@ export function OfficeHoursHeader({
                 </NextLink>
                 <FiChevronRight size={12} />
                 <Box borderBottom="2px solid" borderColor="orange.600" pb={0.5}>
-                  <Text fontSize="xs" fontWeight="semibold" color="fg" truncate maxW={{ base: "40vw", md: "25vw" }}>
+                  <Text
+                    fontSize="xs"
+                    fontWeight="semibold"
+                    color="fg"
+                    truncate
+                    maxW={{ base: "40vw", md: "25vw" }}
+                    data-visual-test="transparent"
+                    data-visual-placeholder="request-id"
+                  >
                     Request #{currentRequest.id}
                   </Text>
                 </Box>
@@ -377,7 +385,15 @@ export function OfficeHoursHeader({
               </NextLink>
               <FiChevronRight />
               <Box borderBottom="3px solid" borderColor="orange.600" pb={1}>
-                <Text fontSize="sm" fontWeight="semibold" color="fg" truncate maxW={{ base: "60vw", md: "40vw" }}>
+                <Text
+                  fontSize="sm"
+                  fontWeight="semibold"
+                  color="fg"
+                  truncate
+                  maxW={{ base: "60vw", md: "40vw" }}
+                  data-visual-test="transparent"
+                  data-visual-placeholder="request-id"
+                >
                   Request #{currentRequest.id}
                 </Text>
               </Box>

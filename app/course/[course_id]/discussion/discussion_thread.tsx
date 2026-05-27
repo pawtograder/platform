@@ -47,6 +47,7 @@ export function DiscussionThreadReply({
     }
   }, [visible]);
   const { tableController } = useDiscussionThreadsController();
+  const courseController = useCourseController();
 
   const sendMessage = useCallback(
     async (message: string, profile_id: string, close = true) => {
@@ -64,16 +65,27 @@ export function DiscussionThreadReply({
         body: message
       });
 
-      // invalidate({
-      //     resource: "discussion_threads",
-      //     invalidates: ['detail'],
-      //     id: thread.parent!
-      // });
       if (close) {
         setVisible(false);
       }
+
+      // Replying auto-follows the thread via a server-side trigger that
+      // INSERTs into discussion_thread_watchers. The Follow→Unfollow
+      // button transition reads that row through a realtime-backed
+      // TableController, and on slow CI runs realtime delivery of the
+      // new watcher row lags the reply create by several seconds, during
+      // which the button keeps saying "Follow". Warm the watcher cache
+      // directly so the UI flips without waiting on the broadcast. Run
+      // this after the composer close because it's best-effort —
+      // realtime is the authoritative path — and we don't want a slow
+      // REST round-trip stalling the close transition.
+      void courseController.discussionThreadWatchers
+        .getOneByFilters([{ column: "discussion_thread_root_id", operator: "eq", value: thread.root || thread.id }])
+        .catch(() => {
+          // Realtime will catch up.
+        });
     },
-    [tableController, setVisible, thread]
+    [tableController, courseController, setVisible, thread]
   );
   if (!visible) {
     return <></>;
@@ -286,7 +298,7 @@ const DiscussionThreadContent = memo(
               {authorProfile ? (
                 <Avatar.Root size="sm" variant="outline" shape="square">
                   <Avatar.Fallback name={authorProfile.name} />
-                  <Avatar.Image src={authorProfile.avatar_url} />
+                  <Avatar.Image src={authorProfile.avatar_url} alt="" />
                 </Avatar.Root>
               ) : (
                 <SkeletonCircle width="40px" height="40px" />
@@ -297,6 +309,25 @@ const DiscussionThreadContent = memo(
                 borderRadius="l3"
               >
                 <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref}>
+                  {thread.duplicate_original_subject &&
+                    thread.duplicate_marked_by_display_name &&
+                    thread.duplicate_marked_at && (
+                      <Box
+                        mb="2"
+                        py="1.5"
+                        px="2"
+                        rounded="md"
+                        bg="orange.subtle"
+                        borderWidth="1px"
+                        borderColor="orange.muted"
+                      >
+                        <Text fontSize="xs" color="fg.default">
+                          Originally <strong>{thread.duplicate_original_subject}</strong> —{" "}
+                          <strong>{thread.duplicate_marked_by_display_name}</strong> marked this as a duplicate and
+                          merged it here.
+                        </Text>
+                      </Box>
+                    )}
                   <HStack gap="1">
                     <Text textStyle="sm" fontWeight="semibold">
                       <Link
@@ -363,7 +394,13 @@ const DiscussionThreadContent = memo(
                   )}
                 </Box>
                 <HStack fontWeight="semibold" textStyle="xs" ps="2">
-                  <Text textStyle="sm" color="fg.muted" ms="3" data-visual-test="blackout">
+                  <Text
+                    textStyle="sm"
+                    color="fg.muted"
+                    ms="3"
+                    data-visual-test="transparent"
+                    data-visual-placeholder="relative-time"
+                  >
                     {formatRelative(thread.created_at, new Date())}
                   </Text>
                   <Link onClick={showReply} color="fg.muted">
@@ -378,7 +415,7 @@ const DiscussionThreadContent = memo(
                     </Link>
                   )}
                   {root_thread?.is_question && canEdit && !isAnswered && (
-                    <Button variant="surface" onClick={toggleAnswered} size="xs" colorPalette="green">
+                    <Button variant="solid" onClick={toggleAnswered} size="xs" colorPalette="green">
                       Mark as Answer
                     </Button>
                   )}

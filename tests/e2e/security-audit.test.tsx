@@ -11,7 +11,7 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
-import { argosScreenshot } from "@argos-ci/playwright";
+import { visualScreenshot } from "./VisualTestUtils";
 
 /**
  * Security Audit Dashboard E2E Tests
@@ -188,6 +188,7 @@ test.beforeAll(async () => {
   [instructor, student1, student2, student3, grader] = await createUsersInClass([
     {
       name: "Professor Paranoid",
+      public_profile_name: "Security Pseudonym Instructor",
       email: "security-instructor@pawtograder.net",
       role: "instructor",
       class_id: course.id,
@@ -195,6 +196,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Claude McCheaterson",
+      public_profile_name: "Security Pseudonym Student 1",
       email: "claude-user@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -203,6 +205,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Backdoor Bobby",
+      public_profile_name: "Security Pseudonym Student 2",
       email: "backdoor-bobby@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -211,6 +214,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Honest Hannah",
+      public_profile_name: "Security Pseudonym Student 3",
       email: "honest-hannah@pawtograder.net",
       role: "student",
       class_id: course.id,
@@ -219,6 +223,7 @@ test.beforeAll(async () => {
     },
     {
       name: "Grading Gary",
+      public_profile_name: "Security Pseudonym Grader",
       email: "security-grader@pawtograder.net",
       role: "grader",
       class_id: course.id,
@@ -445,7 +450,7 @@ test.describe("Security Audit Dashboard", () => {
     const matchedContent = claudeRow.getByText(/java\.io\.File/);
     await expect(matchedContent).toBeVisible();
 
-    await argosScreenshot(page, "Security audit found matches");
+    await visualScreenshot(page, "Security audit found matches");
   });
 
   test("Search with no matches shows appropriate message", async ({ page }) => {
@@ -459,7 +464,7 @@ test.describe("Security Audit Dashboard", () => {
     // Should show no matches message
     await expect(page.getByText(/No matches found/)).toBeVisible({ timeout: 10000 });
 
-    await argosScreenshot(page, "Security audit no matches found");
+    await visualScreenshot(page, "Security audit no matches found");
   });
 
   test("Export to CSV button works when results exist", async ({ page }) => {
@@ -486,6 +491,6 @@ test.describe("Security Audit Dashboard", () => {
     expect(download.suggestedFilename()).toContain("security_audit");
     expect(download.suggestedFilename()).toContain(".csv");
 
-    await argosScreenshot(page, "Security audit export CSV");
+    await visualScreenshot(page, "Security audit export CSV");
   });
 });

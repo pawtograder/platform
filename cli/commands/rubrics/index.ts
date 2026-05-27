@@ -10,13 +10,28 @@
 import type { Argv } from "yargs";
 import * as fs from "fs";
 import * as YAML from "yaml";
-import { apiCall } from "../../utils/api";
-import { logger, handleError, CLIError } from "../../utils/logger";
+import { apiCall } from "@/cli/utils/api";
+import { logger, handleError, CLIError } from "@/cli/utils/logger";
 
 export const command = "rubrics <action>";
 export const describe = "Import and export rubrics in YML format";
 
 // YML structure types
+
+/**
+ * A YAML reference on a rubric check. Either name-keyed (review_round + part +
+ * criterion + check) or by numeric `id` fallback. Mirrors `YamlReference` in
+ * `utils/supabase/DatabaseTypes.d.ts` — the frontend CLI just passes these
+ * through unchanged to/from the edge function.
+ */
+interface YamlReferenceYml {
+  review_round?: string;
+  part?: string;
+  criterion?: string;
+  check?: string;
+  id?: number;
+}
+
 interface RubricCheckYml {
   name: string;
   description: string | null;
@@ -31,6 +46,7 @@ interface RubricCheckYml {
   group: string | null;
   max_annotations: number | null;
   student_visibility: string;
+  references?: YamlReferenceYml[];
 }
 
 interface RubricCriteriaYml {
@@ -289,6 +305,15 @@ export const builder = (yargs: Argv) => {
           logger.info(`  Parts: ${data.summary.parts}`);
           logger.info(`  Criteria: ${data.summary.criteria}`);
           logger.info(`  Checks: ${data.summary.checks}`);
+          if (typeof data.summary.references === "number") {
+            logger.info(`  References: ${data.summary.references}`);
+          }
+          if (Array.isArray(data.reference_warnings) && data.reference_warnings.length > 0) {
+            logger.info(`  Skipped references: ${data.reference_warnings.length}`);
+            for (const w of data.reference_warnings) {
+              logger.info(`    - ${w.check_path}: ${w.reason}`);
+            }
+          }
         } catch (error) {
           handleError(error);
         }
@@ -315,6 +340,9 @@ function printRubricTree(rubric: RubricYml): void {
       for (const check of criteria.checks) {
         const points = check.points >= 0 ? `+${check.points}` : `${check.points}`;
         logger.info(`      Check: ${check.name} (${points})`);
+        if (Array.isArray(check.references) && check.references.length > 0) {
+          logger.info(`        References: ${check.references.length}`);
+        }
       }
     }
   }

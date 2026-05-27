@@ -5,6 +5,7 @@ import NotificationsBox from "@/components/notifications/notifications-box";
 import { TimeZoneSelector } from "@/components/TimeZoneSelector";
 import { Button } from "@/components/ui/button";
 import { ColorModeButton } from "@/components/ui/color-mode";
+import { GlobalSearchTrigger } from "@/components/ui/global-search-trigger";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "@/components/ui/link";
@@ -13,6 +14,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { TimeZoneContext, useTimeZone } from "@/lib/TimeZoneProvider";
 import { getTimeZoneAbbr } from "@/lib/timezoneUtils";
@@ -33,7 +35,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { FiClock } from "react-icons/fi";
+import { FiClock, FiCommand } from "react-icons/fi";
 
 import { useInvalidate, useOne } from "@refinedev/core";
 import { useParams, useSearchParams } from "next/navigation";
@@ -49,6 +51,7 @@ import { signOutAction } from "../../actions";
 import MCPTokensMenu from "@/components/settings/MCPTokensMenu";
 
 function SupportMenu() {
+  const { openHelp } = useKeyboardShortcuts();
   // Track whether the build number has been successfully copied
   const [isCopied, setIsCopied] = useState(false);
 
@@ -113,12 +116,23 @@ function SupportMenu() {
     <Menu.Root>
       <Menu.Trigger asChild>
         <IconButton variant="outline" colorPalette="blue" size="sm" aria-label="Support & Documentation">
-          <HiOutlineSupport />
+          <HiOutlineSupport aria-hidden focusable={false} />
         </IconButton>
       </Menu.Trigger>
       <Portal>
         <Menu.Positioner>
           <Menu.Content>
+            <Menu.Item value="keyboard-shortcuts" onClick={openHelp}>
+              <HStack gap={2} width="100%" justifyContent="space-between">
+                <HStack gap={2}>
+                  <FiCommand />
+                  Keyboard shortcuts
+                </HStack>
+                <Text as="span" color="fg.muted" fontSize="xs">
+                  ?
+                </Text>
+              </HStack>
+            </Menu.Item>
             <Menu.Item value="github-help">
               <Link href={`/course/${course_id}/github-help`}>
                 <FaGithub /> GitHub Help
@@ -262,7 +276,13 @@ const DropBoxAvatar = ({
           <Menu.Root positioning={{ placement: "bottom" }}>
             <Text fontWeight={"700"}>{avatarType} Avatar</Text>
             <Menu.Trigger asChild>
-              <Button background="transparent" height="100%" width="100%" borderRadius={"full"}>
+              <Button
+                aria-label="Edit avatar"
+                background="transparent"
+                height="100%"
+                width="100%"
+                borderRadius={"full"}
+              >
                 <Avatar.Root
                   colorPalette="gray"
                   width="100px"
@@ -276,7 +296,7 @@ const DropBoxAvatar = ({
                   onMouseEnter={() => setIsHovered(true)}
                   onMouseLeave={() => setIsHovered(false)}
                 >
-                  <Avatar.Image src={avatarLink || undefined} />
+                  <Avatar.Image src={avatarLink || undefined} alt="" />
                   <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
                 </Avatar.Root>
                 {isHovered && (
@@ -710,11 +730,13 @@ function UserSettingsMenu() {
 
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
-      <Drawer.Trigger>
-        <Avatar.Root size="sm" colorPalette="gray">
-          <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-          <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
-        </Avatar.Root>
+      <Drawer.Trigger asChild>
+        <IconButton aria-label="Open user menu" variant="ghost" size="sm" borderRadius="full" p={0}>
+          <Avatar.Root size="sm" colorPalette="gray">
+            <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+            <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
+          </Avatar.Root>
+        </IconButton>
       </Drawer.Trigger>
       <Portal>
         <Drawer.Backdrop />
@@ -726,7 +748,7 @@ function UserSettingsMenu() {
                   <HStack flex={1} minWidth={0}>
                     <Avatar.Root size="sm" colorPalette="gray">
                       <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
+                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} alt="" />
                     </Avatar.Root>
                     <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
                       <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
@@ -781,7 +803,7 @@ function ObfuscatedGradesModePicker() {
         aria-label="Toggle obfuscated grades mode"
         css={{ _icon: { width: "5", height: "5" } }}
       >
-        {isObfuscated ? <TbSpyOff /> : <TbSpy />}
+        {isObfuscated ? <TbSpyOff aria-hidden focusable={false} /> : <TbSpy aria-hidden focusable={false} />}
       </IconButton>
     </Tooltip>
   );
@@ -939,7 +961,8 @@ function SafeTimeZoneIndicator() {
 
 export default function UserMenu() {
   return (
-    <HStack minWidth={0}>
+    <HStack minWidth={0} flexWrap="wrap" gap={2} justifyContent="flex-end">
+      <GlobalSearchTrigger />
       <SafeTimeZoneIndicator />
       <ConnectionStatusIndicator />
       <SupportMenu />

@@ -7,7 +7,7 @@ import {
   runGitCommand,
   runRsync,
   rsyncIndicatesTransfers
-} from "../repos/git";
+} from "@/cli/lib/repos/git";
 import type { RepoCopyPair } from "./types";
 
 /**

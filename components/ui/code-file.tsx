@@ -68,7 +68,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentType
+  type ComponentType,
+  type CSSProperties
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -82,6 +83,10 @@ import RequestRegradeDialog from "./request-regrade-dialog";
 import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+
+// Module-stable style — see `components/ui/markdown.tsx`. Inline
+// `style={{...}}` literals defeat `<Markdown>`'s `memo` wrapper.
+const RUBRIC_CHECK_DESCRIPTION_STYLE: CSSProperties = { fontSize: "0.8rem" };
 
 export type RubricCheckSubOption = {
   label: string;
@@ -287,6 +292,7 @@ export default function CodeFile({ file, embedded = false, language = "source.ja
                   content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                 >
                   <Button
+                    aria-label={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}
                     variant={expanded.length > 0 ? "solid" : "outline"}
                     size="xs"
                     p={0}
@@ -575,7 +581,7 @@ export function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
                 </Flex>
               </Box>
               <Box pl={2}>
-                <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
+                <Markdown style={RUBRIC_CHECK_DESCRIPTION_STYLE}>{rubricCheck.description}</Markdown>
               </Box>
               <Box pl={2} w="100%">
                 {isEditing ? (
@@ -662,7 +668,9 @@ export function CodeLineComment({ comment_id }: { comment_id: number }) {
                   </Text>
                 )}
               </Text>
-              <Text data-visual-test="blackout">commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
+              <Text data-visual-test="transparent" data-visual-placeholder="timestamp">
+                commented on {format(comment.created_at, "MMM d, yyyy")}
+              </Text>
             </HStack>
             <HStack>
               {authorProfile?.flair ? (
@@ -1027,6 +1035,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, file }: LineAc
       borderRadius="md"
       boxShadow="lg"
       ref={popupRef}
+      data-annotation-popup=""
     >
       <VStack gap={2} align="stretch">
         <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
