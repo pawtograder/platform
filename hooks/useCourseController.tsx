@@ -43,7 +43,7 @@ import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import useAuthState from "./useAuthState";
-import { useClassProfiles } from "./useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "./useClassProfiles";
 
 const CourseContext = createContext<Course | null>(null);
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -1750,7 +1750,12 @@ function CourseProvider({
 
 function CourseControllerProviderImpl({ controller }: { controller: CourseController }) {
   const { user } = useAuthState();
+  const isReadOnly = useIsReadOnly();
 
+  // Skip the user_id-keyed fetch entirely in view-as: the rows would be the masquerading
+  // instructor's, not the student's. useNotifications already returns [] when read-only,
+  // but not fetching here also avoids pushing the instructor's inbox into the controller's
+  // generic-data store where other surfaces might pick it up.
   const { data: notifications } = useList<Notification>({
     resource: "notifications",
     filters: [{ field: "user_id", operator: "eq", value: user?.id }],
@@ -1758,12 +1763,13 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
     queryOptions: {
       staleTime: Infinity,
       cacheTime: Infinity,
-      enabled: !!user?.id
+      enabled: !!user?.id && !isReadOnly
     },
     pagination: {
       pageSize: 1000
     },
     onLiveEvent: (event) => {
+      if (isReadOnly) return;
       controller.handleGenericDataEvent("notifications", event);
     },
     sorters: [
@@ -1773,10 +1779,11 @@ function CourseControllerProviderImpl({ controller }: { controller: CourseContro
   });
   useEffect(() => {
     controller.registerGenericDataType("notifications", (item: Notification) => item.id);
+    if (isReadOnly) return;
     if (notifications?.data) {
       controller.setGeneric("notifications", notifications.data);
     }
-  }, [controller, notifications?.data]);
+  }, [controller, notifications?.data, isReadOnly]);
 
   const { data: threadWatches } = useList<DiscussionThreadWatcher>({
     resource: "discussion_thread_watchers",
