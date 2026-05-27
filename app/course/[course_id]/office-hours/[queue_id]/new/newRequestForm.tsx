@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import Markdown from "@/components/ui/markdown";
 import {
@@ -62,6 +62,11 @@ export default function HelpRequestForm({
   const searchParams = useSearchParams();
   const { timeZone } = useTimeZone();
   const { course } = useCourseController();
+  // View-as student is read-only. Submitting this form would create a help_requests row
+  // with profile_id = student.private_profile_id and an initial chat message authored as
+  // the student, putting them in the queue with content the masquerader wrote. Gate the
+  // submit handler (UI rendering further down can still render the form for review).
+  const isReadOnly = useIsReadOnly();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
@@ -392,6 +397,14 @@ export default function HelpRequestForm({
   const onSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (isReadOnly) {
+        // Defense in depth: the submit button is also hidden in render below.
+        toaster.error({
+          title: "Read-only preview",
+          description: "Submitting a help request isn't allowed while viewing as a student."
+        });
+        return;
+      }
 
       // Lightweight re-entrancy guard to prevent double submissions from rapid clicks
       if (isSubmittingGuard) return;
@@ -670,7 +683,8 @@ export default function HelpRequestForm({
       router,
       submissions?.data,
       studentHelpActivity,
-      templates.length
+      templates.length,
+      isReadOnly
     ]
   );
 
@@ -1245,10 +1259,10 @@ export default function HelpRequestForm({
         <Button
           type="submit"
           loading={isSubmitting || isSubmittingGuard}
-          disabled={isSubmitting || isSubmittingGuard || hasErrors}
+          disabled={isSubmitting || isSubmittingGuard || hasErrors || isReadOnly}
           mt={4}
         >
-          Submit Request
+          {isReadOnly ? "Submit Request (read-only)" : "Submit Request"}
         </Button>
       </Stack>
     </form>

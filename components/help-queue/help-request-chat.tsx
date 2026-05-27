@@ -49,6 +49,7 @@ import {
   useHelpRequestStudents,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import Link from "next/link";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
@@ -957,6 +958,7 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const readOnly = request?.status === "resolved" || request?.status === "closed";
+  const { isMasking: isViewingAsStudent, filterHelpRequest } = useViewAsStudentDataMask();
 
   // Check if we're in popout mode
   const isPopOut = searchParams.get("popout") === "true";
@@ -966,6 +968,15 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   const helpRequestStudentData = useMemo(
     () => allHelpRequestStudents.filter((student) => student.help_request_id === request?.id),
     [allHelpRequestStudents, request?.id]
+  );
+
+  // View-as student: a real student would only see this request if it's public or they're
+  // an associated member. RLS doesn't apply that gate to the instructor's auth, so a
+  // direct URL would otherwise render any private chat in the class.
+  const memberProfileIds = useMemo(() => helpRequestStudentData.map((s) => s.profile_id), [helpRequestStudentData]);
+  const hiddenFromMasquerade = useMemo(
+    () => isViewingAsStudent && request != null && !filterHelpRequest(request, memberProfileIds),
+    [isViewingAsStudent, request, filterHelpRequest, memberProfileIds]
   );
 
   // Get table controllers from office hours controller
@@ -1194,6 +1205,19 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
     if (!request?.created_at) return "";
     return formatDistanceToNow(new Date(request.created_at), { addSuffix: true });
   }, [request?.created_at]);
+
+  if (hiddenFromMasquerade) {
+    // The student isn't a member of this private request, so they wouldn't see it. Render
+    // a not-visible placeholder rather than the chat surface (which the instructor's auth
+    // happily returned via PostgREST).
+    return (
+      <Flex direction="column" width="100%" mx="auto" py={6} px={3} align="center">
+        <Text fontSize="sm" color="fg.muted">
+          This help request isn&apos;t visible from the student view.
+        </Text>
+      </Flex>
+    );
+  }
 
   return (
     <Flex
