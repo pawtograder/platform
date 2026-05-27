@@ -352,7 +352,7 @@ export default async function StudentDashboard({
 
       {/* Discussion Activity Summary */}
       <CourseFeatureGate feature={COURSE_FEATURES.DISCUSSION}>
-        {user_id && <DiscussionSummary courseId={course_id} userId={user_id} />}
+        <DiscussionSummary courseId={course_id} privateProfileId={private_profile_id} />
       </CourseFeatureGate>
 
       <CourseFeatureGate feature={COURSE_FEATURES.SURVEYS}>

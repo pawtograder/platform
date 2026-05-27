@@ -199,16 +199,19 @@ export async function fetchStudentDashboardBundle(
       .eq("created_by", privateProfileId)
       .order("created_at", { ascending: false })
       .limit(5),
-    userId
-      ? supabase
-          .from("user_roles")
-          .select("class_section_id, lab_section_id")
-          .eq("class_id", courseId)
-          .eq("user_id", userId)
-          .eq("disabled", false)
-          .single()
-      : Promise.resolve({ data: null, error: null })
+    // Key by private_profile_id rather than user_id so view-as gets the masqueraded
+    // student's sections instead of the real instructor's (which typically have none).
+    supabase
+      .from("user_roles")
+      .select("class_section_id, lab_section_id")
+      .eq("class_id", courseId)
+      .eq("private_profile_id", privateProfileId)
+      .eq("disabled", false)
+      .single()
   ]);
+  // userId is unused now that the section lookup keys on private_profile_id; keep the
+  // parameter on the public signature for callers that still derive it from headers.
+  void userId;
 
   const surveysList = (surveysRaw ?? []) as { id: string }[];
   const [

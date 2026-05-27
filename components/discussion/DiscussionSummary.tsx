@@ -8,24 +8,38 @@ import { TopicIcon } from "./TopicIcon";
 
 type DiscussionSummaryProps = {
   courseId: number;
-  userId: string;
+  /**
+   * The masqueraded / effective student's private profile id. Used both to scope
+   * profile-keyed lookups (e.g. discussion_thread_root_id watcher rows) and to
+   * resolve the corresponding user_id for read-status queries below.
+   *
+   * Critically, this must come from the resolved effective identity (view-as),
+   * not the real auth user — otherwise an instructor previewing a student's
+   * dashboard sees their own follows and read state labelled as the student's.
+   */
+  privateProfileId: string;
 };
 
-export async function DiscussionSummary({ courseId, userId }: DiscussionSummaryProps) {
+export async function DiscussionSummary({ courseId, privateProfileId }: DiscussionSummaryProps) {
   const supabase = await createClient();
 
-  // Get user's private profile ID
+  // Resolve the effective student's user_id from their private_profile_id so the
+  // per-user discussion_thread_read_status / discussion_thread_watchers queries below
+  // hit the right rows. RLS forbids cross-user reads, so in view-as this returns no
+  // rows and the panel renders with "unread" defaults — the alternative (using the
+  // real instructor's user_id) would label the instructor's reads as the student's.
   const { data: userRole } = await supabase
     .from("user_roles")
-    .select("private_profile_id")
+    .select("user_id")
     .eq("class_id", courseId)
-    .eq("user_id", userId)
+    .eq("private_profile_id", privateProfileId)
     .eq("disabled", false)
     .single();
 
-  if (!userRole?.private_profile_id) {
+  if (!userRole?.user_id) {
     return null;
   }
+  const userId = userRole.user_id;
 
   // Query pinned threads
   const { data: pinnedThreadsRaw } = await supabase
