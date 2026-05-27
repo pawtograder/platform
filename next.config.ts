@@ -74,13 +74,26 @@ const nextConfig: NextConfig = {
   // and silently produces near-empty server coverage.
   ...(coverageBuild
     ? {
-        webpack: (config: { devtool?: string }, ctx: { isServer: boolean }) => {
-          // Only override server bundle. Client bundles get
+        webpack: (
+          config: { devtool?: string; optimization?: { minimize?: boolean } },
+          ctx: { isServer: boolean }
+        ) => {
+          // Only override server bundle's devtool. Client bundles get
           // sourcemaps via `productionBrowserSourceMaps: true`
           // above; setting devtool twice (here + the option)
           // confuses Next's webpack pipeline and produces an
           // empty `.next/static` directory.
           if (ctx.isServer) config.devtool = "source-map";
+          // Disable client minification so V8 byte ranges → source-map
+          // resolution stays byte-precise. With SWC minify on, inlined
+          // wrappers (e.g. one-line helper functions) and dead-coded
+          // branches lose their probes entirely, producing per-line
+          // coverage reports that look skewed: function declarations
+          // marked covered while neighbouring statements show
+          // "uncovered" or no-data. Bundle size is irrelevant in CI.
+          if (!ctx.isServer && config.optimization) {
+            config.optimization.minimize = false;
+          }
           return config;
         }
       }
