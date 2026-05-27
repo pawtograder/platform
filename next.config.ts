@@ -74,10 +74,7 @@ const nextConfig: NextConfig = {
   // and silently produces near-empty server coverage.
   ...(coverageBuild
     ? {
-        webpack: (
-          config: { devtool?: string; optimization?: { minimize?: boolean } },
-          ctx: { isServer: boolean }
-        ) => {
+        webpack: (config: { devtool?: string; optimization?: { minimize?: boolean } }, ctx: { isServer: boolean }) => {
           // Only override server bundle's devtool. Client bundles get
           // sourcemaps via `productionBrowserSourceMaps: true`
           // above; setting devtool twice (here + the option)
