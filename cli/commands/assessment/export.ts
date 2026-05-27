@@ -585,6 +585,18 @@ async function streamAssignmentToDir(
     totals.error_pin_engagement += counts.error_pin_engagement ?? 0;
   };
 
+  /** Return the next batch index only when the server cursor strictly advances. */
+  const advanceBatchCursor = (current: number, next: unknown, section: string, cursorField: string): number | null => {
+    if (typeof next !== "number") return null;
+    if (next <= current) {
+      logger.warning(
+        `assignment ${slug} [${section}]: ${cursorField} did not advance (${current} -> ${next}); stopping pagination`
+      );
+      return null;
+    }
+    return next;
+  };
+
   // 1. Meta (manifest, rubric, autograder config, groups)
   const meta = await streamAssignmentSection(baseParams, slug, "meta");
   if (meta.manifest === null) throw new CLIError(`assignment ${slug}: missing manifest`);
@@ -605,8 +617,13 @@ async function streamAssignmentToDir(
     mergeBuckets(page.buckets);
     addPageCounts(page.endRecord);
     assertExpectedCount(page.endRecord, "scores", page.buckets.score!.length);
-    const next = page.endRecord.next_score_review_batch_index;
-    if (typeof next !== "number") break;
+    const next = advanceBatchCursor(
+      batchIndex,
+      page.endRecord.next_score_review_batch_index,
+      "scores",
+      "next_score_review_batch_index"
+    );
+    if (next === null) break;
     batchIndex = next;
   }
 
@@ -618,8 +635,13 @@ async function streamAssignmentToDir(
     mergeBuckets(page.buckets);
     addPageCounts(page.endRecord);
     assertExpectedCount(page.endRecord, "grader_tests", page.buckets.grader_test!.length);
-    const next = page.endRecord.next_test_submission_batch_index;
-    if (typeof next !== "number") break;
+    const next = advanceBatchCursor(
+      batchIndex,
+      page.endRecord.next_test_submission_batch_index,
+      "tests",
+      "next_test_submission_batch_index"
+    );
+    if (next === null) break;
     batchIndex = next;
   }
 
@@ -632,8 +654,13 @@ async function streamAssignmentToDir(
       mergeBuckets(page.buckets);
       addPageCounts(page.endRecord);
       assertExpectedCount(page.endRecord, "instructor_build_outputs", page.buckets.instructor_build_output!.length);
-      const next = page.endRecord.next_build_output_submission_batch_index;
-      if (typeof next !== "number") break;
+      const next = advanceBatchCursor(
+        batchIndex,
+        page.endRecord.next_build_output_submission_batch_index,
+        "build_output",
+        "next_build_output_submission_batch_index"
+      );
+      if (next === null) break;
       batchIndex = next;
     }
   }
@@ -647,8 +674,13 @@ async function streamAssignmentToDir(
     addPageCounts(page.endRecord);
     assertExpectedCount(page.endRecord, "hints", page.buckets.hint!.length);
     assertExpectedCount(page.endRecord, "error_pin_engagement", page.buckets.error_pin_engagement!.length);
-    const next = page.endRecord.next_engagement_submission_batch_index;
-    if (typeof next !== "number") break;
+    const next = advanceBatchCursor(
+      batchIndex,
+      page.endRecord.next_engagement_submission_batch_index,
+      "engagement",
+      "next_engagement_submission_batch_index"
+    );
+    if (next === null) break;
     batchIndex = next;
   }
 

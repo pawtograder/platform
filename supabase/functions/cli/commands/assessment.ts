@@ -388,6 +388,16 @@ async function streamGradebookColumns(
 
 type AssignmentExportSection = "all" | "meta" | "submissions" | "scores" | "tests" | "build_output" | "engagement";
 
+const ASSIGNMENT_EXPORT_SECTIONS = new Set<AssignmentExportSection>([
+  "all",
+  "meta",
+  "submissions",
+  "scores",
+  "tests",
+  "build_output",
+  "engagement"
+]);
+
 interface AssignmentExportParams {
   class?: string | number;
   identity_mode?: IdentityMode;
@@ -454,6 +464,8 @@ function slimExtraDataForExport(extra: unknown): unknown {
   if (llm === null || llm === undefined || typeof llm !== "object") return extra;
   const llmObj = llm as Record<string, unknown>;
   const { prompt: _prompt, result: _result, ...llmRest } = llmObj;
+  void _prompt;
+  void _result;
   return {
     ...data,
     llm: {
@@ -830,7 +842,14 @@ function exportAssignmentAll(exportCtx: AssignmentExportContext): Promise<Respon
 async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as AssignmentExportParams;
   const exportCtx = await resolveAssignmentExportContext(ctx, params);
-  const section: AssignmentExportSection = params.section ?? "all";
+  const sectionParam = params.section ?? "all";
+  if (!ASSIGNMENT_EXPORT_SECTIONS.has(sectionParam as AssignmentExportSection)) {
+    throw new CLICommandError(
+      `Invalid section: ${String(sectionParam)}. Must be one of: ${[...ASSIGNMENT_EXPORT_SECTIONS].join(", ")}`,
+      400
+    );
+  }
+  const section = sectionParam as AssignmentExportSection;
 
   switch (section) {
     case "meta":
@@ -846,7 +865,6 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
     case "engagement":
       return exportAssignmentEngagement(exportCtx, Math.max(0, params.engagement_submission_batch_index ?? 0));
     case "all":
-    default:
       return exportAssignmentAll(exportCtx);
   }
 }
