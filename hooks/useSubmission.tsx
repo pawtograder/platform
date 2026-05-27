@@ -211,6 +211,7 @@ export function useSubmissionFileComments({
   const [comments, setComments] = useState<SubmissionFileComment[]>([]);
   const ctx = useContext(SubmissionContext);
   const submissionController = ctx?.submissionController;
+  const isReadOnly = useIsReadOnly();
 
   useEffect(() => {
     if (!submissionController) {
@@ -259,6 +260,11 @@ export function useSubmissionFileComments({
   if (!submissionController) {
     return [];
   }
+  // View-as-student: PostgREST still returns unreleased comments because auth runs as
+  // the real instructor. A real student's RLS would have hidden them, so mirror that.
+  if (isReadOnly) {
+    return comments.filter((c) => c.released);
+  }
   return comments;
 }
 
@@ -272,6 +278,7 @@ export function useSubmissionComments({
   const [comments, setComments] = useState<SubmissionComments[]>([]);
   const ctx = useContext(SubmissionContext);
   const submissionController = ctx?.submissionController;
+  const isReadOnly = useIsReadOnly();
 
   useEffect(() => {
     if (!submissionController) {
@@ -299,6 +306,10 @@ export function useSubmissionComments({
   if (!submissionController) {
     return [];
   }
+  // View-as-student: hide unreleased submission-level comments the real student wouldn't see.
+  if (isReadOnly) {
+    return comments.filter((c) => c.released);
+  }
   return comments;
 }
 
@@ -321,6 +332,7 @@ export function useSubmissionArtifactComments({
   const [comments, setComments] = useState<SubmissionArtifactComment[]>([]);
   const ctx = useContext(SubmissionContext);
   const submissionController = ctx?.submissionController;
+  const isReadOnly = useIsReadOnly();
 
   useEffect(() => {
     if (!submissionController) {
@@ -346,6 +358,10 @@ export function useSubmissionArtifactComments({
 
   if (!submissionController) {
     return [];
+  }
+  // View-as-student: hide unreleased artifact comments the real student wouldn't see.
+  if (isReadOnly) {
+    return comments.filter((c) => c.released);
   }
   return comments;
 }
@@ -886,6 +902,7 @@ export function useSubmissionReviewForRubric(rubricId?: number | null): Submissi
   const controller = ctx?.submissionController;
   const submission = controller?.submission;
   const reviews = useSubmissionReviews();
+  const isReadOnly = useIsReadOnly();
 
   const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
 
@@ -906,6 +923,13 @@ export function useSubmissionReviewForRubric(rubricId?: number | null): Submissi
     }
   }, [rubricId, submission, controller, reviews]);
 
+  // Mirror the same release gate the singular review hooks already apply: a real student
+  // wouldn't see an unreleased review row, so the rubric sidebar's per-rubric review (and
+  // everything derived from it — criteria totals, applied checks, regrade affordances)
+  // must vanish in view-as until release.
+  if (isReadOnly && submissionReview && !submissionReview.released) {
+    return undefined;
+  }
   return submissionReview;
 }
 export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {
