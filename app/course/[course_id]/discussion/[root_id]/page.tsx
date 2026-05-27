@@ -14,7 +14,7 @@ import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
@@ -137,9 +137,15 @@ function ThreadActions({
   const errorPinModal = useModalManager<number>();
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isReadOnly = useIsReadOnly();
   const { discussionThreadTeasers } = useCourseController();
-  const canEdit = thread.author === public_profile_id || thread.author === private_profile_id || isGraderOrInstructor;
-  const canPin = isGraderOrInstructor;
+  // In view-as the underlying hooks already neuter follow/like/reply, but the affordances
+  // were still drawn in the action row. Roll the read-only state into the can-* flags so
+  // the row collapses to a non-interactive set in the masquerade.
+  const canEdit =
+    !isReadOnly &&
+    (thread.author === public_profile_id || thread.author === private_profile_id || isGraderOrInstructor);
+  const canPin = !isReadOnly && isGraderOrInstructor;
   const isRootThread = thread.root != null && thread.id === thread.root;
   const canMarkDuplicate = canPin && isRootThread && !thread.duplicate_original_subject;
 
@@ -153,12 +159,16 @@ function ThreadActions({
 
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">
-      <Tooltip content="Follow">
-        <ThreadFollowButton thread={thread} />
-      </Tooltip>
-      <Tooltip content="Like">
-        <DiscussionThreadLikeButton thread={thread} />
-      </Tooltip>
+      {!isReadOnly && (
+        <>
+          <Tooltip content="Follow">
+            <ThreadFollowButton thread={thread} />
+          </Tooltip>
+          <Tooltip content="Like">
+            <DiscussionThreadLikeButton thread={thread} />
+          </Tooltip>
+        </>
+      )}
       {canEdit && (
         <Tooltip content="Edit">
           <Button aria-label="Edit" onClick={() => setEditing(!editing)} variant="ghost" size="sm">
@@ -198,11 +208,13 @@ function ThreadActions({
           </Button>
         </Tooltip>
       )}
-      <Tooltip content="Reply">
-        <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm">
-          <FaReply />
-        </Button>
-      </Tooltip>
+      {!isReadOnly && (
+        <Tooltip content="Reply">
+          <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm">
+            <FaReply />
+          </Button>
+        </Tooltip>
+      )}
       {/* Discord link - shown if thread has a Discord message (staff only see it) */}
       <DiscordDiscussionMessageLink threadId={thread.id} />
       {/* AI Help button for staff - component has internal tooltip */}
