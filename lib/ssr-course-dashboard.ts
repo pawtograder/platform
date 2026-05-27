@@ -177,6 +177,12 @@ export async function fetchStudentDashboardBundle(
       .eq("status", "published")
       .order("created_at", { ascending: false })
       .limit(100),
+    // Scope to the (effective) student. The bundle is called with view-as identity
+    // already resolved, but the regrade request query historically filtered by class_id
+    // only and relied on RLS — that works for a real student, but in view-as the
+    // instructor's auth returns every regrade in the class. Constrain by the requester
+    // and assignee profile ids so the "Recent regrade requests" panel always shows the
+    // viewed student's own work.
     supabase
       .from("submission_regrade_requests")
       .select(
@@ -190,6 +196,7 @@ export async function fetchStudentDashboardBundle(
     `
       )
       .eq("class_id", courseId)
+      .eq("created_by", privateProfileId)
       .order("created_at", { ascending: false })
       .limit(5),
     userId

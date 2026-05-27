@@ -5,6 +5,7 @@ import { Box, Heading, Text, VStack } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import type { RegradeRequestWithDetails } from "@/utils/supabase/DatabaseTypes";
 import RegradeRequestsTable from "../RegradeRequestsTable";
 import { toaster } from "@/components/ui/toaster";
@@ -13,14 +14,19 @@ import * as Sentry from "@sentry/nextjs";
 
 export default function StudentRegradeRequestsPage() {
   const { course_id } = useParams();
+  const { private_profile_id } = useClassProfiles();
   const [regradeRequests, setRegradeRequests] = useState<RegradeRequestWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!private_profile_id) return;
     async function fetchRegradeRequests() {
       const supabase = createClient();
       try {
+        // Scope to the effective student. Filtering by class_id alone relied on RLS,
+        // which works for a real student but lets an instructor in view-as see every
+        // class regrade request as if it were the masqueraded student's.
         const { data, error } = await supabase
           .from("submission_regrade_requests")
           .select(
@@ -34,6 +40,7 @@ export default function StudentRegradeRequestsPage() {
           `
           )
           .eq("class_id", Number(course_id))
+          .eq("created_by", private_profile_id)
           .order("created_at", { ascending: false });
 
         if (error) {
@@ -68,7 +75,7 @@ export default function StudentRegradeRequestsPage() {
     }
 
     fetchRegradeRequests();
-  }, [course_id]);
+  }, [course_id, private_profile_id]);
 
   return (
     <PageContainer>
