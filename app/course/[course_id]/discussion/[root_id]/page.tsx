@@ -19,6 +19,7 @@ import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import useModalManager from "@/hooks/useModalManager";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -263,7 +264,15 @@ function ThreadFollowButton({ thread }: { thread: DiscussionThreadType }) {
 function DiscussionPost({ root_id }: { root_id: number }) {
   const discussion_topics = useDiscussionTopics();
   const { discussionThreadTeasers } = useCourseController();
-  const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
+  const rawRootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
+  const { filterDiscussionTeaser } = useViewAsStudentDataMask();
+  // View-as-student deep-links to an instructors_only thread must hit the same wall the
+  // student would: PostgREST returns the row to the real instructor, so the mask must
+  // also apply here, not just in the feed list.
+  const rootThread = useMemo(() => {
+    if (!rawRootThread) return rawRootThread;
+    return filterDiscussionTeaser(rawRootThread) ? rawRootThread : undefined;
+  }, [rawRootThread, filterDiscussionTeaser]);
   // Force a single-row fetch on mount / root_id change so the heading paints
   // reliably on first navigation. The course-wide teasers controller is
   // populated by an initial-load query plus realtime broadcasts; if neither
@@ -405,6 +414,17 @@ function DiscussionPost({ root_id }: { root_id: number }) {
     [discussionThreadTeasers, root_id]
   );
 
+  // Distinguish "still loading" from "loaded but masked out by view-as": when the raw row
+  // came back and we hid it ourselves, render a not-found state instead of spinning forever.
+  if (rawRootThread && !rootThread) {
+    return (
+      <Box py="4">
+        <Text fontSize="sm" color="fg.muted">
+          This thread isn&apos;t visible from the student view.
+        </Text>
+      </Box>
+    );
+  }
   if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;
   }

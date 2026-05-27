@@ -205,13 +205,23 @@ export function useUpdateThreadTeaser() {
 }
 export function useRootDiscussionThreadReadStatuses(threadId: number) {
   const controller = useCourseController();
+  const { isMasking } = useViewAsStudentDataMask();
   // Uses the indexed-by-`discussion_thread_root_id` subscription path
   // instead of a predicate scan. The discussion-perf trace showed the old
   // `useListTableControllerValues` path getting up to ~400 listeners
   // on a 2,859-row table, with each broadcast costing
   // O(listeners × rows) ≈ 1M predicate evaluations. The indexed path
   // notifies only the listener whose root_id matches.
-  return useIndexedTableControllerValues(controller.discussionThreadReadStatus, "discussion_thread_root_id", threadId);
+  const rows = useIndexedTableControllerValues(
+    controller.discussionThreadReadStatus,
+    "discussion_thread_root_id",
+    threadId
+  );
+  // The read-status query is keyed by the real `user_id`, so in view-as mode the rows
+  // reflect the instructor's reads — not the student's. Surfacing those would mislead the
+  // masquerader into thinking the student has already read content they actually haven't.
+  // Suppress the indicators entirely; RLS would block reading the student's rows anyway.
+  return useMemo(() => (isMasking ? [] : rows), [isMasking, rows]);
 }
 /**
  * Returns a hook that returns the read status of a thread.
@@ -223,6 +233,7 @@ export function useRootDiscussionThreadReadStatuses(threadId: number) {
 export function useDiscussionThreadReadStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
+  const { isMasking } = useViewAsStudentDataMask();
   // The controller's underlying query already filters by `user_id`
   // (`.eq("user_id", this._userId)` in the lazy getter), so the previous
   // compound `discussion_thread_id === threadId && user_id === user?.id`
@@ -231,14 +242,33 @@ export function useDiscussionThreadReadStatus(threadId: number) {
   // every row in the controller is already this user's. Same scaling
   // motivation as `useRootDiscussionThreadReadStatuses`.
   void user; // kept in scope for the setUnread callback below
-  const readStatus = useIndexedTableControllerValue(
+  const rawReadStatus = useIndexedTableControllerValue(
     controller.discussionThreadReadStatus,
     "discussion_thread_id",
     threadId
   );
+  // In view-as mode the underlying rows belong to the masquerading instructor, not the
+  // student. Synthesize a "read" status so consumers don't render "New" badges sourced
+  // from the wrong identity. The instructor's actual read state is unaffected because
+  // setUnread becomes a no-op below.
+  const readStatus = useMemo(
+    () =>
+      isMasking
+        ? ({
+            ...(rawReadStatus ?? {}),
+            read_at: new Date(0).toISOString()
+          } as typeof rawReadStatus)
+        : rawReadStatus,
+    [isMasking, rawReadStatus]
+  );
 
   const setUnread = useCallback(
     async (root_threadId: number, threadId: number, isUnread: boolean) => {
+      // In view-as mode, writing read status would mutate the *instructor's* state.
+      // Suppress writes entirely so masquerading doesn't pollute the real reader's inbox.
+      if (isMasking) {
+        return;
+      }
       // `useIndexedTableControllerValue` returns `undefined` both while the
       // controller is still loading and when no row exists for this thread.
       // Wait for the initial load to settle, then fall through to the
@@ -280,7 +310,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
         }
       }
     },
-    [user?.id, controller, readStatus]
+    [user?.id, controller, readStatus, isMasking]
   );
   return { readStatus, setUnread };
 }
@@ -413,6 +443,7 @@ export function usePrefetchDiscussionThreadOnHover(
 type DiscussionThreadFields = keyof DiscussionThreadTeaser;
 export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: DiscussionThreadFields[]) {
   const controller = useCourseController();
+  const { isMasking, studentIds } = useViewAsStudentDataMask();
   const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(() => {
     if (id === undefined) {
       return undefined;
@@ -452,6 +483,12 @@ export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: 
       unsubscribe();
     };
   }, [controller, id, watchFields]);
+  // View-as-student: PostgREST returns instructor-visible rows but the student wouldn't see
+  // `instructors_only` threads they didn't author. Hide them here so the singular getter
+  // matches the feed-list filter and deep-link URLs don't bypass the mask.
+  if (isMasking && teaser && !isDiscussionTeaserVisibleToStudent(teaser, studentIds)) {
+    return undefined;
+  }
   return teaser;
 }
 

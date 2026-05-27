@@ -8,7 +8,7 @@ import {
   useReferencingRubricChecks,
   useRubrics
 } from "@/hooks/useAssignment";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
@@ -734,6 +734,7 @@ export function useRubricCriteriaInstances({
 export function useSubmissionReview(reviewId?: number) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
+  const isReadOnly = useIsReadOnly();
   const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
   useEffect(() => {
     if (!ctx || !controller || !reviewId) {
@@ -745,6 +746,11 @@ export function useSubmissionReview(reviewId?: number) {
     setReview(data);
     return () => unsubscribe();
   }, [ctx, controller, reviewId]);
+  // View-as-student: RLS would hide an unreleased review from a real student. Mirror that
+  // so the masquerader doesn't see scores the actual student hasn't gotten yet.
+  if (isReadOnly && review && !review.released) {
+    return undefined;
+  }
   return review;
 }
 export function useSubmissionReviews() {
@@ -767,6 +773,7 @@ export function useSubmissionReviews() {
 export function useSubmissionReviewOrGradingReview(reviewId: number | undefined) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
+  const isReadOnly = useIsReadOnly();
   if (!ctx || !controller) {
     throw new Error("useSubmissionReviewOrGradingReview must be used within a SubmissionContext");
   }
@@ -790,6 +797,12 @@ export function useSubmissionReviewOrGradingReview(reviewId: number | undefined)
     };
   }, [ctx, controller, reviewId]);
 
+  // View-as-student: a real student's RLS hides unreleased reviews entirely. Mirror that
+  // by withholding the review row from masquerading instructors too, so the rubric sidebar
+  // and grade ledger don't leak scores ahead of release.
+  if (isReadOnly && review && !review.released) {
+    return undefined;
+  }
   return review;
 }
 export function useRubricCheck(rubric_check_id: number | null) {
