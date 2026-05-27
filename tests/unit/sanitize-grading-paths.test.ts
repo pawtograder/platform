@@ -10,14 +10,12 @@ import {
 
 describe("sanitizeGradingPaths", () => {
   it("replaces GitHub Actions runner path prefix before pawtograder-grading", () => {
-    const input =
-      "/home/runner/_work/su26-hw-cyb2-aleand919/su26-hw-cyb2-aleand919/pawtograder-grading";
+    const input = "/home/runner/_work/su26-hw-cyb2-aleand919/su26-hw-cyb2-aleand919/pawtograder-grading";
     expect(sanitizeGradingPaths(input)).toBe("/anonymous/pawtograder-grading");
   });
 
   it("preserves path segments after pawtograder-grading", () => {
-    const input =
-      "/home/runner/_work/su26-hw-cyb2-aleand919/su26-hw-cyb2-aleand919/pawtograder-grading/src/Foo.java";
+    const input = "/home/runner/_work/su26-hw-cyb2-aleand919/su26-hw-cyb2-aleand919/pawtograder-grading/src/Foo.java";
     expect(sanitizeGradingPaths(input)).toBe("/anonymous/pawtograder-grading/src/Foo.java");
   });
 
@@ -49,11 +47,8 @@ describe("sliceOutputFromSentinel", () => {
 
 describe("prepareInstructorBuildOutput", () => {
   it("sanitizes paths then slices from sentinel", () => {
-    const raw =
-      "prefix\n/home/runner/_work/repo/repo/pawtograder-grading\n> Task :compileJava\nFAIL";
-    expect(prepareInstructorBuildOutput(raw, { sentinel: "> Task :compileJava" })).toBe(
-      "> Task :compileJava\nFAIL"
-    );
+    const raw = "prefix\n/home/runner/_work/repo/repo/pawtograder-grading\n> Task :compileJava\nFAIL";
+    expect(prepareInstructorBuildOutput(raw, { sentinel: "> Task :compileJava" })).toBe("> Task :compileJava\nFAIL");
   });
 
   it("returns null when sentinel is missing after sanitization", () => {

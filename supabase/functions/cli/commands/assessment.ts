@@ -492,10 +492,7 @@ async function resolveAssignmentExportContext(
   );
   const instructorBuildOutputMax = Math.max(
     0,
-    Math.min(
-      1024 * 1024,
-      params.instructor_build_output_max_bytes ?? DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES
-    )
+    Math.min(1024 * 1024, params.instructor_build_output_max_bytes ?? DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES)
   );
   const instructorBuildOutputFromSentinel =
     typeof params.instructor_build_output_from_sentinel === "string" &&

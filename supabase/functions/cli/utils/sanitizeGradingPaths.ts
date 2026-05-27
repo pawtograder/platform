@@ -14,10 +14,7 @@ export function sliceOutputFromSentinel(output: string, sentinel: string): strin
  * Sanitize grading paths, then optionally keep only text from sentinel onward.
  * Returns null when sentinel is set but not found (row should be omitted).
  */
-export function prepareInstructorBuildOutput(
-  rawOutput: string,
-  options: { sentinel?: string | null }
-): string | null {
+export function prepareInstructorBuildOutput(rawOutput: string, options: { sentinel?: string | null }): string | null {
   const sanitized = sanitizeGradingPaths(rawOutput);
   if (!options.sentinel) return sanitized;
   return sliceOutputFromSentinel(sanitized, options.sentinel);
