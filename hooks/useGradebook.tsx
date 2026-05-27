@@ -929,7 +929,13 @@ export class GradebookCellController {
   }
 
   private _updateStudentEntry(columnStudent: GradebookColumnStudent): void {
-    if (!this._classRealTimeController.isStaff && columnStudent.is_private) {
+    // Non-staff (real students and instructors viewing as student) can only ever observe
+    // their own public rows. Drop both private rows and any classmate's public row that
+    // an _refetchByIds / legacy row broadcast might try to merge in.
+    if (
+      !this._classRealTimeController.isStaff &&
+      (columnStudent.is_private || columnStudent.student_id !== this._classRealTimeController.profileId)
+    ) {
       return;
     }
     const studentId = columnStudent.student_id;
@@ -1008,7 +1014,14 @@ export class GradebookCellController {
   /** Fetch specific gradebook_column_students rows and merge into the grid. */
   private async _refetchByIds(ids: number[]): Promise<void> {
     if (ids.length === 0 || this._closed) return;
-    const { data, error } = await this._client.from("gradebook_column_students").select("*").in("id", ids);
+    // In non-staff mode the broadcast may include ids for classmates' rows (the realtime
+    // filter is class-scoped). Constrain the actual fetch to this caller's own public
+    // rows so we never pull them over the wire — _updateStudentEntry is the backstop.
+    let query = this._client.from("gradebook_column_students").select("*").in("id", ids);
+    if (!this._classRealTimeController.isStaff) {
+      query = query.eq("student_id", this._classRealTimeController.profileId).eq("is_private", false);
+    }
+    const { data, error } = await query;
     if (this._closed) return;
     if (error) {
       throw error;
