@@ -15,8 +15,46 @@ import type {
 } from "../types.ts";
 import { getAdminClient } from "../utils/supabase.ts";
 import { resolveAssignment, resolveClass } from "../utils/resolvers.ts";
+import { resolveSelectors } from "../utils/selectors.ts";
+import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
+import { validateExportIdentityParams } from "../utils/exportIdentity.ts";
+import { streamNdjson } from "../utils/ndjson.ts";
+import { streamSubmissionFiles } from "../utils/submissionFilesExportStream.ts";
+import { streamSubmissions } from "../utils/submissionExportStream.ts";
+import type { IdentityMode } from "../utils/tokenization.ts";
 
 const COMMENT_CHUNK = 120;
+const SUBMISSIONS_EXPORT_SCHEMA_VERSION = 1;
+
+const SUBMISSIONS_EXPORT_PRIVACY_NOTES = [
+  "Tokens use HMAC with a server-side pepper; opaque-mode salt is ephemeral per run.",
+  "File contents are not redacted — student names may appear in source code.",
+  "Repository URLs are included as course metadata."
+];
+
+type SubmissionsExportSection = "catalog" | "meta" | "files";
+
+interface SubmissionsExportParams {
+  class?: string | number;
+  /** Single assignment for meta/files sections. */
+  assignment?: string | number;
+  /** Assignment selectors for catalog section (id, slug, or glob). Omit => all in class. */
+  assignments?: Array<string | number>;
+  identity_mode?: IdentityMode;
+  salt?: string;
+  confirm_pii?: boolean;
+  dump_id?: string;
+  all_submissions?: boolean;
+  with_binary?: boolean;
+  /** Glob patterns on submission_files.name — must match at least one if set. */
+  include_files?: string[];
+  /** Glob patterns on submission_files.name — skipped when any match. */
+  exclude_files?: string[];
+  section?: SubmissionsExportSection;
+  files_batch_index?: number;
+  /** Raw submission ids from a prior meta section — used only for section=files. */
+  submission_ids?: number[];
+}
 
 async function assertUserCanAccessClass(userId: string, classId: number): Promise<void> {
   const supabase = getAdminClient();
@@ -565,6 +603,132 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
   };
 }
 
+async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
+  const params = rawParams as unknown as SubmissionsExportParams;
+  const section: SubmissionsExportSection = params.section ?? "meta";
+  const mode = validateExportIdentityParams(params);
+
+  if (!params.class) throw new CLICommandError("class is required");
+
+  const supabase = getAdminClient();
+  const classData = await resolveClass(supabase, params.class);
+  await assertUserCanAccessClass(ctx.userId, classData.id);
+
+  const allSubmissions = params.all_submissions === true;
+  const withBinary = params.with_binary === true;
+  const includeFiles = normalizePatternList(params.include_files);
+  const excludeFiles = normalizePatternList(params.exclude_files);
+  const dumpId = params.dump_id ?? crypto.randomUUID();
+  const tokenizer = mode === "raw" ? null : await createExportTokenizer(supabase, params.salt!);
+
+  if (section === "catalog") {
+    const { data: rows, error } = await supabase
+      .from("assignments")
+      .select("id, slug, title")
+      .eq("class_id", classData.id)
+      .order("id", { ascending: true });
+    if (error) throw new CLICommandError(`Failed to load assignments: ${error.message}`, 500);
+
+    const candidates = (rows ?? []).map((r) => ({ id: r.id, slug: r.slug, title: r.title }));
+    const selectors = params.assignments ?? (params.assignment != null ? [params.assignment] : undefined);
+    const { resolved, unmatched } = resolveSelectors(selectors, candidates);
+
+    return streamNdjson(async (writer) => {
+      for (const row of resolved) {
+        await writer.write({
+          kind: "assignment",
+          id: row.id,
+          slug: row.slug,
+          title: row.title
+        });
+      }
+      for (const sel of unmatched) {
+        await writer.write({
+          kind: "warning",
+          scope: "assignments",
+          message: "selector_matched_no_assignments",
+          selectors: [sel]
+        });
+      }
+      await writer.write({
+        kind: "end",
+        counts: { assignments: resolved.length },
+        unmatched_selectors: unmatched
+      });
+    });
+  }
+
+  if (!params.assignment) throw new CLICommandError("assignment is required for section=meta|files");
+
+  const assignment = await resolveAssignment(supabase, classData.id, params.assignment);
+
+  if (section === "meta") {
+    return streamNdjson(async (writer) => {
+      await writer.write({
+        kind: "manifest",
+        schema_version: SUBMISSIONS_EXPORT_SCHEMA_VERSION,
+        identity_mode: mode,
+        dump_id: dumpId,
+        exported_at: new Date().toISOString(),
+        class: { id: classData.id, slug: classData.slug, name: classData.name },
+        assignment: { id: assignment.id, slug: assignment.slug, title: assignment.title },
+        submissions_scope: allSubmissions ? "all" : "active",
+        with_binary: withBinary,
+        ...(includeFiles.length > 0 ? { include_files: includeFiles } : {}),
+        ...(excludeFiles.length > 0 ? { exclude_files: excludeFiles } : {}),
+        privacy_notes: SUBMISSIONS_EXPORT_PRIVACY_NOTES
+      });
+
+      const { submissionCount, submissionIds } = await streamSubmissions(
+        supabase,
+        assignment.id,
+        allSubmissions,
+        mode,
+        tokenizer,
+        writer,
+        { includeOrdinal: true }
+      );
+
+      await writer.write({
+        kind: "end",
+        counts: { submissions: submissionCount },
+        submission_ids: submissionIds
+      });
+    });
+  }
+
+  if (section === "files") {
+    const submissionIds = params.submission_ids;
+    if (!Array.isArray(submissionIds) || submissionIds.length === 0) {
+      throw new CLICommandError("submission_ids is required for section=files", 400);
+    }
+    const filesBatchIndex = typeof params.files_batch_index === "number" ? params.files_batch_index : 0;
+
+    return streamNdjson(async (writer) => {
+      const { fileCount, nextFilesBatchIndex } = await streamSubmissionFiles(supabase, tokenizer, writer, {
+        withBinary,
+        filesBatchIndex,
+        submissionIds,
+        includeFiles: includeFiles.length > 0 ? includeFiles : undefined,
+        excludeFiles: excludeFiles.length > 0 ? excludeFiles : undefined
+      });
+
+      await writer.write({
+        kind: "end",
+        counts: { files: fileCount },
+        ...(nextFilesBatchIndex !== null ? { next_files_batch_index: nextFilesBatchIndex } : {})
+      });
+    });
+  }
+
+  throw new CLICommandError(`invalid section: ${String(section)}`, 400);
+}
+
+function normalizePatternList(raw: string[] | undefined): string[] {
+  if (!raw) return [];
+  return raw.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
 registerCommand({
   name: "submissions.comments.import",
   requiredScope: "cli:write",
@@ -581,4 +745,11 @@ registerCommand({
   name: "submissions.artifacts.import",
   requiredScope: "cli:write",
   handler: handleArtifactsImport
+});
+
+registerCommand({
+  name: "submissions.export",
+  requiredScope: "cli:read",
+  stream: true,
+  handler: handleSubmissionsExport
 });

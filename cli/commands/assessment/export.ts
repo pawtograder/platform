@@ -38,6 +38,12 @@ interface ExportArgs {
   withTestOutput?: boolean;
   "test-output-max-bytes"?: number;
   testOutputMaxBytes?: number;
+  "with-instructor-build-output"?: boolean;
+  withInstructorBuildOutput?: boolean;
+  "instructor-build-output-max-bytes"?: number;
+  instructorBuildOutputMaxBytes?: number;
+  "instructor-build-output-from-sentinel"?: string;
+  instructorBuildOutputFromSentinel?: string;
   "all-submissions"?: boolean;
   allSubmissions?: boolean;
 }
@@ -103,6 +109,22 @@ export const exportBuilder = (yargs: Argv) => {
       type: "number",
       default: 4096
     })
+    .option("with-instructor-build-output", {
+      describe:
+        "Include grader_result_output where visibility=hidden (truncated, grading paths sanitized). Off by default.",
+      type: "boolean",
+      default: false
+    })
+    .option("instructor-build-output-max-bytes", {
+      describe: "Per-row cap when --with-instructor-build-output is set (default 4096)",
+      type: "number",
+      default: 4096
+    })
+    .option("instructor-build-output-from-sentinel", {
+      describe:
+        "When set with --with-instructor-build-output, each log is trimmed to start at this substring (after path sanitization). Rows without the sentinel are omitted.",
+      type: "string"
+    })
     .option("all-submissions", {
       describe:
         "Include every submission attempt, not just is_active. Needed for hint feedback and autograder history on earlier tries.",
@@ -123,6 +145,9 @@ export const exportBuilder = (yargs: Argv) => {
       }
       if (argv["skip-gradebook"] && argv["gradebook-column"]?.length) {
         throw new Error("--skip-gradebook cannot be combined with --gradebook-column");
+      }
+      if (argv["instructor-build-output-from-sentinel"] && !argv["with-instructor-build-output"]) {
+        throw new Error("--instructor-build-output-from-sentinel requires --with-instructor-build-output");
       }
       return true;
     });
@@ -159,6 +184,12 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
     }
     if (args.allSubmissions === true) {
       logger.info("Submissions: all attempts (--all-submissions); default is is_active only");
+    }
+    if (args.withInstructorBuildOutput === true) {
+      logger.info("Instructor build output: included (--with-instructor-build-output)");
+    }
+    if (args.instructorBuildOutputFromSentinel) {
+      logger.info(`Instructor build output sentinel: ${args.instructorBuildOutputFromSentinel}`);
     }
     if (mode === "raw") {
       logger.warning(
@@ -259,7 +290,9 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
         const totals = await streamAssignmentToDir(args, salt, mode, dumpId, a.id as number, slug, dir);
         logger.info(
-          `  ${slug}: ${totals.submissions} submissions, ${totals.scores} scores, ${totals.grader_tests} tests, ${totals.hints} hints, ${totals.error_pin_engagement} error-pin engagement rows`
+          `  ${slug}: ${totals.submissions} submissions, ${totals.scores} scores, ${totals.grader_tests} tests${
+            args.withInstructorBuildOutput ? `, ${totals.instructor_build_outputs} instructor build outputs` : ""
+          }, ${totals.hints} hints, ${totals.error_pin_engagement} error-pin engagement rows`
         );
         return totals;
       }),
@@ -282,12 +315,18 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
       ...manifest,
       totals: grand,
       ...(args.skipGradebook === true ? { gradebook_skipped: true } : {}),
-      ...(args.allSubmissions === true ? { all_submissions: true } : {})
+      ...(args.allSubmissions === true ? { all_submissions: true } : {}),
+      ...(args.withInstructorBuildOutput === true ? { with_instructor_build_output: true } : {}),
+      ...(args.instructorBuildOutputFromSentinel
+        ? { instructor_build_output_from_sentinel: args.instructorBuildOutputFromSentinel }
+        : {})
     };
     writeJson(path.join(outputDir, "manifest.json"), enrichedManifest);
 
     logger.success(
-      `Done. ${assignments.length} assignment(s), ${grand.submissions} submissions, ${grand.scores} scores, ${grand.grader_tests} tests, ${grand.hints} hints, ${grand.error_pin_engagement} error-pin engagement rows${
+      `Done. ${assignments.length} assignment(s), ${grand.submissions} submissions, ${grand.scores} scores, ${grand.grader_tests} tests${
+        args.withInstructorBuildOutput ? `, ${grand.instructor_build_outputs} instructor build outputs` : ""
+      }, ${grand.hints} hints, ${grand.error_pin_engagement} error-pin engagement rows${
         args.skipGradebook === true ? ", gradebook skipped" : `, ${grand.gradebook_scores} gradebook cells`
       } in ${outputDir}`
     );
@@ -301,6 +340,39 @@ function writeJson(filePath: string, data: unknown): void {
   // mode option only applies on file creation; chmod afterwards covers the
   // overwrite case where the file already existed with looser perms.
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // Best-effort on platforms where chmod is a no-op (e.g. Windows).
+  }
+}
+
+/**
+ * Write a top-level JSON array without building one giant string. Node's
+ * JSON.stringify on arrays with hundreds of thousands of multi-kB rows hits
+ * V8's max string length (~512 MiB) and throws "Invalid string length".
+ */
+function writeJsonArray(filePath: string, rows: unknown[]): void {
+  if (rows.length === 0) {
+    writeJson(filePath, []);
+    return;
+  }
+
+  const fd = fs.openSync(filePath, "w", 0o600);
+  try {
+    fs.writeSync(fd, "[\n");
+    for (let i = 0; i < rows.length; i++) {
+      if (i > 0) fs.writeSync(fd, ",\n");
+      const indented = JSON.stringify(rows[i], null, 2)
+        .split("\n")
+        .map((line) => `  ${line}`)
+        .join("\n");
+      fs.writeSync(fd, indented);
+    }
+    fs.writeSync(fd, "\n]\n");
+  } finally {
+    fs.closeSync(fd);
+  }
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
@@ -372,6 +444,7 @@ interface AssignmentTotals {
   submissions: number;
   scores: number;
   grader_tests: number;
+  instructor_build_outputs: number;
   hints: number;
   error_pin_engagement: number;
 }
@@ -393,6 +466,7 @@ function emptyAssignmentBuckets(): Record<string, Record<string, unknown>[]> {
     submission: [],
     score: [],
     grader_test: [],
+    instructor_build_output: [],
     hint: [],
     error_pin_engagement: []
   };
@@ -468,8 +542,13 @@ async function streamAssignmentToDir(
     dump_id: dumpId,
     assignment: assignmentId,
     with_test_output: args.withTestOutput === true,
-    test_output_max_bytes: args.testOutputMaxBytes ?? 4096
+    test_output_max_bytes: args.testOutputMaxBytes ?? 4096,
+    with_instructor_build_output: args.withInstructorBuildOutput === true,
+    instructor_build_output_max_bytes: args.instructorBuildOutputMaxBytes ?? 4096
   };
+  if (args.instructorBuildOutputFromSentinel) {
+    baseParams.instructor_build_output_from_sentinel = args.instructorBuildOutputFromSentinel;
+  }
   if (args.allSubmissions === true) baseParams.all_submissions = true;
   if (salt !== null) baseParams.salt = salt;
   if (mode === "raw") baseParams.confirm_pii = true;
@@ -482,6 +561,7 @@ async function streamAssignmentToDir(
     submissions: 0,
     scores: 0,
     grader_tests: 0,
+    instructor_build_outputs: 0,
     hints: 0,
     error_pin_engagement: 0
   };
@@ -500,6 +580,7 @@ async function streamAssignmentToDir(
     totals.submissions += counts.submissions ?? 0;
     totals.scores += counts.scores ?? 0;
     totals.grader_tests += counts.grader_tests ?? 0;
+    totals.instructor_build_outputs += counts.instructor_build_outputs ?? 0;
     totals.hints += counts.hints ?? 0;
     totals.error_pin_engagement += counts.error_pin_engagement ?? 0;
   };
@@ -542,7 +623,22 @@ async function streamAssignmentToDir(
     batchIndex = next;
   }
 
-  // 5. Hints + error-pin engagement (paginated over submission batches)
+  // 5. Instructor build output (paginated over submission batches)
+  if (args.withInstructorBuildOutput === true) {
+    for (let batchIndex = 0; ; ) {
+      const page = await streamAssignmentSection(baseParams, slug, "build_output", {
+        build_output_submission_batch_index: batchIndex
+      });
+      mergeBuckets(page.buckets);
+      addPageCounts(page.endRecord);
+      assertExpectedCount(page.endRecord, "instructor_build_outputs", page.buckets.instructor_build_output!.length);
+      const next = page.endRecord.next_build_output_submission_batch_index;
+      if (typeof next !== "number") break;
+      batchIndex = next;
+    }
+  }
+
+  // 6. Hints + error-pin engagement (paginated over submission batches)
   for (let batchIndex = 0; ; ) {
     const page = await streamAssignmentSection(baseParams, slug, "engagement", {
       engagement_submission_batch_index: batchIndex
@@ -568,12 +664,15 @@ async function streamAssignmentToDir(
     tests: buckets.autograder_test,
     raw_config: buckets.autograder_raw_config![0]?.config ?? null
   });
-  if (buckets.group!.length > 0) writeJson(path.join(dir, "groups.json"), buckets.group);
-  writeJson(path.join(dir, "submissions.json"), buckets.submission);
-  writeJson(path.join(dir, "scores.json"), buckets.score);
-  writeJson(path.join(dir, "tests.json"), buckets.grader_test);
-  writeJson(path.join(dir, "hints.json"), buckets.hint);
-  writeJson(path.join(dir, "error-pin-engagement.json"), buckets.error_pin_engagement);
+  if (buckets.group!.length > 0) writeJsonArray(path.join(dir, "groups.json"), buckets.group);
+  writeJsonArray(path.join(dir, "submissions.json"), buckets.submission);
+  writeJsonArray(path.join(dir, "scores.json"), buckets.score);
+  writeJsonArray(path.join(dir, "tests.json"), buckets.grader_test);
+  if (args.withInstructorBuildOutput === true) {
+    writeJsonArray(path.join(dir, "instructor-build-output.json"), buckets.instructor_build_output);
+  }
+  writeJsonArray(path.join(dir, "hints.json"), buckets.hint);
+  writeJsonArray(path.join(dir, "error-pin-engagement.json"), buckets.error_pin_engagement);
 
   return totals;
 }
@@ -626,7 +725,7 @@ async function streamGradebookToDir(
 
   const dir = path.join(outputDir, "gradebook");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeJson(path.join(dir, "scores.json"), cells);
+  writeJsonArray(path.join(dir, "scores.json"), cells);
 
   return { gradebook_scores: cells.length };
 }
@@ -662,6 +761,7 @@ function aggregateTotals(
     submissions: sum("submissions"),
     scores: sum("scores"),
     grader_tests: sum("grader_tests"),
+    instructor_build_outputs: sum("instructor_build_outputs"),
     hints: sum("hints"),
     error_pin_engagement: sum("error_pin_engagement"),
     gradebook_scores: gradebook.gradebook_scores

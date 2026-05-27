@@ -32,6 +32,9 @@ import { streamNdjson } from "../utils/ndjson.ts";
 import { fetchRubricWithHierarchy } from "../utils/rubric.ts";
 import { resolveSelectors } from "../utils/selectors.ts";
 import { createExportTokenizer } from "../utils/assessmentExportPepper.ts";
+import { validateExportIdentityParams } from "../utils/exportIdentity.ts";
+import { prepareInstructorBuildOutput } from "../utils/sanitizeGradingPaths.ts";
+import { streamSubmissions } from "../utils/submissionExportStream.ts";
 import { type IdentityMode, type Tokenizer } from "../utils/tokenization.ts";
 
 const SCHEMA_VERSION = 1;
@@ -40,6 +43,7 @@ const FACT_PAGE_SIZE = 1000;
 /** Max UUIDs per PostgREST `.in()` filter — long lists exceed HTTP URL limits. */
 const UUID_IN_BATCH_SIZE = 50;
 const DEFAULT_TEST_OUTPUT_MAX_BYTES = 4096;
+const DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES = 4096;
 
 interface PreambleParams {
   class?: string | number;
@@ -66,30 +70,10 @@ interface PreambleParams {
 async function handlePreamble(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as PreambleParams;
   const classIdentifier = params.class;
-  const mode: IdentityMode = params.identity_mode ?? "opaque";
+  const mode = validateExportIdentityParams(params);
   const dumpId = params.dump_id ?? crypto.randomUUID();
 
   if (!classIdentifier) throw new CLICommandError("class is required");
-  if (mode !== "raw" && mode !== "hash" && mode !== "opaque") {
-    throw new CLICommandError(`invalid identity_mode: ${String(mode)}`);
-  }
-  if (mode === "raw" && params.confirm_pii !== true) {
-    throw new CLICommandError(
-      "identity_mode=raw exposes real student ids, emails, and names. Re-run with confirm_pii: true to acknowledge.",
-      400
-    );
-  }
-  if (mode === "hash" || mode === "opaque") {
-    if (!params.salt || typeof params.salt !== "string") {
-      throw new CLICommandError(`identity_mode=${mode} requires a salt`);
-    }
-    // Mirror createTokenizer's contract here so a too-short salt surfaces as
-    // a 400 validation error instead of a generic 500 from inside the
-    // tokenizer constructor.
-    if (params.salt.length < 16) {
-      throw new CLICommandError(`identity_mode=${mode} requires a salt of at least 16 characters`);
-    }
-  }
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
@@ -402,7 +386,7 @@ async function streamGradebookColumns(
   return resolved.length;
 }
 
-type AssignmentExportSection = "all" | "meta" | "submissions" | "scores" | "tests" | "engagement";
+type AssignmentExportSection = "all" | "meta" | "submissions" | "scores" | "tests" | "build_output" | "engagement";
 
 interface AssignmentExportParams {
   class?: string | number;
@@ -414,18 +398,25 @@ interface AssignmentExportParams {
   /** Include grader_result_tests.output (truncated to test_output_max_bytes). */
   with_test_output?: boolean;
   test_output_max_bytes?: number;
+  /** Include grader_result_output where visibility=hidden (truncated, paths sanitized). */
+  with_instructor_build_output?: boolean;
+  instructor_build_output_max_bytes?: number;
+  /** When set, each hidden build log is trimmed to start at this substring (after path sanitization). */
+  instructor_build_output_from_sentinel?: string;
   /** When true, export every submission attempt; default is is_active only. */
   all_submissions?: boolean;
   /**
    * Export slice for chunked assignment dumps. The CLI calls meta → submissions →
-   * scores → tests → engagement separately so each edge invocation gets a fresh
-   * CPU budget. Omit or "all" for a single monolithic stream (may time out).
+   * scores → tests → build_output → engagement separately so each edge invocation
+   * gets a fresh CPU budget. Omit or "all" for a single monolithic stream (may time out).
    */
   section?: AssignmentExportSection;
   /** Paginate scores section: batch index over grading-review ids (0-based). */
   score_review_batch_index?: number;
   /** Paginate tests section: batch index over submission ids (0-based). */
   test_submission_batch_index?: number;
+  /** Paginate build_output section: batch index over submission ids (0-based). */
+  build_output_submission_batch_index?: number;
   /** Paginate engagement section: batch index over submission ids (0-based). */
   engagement_submission_batch_index?: number;
 }
@@ -436,6 +427,8 @@ const SCORE_REVIEW_BATCH_SIZE = 80;
 const TEST_SUBMISSION_BATCH_WITH_OUTPUT = 20;
 /** Submissions per tests-section call without output. */
 const TEST_SUBMISSION_BATCH_NO_OUTPUT = 100;
+/** Submissions per build_output-section call (hidden build logs are heavy). */
+const BUILD_OUTPUT_SUBMISSION_BATCH_SIZE = 20;
 /** Submissions per engagement-section call (hints + error-pin rows). */
 const ENGAGEMENT_SUBMISSION_BATCH_SIZE = 150;
 
@@ -448,6 +441,9 @@ type AssignmentExportContext = {
   allSubmissions: boolean;
   withTestOutput: boolean;
   testOutputMax: number;
+  withInstructorBuildOutput: boolean;
+  instructorBuildOutputMax: number;
+  instructorBuildOutputFromSentinel: string | null;
 };
 
 /** Strip multi-kilobyte LLM prompt/result blobs from test rows — hints.json carries results. */
@@ -474,30 +470,29 @@ async function resolveAssignmentExportContext(
 ): Promise<AssignmentExportContext> {
   const classIdentifier = params.class;
   const assignmentIdentifier = params.assignment;
-  const mode: IdentityMode = params.identity_mode ?? "opaque";
+  const mode = validateExportIdentityParams(params);
   const withTestOutput = params.with_test_output === true;
+  const withInstructorBuildOutput = params.with_instructor_build_output === true;
   const allSubmissions = params.all_submissions === true;
   const testOutputMax = Math.max(
     0,
     Math.min(1024 * 1024, params.test_output_max_bytes ?? DEFAULT_TEST_OUTPUT_MAX_BYTES)
   );
+  const instructorBuildOutputMax = Math.max(
+    0,
+    Math.min(
+      1024 * 1024,
+      params.instructor_build_output_max_bytes ?? DEFAULT_INSTRUCTOR_BUILD_OUTPUT_MAX_BYTES
+    )
+  );
+  const instructorBuildOutputFromSentinel =
+    typeof params.instructor_build_output_from_sentinel === "string" &&
+    params.instructor_build_output_from_sentinel.length > 0
+      ? params.instructor_build_output_from_sentinel
+      : null;
 
   if (!classIdentifier) throw new CLICommandError("class is required");
   if (!assignmentIdentifier) throw new CLICommandError("assignment is required");
-  if (mode === "raw" && params.confirm_pii !== true) {
-    throw new CLICommandError(
-      "identity_mode=raw exposes real student ids. Re-run with confirm_pii: true to acknowledge.",
-      400
-    );
-  }
-  if (mode === "hash" || mode === "opaque") {
-    if (!params.salt || typeof params.salt !== "string") {
-      throw new CLICommandError(`identity_mode=${mode} requires a salt`);
-    }
-    if (params.salt.length < 16) {
-      throw new CLICommandError(`identity_mode=${mode} requires a salt of at least 16 characters`);
-    }
-  }
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
@@ -513,7 +508,10 @@ async function resolveAssignmentExportContext(
     mode,
     allSubmissions,
     withTestOutput,
-    testOutputMax
+    testOutputMax,
+    withInstructorBuildOutput,
+    instructorBuildOutputMax,
+    instructorBuildOutputFromSentinel
   };
 }
 
@@ -544,6 +542,7 @@ function exportAssignmentMeta(exportCtx: AssignmentExportContext): Promise<Respo
         scores: 0,
         grader_tests: 0,
         hints: 0,
+        instructor_build_outputs: 0,
         error_pin_engagement: 0
       }
     });
@@ -572,6 +571,7 @@ function exportAssignmentSubmissions(exportCtx: AssignmentExportContext): Promis
         scores: 0,
         grader_tests: 0,
         hints: 0,
+        instructor_build_outputs: 0,
         error_pin_engagement: 0
       }
     });
@@ -603,6 +603,7 @@ function exportAssignmentScores(exportCtx: AssignmentExportContext, batchIndex: 
         scores: scoreCount,
         grader_tests: 0,
         hints: 0,
+        instructor_build_outputs: 0,
         error_pin_engagement: 0
       },
       ...(hasMore ? { next_score_review_batch_index: batchIndex + 1 } : {})
@@ -640,9 +641,59 @@ function exportAssignmentTests(exportCtx: AssignmentExportContext, batchIndex: n
         scores: 0,
         grader_tests: testCount,
         hints: 0,
+        instructor_build_outputs: 0,
         error_pin_engagement: 0
       },
       ...(hasMore ? { next_test_submission_batch_index: batchIndex + 1 } : {})
+    });
+  });
+}
+
+function exportAssignmentBuildOutput(exportCtx: AssignmentExportContext, batchIndex: number): Promise<Response> {
+  const {
+    supabase,
+    assignmentRow,
+    tokenizer,
+    mode,
+    allSubmissions,
+    withInstructorBuildOutput,
+    instructorBuildOutputMax,
+    instructorBuildOutputFromSentinel
+  } = exportCtx;
+
+  return streamNdjson(async (writer) => {
+    const { submissionIds } = await loadSubmissionScope(supabase, assignmentRow.id, allSubmissions);
+    const start = batchIndex * BUILD_OUTPUT_SUBMISSION_BATCH_SIZE;
+    const submissionBatch = submissionIds.slice(start, start + BUILD_OUTPUT_SUBMISSION_BATCH_SIZE);
+    const hasMore = start + BUILD_OUTPUT_SUBMISSION_BATCH_SIZE < submissionIds.length;
+
+    const buildOutputCount =
+      withInstructorBuildOutput && submissionBatch.length > 0
+        ? await streamInstructorBuildOutput(
+            supabase,
+            submissionBatch,
+            mode,
+            tokenizer,
+            writer,
+            instructorBuildOutputMax,
+            instructorBuildOutputFromSentinel
+          )
+        : 0;
+
+    await writer.write({
+      kind: "end",
+      counts: {
+        rubric_checks: 0,
+        autograder_tests: 0,
+        groups: 0,
+        submissions: 0,
+        scores: 0,
+        grader_tests: 0,
+        hints: 0,
+        instructor_build_outputs: buildOutputCount,
+        error_pin_engagement: 0
+      },
+      ...(hasMore ? { next_build_output_submission_batch_index: batchIndex + 1 } : {})
     });
   });
 }
@@ -676,6 +727,7 @@ function exportAssignmentEngagement(exportCtx: AssignmentExportContext, batchInd
         scores: 0,
         grader_tests: 0,
         hints: hintCount,
+        instructor_build_outputs: 0,
         error_pin_engagement: errorPinEngagementCount
       },
       ...(hasMore ? { next_engagement_submission_batch_index: batchIndex + 1 } : {})
@@ -684,8 +736,19 @@ function exportAssignmentEngagement(exportCtx: AssignmentExportContext, batchInd
 }
 
 function exportAssignmentAll(exportCtx: AssignmentExportContext): Promise<Response> {
-  const { supabase, classData, assignmentRow, tokenizer, mode, allSubmissions, withTestOutput, testOutputMax } =
-    exportCtx;
+  const {
+    supabase,
+    classData,
+    assignmentRow,
+    tokenizer,
+    mode,
+    allSubmissions,
+    withTestOutput,
+    testOutputMax,
+    withInstructorBuildOutput,
+    instructorBuildOutputMax,
+    instructorBuildOutputFromSentinel
+  } = exportCtx;
 
   return streamNdjson(async (writer) => {
     await writer.write({
@@ -721,6 +784,17 @@ function exportAssignmentAll(exportCtx: AssignmentExportContext): Promise<Respon
       withTestOutput,
       testOutputMax
     );
+    const buildOutputCount = withInstructorBuildOutput
+      ? await streamInstructorBuildOutput(
+          supabase,
+          submissionIds,
+          mode,
+          tokenizer,
+          writer,
+          instructorBuildOutputMax,
+          instructorBuildOutputFromSentinel
+        )
+      : 0;
     const hintCount = await streamHints(supabase, submissionIds, mode, tokenizer, writer);
     const errorPinEngagementCount = await streamErrorPinEngagement(
       supabase,
@@ -741,6 +815,7 @@ function exportAssignmentAll(exportCtx: AssignmentExportContext): Promise<Respon
         scores: scoreCount,
         grader_tests: testCount,
         hints: hintCount,
+        instructor_build_outputs: buildOutputCount,
         error_pin_engagement: errorPinEngagementCount
       }
     });
@@ -749,7 +824,7 @@ function exportAssignmentAll(exportCtx: AssignmentExportContext): Promise<Respon
 
 /**
  * Streams everything specific to one assignment. The CLI fans out sectioned
- * calls (meta → submissions → scores → tests → engagement) so each edge
+ * calls (meta → submissions → scores → tests → build_output → engagement) so each edge
  * invocation stays within CPU limits on large classes.
  */
 async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
@@ -766,6 +841,8 @@ async function handleAssignmentExport(ctx: MCPAuthContext, rawParams: Record<str
       return exportAssignmentScores(exportCtx, Math.max(0, params.score_review_batch_index ?? 0));
     case "tests":
       return exportAssignmentTests(exportCtx, Math.max(0, params.test_submission_batch_index ?? 0));
+    case "build_output":
+      return exportAssignmentBuildOutput(exportCtx, Math.max(0, params.build_output_submission_batch_index ?? 0));
     case "engagement":
       return exportAssignmentEngagement(exportCtx, Math.max(0, params.engagement_submission_batch_index ?? 0));
     case "all":
@@ -1033,85 +1110,6 @@ async function loadReviewScope(
   const reviewToSubmission = new Map<number, number>();
   for (const [subId, revId] of submissionToReview.entries()) reviewToSubmission.set(revId, subId);
   return { reviewIds, reviewToSubmission };
-}
-
-/**
- * Page through submissions for the assignment and emit one record per row.
- * By default only is_active submissions are exported (the final attempt per
- * student/group). Pass allSubmissions=true to include every attempt — needed
- * for hint feedback and autograder history on earlier tries.
- */
-async function streamSubmissions(
-  supabase: ReturnType<typeof getAdminClient>,
-  assignmentId: number,
-  allSubmissions: boolean,
-  mode: IdentityMode,
-  tokenizer: Tokenizer | null,
-  writer: { write: (record: Record<string, unknown>) => Promise<void> }
-): Promise<{ submissionCount: number; submissionIds: number[]; activeSubmissionIds: number[] }> {
-  let cursor = 0;
-  let total = 0;
-  const ids: number[] = [];
-  const activeIds: number[] = [];
-
-  while (true) {
-    let query = supabase
-      .from("submissions")
-      .select(
-        "id, profile_id, assignment_group_id, sha, run_number, run_attempt, created_at, grading_review_id, repository, is_active"
-      )
-      .eq("assignment_id", assignmentId)
-      .gt("id", cursor)
-      .order("id", { ascending: true })
-      .limit(FACT_PAGE_SIZE);
-    if (!allSubmissions) query = query.eq("is_active", true);
-
-    const { data: rows, error } = await query;
-    if (error) throw new CLICommandError(`Failed to load submissions: ${error.message}`, 500);
-    if (!rows || rows.length === 0) break;
-
-    for (const row of rows) {
-      const submissionRef =
-        tokenizer === null ? { id: row.id } : { token: await tokenizer.token("submission", row.id) };
-
-      const subjectRef =
-        row.profile_id === null
-          ? null
-          : tokenizer === null
-            ? { id: row.profile_id }
-            : { token: await tokenizer.token("subject", row.profile_id) };
-
-      const groupRef =
-        row.assignment_group_id === null
-          ? null
-          : tokenizer === null
-            ? { id: row.assignment_group_id }
-            : { token: await tokenizer.token("group", row.assignment_group_id) };
-
-      await writer.write({
-        kind: "submission",
-        ...submissionRef,
-        subject: subjectRef,
-        group: groupRef,
-        sha: row.sha,
-        run_number: row.run_number,
-        run_attempt: row.run_attempt,
-        created_at: row.created_at,
-        is_active: row.is_active,
-        has_final_review: row.grading_review_id !== null,
-        // Repository url is course design metadata, not student PII — same
-        // posture as autograder.grader_repo above.
-        repository: row.repository
-      });
-      ids.push(row.id);
-      if (row.is_active) activeIds.push(row.id);
-      total += 1;
-    }
-
-    if (rows.length < FACT_PAGE_SIZE) break;
-    cursor = rows[rows.length - 1]!.id;
-  }
-  return { submissionCount: total, submissionIds: ids, activeSubmissionIds: activeIds };
 }
 
 /**
@@ -1394,6 +1392,105 @@ async function streamGraderTests(
     }
   }
   return { testCount: total, graderTestIds };
+}
+
+/**
+ * grader_result_output rows with visibility=hidden for the given submissions.
+ * Output text is path-sanitized (runner/repo prefixes before pawtograder-grading
+ * become /anonymous), optionally trimmed to start at outputFromSentinel, then
+ * truncated to outputMaxBytes.
+ */
+async function streamInstructorBuildOutput(
+  supabase: ReturnType<typeof getAdminClient>,
+  submissionIds: number[],
+  mode: IdentityMode,
+  tokenizer: Tokenizer | null,
+  writer: { write: (record: Record<string, unknown>) => Promise<void> },
+  outputMaxBytes: number,
+  outputFromSentinel: string | null
+): Promise<number> {
+  if (submissionIds.length === 0) return 0;
+  let total = 0;
+
+  const graderResultIdToSubmission = new Map<number, number>();
+  for (const batch of chunked(submissionIds, 500)) {
+    const { data, error } = await supabase
+      .from("grader_results")
+      .select("id, submission_id")
+      .in("submission_id", batch);
+    if (error) throw new CLICommandError(`Failed to load grader_results: ${error.message}`, 500);
+    for (const r of data ?? []) {
+      if (r.submission_id !== null) graderResultIdToSubmission.set(r.id, r.submission_id);
+    }
+  }
+  const graderResultIds = Array.from(graderResultIdToSubmission.keys());
+  if (graderResultIds.length === 0) return 0;
+
+  for (const batch of chunked(graderResultIds, 500)) {
+    let cursor = 0;
+    while (true) {
+      const { data: rows, error } = await supabase
+        .from("grader_result_output")
+        .select("id, grader_result_id, student_id, assignment_group_id, output, format, visibility")
+        .in("grader_result_id", batch)
+        .eq("visibility", "hidden")
+        .gt("id", cursor)
+        .order("id", { ascending: true })
+        .limit(FACT_PAGE_SIZE);
+      if (error) throw new CLICommandError(`Failed to load grader_result_output: ${error.message}`, 500);
+      if (!rows || rows.length === 0) break;
+
+      for (const row of rows) {
+        const resolvedSubmissionId = graderResultIdToSubmission.get(row.grader_result_id) ?? null;
+        const submissionRef =
+          resolvedSubmissionId === null
+            ? null
+            : tokenizer === null
+              ? { id: resolvedSubmissionId }
+              : { token: await tokenizer.token("submission", resolvedSubmissionId) };
+        const studentRef =
+          row.student_id === null
+            ? null
+            : tokenizer === null
+              ? { id: row.student_id }
+              : { token: await tokenizer.token("subject", row.student_id) };
+        const groupRef =
+          row.assignment_group_id === null
+            ? null
+            : tokenizer === null
+              ? { id: row.assignment_group_id }
+              : { token: await tokenizer.token("group", row.assignment_group_id) };
+
+        const prepared = prepareInstructorBuildOutput(row.output, { sentinel: outputFromSentinel });
+        if (prepared === null) continue;
+
+        const record: Record<string, unknown> = {
+          kind: "instructor_build_output",
+          submission: submissionRef,
+          subject: studentRef,
+          group: groupRef,
+          format: row.format,
+          visibility: row.visibility
+        };
+
+        if (prepared.length <= outputMaxBytes) {
+          record.output = prepared;
+          record.output_truncated = false;
+        } else {
+          record.output = prepared.slice(0, outputMaxBytes);
+          record.output_truncated = true;
+          record.output_full_bytes = prepared.length;
+        }
+
+        await writer.write(record);
+        total += 1;
+      }
+
+      if (rows.length < FACT_PAGE_SIZE) break;
+      cursor = rows[rows.length - 1]!.id;
+    }
+  }
+  return total;
 }
 
 /**
@@ -1834,23 +1931,9 @@ interface GradebookExportParams {
 async function handleGradebookExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as GradebookExportParams;
   const classIdentifier = params.class;
-  const mode: IdentityMode = params.identity_mode ?? "opaque";
+  const mode = validateExportIdentityParams(params);
 
   if (!classIdentifier) throw new CLICommandError("class is required");
-  if (mode === "raw" && params.confirm_pii !== true) {
-    throw new CLICommandError(
-      "identity_mode=raw exposes real student ids. Re-run with confirm_pii: true to acknowledge.",
-      400
-    );
-  }
-  if (mode === "hash" || mode === "opaque") {
-    if (!params.salt || typeof params.salt !== "string") {
-      throw new CLICommandError(`identity_mode=${mode} requires a salt`);
-    }
-    if (params.salt.length < 16) {
-      throw new CLICommandError(`identity_mode=${mode} requires a salt of at least 16 characters`);
-    }
-  }
 
   const supabase = getAdminClient();
   const classData = await resolveClass(supabase, classIdentifier);
