@@ -179,11 +179,19 @@ const DiscussionThreadContent = memo(
     const isReadOnly = useIsReadOnly();
     const { course_id } = useParams();
     const authorProfile = useUserProfile(thread.author);
-    const { private_profile_id } = useClassProfiles();
+    const { private_profile_id, public_profile_id } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
+    // canEdit must reflect the current viewer's identity, not the thread's OP. Checking
+    // authorProfile?.id === originalPoster exposed the Edit button to any viewer reading
+    // the OP's reply because that comparison is between the reply's author and the
+    // thread's OP — both populated for every row, regardless of viewer.
     const canEdit = useMemo(() => {
-      return authorProfile?.id === originalPoster || isGraderOrInstructor;
-    }, [authorProfile, originalPoster, isGraderOrInstructor]);
+      return (
+        thread.author === private_profile_id ||
+        thread.author === public_profile_id ||
+        isGraderOrInstructor
+      );
+    }, [thread.author, private_profile_id, public_profile_id, isGraderOrInstructor]);
 
     // Like functionality
     const likeStatus = useDiscussionThreadLikes(thread.id);
