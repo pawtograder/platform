@@ -192,6 +192,38 @@ spec:
                     /app/bin/realtime rpc \
                       'for %{external_id: eid} <- Realtime.Repo.all(Realtime.Api.Tenant), t = Realtime.Api.get_tenant_by_external_id(eid), do: Realtime.Tenants.Migrations.run_migrations(t)' \
                       >/dev/null 2>&1 || true
+                    # Refresh the tenant's encrypted DB connection settings to
+                    # match current pod env. SEED_SELF_HOST=true only seeds on
+                    # FIRST install (seeds.exs skips when the tenant exists),
+                    # so on upgrades that change DB_HOST/USER/PASSWORD/PORT/NAME
+                    # the encrypted settings stay frozen at install-time values
+                    # and the tenant's CDC handle can no longer reach postgres
+                    # ("Realtime was unable to connect to the project database",
+                    # WS 1011). Idempotent — no-op when decrypted values match.
+                    /app/bin/realtime rpc '
+                      eid = System.get_env("SELF_HOST_TENANT_NAME")
+                      case Realtime.Api.get_tenant_by_external_id(eid) do
+                        %{extensions: exts} when exts != [] ->
+                          env = %{
+                            "db_host" => System.get_env("DB_HOST"),
+                            "db_port" => System.get_env("DB_PORT"),
+                            "db_name" => System.get_env("DB_NAME"),
+                            "db_user" => System.get_env("DB_USER"),
+                            "db_password" => System.get_env("DB_PASSWORD")
+                          }
+                          for ext <- exts do
+                            current = ext.settings |> Map.take(Map.keys(env))
+                                      |> Map.new(fn {k,v} -> {k, Realtime.Crypto.decrypt!(v)} end)
+                            unless current == env do
+                              encrypted = Map.new(env, fn {k,v} -> {k, Realtime.Crypto.encrypt!(v)} end)
+                              ext
+                              |> Ecto.Changeset.change(settings: Map.merge(ext.settings, encrypted))
+                              |> Realtime.Repo.update!()
+                            end
+                          end
+                        _ -> :no_tenant
+                      end
+                    ' >/dev/null 2>&1 || true
           # Realtime v2.34 has no public unauthenticated health endpoint
           # (/healthz returns 404; /api/tenants/<id>/health needs a JWT).
           # TCP probe just confirms the listener is up — good enough for
