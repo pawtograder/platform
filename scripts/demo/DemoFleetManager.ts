@@ -6,7 +6,7 @@
  * Three tiers:
  *  - Real fleet (Ripley / Orion / Paws) — fixed emails, already exist and are
  *    linked to real GitHub accounts. We refuse to bootstrap these silently.
- *  - Filler students — stable synthetic emails, created if missing. DB-only.
+ *  - (filler tier removed — every student in a demo class is a real-fleet member)
  *  - Grader fleet — stable synthetic emails, created if missing. DB-only.
  *
  * The returned objects match the TestingUser shape from tests/e2e/TestingUtils
@@ -35,7 +35,6 @@ export interface DemoFleetUser {
 
 export interface DemoFleet {
   realStudents: DemoFleetUser[];
-  fillerStudents: DemoFleetUser[];
   graders: DemoFleetUser[];
 }
 
@@ -64,40 +63,6 @@ const REAL_FLEET: ReadonlyArray<{
     private_profile_name: "Paws",
     public_profile_name: "demo-hawk-13"
   }
-];
-
-/**
- * Stable filler-student persona names. The list is ordered — fleet member N
- * always gets the same name so demo classes remain consistent across runs.
- */
-const FILLER_STUDENT_NAMES: ReadonlyArray<{ private: string; public: string }> = [
-  { private: "Alice Chen", public: "demo-otter-01" },
-  { private: "Ben Rodriguez", public: "demo-otter-02" },
-  { private: "Chloe Park", public: "demo-otter-03" },
-  { private: "Daniel Okafor", public: "demo-otter-04" },
-  { private: "Emma Liu", public: "demo-otter-05" },
-  { private: "Felipe Costa", public: "demo-otter-06" },
-  { private: "Grace Nakamura", public: "demo-otter-07" },
-  { private: "Hassan Karimi", public: "demo-otter-08" },
-  { private: "Isla Andersen", public: "demo-otter-09" },
-  { private: "Jamal Washington", public: "demo-otter-10" },
-  { private: "Kira Volkov", public: "demo-otter-11" },
-  { private: "Liam Murphy", public: "demo-otter-12" },
-  { private: "Maya Patel", public: "demo-otter-13" },
-  { private: "Noah Schmidt", public: "demo-otter-14" },
-  { private: "Olivia Brooks", public: "demo-otter-15" },
-  { private: "Priya Reddy", public: "demo-otter-16" },
-  { private: "Quentin Lefebvre", public: "demo-otter-17" },
-  { private: "Riya Kapoor", public: "demo-otter-18" },
-  { private: "Sven Eriksson", public: "demo-otter-19" },
-  { private: "Tara Mehta", public: "demo-otter-20" },
-  { private: "Umar Hassan", public: "demo-otter-21" },
-  { private: "Vera Volkov", public: "demo-otter-22" },
-  { private: "Wei Zhang", public: "demo-otter-23" },
-  { private: "Xochi Mendoza", public: "demo-otter-24" },
-  { private: "Yara Khoury", public: "demo-otter-25" },
-  { private: "Zane Park", public: "demo-otter-26" },
-  { private: "Anya Petrov", public: "demo-otter-27" }
 ];
 
 const GRADER_NAMES: ReadonlyArray<{ private: string; public: string }> = [
@@ -181,30 +146,11 @@ async function loadRealFleet(): Promise<DemoFleetUser[]> {
   return out;
 }
 
-export async function ensureDemoFleet(
-  opts: { numFillerStudents?: number; numGraders?: number } = {}
-): Promise<DemoFleet> {
-  const numFillerStudents = Math.min(opts.numFillerStudents ?? 27, FILLER_STUDENT_NAMES.length);
+export async function ensureDemoFleet(opts: { numGraders?: number } = {}): Promise<DemoFleet> {
   const numGraders = Math.min(opts.numGraders ?? 4, GRADER_NAMES.length);
 
   const realStudents = await loadRealFleet();
   console.log(`✓ Real fleet present: ${realStudents.map((u) => u.fleetName).join(", ")}`);
-
-  const fillerStudents: DemoFleetUser[] = [];
-  for (let i = 0; i < numFillerStudents; i++) {
-    const email = `demo-fleet-student-${i + 1}@pawtograder.net`;
-    const userId = await ensureSyntheticUser(email, DEFAULT_PASSWORD);
-    fillerStudents.push({
-      email,
-      user_id: userId,
-      private_profile_name: FILLER_STUDENT_NAMES[i].private,
-      public_profile_name: FILLER_STUDENT_NAMES[i].public,
-      password: DEFAULT_PASSWORD,
-      role: "student",
-      hasRealGitHub: false
-    });
-  }
-  console.log(`✓ Filler students ready: ${fillerStudents.length}`);
 
   const graders: DemoFleetUser[] = [];
   for (let i = 0; i < numGraders; i++) {
@@ -222,16 +168,14 @@ export async function ensureDemoFleet(
   }
   console.log(`✓ Grader fleet ready: ${graders.length}`);
 
-  return { realStudents, fillerStudents, graders };
+  return { realStudents, graders };
 }
 
 if (require.main === module) {
   void (async () => {
     try {
       const fleet = await ensureDemoFleet({});
-      console.log(
-        `realStudents=${fleet.realStudents.length} fillerStudents=${fleet.fillerStudents.length} graders=${fleet.graders.length}`
-      );
+      console.log(`realStudents=${fleet.realStudents.length} graders=${fleet.graders.length}`);
     } catch (e) {
       console.error(e);
       process.exit(1);

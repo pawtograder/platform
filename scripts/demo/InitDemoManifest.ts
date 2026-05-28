@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 /**
- * InitDemoManifest — refresh the intro-cs-java block in canned-repos.json from
+ * InitDemoManifest — refresh the program-design-and-implementation-ii block in canned-repos.json from
  * a real source-of-truth class plus a real instructor's GitHub-linked submission
  * repos. Run this when the pawtograder-playground repos change or when you want
  * to re-pin grader commit SHAs.
@@ -9,7 +9,7 @@
  *   --class-id <N>             Source class id (default 500)
  *   --github-username <name>   GitHub user whose submission repos seed ripley/orion/paws
  *                              (default jon-bell)
- *   --archetype <key>          Block to overwrite in canned-repos.json (default intro-cs-java)
+ *   --archetype <key>          Block to overwrite in canned-repos.json (default program-design-and-implementation-ii)
  *
  * What it pulls:
  *   • assignments(title, slug, total_points, autograder_points, due_date, minutes_due_after_lab,
@@ -40,7 +40,13 @@ import * as path from "path";
 
 import { createAdminClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import type { CannedArchetype, CannedAssignment, CannedRepoManifest, RealFleetName } from "./fixtures.types";
+import type {
+  CannedArchetype,
+  CannedAssignment,
+  CannedRepoManifest,
+  RealFleetName,
+  SourceSubmissionSnapshot
+} from "./fixtures.types";
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -58,7 +64,7 @@ interface CliArgs {
 
 function parseArgs(): CliArgs {
   const argv = process.argv.slice(2);
-  const out: CliArgs = { classId: 500, githubUsername: "jon-bell", archetype: "intro-cs-java" };
+  const out: CliArgs = { classId: 500, githubUsername: "jon-bell", archetype: "program-design-and-implementation-ii" };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const val = argv[i + 1];
@@ -78,7 +84,7 @@ function parseArgs(): CliArgs {
       case "--help":
       case "-h":
         console.log(
-          "Usage: npx tsx scripts/demo/InitDemoManifest.ts [--class-id 500] [--github-username jon-bell] [--archetype intro-cs-java]"
+          "Usage: npx tsx scripts/demo/InitDemoManifest.ts [--class-id 500] [--github-username jon-bell] [--archetype program-design-and-implementation-ii]"
         );
         process.exit(0);
         break;
@@ -116,22 +122,27 @@ async function resolveSourceProfileId(
 async function loadAssignments(
   supabase: ReturnType<typeof createAdminClient<Database>>,
   classId: number
-): Promise<Array<{
-  id: number;
-  slug: string;
-  title: string;
-  total_points: number | null;
-  autograder_points: number | null;
-  due_date: string;
-  minutes_due_after_lab: number | null;
-  template_repo: string | null;
-  grader_repo: string | null;
-  grader_commit_sha: string | null;
-}>> {
+): Promise<
+  Array<{
+    id: number;
+    slug: string;
+    title: string;
+    total_points: number | null;
+    autograder_points: number | null;
+    due_date: string;
+    minutes_due_after_lab: number | null;
+    template_repo: string | null;
+    group_config: "individual" | "groups" | "both" | null;
+    min_group_size: number | null;
+    max_group_size: number | null;
+    grader_repo: string | null;
+    grader_commit_sha: string | null;
+  }>
+> {
   const { data, error } = await supabase
     .from("assignments")
     .select(
-      "id, slug, title, total_points, autograder_points, due_date, minutes_due_after_lab, template_repo, autograder(grader_repo, grader_commit_sha)"
+      "id, slug, title, total_points, autograder_points, due_date, minutes_due_after_lab, template_repo, group_config, min_group_size, max_group_size, autograder(grader_repo, grader_commit_sha)"
     )
     .eq("class_id", classId)
     .order("due_date", { ascending: true });
@@ -148,10 +159,152 @@ async function loadAssignments(
       due_date: a.due_date,
       minutes_due_after_lab: a.minutes_due_after_lab,
       template_repo: a.template_repo,
+      group_config: a.group_config as "individual" | "groups" | "both" | null,
+      min_group_size: a.min_group_size as number | null,
+      max_group_size: a.max_group_size as number | null,
       grader_repo: ag?.grader_repo ?? null,
       grader_commit_sha: ag?.grader_commit_sha ?? null
     };
   });
+}
+
+/**
+ * Latest autograder commit sha per assignment. The `autograder.grader_commit_sha`
+ * column is often null in practice — the source of truth for "what sha would the
+ * grader run on right now" lives in autograder_commits. We pick the most recent
+ * row per assignment regardless of ref so this works whether the class is on main
+ * or a feature branch.
+ */
+async function loadLatestGraderCommits(
+  supabase: ReturnType<typeof createAdminClient<Database>>,
+  classId: number,
+  assignmentIds: number[]
+): Promise<Map<number, string>> {
+  if (assignmentIds.length === 0) return new Map();
+  const { data, error } = await supabase
+    .from("autograder_commits")
+    .select("autograder_id, sha, created_at")
+    .eq("class_id", classId)
+    .in("autograder_id", assignmentIds)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`Failed to load autograder_commits: ${error.message}`);
+  const latest = new Map<number, string>();
+  for (const row of data ?? []) {
+    if (!latest.has(row.autograder_id)) latest.set(row.autograder_id, row.sha);
+  }
+  return latest;
+}
+
+/**
+ * Pull jon-bell's submissions for each assignment in the source class, joined with
+ * their grader_result and grader_result_tests. Returned as a map keyed by
+ * assignment_id, with submissions sorted ascending by ordinal so Phase C can pick
+ * `[0]` for paws and `[len-1]` for ripley deterministically.
+ */
+async function loadSourceSubmissions(
+  supabase: ReturnType<typeof createAdminClient<Database>>,
+  classId: number,
+  profileId: string,
+  assignmentIds: number[]
+): Promise<Map<number, SourceSubmissionSnapshot[]>> {
+  const out = new Map<number, SourceSubmissionSnapshot[]>();
+  if (assignmentIds.length === 0) return out;
+  // Fetch submissions + grader_results in one shot, then the per-grader-result
+  // tests in a second pass. Doing it as a deep nested supabase select trips
+  // supabase-js's type inference (returns GenericStringError), and a two-step
+  // query is easier to read besides.
+  // Disambiguate the FK: grader_results has TWO references to submissions —
+  // grader_results_submission_id_fkey (the result for THIS submission) and
+  // grader_results_rerun_for_submission_id_fkey (a rerun pointing back at the
+  // original). We want the former.
+  const { data: subRows, error: subErr } = await supabase
+    .from("submissions")
+    .select(
+      "id, assignment_id, sha, repository, ordinal, created_at, grader_results!grader_results_submission_id_fkey(id, score, max_score, lint_passed, lint_output, lint_output_format)"
+    )
+    .eq("class_id", classId)
+    .eq("profile_id", profileId)
+    .in("assignment_id", assignmentIds)
+    .order("ordinal", { ascending: true });
+  if (subErr) throw new Error(`Failed to load source submissions: ${subErr.message}`);
+
+  type SubRow = {
+    id: number;
+    assignment_id: number;
+    sha: string;
+    repository: string | null;
+    ordinal: number | null;
+    created_at: string | null;
+    grader_results:
+      | {
+          id: number;
+          score: number | null;
+          max_score: number | null;
+          lint_passed: boolean | null;
+          lint_output: string | null;
+          lint_output_format: string | null;
+        }
+      | Array<{
+          id: number;
+          score: number | null;
+          max_score: number | null;
+          lint_passed: boolean | null;
+          lint_output: string | null;
+          lint_output_format: string | null;
+        }>
+      | null;
+  };
+  const subs = (subRows ?? []) as unknown as SubRow[];
+  const graderResultIds = subs
+    .map((s) => (Array.isArray(s.grader_results) ? s.grader_results[0]?.id : s.grader_results?.id))
+    .filter((id): id is number => typeof id === "number");
+
+  const testsByGraderResult = new Map<number, NonNullable<SourceSubmissionSnapshot["graderResultTests"]>>();
+  if (graderResultIds.length > 0) {
+    const { data: testRows, error: testErr } = await supabase
+      .from("grader_result_tests")
+      .select("grader_result_id, name, name_format, score, max_score, output, output_format, is_released, extra_data")
+      .in("grader_result_id", graderResultIds);
+    if (testErr) throw new Error(`Failed to load grader_result_tests: ${testErr.message}`);
+    for (const t of testRows ?? []) {
+      const arr = testsByGraderResult.get(t.grader_result_id) ?? [];
+      arr.push({
+        name: t.name,
+        name_format: t.name_format ?? null,
+        score: t.score ?? 0,
+        max_score: t.max_score ?? 0,
+        output: t.output ?? null,
+        output_format: t.output_format ?? null,
+        is_released: t.is_released ?? null,
+        extra_data: t.extra_data ?? null
+      });
+      testsByGraderResult.set(t.grader_result_id, arr);
+    }
+  }
+
+  for (const s of subs) {
+    const gr = Array.isArray(s.grader_results) ? s.grader_results[0] : s.grader_results;
+    const snap: SourceSubmissionSnapshot = {
+      sha: s.sha,
+      ordinal: s.ordinal,
+      createdAt: s.created_at,
+      repository: s.repository,
+      graderResult: gr
+        ? {
+            score: gr.score ?? 0,
+            max_score: gr.max_score ?? 0,
+            lint_passed: gr.lint_passed ?? false,
+            lint_output: gr.lint_output ?? null,
+            lint_output_format: gr.lint_output_format ?? null
+          }
+        : null,
+      graderResultTests: gr ? (testsByGraderResult.get(gr.id) ?? []) : []
+    };
+    const arr = out.get(s.assignment_id) ?? [];
+    arr.push(snap);
+    out.set(s.assignment_id, arr);
+  }
+  return out;
 }
 
 /** Repos for the source user across the class, both individual and group. */
@@ -219,10 +372,14 @@ function buildCannedAssignment(
     due_date: string;
     minutes_due_after_lab: number | null;
     template_repo: string | null;
+    group_config: "individual" | "groups" | "both" | null;
+    min_group_size: number | null;
+    max_group_size: number | null;
     grader_repo: string | null;
     grader_commit_sha: string | null;
   },
   jonRepos: string[],
+  sourceSubmissions: SourceSubmissionSnapshot[],
   earliest: Date
 ): CannedAssignment {
   const studentSubmissions: Partial<Record<RealFleetName, string>> = {};
@@ -241,9 +398,17 @@ function buildCannedAssignment(
     graderCommitSha: a.grader_commit_sha ?? "",
     sourceAssignmentId: a.id
   };
+  if (a.group_config && a.group_config !== "individual") {
+    entry.groupConfig = a.group_config;
+  }
+  if (a.min_group_size != null) entry.minGroupSize = a.min_group_size;
+  if (a.max_group_size != null) entry.maxGroupSize = a.max_group_size;
   if (jonRepos.length > 0) {
     entry.genericStudentSubmission = jonRepos[0];
     entry.studentSubmissions = studentSubmissions;
+  }
+  if (sourceSubmissions.length > 0) {
+    entry.sourceSubmissions = sourceSubmissions;
   }
   return entry;
 }
@@ -266,14 +431,39 @@ async function main() {
   const totalRepos = [...repoMap.values()].reduce((s, r) => s + r.length, 0);
   console.log(`✓ Found ${totalRepos} ${args.githubUsername} repos across ${repoMap.size} assignments`);
 
+  const latestShas = await loadLatestGraderCommits(
+    supabase,
+    args.classId,
+    assignments.map((a) => a.id)
+  );
+  console.log(`✓ Resolved ${latestShas.size} latest grader commit shas from autograder_commits`);
+
+  const sourceSubmissions = await loadSourceSubmissions(
+    supabase,
+    args.classId,
+    profileId,
+    assignments.map((a) => a.id)
+  );
+  const totalSourceSubs = [...sourceSubmissions.values()].reduce((s, arr) => s + arr.length, 0);
+  console.log(
+    `✓ Captured ${totalSourceSubs} ${args.githubUsername} submissions across ${sourceSubmissions.size} assignments`
+  );
+
   const earliest = new Date(assignments[0].due_date);
 
   const canned: CannedAssignment[] = [];
   for (const a of assignments) {
     const repos = repoMap.get(a.id) ?? [];
+    const subs = sourceSubmissions.get(a.id) ?? [];
+    // autograder.grader_commit_sha is usually NULL — prefer the latest sha from
+    // autograder_commits.
+    const effectiveSha = a.grader_commit_sha ?? latestShas.get(a.id) ?? null;
     if (!a.template_repo) console.warn(`[warn] ${a.slug}: no template_repo in DB; handoutRepo left blank`);
-    if (!a.grader_commit_sha) console.warn(`[warn] ${a.slug}: no autograder.grader_commit_sha; left blank`);
-    canned.push(buildCannedAssignment(a, repos, earliest));
+    if (!effectiveSha)
+      console.warn(`[warn] ${a.slug}: no grader commit sha (autograder + autograder_commits both empty); left blank`);
+    if (subs.length === 0)
+      console.warn(`[warn] ${a.slug}: no ${args.githubUsername} submissions in source class; Phase C will fall back to HEAD`);
+    canned.push(buildCannedAssignment({ ...a, grader_commit_sha: effectiveSha }, repos, subs, earliest));
   }
 
   // Load and surgically patch the manifest.
@@ -300,7 +490,9 @@ async function main() {
     console.log(
       `⚠ ${missingHandouts} entries missing handoutRepo, ${missingSolutions} missing solutionRepo, ${missingShas} missing graderCommitSha`
     );
-    console.log("   Fill these in by hand (or wire pawtograder-playground repos for them) before running real-handouts.");
+    console.log(
+      "   Fill these in by hand (or wire pawtograder-playground repos for them) before running real-handouts."
+    );
   }
 }
 

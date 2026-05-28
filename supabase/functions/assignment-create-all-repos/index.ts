@@ -5,6 +5,7 @@ import Bottleneck from "npm:bottleneck";
 import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { sanitizeRepoNameComponent } from "../_shared/repoNames.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -200,7 +201,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     const groupRepos = assignment.assignment_groups
       ?.filter((group) => !existingRepos?.find((repo) => repo.assignment_group_id === group.id))
       .map((group) => ({
-        name: `${assignment.classes?.slug}-${assignment.slug}-group-${group.name}`,
+        name: `${assignment.classes?.slug}-${assignment.slug}-group-${sanitizeRepoNameComponent(group.name)}`,
         assignment_group: group,
         student_github_usernames: group.assignment_groups_members.map(
           (member) => member.user_roles.users.github_username!
@@ -242,7 +243,7 @@ export async function createAllRepos(courseId: number, assignmentId: number, sco
     profile_id: string | null,
     assignmentGroup: AssignmentGroup | null
   ) => {
-    const repoName = `${assignment.classes?.slug}-${assignment.slug}-${assignmentGroup?.name ?? github_username[0]}`;
+    const repoName = `${assignment.classes?.slug}-${assignment.slug}-${assignmentGroup ? sanitizeRepoNameComponent(assignmentGroup.name) : github_username[0]}`;
     console.log(`Creating repo ${repoName} for ${name}`);
     if (!assignment.template_repo) {
       console.log(`No template repo for assignment ${assignment.id}`);

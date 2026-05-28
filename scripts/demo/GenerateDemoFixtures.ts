@@ -9,7 +9,7 @@
  *
  * Usage:
  *   ANTHROPIC_API_KEY=... npx tsx scripts/demo/GenerateDemoFixtures.ts \
- *       --archetype intro-cs-java
+ *       --archetype program-design-and-implementation-ii
  *
  * Defaults to all archetypes listed in scripts/demo/canned-repos.json.
  */
@@ -38,15 +38,19 @@ function loadManifest(): CannedRepoManifest {
   return JSON.parse(raw) as CannedRepoManifest;
 }
 
-function parseArgs(): { archetypes?: string[] } {
+function parseArgs(): { archetypes?: string[]; force: boolean } {
   const args = process.argv.slice(2);
-  const out: { archetypes?: string[] } = {};
+  const out: { archetypes?: string[]; force: boolean } = { force: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--archetype" && args[i + 1]) {
       out.archetypes = (out.archetypes ?? []).concat(args[++i]);
+    } else if (args[i] === "--force" || args[i] === "-f") {
+      out.force = true;
     } else if (args[i] === "--help" || args[i] === "-h") {
       console.log(
-        "Usage: ANTHROPIC_API_KEY=... npx tsx scripts/demo/GenerateDemoFixtures.ts [--archetype intro-cs-java]..."
+        "Usage: ANTHROPIC_API_KEY=... npx tsx scripts/demo/GenerateDemoFixtures.ts " +
+          "[--archetype program-design-and-implementation-ii] [--force]\n" +
+          "  --force regenerates fixture files that already exist (default: skip)."
       );
       process.exit(0);
     }
@@ -161,7 +165,7 @@ function buildSpecs(): ContentTypeSpec<unknown>[] {
   ];
 }
 
-async function generateForArchetype(name: string, archetype: CannedArchetype): Promise<void> {
+async function generateForArchetype(name: string, archetype: CannedArchetype, force: boolean): Promise<void> {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY must be set");
   }
@@ -169,11 +173,24 @@ async function generateForArchetype(name: string, archetype: CannedArchetype): P
   const llm = new ChatAnthropic({
     model: MODEL_NAME,
     temperature: 0.85,
-    maxTokens: 8192,
+    // help_requests is the biggest payload — ~50 requests × multi-paragraph
+    // replies routinely runs past 30KB. Sonnet 4.6 supports up to 64K output
+    // tokens, so give it the headroom rather than truncating mid-string.
+    maxTokens: 32768,
+    // The Anthropic SDK refuses non-streaming requests whose expected runtime
+    // exceeds 10 minutes (it computes this from maxTokens × per-model rate). At
+    // 32K tokens we're past that line, so use streaming — langchain's .invoke
+    // still returns the aggregated message but issues a streamed request.
+    streaming: true,
     clientOptions: {
       defaultHeaders: { "anthropic-beta": "prompt-caching-2024-07-31" }
     }
   });
+  // @langchain/anthropic 0.3.26 defaults topP and topK to -1 and forwards them
+  // verbatim to the API. Newer Claude models reject -1 ("top_p cannot be set to
+  // -1"). Clear the sentinel so the request omits both fields.
+  (llm as unknown as { topP?: number; topK?: number }).topP = undefined;
+  (llm as unknown as { topP?: number; topK?: number }).topK = undefined;
 
   const systemPrompt = archetypeSystemPrompt(name, archetype);
   const outDir = path.join(FIXTURE_ROOT, name);
@@ -183,6 +200,11 @@ async function generateForArchetype(name: string, archetype: CannedArchetype): P
   // Run all four content-type calls in parallel — they share the cached system block.
   await Promise.all(
     specs.map(async (spec) => {
+      const outPath = path.join(outDir, `${spec.name}.json`);
+      if (!force && fs.existsSync(outPath)) {
+        console.log(`[${name}] ${spec.name}: already exists, skipping (use --force to regenerate)`);
+        return;
+      }
       console.log(`[${name}] generating ${spec.name}…`);
       const response = await llm.invoke([
         {
@@ -197,6 +219,13 @@ async function generateForArchetype(name: string, archetype: CannedArchetype): P
         .replace(/^```(?:json)?\s*/m, "")
         .replace(/```\s*$/m, "")
         .trim();
+      const stopReason = (response.response_metadata as { stop_reason?: string } | undefined)?.stop_reason;
+      if (stopReason === "max_tokens") {
+        throw new Error(
+          `[${name}] ${spec.name}: model hit max_tokens (${stripped.length} chars produced). ` +
+            `Bump maxTokens in GenerateDemoFixtures.ts and re-run.`
+        );
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(stripped);
@@ -205,7 +234,6 @@ async function generateForArchetype(name: string, archetype: CannedArchetype): P
         throw new Error(`[${name}] ${spec.name}: invalid JSON returned by model. Preview:\n${preview}\n---\n${e}`);
       }
       const validated = spec.validate(parsed);
-      const outPath = path.join(outDir, `${spec.name}.json`);
       fs.writeFileSync(outPath, JSON.stringify(validated, null, 2) + "\n");
       console.log(`[${name}] wrote ${outPath}`);
     })
@@ -215,13 +243,14 @@ async function generateForArchetype(name: string, archetype: CannedArchetype): P
 async function main() {
   const argv = parseArgs();
   const manifest = loadManifest();
-  const archetypeNames = argv.archetypes ?? Object.keys(manifest);
+  // Skip underscore-prefixed archetypes by default — they're disabled placeholders.
+  const archetypeNames = argv.archetypes ?? Object.keys(manifest).filter((k) => !k.startsWith("_"));
   for (const name of archetypeNames) {
     const archetype = manifest[name];
     if (!archetype) {
       throw new Error(`Unknown archetype '${name}' — must be one of: ${Object.keys(manifest).join(", ")}`);
     }
-    await generateForArchetype(name, archetype);
+    await generateForArchetype(name, archetype, argv.force);
   }
 }
 

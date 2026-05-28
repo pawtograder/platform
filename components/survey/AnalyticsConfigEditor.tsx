@@ -36,12 +36,17 @@ export function AnalyticsConfigEditor({ surveyJson, analyticsConfig, onChange }:
   const questions = useMemo(() => getQuestionsFromSurvey(surveyJson), [surveyJson]);
 
   const updateQuestionConfig = (questionName: string, updates: Partial<QuestionAnalyticsConfig>) => {
+    // analyticsConfig may arrive as null/undefined or as a partial object that's
+    // missing `questions` entirely (e.g. a survey created without the analytics
+    // wiring). Coalesce so the spread/[lookup] don't trip "undefined is not an
+    // object (evaluating 'a.questions[e.name]')".
+    const existingQuestions = analyticsConfig?.questions ?? {};
     onChange({
       ...analyticsConfig,
       questions: {
-        ...analyticsConfig.questions,
+        ...existingQuestions,
         [questionName]: {
-          ...(analyticsConfig.questions[questionName] ?? { includeInAnalytics: false }),
+          ...(existingQuestions[questionName] ?? { includeInAnalytics: false }),
           ...updates
         }
       }
@@ -101,7 +106,7 @@ export function AnalyticsConfigEditor({ surveyJson, analyticsConfig, onChange }:
 
       <Text fontWeight="semibold">Per-Question Configuration</Text>
       {questions.map((q) => {
-        const config = analyticsConfig.questions[q.name] ?? { includeInAnalytics: false };
+        const config = analyticsConfig?.questions?.[q.name] ?? { includeInAnalytics: false };
         return (
           <Card.Root key={q.name}>
             <Card.Header>

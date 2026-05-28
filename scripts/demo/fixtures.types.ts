@@ -26,15 +26,33 @@ export interface CannedAssignment {
   solutionRepo: string;
   /** Pinned grader commit sha so demo provisioning is deterministic. */
   graderCommitSha: string;
+  /** Mirror of `assignments.group_config` in the source class. `groups` makes
+   * the demo assignment a group assignment — the seeder enrolls all real-fleet
+   * students into a single shared group (since the demo fleet is small and we
+   * want the visiting instructor to see them collaborating). */
+  groupConfig?: "individual" | "groups" | "both";
+  /** Mirror of `assignments.max_group_size` / `min_group_size`. Optional; the
+   * seeder sets sensible defaults when missing. */
+  minGroupSize?: number | null;
+  maxGroupSize?: number | null;
   /** Source assignment id in `CannedArchetype.sourceClassId` whose hand-grading
    * rubrics (grading + meta + self-review) should be copied onto the demo
    * assignment. When absent, the seeder generates random rubric structure. */
   sourceAssignmentId?: number;
+  /** Real submissions jon-bell (or whatever GitHub user the init script was
+   * pointed at) made against this assignment in the source class. Phase C
+   * distributes these across the fleet (ripley = newest, orion = middle, paws =
+   * oldest) and pushes each one's exact sha into the corresponding student's
+   * demo repo. We don't insert grader rows ourselves — the platform's webhook
+   * fires on each push and the autograder produces matching scores naturally
+   * because the pushed content matches jon-bell's original submission. The
+   * snapshot of the grader_result + tests is kept here for reference and so
+   * the manifest is self-documenting. */
+  sourceSubmissions?: SourceSubmissionSnapshot[];
   /**
-   * Optional generic student submission repo. When set and the handout
-   * strategy creates real student repos, filler students "submit" from this
-   * repo. Real fleet members fall back to it if no per-name submission is
-   * configured.
+   * Optional generic student submission repo. Used as a fallback in Phase C
+   * when a fleet member has no entry in `studentSubmissions` AND there are no
+   * `sourceSubmissions` for the assignment.
    */
   genericStudentSubmission?: string;
   /**
@@ -42,6 +60,35 @@ export interface CannedAssignment {
    * fleet members (ripley/orion/paws); all other students ignore this field.
    */
   studentSubmissions?: Partial<Record<RealFleetName, string>>;
+}
+
+export interface SourceSubmissionSnapshot {
+  /** Submission sha that the source user pushed. This is what Phase C checks
+   * out of the source GitHub repo and overlays into the demo student repo. */
+  sha: string;
+  /** Pawtograder submissions.ordinal — 1-based attempt count for that profile + assignment. */
+  ordinal?: number | null;
+  /** ISO timestamp of the submission record in the source class. */
+  createdAt?: string | null;
+  /** owner/repo the source user submitted from, when available. */
+  repository?: string | null;
+  graderResult?: {
+    score: number;
+    max_score: number;
+    lint_passed: boolean;
+    lint_output: string | null;
+    lint_output_format: string | null;
+  } | null;
+  graderResultTests?: Array<{
+    name: string;
+    name_format: string | null;
+    score: number;
+    max_score: number;
+    output: string | null;
+    output_format: string | null;
+    is_released: boolean | null;
+    extra_data: unknown;
+  }>;
 }
 
 export interface CannedArchetype {

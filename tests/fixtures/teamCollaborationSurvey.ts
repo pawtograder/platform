@@ -7,6 +7,8 @@
  *   - Q9: checkbox
  *   - Q15: comment (long text)
  */
+import type { SurveyAnalyticsConfig } from "@/types/survey-analytics";
+
 export const TEAM_COLLABORATION_SURVEY = {
   title: "Weekly Team Collaboration Survey",
   description: "Please complete this weekly survey about your team collaboration experience.",
@@ -204,4 +206,101 @@ export const TEAM_COLLABORATION_SURVEY = {
       ]
     }
   ]
+};
+
+/**
+ * Canonical analytics configuration for the Team Collaboration Response Survey
+ * (TCRS). Co-located with the survey JSON so seeding and tests use one exact
+ * source of truth. Question keys match the survey's question names; alert
+ * thresholds/directions drive the analytics view's flagging.
+ */
+export const TEAM_COLLABORATION_ANALYTICS_CONFIG: SurveyAnalyticsConfig = {
+  questions: {
+    q1: {
+      includeInAnalytics: true,
+      displayLabel: "This week I have..."
+    },
+    q2: {
+      includeInAnalytics: true,
+      displayLabel: "Interacted with team by..."
+    },
+    q3: {
+      includeInAnalytics: true,
+      alertThreshold: 5,
+      alertDirection: "above",
+      alertMessage: "Student unclear on weekly goals",
+      displayLabel: "Knew what to do"
+    },
+    q4: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Individual reports lower than expected progress",
+      displayLabel: "Personal progress"
+    },
+    q5: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Team reports lower than expected progress",
+      displayLabel: "Team progress"
+    },
+    q6: {
+      includeInAnalytics: true,
+      alertThreshold: 6,
+      alertDirection: "any_above",
+      alertMessage: "Possible unequal contribution reported",
+      displayLabel: "Equal contribution"
+    },
+    q7: {
+      includeInAnalytics: true,
+      alertThreshold: 4,
+      alertDirection: "above",
+      alertMessage: "Student planning to do less next week",
+      displayLabel: "Next week plans"
+    },
+    q16: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Low team interdependence",
+      isReversedScale: true,
+      displayLabel: "Team reliance"
+    },
+    q21: {
+      includeInAnalytics: true,
+      alertThreshold: 3.5,
+      alertDirection: "above",
+      alertMessage: "Information hoarding detected",
+      isReversedScale: true,
+      displayLabel: "Info sharing"
+    },
+    q23: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Low team satisfaction",
+      isReversedScale: true,
+      displayLabel: "Team satisfaction"
+    },
+    q24: {
+      includeInAnalytics: true,
+      alertThreshold: 2.5,
+      alertDirection: "below",
+      alertMessage: "Tasks not completed as agreed",
+      isReversedScale: true,
+      displayLabel: "Task agreement"
+    },
+    q9: {
+      includeInAnalytics: true,
+      flagValues: [4, 5, 6],
+      alertMessage: "Teammate/communication impediments reported",
+      displayLabel: "Impediments"
+    }
+  },
+  globalSettings: {
+    varianceThreshold: 1.5,
+    nonResponseThreshold: 0.8,
+    trendDeclineCount: 3
+  }
 };

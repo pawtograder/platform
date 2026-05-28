@@ -48,6 +48,10 @@ interface RubricPartRow {
   description: string | null;
   ordinal: number;
   data: unknown;
+  // Grading-mode flags must be carried over or "assign to student" /
+  // "individual grading" parts silently downgrade to regular grading in the copy.
+  is_individual_grading: boolean;
+  is_assign_to_student: boolean;
   rubric_criteria: RubricCriteriaRow[];
 }
 
@@ -64,9 +68,7 @@ interface RubricHierarchy {
 async function fetchHierarchy(supabase: Sb, rubricId: number): Promise<RubricHierarchy | null> {
   const { data, error } = await supabase
     .from("rubrics")
-    .select(
-      `*, rubric_parts (*, rubric_criteria (*, rubric_checks (*)))`
-    )
+    .select(`*, rubric_parts (*, rubric_criteria (*, rubric_checks (*)))`)
     .eq("id", rubricId)
     .single();
   if (error) {
@@ -135,7 +137,9 @@ async function copyOneRubric(
         name: part.name,
         description: part.description,
         ordinal: part.ordinal,
-        data: part.data as never
+        data: part.data as never,
+        is_individual_grading: part.is_individual_grading,
+        is_assign_to_student: part.is_assign_to_student
       })
       .select("id")
       .single();
@@ -222,9 +226,7 @@ async function copyCheckReferences(
     if (!targetRubricId || !newReferenced || !newReferencing) {
       // Skip references that can't be resolved (e.g. cross-rubric ref to a rubric we
       // didn't copy). The deno version errors; for demo provisioning a skip is fine.
-      console.warn(
-        `[copyRubrics] Skipping unresolved rubric_check_reference (rubric_id=${ref.rubric_id})`
-      );
+      console.warn(`[copyRubrics] Skipping unresolved rubric_check_reference (rubric_id=${ref.rubric_id})`);
       continue;
     }
     const { error: insErr } = await supabase.from("rubric_check_references").insert({
