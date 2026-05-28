@@ -12,6 +12,14 @@ spec:
     - name: http
       port: {{ .Values.kong.service.port }}
       targetPort: http
+    {{- if .Values.monitoring.enabled }}
+    # Admin API exposes /metrics for the Prometheus plugin. ClusterIP-only,
+    # never published through the ingress. Add a NetworkPolicy if you want
+    # to gate by source namespace.
+    - name: admin-metrics
+      port: 8001
+      targetPort: admin-metrics
+    {{- end }}
   selector:
     {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "kong") | nindent 4 }}
 ---
@@ -43,6 +51,10 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.kong.service.port }}
+            {{- if .Values.monitoring.enabled }}
+            - name: admin-metrics
+              containerPort: 8001
+            {{- end }}
           env:
             - name: KONG_DATABASE
               value: "off"
@@ -56,11 +68,18 @@ spec:
             - name: KONG_DNS_ORDER
               value: "LAST,A,CNAME"
             - name: KONG_PLUGINS
-              value: "request-transformer,cors,key-auth,acl,basic-auth"
+              value: "request-transformer,cors,key-auth,acl,basic-auth{{ if .Values.monitoring.enabled }},prometheus{{ end }}"
             - name: KONG_PROXY_LISTEN
               value: "0.0.0.0:{{ .Values.kong.service.port }}"
+            {{- if .Values.monitoring.enabled }}
+            # Admin API enabled solely for the Prometheus plugin's /metrics
+            # endpoint. ClusterIP-only port; the chart does not publish it.
+            - name: KONG_ADMIN_LISTEN
+              value: "0.0.0.0:8001"
+            {{- else }}
             - name: KONG_ADMIN_LISTEN
               value: "off"
+            {{- end }}
             - name: KONG_NGINX_PROXY_PROXY_BUFFER_SIZE
               value: "160k"
             - name: KONG_NGINX_PROXY_PROXY_BUFFERS

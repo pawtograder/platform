@@ -46,6 +46,14 @@ spec:
               value: "0.0.0.0"
             - name: GOTRUE_API_PORT
               value: {{ .Values.auth.service.port | quote }}
+            {{- if .Values.monitoring.enabled }}
+            # GoTrue serves /metrics in Prometheus format when this is
+            # enabled — no authentication, so we rely on the Service's
+            # ClusterIP not being externally reachable + NetworkPolicy.
+            # Picked up by the ServiceMonitor in monitoring.yaml.
+            - name: GOTRUE_METRICS_ENABLED
+              value: "true"
+            {{- end }}
             - name: API_EXTERNAL_URL
               value: {{ include "pawtograder.api.url" . }}
             - name: GOTRUE_SITE_URL

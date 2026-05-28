@@ -1,0 +1,336 @@
+{{- if .Values.monitoring.enabled -}}
+{{- /*
+Monitoring wiring. Emits Prometheus Operator CRs (ServiceMonitor) for every
+component that exposes /metrics, plus the postgres_exporter custom-queries
+ConfigMap consumed by the sidecar in postgres-statefulset.yaml.
+
+We do NOT deploy our own Prometheus or Grafana — the cluster's
+kube-prometheus-stack auto-discovers ServiceMonitors in any namespace and the
+Grafana sidecar picks up ConfigMaps labeled `grafana_dashboard: "1"`.
+
+Each ServiceMonitor reuses the chart's selectorLabels so that even if a Service
+gets renamed, the operator still finds the right pod set.
+*/ -}}
+---
+# postgres_exporter — custom queries that surface supabase/pawtograder
+# semantics on top of the default pg_stat_database / pg_stat_user_tables
+# coverage. Keep query names stable: dashboards reference them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-exporter") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
+data:
+  queries.yaml: |
+    pg_replication_slots:
+      query: |
+        SELECT slot_name,
+               (active)::int AS active,
+               COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn), 0)::float AS lag_bytes
+        FROM pg_replication_slots
+      master: true
+      metrics:
+        - slot_name:
+            usage: "LABEL"
+            description: "Replication slot name"
+        - active:
+            usage: "GAUGE"
+            description: "1 if the slot is currently active, 0 otherwise"
+        - lag_bytes:
+            usage: "GAUGE"
+            description: "WAL bytes between current_wal_lsn and the slot's confirmed_flush_lsn"
+
+    pg_stat_statements_top:
+      query: |
+        SELECT queryid::text,
+               LEFT(query, 80) AS query_preview,
+               calls,
+               total_exec_time,
+               mean_exec_time,
+               rows
+        FROM pg_stat_statements
+        ORDER BY total_exec_time DESC
+        LIMIT 20
+      metrics:
+        - queryid:
+            usage: "LABEL"
+            description: "pg_stat_statements query id"
+        - query_preview:
+            usage: "LABEL"
+            description: "First 80 chars of the normalized statement"
+        - calls:
+            usage: "COUNTER"
+            description: "Number of times the statement has been executed"
+        - total_exec_time:
+            usage: "COUNTER"
+            description: "Total time spent executing the statement, in ms"
+        - mean_exec_time:
+            usage: "GAUGE"
+            description: "Mean time per execution, in ms"
+        - rows:
+            usage: "COUNTER"
+            description: "Total rows touched by the statement"
+
+    pawtograder_classes:
+      query: |
+        SELECT COUNT(*) FILTER (WHERE NOT is_demo)::float AS real_classes,
+               COUNT(*) FILTER (WHERE is_demo)::float AS demo_classes,
+               COUNT(*)::float AS total_classes
+        FROM public.classes
+      metrics:
+        - real_classes:
+            usage: "GAUGE"
+            description: "Number of non-demo classes"
+        - demo_classes:
+            usage: "GAUGE"
+            description: "Number of demo classes (seeded fixtures)"
+        - total_classes:
+            usage: "GAUGE"
+            description: "Total class count"
+
+    pawtograder_active_submissions:
+      query: |
+        SELECT class_id::text,
+               COUNT(*)::float AS active_count
+        FROM public.submissions
+        WHERE is_active = true
+        GROUP BY class_id
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - active_count:
+            usage: "GAUGE"
+            description: "Number of submissions currently marked is_active=true in this class"
+
+    pawtograder_help_queue_depth:
+      query: |
+        SELECT class_id::text,
+               COUNT(*) FILTER (WHERE status = 'open')::float AS open_count,
+               COUNT(*) FILTER (WHERE status = 'in_progress')::float AS in_progress_count
+        FROM public.help_requests
+        WHERE created_at > NOW() - INTERVAL '24 hours'
+        GROUP BY class_id
+      metrics:
+        - class_id:
+            usage: "LABEL"
+            description: "Class ID"
+        - open_count:
+            usage: "GAUGE"
+            description: "Help requests in open state in the last 24h"
+        - in_progress_count:
+            usage: "GAUGE"
+            description: "Help requests being actively handled in the last 24h"
+
+    pawtograder_table_sizes:
+      query: |
+        SELECT n.nspname || '.' || c.relname AS relation,
+               pg_total_relation_size(c.oid)::float AS total_bytes,
+               pg_relation_size(c.oid)::float AS heap_bytes
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p')
+          AND n.nspname IN ('public', 'auth', 'storage', 'realtime')
+          AND pg_total_relation_size(c.oid) > 10485760
+        ORDER BY pg_total_relation_size(c.oid) DESC
+        LIMIT 30
+      metrics:
+        - relation:
+            usage: "LABEL"
+            description: "Schema-qualified table or partition name"
+        - total_bytes:
+            usage: "GAUGE"
+            description: "Total size including indexes and TOAST"
+        - heap_bytes:
+            usage: "GAUGE"
+            description: "Heap size only (no indexes)"
+---
+# ServiceMonitor: postgres (via the in-pod exporter sidecar). The sidecar
+# listens on 9187 inside the postgres pod; reach it via the existing
+# pawtograder-postgres headless Service.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+---
+# Add a "metrics" port to the existing postgres Service so the ServiceMonitor
+# can target it by name. (postgres.yaml only exposes :5432.)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-metrics") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+---
+# ServiceMonitor: storage-api. /metrics on the http port.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "storage") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "storage") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "storage") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+---
+# ServiceMonitor: edge-functions. /metrics on the http port.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "edge-functions") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "functions") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "functions") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+---
+# ServiceMonitor: GoTrue (auth). /metrics on the http port; requires
+# GOTRUE_METRICS_ENABLED=true, set in auth.yaml.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "auth") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "auth") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "auth") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+---
+# ServiceMonitor: kong (Prometheus plugin via admin port :8001).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "kong") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "kong") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "kong") | nindent 6 }}
+  endpoints:
+    - port: admin-metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+---
+# ServiceMonitor: realtime. /metrics gated by an HS256 JWT signed with
+# API_JWT_SECRET (= JWT_SECRET in this chart). Pre-minted bearer lives in
+# pawtograder-jwt; Prometheus injects it as Authorization: Bearer <token>.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "realtime") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "realtime") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "realtime") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.jwt }}
+          key: REALTIME_METRICS_BEARER
+{{- if .Values.supavisor.enabled }}
+---
+# ServiceMonitor: supavisor. /metrics gated by an HS256 JWT signed with
+# SUPAVISOR_METRICS_JWT_SECRET (distinct from API_JWT_SECRET).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "supavisor") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "supavisor") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "supavisor") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.jwt }}
+          key: SUPAVISOR_METRICS_BEARER
+{{- end }}
+---
+# ServiceMonitor: web (Next.js /api/metrics). Static bearer; the app does
+# a constant-time string compare. See app/api/metrics/route.ts.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "web") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /api/metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.secrets.names.jwt }}
+          key: METRICS_SCRAPE_TOKEN
+{{- end }}

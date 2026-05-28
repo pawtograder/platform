@@ -64,6 +64,15 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: SERVICE_ROLE_KEY
+            {{- if .Values.monitoring.enabled }}
+            # Static bearer token gating the app's /api/metrics endpoint.
+            # ServiceMonitor injects it as Authorization: Bearer <token>.
+            - name: METRICS_SCRAPE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: METRICS_SCRAPE_TOKEN
+            {{- end }}
             {{- with .Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

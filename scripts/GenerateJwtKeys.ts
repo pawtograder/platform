@@ -145,6 +145,30 @@ const serviceRoleKey = signHS256(
   APIKEYS_KID
 );
 
+// --- Metrics scrape bearer tokens ---
+// Realtime and Supavisor protect /metrics with HS256 JWTs validated
+// against their respective configured secrets. We pre-mint long-lived
+// tokens here so the ServiceMonitor CR can reference them via
+// bearerTokenSecret without having to run a CronJob to rotate them.
+// Realtime accepts any HS256 JWT signed with API_JWT_SECRET (= JWT_SECRET
+// in this chart). Supavisor uses SUPAVISOR_METRICS_JWT_SECRET, distinct.
+const realtimeMetricsBearer = signHS256(
+  hsSecret,
+  { iss: "supabase", ref: "pawtograder", role: "realtime_admin", iat: now, exp },
+  APIKEYS_KID
+);
+const supavisorMetricsBearer = signHS256(
+  supavisorMetricsJwtSecret,
+  { iss: "supavisor", role: "metrics", iat: now, exp },
+  "pawtograder-supavisor-metrics"
+);
+
+// --- Web app /api/metrics scrape token ---
+// The Next.js app's Prometheus endpoint is gated by a static bearer to
+// avoid scraping noise from arbitrary anon clients. Long opaque token,
+// not a JWT — the app only does a constant-time string comparison.
+const metricsScrapeToken = randomBytes(32).toString("hex");
+
 // --- Output ---
 const args = process.argv.slice(2);
 const mode: "plain" | "env" | "kv" | "helm" = args.includes("--env")
@@ -181,6 +205,9 @@ if (mode === "env") {
   console.log(`SUPAVISOR_VAULT_ENC_KEY=${supavisorVaultEncKey}`); // codeql[js/clear-text-logging]
   console.log(`SUPAVISOR_API_JWT_SECRET=${supavisorApiJwtSecret}`); // codeql[js/clear-text-logging]
   console.log(`SUPAVISOR_METRICS_JWT_SECRET=${supavisorMetricsJwtSecret}`); // codeql[js/clear-text-logging]
+  console.log(`REALTIME_METRICS_BEARER=${realtimeMetricsBearer}`); // codeql[js/clear-text-logging]
+  console.log(`SUPAVISOR_METRICS_BEARER=${supavisorMetricsBearer}`); // codeql[js/clear-text-logging]
+  console.log(`METRICS_SCRAPE_TOKEN=${metricsScrapeToken}`); // codeql[js/clear-text-logging]
 } else if (mode === "helm") {
   // YAML snippet that can be passed via `helm install -f` together with the
   // chart's other values. Single-quoted scalars preserve the JSON exactly.
@@ -209,6 +236,9 @@ if (mode === "env") {
   console.log(`      supavisorVaultEncKey: '${escSingle(supavisorVaultEncKey)}'`); // codeql[js/clear-text-logging]
   console.log(`      supavisorApiJwtSecret: '${escSingle(supavisorApiJwtSecret)}'`); // codeql[js/clear-text-logging]
   console.log(`      supavisorMetricsJwtSecret: '${escSingle(supavisorMetricsJwtSecret)}'`); // codeql[js/clear-text-logging]
+  console.log(`      realtimeMetricsBearer: '${escSingle(realtimeMetricsBearer)}'`); // codeql[js/clear-text-logging]
+  console.log(`      supavisorMetricsBearer: '${escSingle(supavisorMetricsBearer)}'`); // codeql[js/clear-text-logging]
+  console.log(`      metricsScrapeToken: '${escSingle(metricsScrapeToken)}'`); // codeql[js/clear-text-logging]
   console.log("    postgres:");
   console.log(`      password: '${escSingle(postgresPassword)}'`); // codeql[js/clear-text-logging]
   console.log(`      pawtograderPassword: '${escSingle(pawtograderPassword)}'`); // codeql[js/clear-text-logging]
@@ -237,7 +267,10 @@ if (mode === "env") {
   console.log(`  SUPAVISOR_SECRET_KEY_BASE='${supavisorSecretKeyBase}' \\`); // codeql[js/clear-text-logging]
   console.log(`  SUPAVISOR_VAULT_ENC_KEY='${supavisorVaultEncKey}' \\`); // codeql[js/clear-text-logging]
   console.log(`  SUPAVISOR_API_JWT_SECRET='${supavisorApiJwtSecret}' \\`); // codeql[js/clear-text-logging]
-  console.log(`  SUPAVISOR_METRICS_JWT_SECRET='${supavisorMetricsJwtSecret}'`); // codeql[js/clear-text-logging]
+  console.log(`  SUPAVISOR_METRICS_JWT_SECRET='${supavisorMetricsJwtSecret}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  REALTIME_METRICS_BEARER='${realtimeMetricsBearer}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  SUPAVISOR_METRICS_BEARER='${supavisorMetricsBearer}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  METRICS_SCRAPE_TOKEN='${metricsScrapeToken}'`); // codeql[js/clear-text-logging]
 } else {
   console.log("JWT_SECRET (HS256, used for ANON/SERVICE keys only):");
   console.log(`  ${hsSecret}`);

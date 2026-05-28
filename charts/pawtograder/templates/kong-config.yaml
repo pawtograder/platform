@@ -10,6 +10,19 @@ data:
   kong.yml: |
     _format_version: "2.1"
     _transform: true
+    {{- if .Values.monitoring.enabled }}
+    # Globally enable the Prometheus plugin so kong exposes /metrics on
+    # the admin port (8001). Per-service status codes, latencies, and
+    # upstream health are emitted automatically.
+    plugins:
+      - name: prometheus
+        config:
+          per_consumer: false
+          status_code_metrics: true
+          latency_metrics: true
+          bandwidth_metrics: false
+          upstream_health_metrics: true
+    {{- end }}
     consumers:
       - username: anon
         keyauth_credentials:
