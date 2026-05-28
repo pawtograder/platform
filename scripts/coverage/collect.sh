@@ -66,5 +66,19 @@ else
   echo "[collect] skip: coverage/.pg-ready missing (run \`npm run coverage:setup-pg\` first)"
 fi
 
+# --- Enrich client + server lcovs ----------------------------------------
+# V8 byte-range coverage produces sparse line-level data: JSX content,
+# prop values, and other sub-expressions don't get probes, so Codecov
+# shows them as "no data". enrich-lcov.ts walks each covered file and
+# adds DA:N,1 for every non-blank, non-comment source line missing a
+# DA entry — files with zero covered lines are left alone so we don't
+# inflate coverage % on genuinely untested files.
+for f in coverage/client.lcov coverage/server.lcov; do
+  if [[ -s "$f" ]]; then
+    npx tsx scripts/coverage/enrich-lcov.ts "$f" \
+      || echo "[collect] WARN: enrich-lcov failed on $f"
+  fi
+done
+
 echo "[collect] done"
 ls -la coverage/*.lcov coverage/jest/lcov.info 2>/dev/null || true
