@@ -74,14 +74,18 @@ spec:
                 # $1 = label, $2 = SQL that returns 1 row when ready
                 psql -tAc "$2" 2>/dev/null | grep -q 1
               }
-              # Realtime's tables aren't required by pawtograder migrations
-              # (they touch the `supabase_realtime` publication, created by
-              # the postgres image's own init-scripts, not realtime itself).
+              # Wait for every supabase service to finish its own migrations:
+              #   - auth: needs auth.identities
+              #   - storage: needs storage.buckets with the `public` column
+              #   - realtime: needs the `supabase_realtime` publication AND
+              #     realtime.messages (created by realtime's bootstrap; the
+              #     `realtime-to-broadcast` pawtograder migration references it)
               for i in $(seq 1 90); do
                 ok=true
                 check 'auth.identities'           "SELECT 1 FROM information_schema.tables WHERE table_schema='auth' AND table_name='identities'"               || ok=false
                 check 'storage.buckets.public'    "SELECT 1 FROM information_schema.columns WHERE table_schema='storage' AND table_name='buckets' AND column_name='public'" || ok=false
                 check 'pub.supabase_realtime'     "SELECT 1 FROM pg_publication WHERE pubname='supabase_realtime'"                                              || ok=false
+                check 'realtime.messages'         "SELECT 1 FROM information_schema.tables WHERE table_schema='realtime' AND table_name='messages'"             || ok=false
                 if $ok; then
                   echo "supabase services migrated"
                   exit 0

@@ -360,24 +360,17 @@ jobs:
             --set migrations.image.tag="${{ needs.meta.outputs.tag }}" \
             --set secrets.autogenerate=false \
             --set secrets.create=false \
-            --wait --timeout 10m
+            --wait --wait-for-jobs --timeout 10m
 
-      - name: Wait for migrations to complete
+      - name: Status snapshot on failure
+        if: failure()
         run: |
-          set -euo pipefail
-          # The chart's migrations Job runs as a regular install resource
-          # with init containers waiting on supabase services. helm --wait
-          # only waits for Deployments/StatefulSets, so we explicitly poll.
-          # Fail loudly on timeout: a preview without a migrated schema is a
-          # broken preview, and we don't want the comment-on-PR step to post
-          # "Preview deployed" over the top of it.
-          if ! kubectl -n "${{ needs.meta.outputs.namespace }}" wait \
-            --for=condition=Complete --timeout=10m \
-            job -l app.kubernetes.io/component=migrations; then
-            echo "::error::migrations job didn't complete within 10m"
-            kubectl -n "${{ needs.meta.outputs.namespace }}" get pods,jobs
-            exit 1
-          fi
+          NS="${{ needs.meta.outputs.namespace }}"
+          kubectl -n "$NS" get pods,jobs 2>&1 | head -50
+          for j in $(kubectl -n "$NS" get jobs -o name); do
+            echo "=== $j ==="
+            kubectl -n "$NS" logs "$j" --all-containers --tail=200 2>&1 | tail -200 || true
+          done
 
       - name: Status snapshot
         if: always()

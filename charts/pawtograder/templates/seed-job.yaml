@@ -1,8 +1,17 @@
 {{- if and .Values.postgres.enabled .Values.seed.enabled }}
 # Seed Job: applies supabase/seed.sql to create the Demo Class (and
 # canned auth.users / assignments / submissions). Runs as a
-# post-install,post-upgrade Helm hook so migrations + supabase services
-# are already up. Idempotent — seed.sh skips if the demo class exists.
+# post-install,post-upgrade Helm hook.
+#
+# IMPORTANT: this hook fires after helm's --wait phase, which only
+# blocks on Deployments/StatefulSets — NOT on the migrations Job (a
+# regular install resource). Callers MUST pass --wait-for-jobs to
+# `helm install/upgrade` so migrations completes before this fires.
+# Otherwise seed.sh races migrations against an empty schema.
+# seed.sh defends against this by hard-failing if public.classes is
+# missing, but the right thing is to wait for jobs.
+#
+# Idempotent — seed.sh skips if the demo class exists.
 apiVersion: batch/v1
 kind: Job
 metadata:

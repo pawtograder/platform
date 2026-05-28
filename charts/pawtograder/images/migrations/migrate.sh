@@ -48,18 +48,24 @@ for f in "${sorted[@]}"; do
   version="${base%%_*}"
   name="${base#*_}"
   # Use psql --set with the :'var' literal-quoting form so values are quoted
-  # by psql, never by the shell. This is the equivalent of bound parameters
-  # and is safe even if filenames contain quotes or other unusual characters.
-  exists="$(psql -tAc --set=ver="${version}" \
-    "SELECT 1 FROM supabase_migrations.schema_migrations WHERE version=:'ver'")"
+  # by psql, never by the shell. psql does NOT perform variable substitution
+  # on commands passed via -c; the SQL has to come from stdin or -f for the
+  # :'var' form to work. Feed via stdin heredoc.
+  exists="$(psql -tA -v ver="${version}" <<'SQL'
+SELECT 1 FROM supabase_migrations.schema_migrations WHERE version=:'ver';
+SQL
+)"
   if [ "${exists}" = "1" ]; then
     skipped=$((skipped+1))
     continue
   fi
   echo "[migrate] applying ${base}"
   psql -v ON_ERROR_STOP=1 --single-transaction -f "$f"
-  psql -v ON_ERROR_STOP=1 --set=ver="${version}" --set=mname="${name}" -c \
-    "INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES (:'ver', :'mname') ON CONFLICT (version) DO NOTHING;"
+  psql -v ON_ERROR_STOP=1 -v ver="${version}" -v mname="${name}" <<'SQL'
+INSERT INTO supabase_migrations.schema_migrations (version, name)
+VALUES (:'ver', :'mname')
+ON CONFLICT (version) DO NOTHING;
+SQL
   applied=$((applied+1))
 done
 

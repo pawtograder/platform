@@ -63,8 +63,14 @@ SOPS-encrypted manifests) and set `secrets.create=false`.
 The full set of keys consumed from `pawtograder-jwt`:
 
 - `JWT_SECRET` — HS256 secret used by GoTrue, PostgREST, Realtime, Kong, the
-  edge runtime, and the bootstrap superuser's `app.jwt_secret` GUC. Sized at
-  ≥ 32 bytes.
+  edge runtime, and the bootstrap superuser's `app.jwt_secret` GUC. **Size
+  at ≥ 48 raw bytes (≥ 64 base64 chars).** HS256 itself only needs ≥ 32
+  bytes, but realtime also reuses this value as Phoenix's `secret_key_base`
+  (via `realtime.yaml`), which `Plug.Crypto` requires to be ≥ 64 bytes.
+  The autogenerate path uses `randomBytes(48).toString("base64")` for
+  exactly this reason; the Quick-start shows `openssl rand -base64 48`.
+  If you set this below 64 chars, GoTrue/PostgREST/Kong/edge run fine but
+  realtime crash-loops with "secret_key_base is too short."
 - `ANON_KEY`, `SERVICE_ROLE_KEY` — long-lived HS256 JWTs (`role=anon` and
   `role=service_role`) signed with `JWT_SECRET`.
 - `JWT_PRIVATE_JWKS` — JSON array of private JWKs for asymmetric session
