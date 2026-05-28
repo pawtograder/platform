@@ -32,10 +32,10 @@ function isAuthorized(headerValue: string | null): boolean {
 
 export async function GET(req: Request): Promise<Response> {
   if (!process.env.METRICS_SCRAPE_TOKEN) {
-    return new Response(
-      "metrics disabled (METRICS_SCRAPE_TOKEN not set)",
-      { status: 503, headers: { "content-type": "text/plain" } }
-    );
+    return new Response("metrics disabled (METRICS_SCRAPE_TOKEN not set)", {
+      status: 503,
+      headers: { "content-type": "text/plain" }
+    });
   }
   if (!isAuthorized(req.headers.get("authorization"))) {
     return new Response("unauthorized", {

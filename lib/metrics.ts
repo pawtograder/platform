@@ -10,12 +10,7 @@
 // and surfaced to the cluster's Prometheus via the ServiceMonitor in
 // charts/pawtograder/templates/monitoring.yaml.
 
-import type {
-  Counter,
-  Gauge,
-  Histogram,
-  Registry as RegistryT
-} from "prom-client";
+import type { Counter, Gauge, Histogram, Registry as RegistryT } from "prom-client";
 
 type MetricsBundle = {
   registry: RegistryT;
@@ -175,9 +170,7 @@ export async function timeHttp<T>(
   m.httpInFlight.inc({ route });
   try {
     const result = await fn();
-    const status =
-      statusOf?.(result) ??
-      (result instanceof Response ? result.status : 200);
+    const status = statusOf?.(result) ?? (result instanceof Response ? result.status : 200);
     end({ status: String(status) });
     return result;
   } catch (e) {
