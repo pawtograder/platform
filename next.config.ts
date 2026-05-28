@@ -65,30 +65,22 @@ const nextConfig: NextConfig = {
       static: 300
     }
   },
-  // Coverage builds need full source maps on BOTH client and server
-  // bundles. `productionBrowserSourceMaps: true` (above) handles client;
-  // for the server bundle Next 15 omits sourcemaps in production by
-  // default, so we force `devtool = source-map` via a webpack hook.
-  // Without this, `c8 report` over NODE_V8_COVERAGE has no way to map
-  // compiled `.next/server/app/.../page.js` back to its `.tsx` source
-  // and silently produces near-empty server coverage.
+  // Coverage-build webpack tweaks:
+  // - Client: disable SWC minification so V8 byte ranges → source-map
+  //   resolution stays byte-precise. With minify on, inlined wrappers
+  //   and dead-coded branches lose their probes, producing skewed
+  //   per-line counts. Bundle size is irrelevant in CI.
+  // - Server: emit source maps. We KNOW that NODE_V8_COVERAGE does
+  //   not currently capture Next 15's vm-loaded Server Component
+  //   bundles, so these maps are mostly unused today — but we leave
+  //   them in so a future Inspector-attach path (see COVERAGE.md
+  //   v2 plan) gets the source mapping for free.
   ...(coverageBuild
     ? {
         webpack: (config: { devtool?: string; optimization?: { minimize?: boolean } }, ctx: { isServer: boolean }) => {
-          // Only override server bundle's devtool. Client bundles get
-          // sourcemaps via `productionBrowserSourceMaps: true`
-          // above; setting devtool twice (here + the option)
-          // confuses Next's webpack pipeline and produces an
-          // empty `.next/static` directory.
-          if (ctx.isServer) config.devtool = "source-map";
-          // Disable client minification so V8 byte ranges → source-map
-          // resolution stays byte-precise. With SWC minify on, inlined
-          // wrappers (e.g. one-line helper functions) and dead-coded
-          // branches lose their probes entirely, producing per-line
-          // coverage reports that look skewed: function declarations
-          // marked covered while neighbouring statements show
-          // "uncovered" or no-data. Bundle size is irrelevant in CI.
-          if (!ctx.isServer && config.optimization) {
+          if (ctx.isServer) {
+            config.devtool = "source-map";
+          } else if (config.optimization) {
             config.optimization.minimize = false;
           }
           return config;
