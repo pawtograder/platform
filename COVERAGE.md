@@ -74,7 +74,18 @@ Documented so we don't pretend coverage is complete.
 
 1. **DB-trigger-driven function invocations don't get edge-function coverage.** When Postgres calls an edge function via `pg_net` (webhooks, async workers), the request goes through Kong → the original `edge-runtime` container, not our bootstrap. The bootstrap only catches functions invoked from the Next.js process. **v2 plan:** reroute Kong's `/functions/v1/*` upstream to point at the bootstrap. Requires touching the `supabase_kong_*` container's config and is best done as a Docker network/alias swap once we have the v1 numbers stable.
 2. **Server-side V8 coverage attribution is per-process, not per-test.** Each test hits `/api/__coverage__` to flush, but V8 in Node merges flushes within a process. To get per-test attribution we'd need to restart `next start` between tests — not worth the time cost. Per-PR aggregate is fine.
-3. **Server Components (`app/.../page.tsx` without `"use client"`) are not in `server.lcov`.** Next 15 renders Server Components by loading the compiled bundle via the `vm` module (`vm.compileFunction` / `vm.runInThisContext`). Node's `NODE_V8_COVERAGE` does not instrument scripts loaded that way, so the `.next/server/app/.../page.js` bundles never appear in the V8 dump that `c8 report` consumes. Net effect: `server.lcov` only contains ~4 utility modules (`lib/courseFeatures.ts`, `utils/utils.ts`, etc.) that get loaded via standard `require`/`import`. Verified by inspecting raw V8 dumps: 551 entries, of which 360 are `node_modules/next/*`, 184 are `node:builtin`, 5 are Next's own normalizers, and **zero** are `.next/server/app/*`. Client Components (with `"use client"`) ARE covered in `next-client` since they execute in Chromium. **v2 plan:** attach to the running Next process via the Node Inspector protocol and pull precise coverage via `Profiler.takePreciseCoverage` — that captures vm-loaded scripts too. Tools like `monocart-coverage-reports` support this via a `cdp` / `node-inspector` mode.
+3. ~~**Server Components are not in `server.lcov`.**~~ **Fixed.** Earlier
+   approach used `NODE_V8_COVERAGE`, which does not instrument scripts
+   loaded via the `vm` module — i.e., the path Next 15 uses for Server
+   Component bundles. New approach uses `node:inspector`'s
+   `Profiler.startPreciseCoverage` from inside the Next process via the
+   existing `instrumentation.ts` hook; precise coverage sees vm-loaded
+   scripts because it runs in the same V8 isolate. The workflow sends
+   `SIGUSR2` at teardown, `instrumentation.ts` calls
+   `Profiler.takePreciseCoverage` and writes `coverage/server-cdp-<pid>.json`,
+   and `scripts/coverage/v8-server-to-lcov.ts` converts it to lcov via
+   monocart. Verified end-to-end: 368 `SF:app/...` pages including
+   `(auth-pages)/sign-in/page.tsx`, all `admin/*`, all `api/*` routes.
 4. **Client-side V8 coverage occasionally fails to source-map.** `v8-to-istanbul` (now `monocart-coverage-reports`) drops scripts whose source map can't be resolved (some RSC payloads, vendor chunks without maps). Expect ~5% of compiled chunks to silently disappear. Set `COVERAGE_DEBUG=1` to see them.
 5. **`plpgsql_check` profiler must be in `shared_preload_libraries`.** Otherwise coverage is per-session and won't span Playwright's many connections. `npm run coverage:setup-pg` configures this and restarts the DB container; re-run after any `supabase stop --no-backup`.
 6. **PL/pgSQL functions defined outside `supabase/migrations/*.sql` are skipped** by the coverage bridge — there's no source file to attribute to.
@@ -88,7 +99,6 @@ Documented so we don't pretend coverage is complete.
 
 ## v2 / future
 
-- **Capture Server Component coverage via the Node Inspector.** (Lifts limitation #3.) Start `next start` with `--inspect=127.0.0.1:9229`, connect a coverage-collecting client at boot (e.g. `monocart-coverage-reports` in `node-inspector` mode), call `Profiler.startPreciseCoverage` with `callCount=true,detailed=true`, run Playwright, then `Profiler.takePreciseCoverage` before shutdown. Unlike `NODE_V8_COVERAGE`, the Inspector path sees scripts loaded via `vm.compileFunction` / `vm.runInThisContext`, which is how Next 15 loads Server Component bundles.
 - **Reroute Kong to capture DB-trigger-driven edge invocations.** (Lifts limitation #1.)
 - **pgTAP for explicit SQL tests.** When ready, add `supabase/tests/pgtap/*.sql`, run via `pg_prove` in the same coverage workflow, upload as an additional Codecov flag. pgTAP doesn't produce line coverage on its own — it complements `plpgsql_check` by exercising functions, RLS policies, and trigger semantics that Playwright can't easily reach. The plpgsql_check profiler observes which lines pgTAP runs, so we get more line coverage "for free" from adding pgTAP tests.
 - **Per-test server-side attribution** by restarting Next between tests (only if a regression is hard to attribute and the team wants the breakdown).
