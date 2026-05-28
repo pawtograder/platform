@@ -1,0 +1,220 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.logs.enabled -}}
+{{- /*
+Grafana Alloy DaemonSet: tails container logs from each node and ships
+them to Loki. Configured to collect from .Release.Namespace by default
+plus any extra namespaces listed in monitoring.logs.alloy.extraNamespaces.
+
+Pod labels (app.kubernetes.io/component, app.kubernetes.io/instance)
+are joined onto every log line as Loki labels so dashboards can filter
+to a single component or release.
+*/ -}}
+{{- $allowedNamespaces := prepend .Values.monitoring.logs.alloy.extraNamespaces .Release.Namespace -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alloy") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy") }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alloy") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "nodes/metrics", "services", "endpoints", "pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy") }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alloy") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy") }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy") }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy-config") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alloy") | nindent 4 }}
+data:
+  config.alloy: |
+    // Discover all pods in the cluster, then keep only those whose
+    // namespace matches the allowlist. Joining with the pod metadata
+    // lets us emit nice labels onto every log line.
+    discovery.kubernetes "pods" {
+      role = "pod"
+    }
+
+    discovery.relabel "pod_logs" {
+      targets = discovery.kubernetes.pods.targets
+
+      // Keep only pods in the allowed namespaces.
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        regex         = "{{ join "|" $allowedNamespaces }}"
+        action        = "keep"
+      }
+      // Promote node, namespace, pod, container, component labels.
+      rule {
+        source_labels = ["__meta_kubernetes_pod_node_name"]
+        target_label  = "node"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_component"]
+        target_label  = "component"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_instance"]
+        target_label  = "instance"
+      }
+      // Path to the container log file on disk.
+      rule {
+        source_labels = [
+          "__meta_kubernetes_pod_uid",
+          "__meta_kubernetes_pod_container_name",
+        ]
+        separator    = "/"
+        target_label = "__path__"
+        replacement  = "/var/log/pods/*$1/*.log"
+      }
+    }
+
+    loki.source.kubernetes "pods" {
+      targets    = discovery.relabel.pod_logs.output
+      forward_to = [loki.process.app_logs.receiver]
+    }
+
+    // Best-effort JSON parsing — the web app emits structured logs via
+    // pino; supabase services log plain text. The parser doesn't fail
+    // on non-JSON; it just leaves the line as-is.
+    loki.process "app_logs" {
+      forward_to = [loki.write.default.receiver]
+
+      stage.json {
+        expressions = {
+          level = "level",
+          msg   = "msg",
+        }
+      }
+      stage.labels {
+        values = {
+          level = "",
+        }
+      }
+    }
+
+    loki.write "default" {
+      endpoint {
+        {{- if .Values.monitoring.logs.loki.endpoint }}
+        url = "{{ .Values.monitoring.logs.loki.endpoint }}"
+        {{- else }}
+        url = "http://{{ include "pawtograder.componentName" (dict "ctx" . "component" "loki") }}.{{ .Release.Namespace }}.svc.cluster.local:3100/loki/api/v1/push"
+        {{- end }}
+      }
+      // Attach a release identifier so the central Loki can multiplex
+      // per-preview logs cleanly. Combined with the namespace label
+      // from discovery.relabel, queries can target a single preview.
+      external_labels = {
+        release = "{{ .Release.Name }}",
+      }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alloy") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "alloy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "alloy") | nindent 8 }}
+      annotations:
+        # Restart Alloy when the rendered config changes. We hash the
+        # final config.alloy string (not the file) so include cycles
+        # don't blow up.
+        checksum/config: {{ tpl .Values.monitoring.logs.loki.endpoint . | default "in-namespace" | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy") }}
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      # Tolerate every taint so Alloy collects logs from control-plane
+      # and tainted worker nodes too.
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+      containers:
+        - name: alloy
+          image: {{ .Values.monitoring.logs.alloy.image.repository }}:{{ .Values.monitoring.logs.alloy.image.tag }}
+          imagePullPolicy: {{ .Values.monitoring.logs.alloy.image.pullPolicy }}
+          args:
+            - run
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --stability.level=generally-available
+            - /etc/alloy/config.alloy
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+          ports:
+            - name: http
+              containerPort: 12345
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+          resources:
+            {{- toYaml .Values.monitoring.logs.alloy.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "alloy-config") }}
+        - name: varlog
+          hostPath: { path: /var/log }
+        - name: varlibdockercontainers
+          hostPath: { path: /var/lib/docker/containers }
+{{- end }}

@@ -1,0 +1,169 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.logs.enabled (not .Values.monitoring.logs.loki.endpoint) -}}
+{{- /*
+Loki single-binary StatefulSet. Designed for per-deployment log retention
+inside the pawtograder namespace, NOT for cluster-wide log aggregation.
+For production / multi-tenant log storage, run a cluster-scoped Loki
+(loki-distributed or grafana/loki helm chart) and disable monitoring.logs.
+
+Storage backend: filesystem (TSDB index + chunks on PVC or emptyDir).
+Retention is enforced by the compactor; see retentionHours in values.yaml.
+*/ -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "loki-config") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "loki") | nindent 4 }}
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9095
+      log_level: info
+    common:
+      path_prefix: /var/loki
+      storage:
+        filesystem:
+          chunks_directory: /var/loki/chunks
+          rules_directory: /var/loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: 2025-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    compactor:
+      working_directory: /var/loki/compactor
+      compaction_interval: 10m
+      retention_enabled: true
+      retention_delete_delay: 2h
+      retention_delete_worker_count: 150
+      delete_request_store: filesystem
+    limits_config:
+      retention_period: {{ .Values.monitoring.logs.loki.retentionHours }}h
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      max_query_series: 5000
+      max_query_parallelism: 32
+      ingestion_rate_mb: 16
+      ingestion_burst_size_mb: 32
+    ruler:
+      storage:
+        type: local
+        local:
+          directory: /var/loki/rules
+      rule_path: /var/loki/rules-temp
+      ring:
+        kvstore:
+          store: inmemory
+    query_range:
+      align_queries_with_step: true
+      cache_results: true
+      results_cache:
+        cache:
+          embedded_cache:
+            enabled: true
+            max_size_mb: 100
+    analytics:
+      reporting_enabled: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "loki") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "loki") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+    - name: grpc
+      port: 9095
+      targetPort: grpc
+  selector:
+    {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "loki") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "loki") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "loki") | nindent 4 }}
+spec:
+  serviceName: {{ include "pawtograder.componentName" (dict "ctx" . "component" "loki") }}
+  replicas: {{ .Values.monitoring.logs.loki.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "loki") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "loki") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/loki.yaml") . | sha256sum }}
+    spec:
+      {{- include "pawtograder.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: loki
+          image: {{ .Values.monitoring.logs.loki.image.repository }}:{{ .Values.monitoring.logs.loki.image.tag }}
+          imagePullPolicy: {{ .Values.monitoring.logs.loki.image.pullPolicy }}
+          args:
+            - -config.file=/etc/loki/loki.yaml
+            - -target=all
+          ports:
+            - name: http
+              containerPort: 3100
+            - name: grpc
+              containerPort: 9095
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /ready, port: http }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 6
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+            - name: data
+              mountPath: /var/loki
+          resources:
+            {{- toYaml .Values.monitoring.logs.loki.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "loki-config") }}
+        {{- if not .Values.monitoring.logs.loki.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.monitoring.logs.loki.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.monitoring.logs.loki.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.monitoring.logs.loki.persistence.size }}
+  {{- end }}
+{{- end }}

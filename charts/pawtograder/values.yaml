@@ -627,12 +627,22 @@ monitoring:
     edgeFunctions:    true
     appBusiness:      true
 
-  # Log pipeline: Loki single-binary + Alloy DaemonSet. Disabled by
-  # default — many platforms run a cluster-wide log stack already, in
-  # which case you only need the Grafana datasource pointing at it.
+  # Log pipeline. Two modes:
+  #   1. External / centralized (preferred for preview clusters):
+  #      Set monitoring.logs.loki.endpoint to an existing Loki's push
+  #      URL (e.g. http://loki.monitoring:3100/loki/api/v1/push). The
+  #      chart will deploy ONLY the Alloy shipper in this namespace; no
+  #      per-release Loki StatefulSet, no per-release storage.
+  #   2. In-chart Loki (production single-tenant):
+  #      Leave loki.endpoint empty and the chart deploys a single-binary
+  #      Loki StatefulSet alongside Alloy. Suited to deployments that
+  #      want isolated retention and don't have a central log store.
   logs:
     enabled: false
     loki:
+      # When set, the chart skips the Loki StatefulSet and Alloy ships
+      # to this push URL. Leave empty to deploy Loki in this namespace.
+      endpoint: ""
       replicas: 1
       image:
         repository: grafana/loki
