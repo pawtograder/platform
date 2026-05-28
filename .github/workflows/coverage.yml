@@ -285,6 +285,27 @@ jobs:
           rm -rf test-results playwright-report .next/cache /tmp/playwright* 2>/dev/null || true
           df -h "$GITHUB_WORKSPACE" || true
 
+      - name: Sanity check source-tree integrity
+        if: always()
+        # One specific file (results/page.tsx) gets enriched to only
+        # ~half its expected line count in CI but not locally. Print
+        # `git status` + a directed wc on that file to figure out if
+        # anything in the workflow corrupted it between checkout and
+        # collect.
+        run: |
+          echo "=== git status --short ==="
+          git status --short | head -50 || true
+          echo
+          for f in "app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/results/page.tsx"; do
+            if [[ -f "$f" ]]; then
+              echo "=== $f ==="
+              wc -l "$f"
+              echo "  size bytes:"; wc -c "$f"
+              echo "  md5 disk:   $(md5sum "$f" | cut -d' ' -f1)"
+              echo "  md5 HEAD:   $(git show HEAD:"$f" | md5sum | cut -d' ' -f1)"
+            fi
+          done
+
       - name: Stop Next.js so V8 coverage flushes
         if: always()
         run: |
