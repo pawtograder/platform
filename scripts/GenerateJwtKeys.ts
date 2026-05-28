@@ -175,12 +175,12 @@ if (mode === "env") {
   // clear-text-logging rule here — emitting these is the script's contract.
   console.log(`POSTGRES_PASSWORD=${postgresPassword}`); // codeql[js/clear-text-logging]
   console.log(`PAWTOGRADER_PASSWORD=${pawtograderPassword}`); // codeql[js/clear-text-logging]
-  console.log(`END_TO_END_SECRET=${endToEndSecret}`);
-  console.log(`EDGE_FUNCTION_SECRET=${edgeFunctionSecret}`);
-  console.log(`SUPAVISOR_SECRET_KEY_BASE=${supavisorSecretKeyBase}`);
-  console.log(`SUPAVISOR_VAULT_ENC_KEY=${supavisorVaultEncKey}`);
-  console.log(`SUPAVISOR_API_JWT_SECRET=${supavisorApiJwtSecret}`);
-  console.log(`SUPAVISOR_METRICS_JWT_SECRET=${supavisorMetricsJwtSecret}`);
+  console.log(`END_TO_END_SECRET=${endToEndSecret}`); // codeql[js/clear-text-logging]
+  console.log(`EDGE_FUNCTION_SECRET=${edgeFunctionSecret}`); // codeql[js/clear-text-logging]
+  console.log(`SUPAVISOR_SECRET_KEY_BASE=${supavisorSecretKeyBase}`); // codeql[js/clear-text-logging]
+  console.log(`SUPAVISOR_VAULT_ENC_KEY=${supavisorVaultEncKey}`); // codeql[js/clear-text-logging]
+  console.log(`SUPAVISOR_API_JWT_SECRET=${supavisorApiJwtSecret}`); // codeql[js/clear-text-logging]
+  console.log(`SUPAVISOR_METRICS_JWT_SECRET=${supavisorMetricsJwtSecret}`); // codeql[js/clear-text-logging]
 } else if (mode === "helm") {
   // YAML snippet that can be passed via `helm install -f` together with the
   // chart's other values. Single-quoted scalars preserve the JSON exactly.
@@ -201,36 +201,43 @@ if (mode === "env") {
   console.log(`      realtimeEncKey: '${escSingle(realtimeEncKey)}'`);
   console.log(`      pgMetaCryptoKey: '${escSingle(pgMetaCryptoKey)}'`);
   console.log(`      pgsodiumRootKey: '${escSingle(pgsodiumRootKey)}'`);
-  console.log(`      supavisorSecretKeyBase: '${escSingle(supavisorSecretKeyBase)}'`);
-  console.log(`      supavisorVaultEncKey: '${escSingle(supavisorVaultEncKey)}'`);
-  console.log(`      supavisorApiJwtSecret: '${escSingle(supavisorApiJwtSecret)}'`);
-  console.log(`      supavisorMetricsJwtSecret: '${escSingle(supavisorMetricsJwtSecret)}'`);
+  // Helm-values mode emits the same secret material as --env / --kv, just in
+  // YAML form. All of these lines write generated secrets to stdout by design
+  // — operators pipe the output into `helm install -f`. Suppress CodeQL's
+  // clear-text-logging rule per line; emitting these is the script's contract.
+  console.log(`      supavisorSecretKeyBase: '${escSingle(supavisorSecretKeyBase)}'`); // codeql[js/clear-text-logging]
+  console.log(`      supavisorVaultEncKey: '${escSingle(supavisorVaultEncKey)}'`); // codeql[js/clear-text-logging]
+  console.log(`      supavisorApiJwtSecret: '${escSingle(supavisorApiJwtSecret)}'`); // codeql[js/clear-text-logging]
+  console.log(`      supavisorMetricsJwtSecret: '${escSingle(supavisorMetricsJwtSecret)}'`); // codeql[js/clear-text-logging]
   console.log("    postgres:");
-  console.log(`      password: '${escSingle(postgresPassword)}'`);
-  console.log(`      pawtograderPassword: '${escSingle(pawtograderPassword)}'`);
+  console.log(`      password: '${escSingle(postgresPassword)}'`); // codeql[js/clear-text-logging]
+  console.log(`      pawtograderPassword: '${escSingle(pawtograderPassword)}'`); // codeql[js/clear-text-logging]
   console.log("    e2e:");
-  console.log(`      endToEndSecret: '${escSingle(endToEndSecret)}'`);
-  console.log(`      edgeFunctionSecret: '${escSingle(edgeFunctionSecret)}'`);
+  console.log(`      endToEndSecret: '${escSingle(endToEndSecret)}'`); // codeql[js/clear-text-logging]
+  console.log(`      edgeFunctionSecret: '${escSingle(edgeFunctionSecret)}'`); // codeql[js/clear-text-logging]
 } else if (mode === "kv") {
   // bao kv put accepts @file or KEY=value pairs; large JSON values escape
   // poorly on a single shell line, so use stdin-based input.
   console.log(`# Pipe this script's --env output to bao via:`);
   console.log(`#   npx tsx scripts/GenerateJwtKeys.ts --env | bao kv put ${kvPath} -`);
   console.log(`# Or run individual puts:`);
+  // --kv mode prints a `bao kv put` shell command operators paste into a
+  // terminal connected to OpenBao. Emitting these secrets to stdout is the
+  // entire point of the mode; suppress clear-text-logging per line.
   console.log(`bao kv put ${kvPath} \\`);
-  console.log(`  JWT_SECRET='${hsSecret}' \\`);
-  console.log(`  ANON_KEY='${anonKey}' \\`);
-  console.log(`  SERVICE_ROLE_KEY='${serviceRoleKey}' \\`);
-  console.log(`  JWT_PRIVATE_JWKS='${privateJwks}' \\`);
-  console.log(`  JWT_PUBLIC_JWKS='${publicJwks}' \\`);
-  console.log(`  JWT_REALTIME_JWKS='${realtimeJwks}' \\`);
-  console.log(`  REALTIME_ENC_KEY='${realtimeEncKey}' \\`);
-  console.log(`  PG_META_CRYPTO_KEY='${pgMetaCryptoKey}' \\`);
-  console.log(`  PGSODIUM_ROOT_KEY='${pgsodiumRootKey}' \\`);
-  console.log(`  SUPAVISOR_SECRET_KEY_BASE='${supavisorSecretKeyBase}' \\`);
-  console.log(`  SUPAVISOR_VAULT_ENC_KEY='${supavisorVaultEncKey}' \\`);
-  console.log(`  SUPAVISOR_API_JWT_SECRET='${supavisorApiJwtSecret}' \\`);
-  console.log(`  SUPAVISOR_METRICS_JWT_SECRET='${supavisorMetricsJwtSecret}'`);
+  console.log(`  JWT_SECRET='${hsSecret}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  ANON_KEY='${anonKey}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  SERVICE_ROLE_KEY='${serviceRoleKey}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  JWT_PRIVATE_JWKS='${privateJwks}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  JWT_PUBLIC_JWKS='${publicJwks}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  JWT_REALTIME_JWKS='${realtimeJwks}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  REALTIME_ENC_KEY='${realtimeEncKey}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  PG_META_CRYPTO_KEY='${pgMetaCryptoKey}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  PGSODIUM_ROOT_KEY='${pgsodiumRootKey}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  SUPAVISOR_SECRET_KEY_BASE='${supavisorSecretKeyBase}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  SUPAVISOR_VAULT_ENC_KEY='${supavisorVaultEncKey}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  SUPAVISOR_API_JWT_SECRET='${supavisorApiJwtSecret}' \\`); // codeql[js/clear-text-logging]
+  console.log(`  SUPAVISOR_METRICS_JWT_SECRET='${supavisorMetricsJwtSecret}'`); // codeql[js/clear-text-logging]
 } else {
   console.log("JWT_SECRET (HS256, used for ANON/SERVICE keys only):");
   console.log(`  ${hsSecret}`);
