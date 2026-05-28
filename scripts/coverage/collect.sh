@@ -29,16 +29,27 @@ else
   echo "[collect] skip: no coverage/edge dir (was the bootstrap run with --coverage?)"
 fi
 
-# --- Next.js server (Node V8) ---------------------------------------------
-if [[ -d coverage/server ]]; then
-  echo "[collect] c8 report (server)"
-  # CRITICAL: pass --exclude-after-remap so c8's include/exclude
-  # globs apply to the *resolved* source paths (app/foo.tsx) instead
-  # of the *dist* paths (.next/server/app/.../page.js). Without it,
-  # the `--exclude='.next/**'` below also rejects every Server
-  # Component page bundle BEFORE source-map resolution, leaving only
-  # the handful of utility files that Node loaded outside the bundle
-  # (lib/courseFeatures.ts, utils/utils.ts) in the report.
+# --- Next.js server (Node Inspector via instrumentation.ts) --------------
+# We prefer the Inspector path (coverage/server-cdp.json) because it
+# captures Server Component bundles that Next 15 loads via the `vm`
+# module — which `NODE_V8_COVERAGE` cannot see. The workflow's
+# teardown step sends SIGUSR2 to Next, which makes
+# instrumentation.ts call `Profiler.takePreciseCoverage` and write
+# the dump.
+#
+# If the CDP dump isn't present (e.g., COVERAGE wasn't set during
+# build, or instrumentation didn't run), fall back to the c8 +
+# NODE_V8_COVERAGE path — it's much less complete but better than
+# zero data.
+if [[ -f coverage/server-cdp.json ]]; then
+  echo "[collect] v8-server-to-lcov (Inspector CDP)"
+  npx tsx scripts/coverage/v8-server-to-lcov.ts \
+    || echo "[collect] WARN: server CDP conversion failed"
+elif [[ -d coverage/server ]]; then
+  echo "[collect] c8 report (NODE_V8_COVERAGE fallback)"
+  # --exclude-after-remap so c8's include/exclude globs apply to the
+  # *resolved* source paths (app/foo.tsx) instead of the *dist*
+  # paths (.next/server/app/.../page.js).
   NODE_V8_COVERAGE="$ROOT/coverage/server" npx c8 report \
     --reporter=lcovonly \
     --report-dir=coverage \
@@ -51,7 +62,7 @@ if [[ -d coverage/server ]]; then
     mv coverage/lcov.info coverage/server.lcov
   fi
 else
-  echo "[collect] skip: no coverage/server dir (was next start launched with NODE_V8_COVERAGE?)"
+  echo "[collect] skip: no server coverage data (neither server-cdp.json nor coverage/server/)"
 fi
 
 # --- Next.js client (Chromium V8) -----------------------------------------

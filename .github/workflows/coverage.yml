@@ -271,10 +271,29 @@ jobs:
       - name: Stop Next.js so V8 coverage flushes
         if: always()
         run: |
-          # SIGINT to the entire process group so the inner deno/next
-          # processes get the signal (npm doesn't always forward
-          # signals to its descendants). `kill -INT -- -$PGID` sends to
-          # the group with the negative-PID convention.
+          # Step 1: SIGUSR2 to the Next.js process group — that
+          # tells our instrumentation.ts to take precise V8 coverage
+          # (which CAN see Server Component vm-loaded bundles) and
+          # write coverage/server-cdp.json. Unlike SIGINT, this does
+          # not terminate the process.
+          if [[ -f /tmp/next.pid ]]; then
+            pid=$(cat /tmp/next.pid)
+            pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+            if [[ -n "$pgid" ]]; then
+              kill -USR2 -- "-$pgid" 2>/dev/null || true
+            fi
+            # Also signal the Next worker children directly in case
+            # SIGUSR2 didn't propagate via the group.
+            pkill -USR2 -f "next-server" || true
+            # Wait for the dump file to appear, up to 30s.
+            for _ in $(seq 1 30); do
+              if [[ -s coverage/server-cdp.json ]]; then break; fi
+              sleep 1
+            done
+          fi
+          # Step 2: SIGINT for clean exit so NODE_V8_COVERAGE (the
+          # fallback path) and coverage/edge/* (the deno --coverage
+          # output) get flushed.
           for pidfile in /tmp/next.pid /tmp/edge.pid; do
             if [[ -f "$pidfile" ]]; then
               pid=$(cat "$pidfile")
@@ -291,6 +310,8 @@ jobs:
           pkill -INT -f "supabase/functions/_coverage/serve.ts" || true
           pkill -INT -f "next-server" || true
           sleep 3
+          echo "Coverage artifacts after stop:"
+          ls -la coverage/server-cdp.json coverage/server 2>/dev/null || true
 
       - name: Collect per-layer coverage
         if: always()
@@ -305,6 +326,7 @@ jobs:
             coverage/*.lcov
             coverage/jest/lcov.info
             coverage/postgres.log
+            coverage/server-cdp.json
           if-no-files-found: warn
           retention-days: 7
 
