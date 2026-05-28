@@ -138,6 +138,10 @@ export interface SeedingConfiguration {
   handoutStrategy?: HandoutStrategy;
   /** When true, mark the resulting class as is_demo=true. */
   isDemoClass?: boolean;
+  /** Source class id whose hand-grading rubrics are copied onto each demo
+   * assignment that carries a `sourceAssignmentId` in perAssignmentRepos. When
+   * unset, the seeder falls back to its random rubric generator. */
+  sourceClassId?: number;
   /** Pre-existing fleet of users to enroll instead of creating new ones. */
   sharedFleet?: {
     instructors: TestingUser[];
@@ -1142,6 +1146,11 @@ export class DatabaseSeeder {
     return this;
   }
 
+  withSourceClassId(sourceClassId: number): this {
+    this.config.sourceClassId = sourceClassId;
+    return this;
+  }
+
   withSharedFleet(fleet: NonNullable<SeedingConfiguration["sharedFleet"]>): this {
     this.config.sharedFleet = fleet;
     // Mirror counts so getCompleteConfiguration validation passes.
@@ -1212,7 +1221,8 @@ export class DatabaseSeeder {
       perAssignmentRepos: this.config.perAssignmentRepos,
       handoutStrategy: this.config.handoutStrategy,
       isDemoClass: this.config.isDemoClass,
-      sharedFleet: this.config.sharedFleet
+      sharedFleet: this.config.sharedFleet,
+      sourceClassId: this.config.sourceClassId
     };
   }
 
@@ -2775,8 +2785,22 @@ export class DatabaseSeeder {
         })
         .eq("id", assignmentData.id);
 
-      // Create rubric structure
-      await this.createRubricForAssignment(assignmentData, config.rubricConfig!);
+      // Create rubric structure. When this assignment is canned and points at a
+      // sourceAssignmentId, copy the real hand-grading rubric tree from there
+      // instead of generating a random one. The seeder later grades against the
+      // copied rubric, so this must happen before gradeSubmissions.
+      if (this.config.sourceClassId && canned?.sourceAssignmentId) {
+        const { copyAllRubricsForAssignment } = await import("./demo/copyRubrics");
+        await copyAllRubricsForAssignment(supabase, this.config.sourceClassId, canned.sourceAssignmentId, {
+          id: assignmentData.id,
+          class_id: assignmentData.class_id,
+          grading_rubric_id: assignmentData.grading_rubric_id,
+          self_review_rubric_id: assignmentData.self_review_rubric_id,
+          meta_grading_rubric_id: assignmentData.meta_grading_rubric_id
+        });
+      } else {
+        await this.createRubricForAssignment(assignmentData, config.rubricConfig!);
+      }
 
       // Create assignment groups for group assignments
       let groups: Array<{ id: number; name: string; memberCount: number; members: string[] }> = [];

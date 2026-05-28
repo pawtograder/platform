@@ -379,6 +379,11 @@ export type AutograderCreateReposForStudentRequest = {
   sync_all_permissions?: boolean; // Optional: if true, sync permissions for all existing repos
   /** When true with assignment_id, allow an individual test repo even for groups-only assignments (instructor Test Assignment). */
   for_test_assignment?: boolean;
+  /** Optional override of the GitHub source template repository for the per-student repo, in
+   * `owner/repo` form. Only honored when the caller is the edge-function secret or the service
+   * role and `assignment_id` is set — demo provisioning uses this to seed each real-fleet
+   * student with a canned submission repo instead of the empty handout. */
+  template_repo_override?: string;
 };
 
 export type AssignmentDeleteRequest = {

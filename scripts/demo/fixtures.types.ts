@@ -26,6 +26,10 @@ export interface CannedAssignment {
   solutionRepo: string;
   /** Pinned grader commit sha so demo provisioning is deterministic. */
   graderCommitSha: string;
+  /** Source assignment id in `CannedArchetype.sourceClassId` whose hand-grading
+   * rubrics (grading + meta + self-review) should be copied onto the demo
+   * assignment. When absent, the seeder generates random rubric structure. */
+  sourceAssignmentId?: number;
   /**
    * Optional generic student submission repo. When set and the handout
    * strategy creates real student repos, filler students "submit" from this
@@ -44,6 +48,10 @@ export interface CannedArchetype {
   courseTitle: string;
   description?: string;
   timeZone: string;
+  /** Source class id the manifest was populated from. Pawtograder's demo
+   * seeder reads this to copy hand-grading rubrics from each assignment's
+   * `sourceAssignmentId` into the freshly-provisioned demo class. */
+  sourceClassId?: number;
   assignments: CannedAssignment[];
 }
 

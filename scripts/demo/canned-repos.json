@@ -91,7 +91,7 @@
       }
     ]
   },
-  "algos-python": {
+  "_algos-python": {
     "courseTitle": "CS 3000: Algorithms",
     "description": "Algorithms course covering sorting, BSTs, graph traversal, and dynamic programming. Submissions in Python.",
     "timeZone": "America/New_York",
@@ -146,7 +146,7 @@
       }
     ]
   },
-  "web-dev-ts": {
+  "_web-dev-ts": {
     "courseTitle": "CS 4550: Web Development",
     "description": "Full-stack web development with TypeScript: HTML/CSS, fetch, React state, and a small full-stack mini-app.",
     "timeZone": "America/New_York",

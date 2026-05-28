@@ -35,9 +35,9 @@ import { createAdminClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
 import { DatabaseSeeder, enrollExistingUserInClass } from "./DatabaseSeedingUtils";
-import { ensureDemoFleet, type DemoFleetUser } from "./demo/DemoFleetManager";
+import { ensureDemoFleet, type DemoFleet, type DemoFleetUser } from "./demo/DemoFleetManager";
 import type { CannedArchetype, CannedRepoManifest, FixtureBundle, HandoutStrategy } from "./demo/fixtures.types";
-import { assignmentCreateHandoutRepo } from "@/lib/edgeFunctions";
+import { assignmentCreateHandoutRepo, autograderCreateRepoForStudentDemo } from "@/lib/edgeFunctions";
 import { TestingUser } from "@/tests/e2e/TestingUtils";
 import { DEFAULT_RATE_LIMITS, RateLimitManager } from "@/tests/generator/GenerationUtils";
 
@@ -224,7 +224,8 @@ async function ensureInstructorUsers(emails: string[]): Promise<TestingUser[]> {
 async function maybeCreateRealHandouts(
   classId: number,
   archetype: CannedArchetype,
-  strategy: HandoutStrategy
+  strategy: HandoutStrategy,
+  fleet: DemoFleet
 ): Promise<void> {
   if (strategy === "fake-repos") {
     console.log("📦 Handout strategy: fake-repos — skipping GitHub repo creation");
@@ -257,12 +258,37 @@ async function maybeCreateRealHandouts(
     }
   }
 
-  if (strategy === "real-everything") {
-    console.warn(
-      "⚠ --handout-strategy real-everything is not fully implemented in this script. " +
-        "Real per-student repos for ripley/orion/paws require the autograder-create-repos-for-student " +
-        "edge function to accept a template_repo override. For now, only handout repos are created."
-    );
+  if (strategy !== "real-everything") return;
+
+  // real-everything: for each assignment × real-fleet student, create the student's
+  // individual repo seeded from the canned submission template. Filler students are
+  // skipped here — they keep the inline sample.java path from batchCreateSubmissions.
+  console.log(`👥 Creating real per-student repos for ${fleet.realStudents.length} real fleet members…`);
+  for (const a of assignments) {
+    const canned = archetype.assignments.find((c) => c.slug === a.slug);
+    if (!canned) continue;
+    for (const student of fleet.realStudents) {
+      const override =
+        (student.fleetName && canned.studentSubmissions?.[student.fleetName]) ?? canned.genericStudentSubmission;
+      if (!override) {
+        console.warn(`  ⚠ ${a.slug}/${student.fleetName}: no studentSubmission override; skipping`);
+        continue;
+      }
+      try {
+        await autograderCreateRepoForStudentDemo(
+          {
+            user_id: student.user_id,
+            class_id: classId,
+            assignment_id: a.id,
+            template_repo_override: override
+          },
+          supabase
+        );
+        console.log(`  ✓ ${a.slug}/${student.fleetName}: repo seeded from ${override}`);
+      } catch (e) {
+        console.warn(`  ⚠ ${a.slug}/${student.fleetName}: failed — ${(e as Error).message}`);
+      }
+    }
   }
 }
 
@@ -300,7 +326,9 @@ async function main() {
     .withPerAssignmentRepos(archetype.assignments)
     .withHandoutStrategy(args.handoutStrategy)
     .withDemoFixtures(fixtures)
-    .withDemoFlag(true)
+    .withDemoFlag(true);
+  if (archetype.sourceClassId) seeder.withSourceClassId(archetype.sourceClassId);
+  seeder
     .withGradingScheme("specification")
     .withAssignmentDateRange(new Date(), new Date()) // values ignored when perAssignmentRepos is set
     .withRubricConfig({
@@ -352,7 +380,7 @@ async function main() {
   void enrollExistingUserInClass;
   void new RateLimitManager(DEFAULT_RATE_LIMITS);
 
-  await maybeCreateRealHandouts(latestClass.id, archetype, args.handoutStrategy);
+  await maybeCreateRealHandouts(latestClass.id, archetype, args.handoutStrategy, fleet);
 
   console.log("");
   console.log("🎉 Demo provisioning complete.");
