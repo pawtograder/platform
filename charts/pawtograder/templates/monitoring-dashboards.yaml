@@ -1,0 +1,45 @@
+{{- if and .Values.monitoring.enabled (or .Values.monitoring.dashboards.stackOverview .Values.monitoring.dashboards.postgresDeepDive .Values.monitoring.dashboards.realtimeFanout .Values.monitoring.dashboards.edgeFunctions .Values.monitoring.dashboards.appBusiness) -}}
+{{- /*
+Grafana dashboards. One ConfigMap per dashboard so individual
+dashboards can be toggled via monitoring.dashboards.*.enabled and so
+that the per-dashboard ConfigMap size stays well under the 1 MiB k8s
+limit. Each carries the kube-prometheus-stack Grafana sidecar's
+discovery label `grafana_dashboard: "1"`.
+
+The sidecar uses the configured Prometheus datasource UID. We
+parameterise on ${DS_PROMETHEUS} in the JSON so the sidecar substitutes
+in the cluster's actual UID at mount time.
+*/ -}}
+{{- $ctx := . -}}
+{{- range $name, $enabled := .Values.monitoring.dashboards }}
+{{- if $enabled }}
+{{- /* Map values key (camelCase) → dashboard file (kebab-case) */ -}}
+{{- $file := "" -}}
+{{- $slug := "" -}}
+{{- if eq $name "stackOverview" }}    {{- $file = "stack-overview.json"    -}}{{- $slug = "stack-overview" -}}    {{- end -}}
+{{- if eq $name "postgresDeepDive" }} {{- $file = "postgres-deep-dive.json" -}}{{- $slug = "postgres-deep-dive" -}} {{- end -}}
+{{- if eq $name "realtimeFanout" }}   {{- $file = "realtime-fanout.json"   -}}{{- $slug = "realtime-fanout" -}}   {{- end -}}
+{{- if eq $name "edgeFunctions" }}    {{- $file = "edge-functions.json"    -}}{{- $slug = "edge-functions" -}}    {{- end -}}
+{{- if eq $name "appBusiness" }}      {{- $file = "app-business.json"      -}}{{- $slug = "app-business" -}}      {{- end -}}
+{{- if $file }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" $ctx "component" (printf "dashboard-%s" $slug)) }}
+  namespace: {{ $ctx.Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" $ctx "component" "monitoring") | nindent 4 }}
+    # Discovery label consumed by the kube-prometheus-stack Grafana
+    # sidecar (LABEL=grafana_dashboard, LABEL_VALUE=1, NAMESPACE=ALL).
+    grafana_dashboard: "1"
+  annotations:
+    # Drop the dashboard into the "Pawtograder" Grafana folder.
+    grafana_folder: Pawtograder
+data:
+  {{ $file }}: |-
+    {{- $ctx.Files.Get (printf "dashboards/%s" $file) | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

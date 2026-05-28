@@ -1,0 +1,229 @@
+{
+  "uid": "pawtograder-stack-overview",
+  "title": "Pawtograder · Stack Overview",
+  "tags": ["pawtograder", "stack"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(kube_pod_info{pod=~\"pawtograder-.*\"}, namespace)",
+        "refresh": 1,
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Pods ready",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(namespace) (kube_pod_status_ready{namespace=~\"$namespace\", pod=~\"pawtograder-.*\", condition=\"true\"})"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 8 }
+            ]
+          },
+          "unit": "none"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Pods restarting (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(namespace) (increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\", pod=~\"pawtograder-.*\"}[1h]))"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "unit": "none"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Web error rate (5xx, 5m)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(web_http_request_duration_seconds_count{status=~\"5..\"}[5m])) / clamp_min(sum(rate(web_http_request_duration_seconds_count[5m])), 0.001)"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          },
+          "unit": "percentunit"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Active submissions",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "sum(pawtograder_active_submissions_active_count)" }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "HTTP request rate by service",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "web",
+          "legendFormat": "web",
+          "expr": "sum(rate(web_http_request_duration_seconds_count[1m]))"
+        },
+        {
+          "refId": "kong",
+          "legendFormat": "kong (proxy)",
+          "expr": "sum(rate(kong_http_requests_total[1m]))"
+        },
+        {
+          "refId": "storage",
+          "legendFormat": "storage-api",
+          "expr": "sum(rate(http_request_duration_seconds_count{job=~\".*-storage\"}[1m]))"
+        },
+        {
+          "refId": "edge",
+          "legendFormat": "edge-functions",
+          "expr": "sum(rate(http_requests_total{job=~\".*-edge-functions\"}[1m]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "P95 latency by service",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "web",
+          "legendFormat": "web",
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(web_http_request_duration_seconds_bucket[5m])))"
+        },
+        {
+          "refId": "kong",
+          "legendFormat": "kong (proxy)",
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(kong_latency_bucket[5m])))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Memory by pod (RSS)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{pod}}",
+          "expr": "sum by(pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", pod=~\"pawtograder-.*\", container!=\"\", container!=\"POD\"})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "CPU by pod",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{pod}}",
+          "expr": "sum by(pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", pod=~\"pawtograder-.*\", container!=\"\", container!=\"POD\"}[1m]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
+    },
+    {
+      "id": 30,
+      "type": "table",
+      "title": "Recent restarts (24h)",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "expr": "topk(10, sum by(pod, namespace) (increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\", pod=~\"pawtograder-.*\"}[24h])))"
+        }
+      ]
+    }
+  ]
+}
