@@ -354,6 +354,7 @@ jobs:
             coverage/jest/lcov.info
             coverage/postgres.log
             coverage/server-cdp*.json
+            coverage/enrich-*.log
           if-no-files-found: warn
           retention-days: 7
 

@@ -80,13 +80,22 @@ async function enrichBlock(block: LcovBlock): Promise<string[]> {
   if (!hasCovered) return block.lines;
 
   let source: string;
+  const absPath = path.join(REPO_ROOT, block.sf);
   try {
-    source = await readFile(path.join(REPO_ROOT, block.sf), "utf8");
-  } catch {
+    source = await readFile(absPath, "utf8");
+  } catch (err) {
     // File not found in repo (could be generated). Leave alone.
+    if (process.env.ENRICH_DEBUG) {
+      console.error(`[enrich-lcov] readFile failed for ${absPath}:`, err);
+    }
     return block.lines;
   }
   const sourceLines = source.split(/\r?\n/);
+  if (process.env.ENRICH_DEBUG) {
+    console.error(
+      `[enrich-lcov] ${block.sf}: source bytes=${source.length} lines=${sourceLines.length} existing DA=${existing.size}`
+    );
+  }
 
   // Build the new DA list: existing + filled.
   const filled = new Map<number, number>(existing);

@@ -75,8 +75,13 @@ fi
 # inflate coverage % on genuinely untested files.
 for f in coverage/client.lcov coverage/server.lcov; do
   if [[ -s "$f" ]]; then
-    npx tsx scripts/coverage/enrich-lcov.ts "$f" \
+    # ENRICH_DEBUG=1 makes the enricher log source line counts for
+    # every block, which we need to track down the one file where
+    # enrichment stops short of EOF in CI (works fine locally —
+    # probably a checkout-time race or partial readFile).
+    ENRICH_DEBUG=1 npx tsx scripts/coverage/enrich-lcov.ts "$f" 2> "coverage/enrich-$(basename "$f" .lcov).log" \
       || echo "[collect] WARN: enrich-lcov failed on $f"
+    echo "[collect] enriched $f → see coverage/enrich-$(basename "$f" .lcov).log for per-file detail"
   fi
 done
 
