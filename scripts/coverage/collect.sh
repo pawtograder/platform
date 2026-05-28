@@ -34,12 +34,12 @@ fi
 # instrumentation.ts on SIGUSR2 (see the workflow teardown step).
 # Unlike the older NODE_V8_COVERAGE approach this captures vm-loaded
 # Server Component bundles.
-if [[ -f coverage/server-cdp.json ]]; then
+if compgen -G "coverage/server-cdp*.json" >/dev/null; then
   echo "[collect] v8-server-to-lcov (Inspector CDP)"
   npx tsx scripts/coverage/v8-server-to-lcov.ts \
     || echo "[collect] WARN: server CDP conversion failed"
 else
-  echo "[collect] skip: no coverage/server-cdp.json (was instrumentation.ts active? did SIGUSR2 fire?)"
+  echo "[collect] skip: no coverage/server-cdp*.json (was instrumentation.ts active? did SIGUSR2 fire?)"
 fi
 
 # --- Next.js client (Chromium V8) -----------------------------------------

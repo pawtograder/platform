@@ -66,7 +66,12 @@ async function registerServerCoverageCollector(): Promise<void> {
     detailed: true
   });
 
-  const outputPath = path.resolve(process.cwd(), "coverage", "server-cdp.json");
+  // PID-suffixed filename: Next forks a primary process plus one or
+  // more render workers, all of which load instrumentation.ts and
+  // register the SIGUSR2 handler. Without a unique filename per
+  // process, concurrent writes interleave and produce a single
+  // malformed JSON. The converter globs `server-cdp-*.json`.
+  const outputPath = path.resolve(process.cwd(), "coverage", `server-cdp-${process.pid}.json`);
 
   const flush = async () => {
     try {
@@ -83,7 +88,14 @@ async function registerServerCoverageCollector(): Promise<void> {
         return true;
       });
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      await fs.writeFile(outputPath, JSON.stringify({ result: filtered }));
+      // Atomic write: a re-entrant flush (e.g. SIGUSR2 then SIGTERM)
+      // would otherwise truncate-then-append-mid-stream and produce
+      // malformed JSON. Write to a tempfile and rename so the final
+      // file is either the previous version or the new one, never a
+      // half-write.
+      const tmpPath = `${outputPath}.tmp`;
+      await fs.writeFile(tmpPath, JSON.stringify({ result: filtered }));
+      await fs.rename(tmpPath, outputPath);
       // eslint-disable-next-line no-console
       console.log(`[coverage] wrote ${filtered.length}/${result.length} V8 entries to ${outputPath}`);
     } catch (err) {

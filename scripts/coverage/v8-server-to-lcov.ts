@@ -15,13 +15,13 @@
  * We strip the `webpack://<pkg>/./` prefix to land at `app/...`.
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import MCR from "monocart-coverage-reports";
 
 const REPO_ROOT = process.cwd();
-const INPUT = path.resolve(REPO_ROOT, "coverage", "server-cdp.json");
+const COVERAGE_DIR = path.resolve(REPO_ROOT, "coverage");
 const OUTPUT = path.resolve(REPO_ROOT, "coverage", "server.lcov");
 
 type V8Entry = {
@@ -111,21 +111,32 @@ function normalizeSourcePath(raw: string): string | null {
 }
 
 async function main(): Promise<void> {
-  let raw: string;
+  // Glob coverage/server-cdp*.json. Each Next process (the primary
+  // server + any render workers) writes its own PID-suffixed dump,
+  // so concurrent writes don't trash each other.
+  let files: string[];
   try {
-    raw = await readFile(INPUT, "utf8");
+    files = (await readdir(COVERAGE_DIR)).filter((f) => /^server-cdp(-\d+)?\.json$/.test(f));
   } catch {
-    console.error(`[v8-server-to-lcov] no input at ${INPUT} — was instrumentation.ts active?`);
+    files = [];
+  }
+  if (files.length === 0) {
+    console.error(`[v8-server-to-lcov] no server-cdp*.json under ${COVERAGE_DIR}`);
     return;
   }
-  let payload: { result?: V8Entry[] };
-  try {
-    payload = JSON.parse(raw);
-  } catch (err) {
-    console.error(`[v8-server-to-lcov] malformed input:`, err);
-    process.exit(1);
+  const entries: V8Entry[] = [];
+  for (const f of files) {
+    const fp = path.join(COVERAGE_DIR, f);
+    try {
+      const raw = await readFile(fp, "utf8");
+      const payload: { result?: V8Entry[] } = JSON.parse(raw);
+      const r = payload.result ?? [];
+      entries.push(...r);
+      console.error(`[v8-server-to-lcov] loaded ${r.length} entries from ${f}`);
+    } catch (err) {
+      console.error(`[v8-server-to-lcov] WARN: skipping ${f}:`, err);
+    }
   }
-  const entries = payload.result ?? [];
 
   const mcr = (MCR as unknown as (opts: unknown) => unknown)({
     name: "next-server",

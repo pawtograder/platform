@@ -337,6 +337,11 @@ jobs:
 
       - name: Collect per-layer coverage
         if: always()
+        env:
+          # The client converter loads 261 V8 dumps + their source +
+          # source maps; default 4 GB heap OOMs near the end. Bump
+          # to 8 GB to give monocart room.
+          NODE_OPTIONS: --max-old-space-size=8000
         run: npm run coverage:collect
 
       - name: Upload coverage artifact (for debugging)
@@ -348,7 +353,7 @@ jobs:
             coverage/*.lcov
             coverage/jest/lcov.info
             coverage/postgres.log
-            coverage/server-cdp.json
+            coverage/server-cdp*.json
           if-no-files-found: warn
           retention-days: 7
 
