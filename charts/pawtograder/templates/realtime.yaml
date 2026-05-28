@@ -158,6 +158,40 @@ spec:
             # external_id). Set the seeded tenant name to match.
             - name: SELF_HOST_TENANT_NAME
               value: {{ include "pawtograder.realtime.host" . }}
+          # Realtime applies per-tenant DB migrations LAZILY — they run when
+          # a client first connects to the tenant. realtime.messages and
+          # realtime.subscription (referenced by pawtograder migrations) are
+          # created by these tenant migrations. Without intervention, fresh
+          # installs can have pawtograder migrations fire against a schema
+          # where realtime.messages doesn't exist yet.
+          #
+          # postStart waits for the local node to accept RPC, then triggers
+          # Realtime.Tenants.Migrations.run_migrations for every tenant.
+          # The migration framework records applied versions, so this is
+          # idempotent across pod restarts and across the 3 statefulset
+          # replicas. Failures are tolerated (|| true) so a transient hiccup
+          # doesn't kill the pod — the migrations Job's wait probe for
+          # realtime.messages is the source of truth for "did this work."
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - |
+                    for i in $(seq 1 60); do
+                      if /app/bin/realtime rpc 'IO.puts(:ok)' 2>/dev/null | grep -q '^ok$'; then
+                        break
+                      fi
+                      sleep 2
+                    done
+                    # Use get_tenant_by_external_id (not Repo.all directly) so
+                    # the Tenant struct comes back with its :extensions
+                    # association preloaded — run_migrations/1 pattern-matches
+                    # on extensions and crashes if it's NotLoaded.
+                    /app/bin/realtime rpc \
+                      'for %{external_id: eid} <- Realtime.Repo.all(Realtime.Api.Tenant), t = Realtime.Api.get_tenant_by_external_id(eid), do: Realtime.Tenants.Migrations.run_migrations(t)' \
+                      >/dev/null 2>&1 || true
           # Realtime v2.34 has no public unauthenticated health endpoint
           # (/healthz returns 404; /api/tenants/<id>/health needs a JWT).
           # TCP probe just confirms the listener is up — good enough for
