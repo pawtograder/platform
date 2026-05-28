@@ -73,46 +73,46 @@ async function registerServerCoverageCollector(): Promise<void> {
   // malformed JSON. The converter globs `server-cdp-*.json`.
   const outputPath = path.resolve(process.cwd(), "coverage", `server-cdp-${process.pid}.json`);
 
-  const flush = async () => {
-    try {
-      const { result } = await post<{ result: Array<{ url?: string }> }>("Profiler.takePreciseCoverage");
-      // Filter out node:* builtins and node_modules entries that the
-      // converter would drop anyway. Without this, server-cdp.json
-      // is ~30-50% larger and the CI runner can blow past its disk
-      // quota when Playwright also keeps screenshots/traces around.
-      const filtered = result.filter((r) => {
-        const u = r?.url ?? "";
-        if (!u) return false;
-        if (u.startsWith("node:")) return false;
-        if (u.includes("/node_modules/")) return false;
-        return true;
-      });
-      await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      // Atomic write: a re-entrant flush (e.g. SIGUSR2 then SIGTERM)
-      // would otherwise truncate-then-append-mid-stream and produce
-      // malformed JSON. Write to a tempfile and rename so the final
-      // file is either the previous version or the new one, never a
-      // half-write.
-      const tmpPath = `${outputPath}.tmp`;
-      await fs.writeFile(tmpPath, JSON.stringify({ result: filtered }));
-      await fs.rename(tmpPath, outputPath);
-      // eslint-disable-next-line no-console
-      console.log(`[coverage] wrote ${filtered.length}/${result.length} V8 entries to ${outputPath}`);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[coverage] failed to take precise coverage:", err);
-    }
+  // Deduplicate flushes. SIGUSR2 is sent by the workflow first to
+  // capture coverage; SIGINT/SIGTERM follows for clean shutdown.
+  // Without this guard, both signal handlers race on the same
+  // tempfile and produce a half-written JSON.
+  let inFlight: Promise<void> | null = null;
+  const flush = (): Promise<void> => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      try {
+        const { result } = await post<{ result: Array<{ url?: string }> }>("Profiler.takePreciseCoverage");
+        const filtered = result.filter((r) => {
+          const u = r?.url ?? "";
+          if (!u) return false;
+          if (u.startsWith("node:")) return false;
+          if (u.includes("/node_modules/")) return false;
+          return true;
+        });
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        // Write via a unique tempfile + atomic rename — robust against
+        // concurrent writers and partial writes.
+        const tmpPath = `${outputPath}.${process.pid}.tmp`;
+        await fs.writeFile(tmpPath, JSON.stringify({ result: filtered }));
+        await fs.rename(tmpPath, outputPath);
+        // eslint-disable-next-line no-console
+        console.log(`[coverage] wrote ${filtered.length}/${result.length} V8 entries to ${outputPath}`);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[coverage] failed to take precise coverage:", err);
+      }
+    })();
+    return inFlight;
   };
 
-  // SIGUSR2 = "please dump coverage now". Sent by the workflow's
-  // teardown step before stopping Next. Unlike SIGINT, this does not
-  // terminate the process — coverage can be sampled multiple times.
+  // SIGUSR2 = "please dump coverage now". Workflow sends this first.
   process.on("SIGUSR2", () => {
     void flush();
   });
 
-  // Also flush on shutdown so a SIGINT/SIGTERM still captures
-  // whatever coverage exists at exit time.
+  // SIGINT/SIGTERM = shutdown. If a SIGUSR2 flush is already in
+  // progress, we await it (dedupe via inFlight) and then exit.
   const onShutdown = async () => {
     await flush();
     process.exit(0);
