@@ -36,9 +36,16 @@ export async function register() {
  * Active only when `COVERAGE=1` is set.
  */
 async function registerServerCoverageCollector(): Promise<void> {
-  const inspector = await import("node:inspector");
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  // Webpack tries to bundle instrumentation.ts for BOTH runtimes
+  // (nodejs + edge). The edge runtime cannot resolve `node:*`
+  // builtins and would fail the build. `/* webpackIgnore: true */`
+  // tells webpack to leave the import alone — it stays a runtime
+  // dynamic import, which only resolves on the nodejs runtime where
+  // these modules exist (and where we'd actually reach this code,
+  // gated above on NEXT_RUNTIME === "nodejs").
+  const inspector = await import(/* webpackIgnore: true */ "node:inspector");
+  const fs = await import(/* webpackIgnore: true */ "node:fs/promises");
+  const path = await import(/* webpackIgnore: true */ "node:path");
 
   const session = new inspector.Session();
   session.connect();

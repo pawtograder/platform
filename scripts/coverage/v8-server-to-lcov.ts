@@ -80,19 +80,33 @@ function normalizeSourcePath(raw: string): string | null {
   if (raw.startsWith("node:")) return null;
   if (raw.includes("/node_modules/") || raw.startsWith("node_modules/")) return null;
   if (raw.startsWith("file://")) return null;
+  if (raw.startsWith(".next/")) return null;
   if (raw.includes("/.next/")) return null;
 
-  // Strip the webpack package-name prefix Next uses for the server
-  // bundle (`@pawtograder/webapp/`) when present.
-  let s = raw.startsWith("@pawtograder/webapp/") ? raw.slice("@pawtograder/webapp/".length) : raw;
+  // Server-bundle source maps prefix paths with `webpack://@pawtograder/webapp/`.
+  // monocart strips the `webpack://` scheme AND the leading `@`, so by the
+  // time the callback fires we see `pawtograder/webapp/...`. Also accept
+  // `@pawtograder/webapp/...` (some flows preserve the @) and `_N_E/...`
+  // (Next's edge/middleware bundles). Function must be idempotent because
+  // monocart calls it recursively with its own output.
+  let s = raw;
+  for (const prefix of ["@pawtograder/webapp/", "pawtograder/webapp/", "_N_E/"]) {
+    if (s.startsWith(prefix)) {
+      s = s.slice(prefix.length);
+      break;
+    }
+  }
   // Synthetic webpack module ids (?abc1, -abc1) or external markers.
   if (/^[-?]/.test(s)) return null;
   if (s.startsWith("external ") || s.includes("(external ")) return null;
+  // Webpack runtime helpers (webpack/bootstrap, webpack/runtime/*).
+  if (s.startsWith("webpack/")) return null;
   // Next.js internals (relative above repo root).
   if (s.startsWith("../")) return null;
   s = s.replace(/^\.\//, "");
   if (!s) return null;
   if (s.startsWith("(webpack)/")) return null;
+  // After stripping, anything not matching a repo dir is uninteresting.
   return s;
 }
 
@@ -145,20 +159,33 @@ async function main(): Promise<void> {
     }
   }) as { add: (entries: unknown) => Promise<unknown>; generate: () => Promise<unknown> };
 
+  // Profiler.takePreciseCoverage returns URL + functions + ranges, but
+  // NOT the script source — V8 holds the source in the isolate and the
+  // inspector doesn't serialize it. We have to read both the .js text
+  // and its .js.map from disk ourselves and attach them; otherwise
+  // monocart has nothing to map V8 byte offsets against.
+  let sourcesLoaded = 0;
   let mapsLoaded = 0;
-  let mapsAttempted = 0;
-  // Pre-attach disk source maps where we can find them. monocart will
-  // also try the embedded sourceMappingURL comment in `entry.source` as
-  // a fallback, but server bundles are loaded by Node directly so the
-  // comment points at a relative `.map` next to the .js, which monocart
-  // can't resolve on its own (no HTTP fetcher for file paths).
   for (const entry of entries) {
-    if (!entry.url || !entry.source) continue;
-    mapsAttempted++;
-    const sourceMap = await loadServerSourceMap(entry.url);
-    if (sourceMap) {
-      entry.sourceMap = sourceMap;
-      mapsLoaded++;
+    if (!entry.url) continue;
+    let filePath: string | null = null;
+    if (entry.url.startsWith("file://")) {
+      filePath = new URL(entry.url).pathname;
+    } else if (entry.url.startsWith("/")) {
+      filePath = entry.url;
+    }
+    if (filePath && filePath.endsWith(".js")) {
+      try {
+        entry.source = await readFile(filePath, "utf8");
+        sourcesLoaded++;
+      } catch {
+        // skip
+      }
+      const sourceMap = await loadServerSourceMap(entry.url);
+      if (sourceMap) {
+        entry.sourceMap = sourceMap;
+        mapsLoaded++;
+      }
     }
   }
 
@@ -179,7 +206,7 @@ async function main(): Promise<void> {
   const summary = (await mcr.generate()) as { summary?: { lines?: { pct?: number } } };
 
   console.error(
-    `[v8-server-to-lcov] entries=${entries.length} maps_attempted=${mapsAttempted} maps_loaded=${mapsLoaded}`
+    `[v8-server-to-lcov] entries=${entries.length} sources_loaded=${sourcesLoaded} maps_loaded=${mapsLoaded}`
   );
   const pct = summary?.summary?.lines?.pct;
   if (typeof pct === "number") {
