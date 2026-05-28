@@ -272,6 +272,19 @@ jobs:
         env:
           ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
 
+      - name: Free disk space (pre-stop)
+        if: always()
+        # Multi-GB of test-results/, traces, html-report. Once
+        # Playwright has exited (or errored) we no longer need any
+        # of it for coverage — the lcov files all live under
+        # coverage/. Running this BEFORE the Stop step matters
+        # because Stop's signal-handling shell can't even start if
+        # the disk is already full.
+        run: |
+          du -sh test-results/ playwright-report/ .next/cache/ coverage/ /tmp/ 2>/dev/null || true
+          rm -rf test-results playwright-report .next/cache /tmp/playwright* 2>/dev/null || true
+          df -h "$GITHUB_WORKSPACE" || true
+
       - name: Stop Next.js so V8 coverage flushes
         if: always()
         run: |

@@ -345,10 +345,21 @@ export const test = base.extend<E2EFixtures>({
       try {
         const entries = await page.coverage.stopJSCoverage();
         mkdirSync(COVERAGE_CLIENT_DIR, { recursive: true });
-        // Shape matches what `v8-to-istanbul` and `c8` consume: { result: [...] }.
+        // CRITICAL: strip `source` (and the css-only `text`) before
+        // writing the dump. Each chunk's source text is 1-5 MB for
+        // big Next bundles (Monaco, Chakra, charts). With ~175
+        // entries × 260 tests we'd land 5-13 GB on disk; the runner
+        // ran out of space last time. The converter loads source
+        // from .next/ on demand instead — same pattern as the
+        // server-CDP path.
+        const slim = entries.map((e: { url: string; scriptId?: string; functions?: unknown[] }) => ({
+          url: e.url,
+          scriptId: e.scriptId,
+          functions: e.functions
+        }));
         writeFileSync(
           path.join(COVERAGE_CLIENT_DIR, `${sanitizeForFs(testInfo.testId)}.json`),
-          JSON.stringify({ result: entries })
+          JSON.stringify({ result: slim })
         );
       } catch (err) {
         console.warn(`[coverage] stopJSCoverage failed for ${testInfo.title}:`, err);

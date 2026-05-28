@@ -202,13 +202,21 @@ async function main(): Promise<void> {
 
     for (const entry of result) {
       entriesSeen++;
-      if (!entry.url || !entry.source) continue;
+      if (!entry.url) continue;
 
       const localPath = urlToLocalPath(entry.url, baseURL);
       if (!localPath) continue;
 
-      // Load source map from disk; without it monocart can't translate
-      // V8 byte ranges to original .ts/.tsx files.
+      // The per-test dumps no longer include `source` (we strip it
+      // at write time to keep ~13 GB off the CI runner's disk).
+      // Load the .js and .js.map from .next/ here instead.
+      if (!entry.source) {
+        try {
+          entry.source = await readFile(localPath, "utf8");
+        } catch {
+          continue;
+        }
+      }
       const sourceMap = await loadSourceMap(localPath);
       if (sourceMap) {
         entry.sourceMap = sourceMap;
