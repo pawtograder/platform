@@ -70,11 +70,22 @@ async function registerServerCoverageCollector(): Promise<void> {
 
   const flush = async () => {
     try {
-      const { result } = await post<{ result: unknown[] }>("Profiler.takePreciseCoverage");
+      const { result } = await post<{ result: Array<{ url?: string }> }>("Profiler.takePreciseCoverage");
+      // Filter out node:* builtins and node_modules entries that the
+      // converter would drop anyway. Without this, server-cdp.json
+      // is ~30-50% larger and the CI runner can blow past its disk
+      // quota when Playwright also keeps screenshots/traces around.
+      const filtered = result.filter((r) => {
+        const u = r?.url ?? "";
+        if (!u) return false;
+        if (u.startsWith("node:")) return false;
+        if (u.includes("/node_modules/")) return false;
+        return true;
+      });
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      await fs.writeFile(outputPath, JSON.stringify({ result }));
+      await fs.writeFile(outputPath, JSON.stringify({ result: filtered }));
       // eslint-disable-next-line no-console
-      console.log(`[coverage] wrote ${result.length} V8 entries to ${outputPath}`);
+      console.log(`[coverage] wrote ${filtered.length}/${result.length} V8 entries to ${outputPath}`);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("[coverage] failed to take precise coverage:", err);

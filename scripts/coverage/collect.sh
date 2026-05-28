@@ -30,39 +30,16 @@ else
 fi
 
 # --- Next.js server (Node Inspector via instrumentation.ts) --------------
-# We prefer the Inspector path (coverage/server-cdp.json) because it
-# captures Server Component bundles that Next 15 loads via the `vm`
-# module — which `NODE_V8_COVERAGE` cannot see. The workflow's
-# teardown step sends SIGUSR2 to Next, which makes
-# instrumentation.ts call `Profiler.takePreciseCoverage` and write
-# the dump.
-#
-# If the CDP dump isn't present (e.g., COVERAGE wasn't set during
-# build, or instrumentation didn't run), fall back to the c8 +
-# NODE_V8_COVERAGE path — it's much less complete but better than
-# zero data.
+# Coverage comes from coverage/server-cdp.json — written by
+# instrumentation.ts on SIGUSR2 (see the workflow teardown step).
+# Unlike the older NODE_V8_COVERAGE approach this captures vm-loaded
+# Server Component bundles.
 if [[ -f coverage/server-cdp.json ]]; then
   echo "[collect] v8-server-to-lcov (Inspector CDP)"
   npx tsx scripts/coverage/v8-server-to-lcov.ts \
     || echo "[collect] WARN: server CDP conversion failed"
-elif [[ -d coverage/server ]]; then
-  echo "[collect] c8 report (NODE_V8_COVERAGE fallback)"
-  # --exclude-after-remap so c8's include/exclude globs apply to the
-  # *resolved* source paths (app/foo.tsx) instead of the *dist*
-  # paths (.next/server/app/.../page.js).
-  NODE_V8_COVERAGE="$ROOT/coverage/server" npx c8 report \
-    --reporter=lcovonly \
-    --report-dir=coverage \
-    --src="$ROOT" \
-    --exclude-after-remap \
-    --include='app/**' --include='lib/**' --include='utils/**' --include='hooks/**' --include='components/**' \
-    --exclude='**/*.d.ts' --exclude='**/node_modules/**' --exclude='.next/**' \
-    || echo "[collect] WARN: c8 server report failed"
-  if [[ -f coverage/lcov.info ]]; then
-    mv coverage/lcov.info coverage/server.lcov
-  fi
 else
-  echo "[collect] skip: no server coverage data (neither server-cdp.json nor coverage/server/)"
+  echo "[collect] skip: no coverage/server-cdp.json (was instrumentation.ts active? did SIGUSR2 fire?)"
 fi
 
 # --- Next.js client (Chromium V8) -----------------------------------------

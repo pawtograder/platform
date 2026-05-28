@@ -84,7 +84,11 @@ jobs:
     env:
       # Coverage activation flags read by Next, Playwright, edge bootstrap.
       COVERAGE: "1"
-      NODE_V8_COVERAGE: ${{ github.workspace }}/coverage/server
+      # NODE_V8_COVERAGE is intentionally NOT set: we capture server
+      # coverage via the Inspector path in instrumentation.ts, which
+      # sees vm-loaded scripts. The legacy NODE_V8_COVERAGE dump would
+      # add ~1-2 GB of per-process JSON to /home/runner/_work and the
+      # runner ran out of disk during artifact upload last attempt.
       COVERAGE_FUNCTIONS_URL: http://127.0.0.1:9998
       NEXT_PUBLIC_COVERAGE_FUNCTIONS_URL: http://127.0.0.1:9998
       COVERAGE_FUNCTIONS_PORT: "9998"
@@ -211,10 +215,10 @@ jobs:
           NEXT_DISABLE_SENTRY: "1"
         run: npm run build
 
-      - name: Start Next.js (with NODE_V8_COVERAGE)
+      - name: Start Next.js
         run: |
           set -euo pipefail
-          mkdir -p coverage/server coverage/edge coverage/client
+          mkdir -p coverage/edge coverage/client
           # setsid puts the process in its own process group so we can
           # SIGINT the whole group (npm → next → workers) cleanly.
           setsid npm run start > /tmp/next.log 2>&1 < /dev/null &
@@ -291,9 +295,8 @@ jobs:
               sleep 1
             done
           fi
-          # Step 2: SIGINT for clean exit so NODE_V8_COVERAGE (the
-          # fallback path) and coverage/edge/* (the deno --coverage
-          # output) get flushed.
+          # Step 2: SIGINT for clean exit so coverage/edge/* (the
+          # deno --coverage output) gets flushed.
           for pidfile in /tmp/next.pid /tmp/edge.pid; do
             if [[ -f "$pidfile" ]]; then
               pid=$(cat "$pidfile")
@@ -303,7 +306,7 @@ jobs:
               fi
             fi
           done
-          # Give V8 time to flush NODE_V8_COVERAGE / coverage/edge.
+          # Give Deno time to flush coverage/edge.
           sleep 5
           # Belt-and-suspenders: pkill any stragglers that didn't see
           # the group signal.
@@ -311,7 +314,13 @@ jobs:
           pkill -INT -f "next-server" || true
           sleep 3
           echo "Coverage artifacts after stop:"
-          ls -la coverage/server-cdp.json coverage/server 2>/dev/null || true
+          ls -la coverage/server-cdp.json 2>/dev/null || true
+          # Free disk before artifact upload — Playwright leaves
+          # multi-GB of test-results/ and playwright-report/ that we
+          # don't need once Playwright has exited.
+          du -sh test-results/ playwright-report/ .next/cache/ 2>/dev/null || true
+          rm -rf test-results playwright-report .next/cache 2>/dev/null || true
+          df -h "$GITHUB_WORKSPACE" || true
 
       - name: Collect per-layer coverage
         if: always()
