@@ -444,7 +444,7 @@ function LabDueDateSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   );
 }
 
-function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
   const [withEval, setWithEval] = useState<boolean>(false);
   const [allowEarly, setAllowEarly] = useState<boolean>(form.getValues("allow_early") == true);
 
@@ -452,6 +452,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
     register,
     getValues,
     watch,
+    control,
     formState: { errors }
   } = form;
 
@@ -535,6 +536,34 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
                 <Checkbox.Label>Allow early submission</Checkbox.Label>
               </Checkbox.Root>
             </Field>
+            <Fieldset.Content>
+              <Field
+                label={`Release self-review at (${timezone}, optional)`}
+                helperText="If set, the self-review is assigned and becomes visible to all students at this exact wall-clock time, ignoring per-student due-date exceptions. Leave blank to release when the programming assignment's due date passes (current behavior). Pairs with the rubric option 'Hide from students until assigned'."
+              >
+                <Controller
+                  name="self_review_release_at"
+                  control={control}
+                  render={({ field }) => {
+                    const raw = field.value as string | null | undefined;
+                    const hasATimezoneOffset =
+                      typeof raw === "string" &&
+                      raw.length >= 6 &&
+                      (raw.charAt(raw.length - 6) === "+" || raw.charAt(raw.length - 6) === "-");
+                    const localValue =
+                      raw && hasATimezoneOffset ? new TZDate(raw, timezone).toISOString().slice(0, -13) : (raw ?? "");
+                    return (
+                      <Input
+                        type="datetime-local"
+                        value={localValue}
+                        onChange={(e) => field.onChange(e.target.value || null)}
+                        onBlur={field.onBlur}
+                      />
+                    );
+                  }}
+                />
+              </Field>
+            </Fieldset.Content>
           </>
         )}
       </CardBody>
@@ -596,7 +625,10 @@ export default function AssignmentForm({
         release_date: appendTimezoneOffset(values.release_date, timezone),
         due_date: appendTimezoneOffset(values.due_date, timezone),
         group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone),
-        regrade_deadline: appendTimezoneOffset(values.regrade_deadline, timezone)
+        regrade_deadline: appendTimezoneOffset(values.regrade_deadline, timezone),
+        self_review_release_at: values.self_review_release_at
+          ? appendTimezoneOffset(values.self_review_release_at, timezone)
+          : null
       };
       try {
         await onSubmit(valuesWithDates);
@@ -841,7 +873,7 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <GroupConfigurationSubform form={form} timezone={timezone} />
-          <SelfEvaluationSubform form={form} />
+          <SelfEvaluationSubform form={form} timezone={timezone} />
           <Fieldset.Content>
             <Field
               label={`Regrade Request Deadline (${course.time_zone})`}

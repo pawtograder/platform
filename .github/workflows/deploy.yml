@@ -265,6 +265,18 @@ jobs:
           docker exec -i "supabase_db_${SUPABASE_PROJECT}" psql -U postgres -d postgres -c \
             "SELECT public.audit_maintain_partitions();"
 
+      # Jest integration tests that hit the local Supabase API directly
+      # (no Next.js / edge-functions needed). Convention: files named
+      # tests/unit/issue*.test.ts gate on RUN_SUPABASE_INTEGRATION_TESTS=true
+      # and self-skip otherwise — set the env var here so they actually run.
+      - name: Run Jest integration tests
+        env:
+          SUPABASE_URL: ${{ env.LOCAL_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.LOCAL_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.LOCAL_SUPABASE_SERVICE_ROLE_KEY }}
+          RUN_SUPABASE_INTEGRATION_TESTS: "true"
+        run: npx jest --runInBand --testPathPatterns "tests/unit/issue"
+
       - name: Serve Edge Functions
         run: |
           set -euo pipefail

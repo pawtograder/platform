@@ -64,6 +64,7 @@ export default function NewAssignmentPage() {
               enabled: isEnabled,
               deadline_offset: isEnabled ? getValues("deadline_offset") : null,
               allow_early: isEnabled ? getValues("allow_early") : null,
+              release_at: isEnabled ? getValues("self_review_release_at") || null : null,
               class_id: course_id
             }
           },

@@ -506,7 +506,8 @@ function InnerRubricPage() {
         review_round: reviewRound,
         rubric_parts: [],
         created_at: "", // Will be set by DB
-        cap_score_to_assignment_points: false
+        cap_score_to_assignment_points: false,
+        hide_unless_assigned: false
       };
     },
     [assignmentDetails?.title]

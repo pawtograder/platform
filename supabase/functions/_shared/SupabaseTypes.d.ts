@@ -988,6 +988,7 @@ export type Database = {
           deadline_offset: number | null;
           enabled: boolean;
           id: number;
+          release_at: string | null;
         };
         Insert: {
           allow_early?: boolean | null;
@@ -995,6 +996,7 @@ export type Database = {
           deadline_offset?: number | null;
           enabled?: boolean;
           id?: number;
+          release_at?: string | null;
         };
         Update: {
           allow_early?: boolean | null;
@@ -1002,6 +1004,7 @@ export type Database = {
           deadline_offset?: number | null;
           enabled?: boolean;
           id?: number;
+          release_at?: string | null;
         };
         Relationships: [
           {
@@ -7101,6 +7104,7 @@ export type Database = {
           class_id: number;
           created_at: string;
           description: string | null;
+          hide_unless_assigned: boolean;
           id: number;
           is_private: boolean;
           name: string;
@@ -7112,6 +7116,7 @@ export type Database = {
           class_id: number;
           created_at?: string;
           description?: string | null;
+          hide_unless_assigned?: boolean;
           id?: number;
           is_private?: boolean;
           name: string;
@@ -7123,6 +7128,7 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           description?: string | null;
+          hide_unless_assigned?: boolean;
           id?: number;
           is_private?: boolean;
           name?: string;
@@ -11076,6 +11082,18 @@ export type Database = {
         };
         Returns: Json;
       };
+      _materialize_bare_check_regrade_comment: {
+        Args: {
+          p_author: string;
+          p_line: number;
+          p_points: number;
+          p_regrade_request_id: number;
+          p_request: Database["public"]["Tables"]["submission_regrade_requests"]["Row"];
+          p_submission_artifact_id: number;
+          p_submission_file_id: number;
+        };
+        Returns: Record<string, unknown>;
+      };
       _submission_review_is_completable: {
         Args: { p_submission_review_id: number };
         Returns: boolean;
@@ -11352,6 +11370,10 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
+      auto_assign_self_reviews: {
+        Args: { this_assignment_id: number; this_profile_id: string };
+        Returns: undefined;
+      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
