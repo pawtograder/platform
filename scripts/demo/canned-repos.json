@@ -1,0 +1,204 @@
+{
+  "intro-cs-java": {
+    "courseTitle": "CS 1500: Introduction to Programming with Java",
+    "description": "First-semester programming course covering Java fundamentals: variables, control flow, ArrayList, recursion, and OOP basics.",
+    "timeZone": "America/New_York",
+    "assignments": [
+      {
+        "slug": "hello-world",
+        "title": "Hello World & Variables",
+        "weeksFromStart": 1,
+        "isLab": false,
+        "points": 50,
+        "autograderPoints": 20,
+        "handoutRepo": "pawtograder-playground/demo-java-hello-world-handout",
+        "solutionRepo": "pawtograder-playground/demo-java-hello-world-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-java-hello-world-student-generic",
+        "studentSubmissions": {
+          "ripley": "pawtograder-playground/demo-java-hello-world-student-ripley",
+          "orion": "pawtograder-playground/demo-java-hello-world-student-orion",
+          "paws": "pawtograder-playground/demo-java-hello-world-student-paws"
+        }
+      },
+      {
+        "slug": "loops-conditionals",
+        "title": "Loops and Conditionals Lab",
+        "weeksFromStart": 2,
+        "isLab": true,
+        "points": 30,
+        "autograderPoints": 15,
+        "handoutRepo": "pawtograder-playground/demo-java-loops-handout",
+        "solutionRepo": "pawtograder-playground/demo-java-loops-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-java-loops-student-generic",
+        "studentSubmissions": {
+          "ripley": "pawtograder-playground/demo-java-loops-student-ripley",
+          "orion": "pawtograder-playground/demo-java-loops-student-orion",
+          "paws": "pawtograder-playground/demo-java-loops-student-paws"
+        }
+      },
+      {
+        "slug": "arraylist-basics",
+        "title": "ArrayList Basics",
+        "weeksFromStart": 3,
+        "isLab": false,
+        "points": 75,
+        "autograderPoints": 30,
+        "handoutRepo": "pawtograder-playground/demo-java-arraylist-handout",
+        "solutionRepo": "pawtograder-playground/demo-java-arraylist-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-java-arraylist-student-generic",
+        "studentSubmissions": {
+          "ripley": "pawtograder-playground/demo-java-arraylist-student-ripley",
+          "orion": "pawtograder-playground/demo-java-arraylist-student-orion",
+          "paws": "pawtograder-playground/demo-java-arraylist-student-paws"
+        }
+      },
+      {
+        "slug": "recursion",
+        "title": "Introduction to Recursion",
+        "weeksFromStart": 5,
+        "isLab": false,
+        "points": 100,
+        "autograderPoints": 40,
+        "handoutRepo": "pawtograder-playground/demo-java-recursion-handout",
+        "solutionRepo": "pawtograder-playground/demo-java-recursion-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-java-recursion-student-generic",
+        "studentSubmissions": {
+          "ripley": "pawtograder-playground/demo-java-recursion-student-ripley",
+          "orion": "pawtograder-playground/demo-java-recursion-student-orion",
+          "paws": "pawtograder-playground/demo-java-recursion-student-paws"
+        }
+      },
+      {
+        "slug": "oop-shapes",
+        "title": "OOP: Shapes & Inheritance",
+        "weeksFromStart": 7,
+        "isLab": false,
+        "points": 100,
+        "autograderPoints": 40,
+        "handoutRepo": "pawtograder-playground/demo-java-shapes-handout",
+        "solutionRepo": "pawtograder-playground/demo-java-shapes-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-java-shapes-student-generic",
+        "studentSubmissions": {
+          "ripley": "pawtograder-playground/demo-java-shapes-student-ripley",
+          "orion": "pawtograder-playground/demo-java-shapes-student-orion",
+          "paws": "pawtograder-playground/demo-java-shapes-student-paws"
+        }
+      }
+    ]
+  },
+  "algos-python": {
+    "courseTitle": "CS 3000: Algorithms",
+    "description": "Algorithms course covering sorting, BSTs, graph traversal, and dynamic programming. Submissions in Python.",
+    "timeZone": "America/New_York",
+    "assignments": [
+      {
+        "slug": "sorting-survey",
+        "title": "Comparison of Sorting Algorithms",
+        "weeksFromStart": 2,
+        "isLab": false,
+        "points": 80,
+        "autograderPoints": 30,
+        "handoutRepo": "pawtograder-playground/demo-py-sorting-handout",
+        "solutionRepo": "pawtograder-playground/demo-py-sorting-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-py-sorting-student-generic"
+      },
+      {
+        "slug": "bst",
+        "title": "Binary Search Trees",
+        "weeksFromStart": 4,
+        "isLab": false,
+        "points": 100,
+        "autograderPoints": 40,
+        "handoutRepo": "pawtograder-playground/demo-py-bst-handout",
+        "solutionRepo": "pawtograder-playground/demo-py-bst-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-py-bst-student-generic"
+      },
+      {
+        "slug": "graph-traversal",
+        "title": "Graph Traversal: BFS & DFS",
+        "weeksFromStart": 6,
+        "isLab": false,
+        "points": 100,
+        "autograderPoints": 40,
+        "handoutRepo": "pawtograder-playground/demo-py-graphs-handout",
+        "solutionRepo": "pawtograder-playground/demo-py-graphs-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-py-graphs-student-generic"
+      },
+      {
+        "slug": "dynamic-programming",
+        "title": "Dynamic Programming",
+        "weeksFromStart": 8,
+        "isLab": false,
+        "points": 120,
+        "autograderPoints": 50,
+        "handoutRepo": "pawtograder-playground/demo-py-dp-handout",
+        "solutionRepo": "pawtograder-playground/demo-py-dp-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-py-dp-student-generic"
+      }
+    ]
+  },
+  "web-dev-ts": {
+    "courseTitle": "CS 4550: Web Development",
+    "description": "Full-stack web development with TypeScript: HTML/CSS, fetch, React state, and a small full-stack mini-app.",
+    "timeZone": "America/New_York",
+    "assignments": [
+      {
+        "slug": "static-site",
+        "title": "HTML & CSS Portfolio",
+        "weeksFromStart": 1,
+        "isLab": false,
+        "points": 50,
+        "autograderPoints": 15,
+        "handoutRepo": "pawtograder-playground/demo-ts-portfolio-handout",
+        "solutionRepo": "pawtograder-playground/demo-ts-portfolio-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-ts-portfolio-student-generic"
+      },
+      {
+        "slug": "fetch-api",
+        "title": "Fetching APIs",
+        "weeksFromStart": 3,
+        "isLab": false,
+        "points": 80,
+        "autograderPoints": 30,
+        "handoutRepo": "pawtograder-playground/demo-ts-fetch-handout",
+        "solutionRepo": "pawtograder-playground/demo-ts-fetch-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-ts-fetch-student-generic"
+      },
+      {
+        "slug": "react-state",
+        "title": "React State & Effects",
+        "weeksFromStart": 5,
+        "isLab": false,
+        "points": 100,
+        "autograderPoints": 40,
+        "handoutRepo": "pawtograder-playground/demo-ts-react-handout",
+        "solutionRepo": "pawtograder-playground/demo-ts-react-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-ts-react-student-generic"
+      },
+      {
+        "slug": "fullstack-app",
+        "title": "Full-Stack Mini App",
+        "weeksFromStart": 8,
+        "isLab": false,
+        "points": 150,
+        "autograderPoints": 60,
+        "handoutRepo": "pawtograder-playground/demo-ts-fullstack-handout",
+        "solutionRepo": "pawtograder-playground/demo-ts-fullstack-solution",
+        "graderCommitSha": "REPLACE_WITH_PINNED_SHA",
+        "genericStudentSubmission": "pawtograder-playground/demo-ts-fullstack-student-generic"
+      }
+    ]
+  }
+}

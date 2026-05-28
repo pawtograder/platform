@@ -9,7 +9,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
 
 async function handleRequest(req: Request, scope: Sentry.Scope) {
-  const { assignment_id, class_id } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
+  const { assignment_id, class_id, template_repo_override } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
   scope?.setTag("function", "assignment-create-handout-repo");
   scope?.setTag("assignment_id", assignment_id.toString());
   scope?.setTag("class_id", class_id.toString());
@@ -48,7 +48,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("id", assignment_id);
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg);
-  await createRepo(handoutRepoOrg, handoutRepoName, TEMPLATE_HANDOUT_REPO_NAME, { is_template_repo: true }, scope);
+  const sourceTemplateRepo = template_repo_override ?? TEMPLATE_HANDOUT_REPO_NAME;
+  scope.setTag("source_template_repo", sourceTemplateRepo);
+  await createRepo(handoutRepoOrg, handoutRepoName, sourceTemplateRepo, { is_template_repo: true }, scope);
   await syncRepoPermissions(handoutRepoOrg, handoutRepoName, assignment.classes.slug, [], scope);
   await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
 

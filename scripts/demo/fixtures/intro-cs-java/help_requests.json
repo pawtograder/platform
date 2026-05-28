@@ -1,0 +1,211 @@
+[
+  {
+    "assignmentSlug": "hello-world",
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 6,
+    "request": "javac is not recognized as a command in my terminal. Just installed Java this morning.",
+    "replies": [
+      { "message": "Sounds like PATH isn't set. What OS are you on?", "isFromInstructor": true },
+      { "message": "Windows 11", "isFromInstructor": false },
+      {
+        "message": "Got it — added JAVA_HOME and PATH entries. Run `javac --version` to verify.",
+        "isFromInstructor": true
+      },
+      { "message": "Works! Thanks!", "isFromInstructor": false }
+    ]
+  },
+  {
+    "assignmentSlug": "loops-conditionals",
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 12,
+    "request": "My nested for loop prints the multiplication table but the columns aren't lined up. Some entries are 1 digit and some are 3.",
+    "replies": [
+      { "message": "Use `printf(\"%4d\", n)` instead of `print(n)` — it pads to 4 spaces.", "isFromInstructor": true },
+      { "message": "That worked, thank you! Why doesn't println accept format strings?", "isFromInstructor": false },
+      { "message": "println is a shortcut. The full machinery lives in printf / format.", "isFromInstructor": true }
+    ]
+  },
+  {
+    "assignmentSlug": "loops-conditionals",
+    "isPrivate": true,
+    "resolved": false,
+    "durationMinutes": 3,
+    "request": "I missed last week's lab for medical reasons. Can someone walk me through what we covered?",
+    "replies": []
+  },
+  {
+    "assignmentSlug": "arraylist-basics",
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 22,
+    "request": "ConcurrentModificationException keeps showing up when I try to remove odd numbers from an ArrayList in a for-each loop.",
+    "replies": [
+      {
+        "message": "Classic. Java's enhanced for can't modify the collection while iterating. Switch to an Iterator and call `it.remove()`, or use `list.removeIf(...)`.",
+        "isFromInstructor": true
+      },
+      { "message": "Tried removeIf — works perfectly. Way cleaner than my old code.", "isFromInstructor": false },
+      {
+        "message": "Glad! removeIf was added in Java 8 — a lot of older tutorials don't show it.",
+        "isFromInstructor": true
+      }
+    ]
+  },
+  {
+    "assignmentSlug": "arraylist-basics",
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 8,
+    "request": "Why does ArrayList<int> not compile but ArrayList<Integer> does?",
+    "replies": [
+      {
+        "message": "Generics don't work with primitives — they need objects. Integer is the wrapper class for int.",
+        "isFromInstructor": true
+      },
+      { "message": "Got it, autoboxing handles the conversion?", "isFromInstructor": false },
+      { "message": "Exactly.", "isFromInstructor": true }
+    ]
+  },
+  {
+    "assignmentSlug": "arraylist-basics",
+    "isPrivate": false,
+    "resolved": false,
+    "durationMinutes": 2,
+    "request": "My autograder shows 'Compilation Failed' but I can compile locally just fine.",
+    "replies": [
+      { "message": "Did you push everything? Especially any new files you might have added?", "isFromInstructor": true }
+    ]
+  },
+  {
+    "assignmentSlug": "recursion",
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 30,
+    "request": "Trying to write a recursive method that reverses a string but I keep getting StackOverflowError no matter how short the input is.",
+    "replies": [
+      {
+        "message": "Sounds like the base case never fires. Can you share your method signature and base case?",
+        "isFromInstructor": true
+      },
+      { "message": "public String reverse(String s) { return reverse(s) + s.charAt(0); }", "isFromInstructor": false },
+      {
+        "message": "Aha — your recursive call is `reverse(s)`, not `reverse(s.substring(1))`. So you never get closer to the base case.",
+        "isFromInstructor": true
+      },
+      { "message": "Oh my god. Thank you.", "isFromInstructor": false }
+    ]
+  },
+  {
+    "assignmentSlug": "recursion",
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 18,
+    "request": "I think I have the right idea for the Towers of Hanoi recursion but my output has duplicate moves.",
+    "replies": [
+      {
+        "message": "Common bug: are you printing inside both the recursive call and the helper? Likely calling the helper twice.",
+        "isFromInstructor": true
+      },
+      {
+        "message": "Found it — I had two `move()` calls between the recursive steps when I only needed one.",
+        "isFromInstructor": false
+      }
+    ]
+  },
+  {
+    "assignmentSlug": "recursion",
+    "isPrivate": true,
+    "resolved": false,
+    "durationMinutes": 1,
+    "request": "Can I get an extension on HW4? Family emergency this weekend.",
+    "replies": []
+  },
+  {
+    "assignmentSlug": "oop-shapes",
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 14,
+    "request": "Trying to override toString in Triangle but the parent Shape.toString is what gets called when I print.",
+    "replies": [
+      { "message": "Did you put @Override on it? If so, what's the exact signature?", "isFromInstructor": true },
+      {
+        "message": "public String toString(int sides) — I added an int param since triangles have 3 sides.",
+        "isFromInstructor": false
+      },
+      {
+        "message": "There's your bug — that's overloading, not overriding. The signature has to match the parent's exactly (no params).",
+        "isFromInstructor": true
+      }
+    ]
+  },
+  {
+    "assignmentSlug": "oop-shapes",
+    "isPrivate": false,
+    "resolved": false,
+    "durationMinutes": 5,
+    "request": "Can a constructor call super() AND this()?",
+    "replies": [
+      {
+        "message": "Both have to be the first statement, so no — you can only call one. What are you trying to do?",
+        "isFromInstructor": true
+      }
+    ]
+  },
+  {
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 4,
+    "request": "How do I push my code? I tried git push but it asks for a username and password.",
+    "replies": [
+      {
+        "message": "GitHub deprecated password auth. Set up an SSH key or use a personal access token. There's a guide on the course website.",
+        "isFromInstructor": true
+      },
+      { "message": "SSH worked, thanks!", "isFromInstructor": false }
+    ]
+  },
+  {
+    "isPrivate": true,
+    "resolved": true,
+    "durationMinutes": 25,
+    "request": "I'm really struggling overall and don't know if I should drop the course. Can we talk?",
+    "replies": [
+      {
+        "message": "Of course. Let's set up a 1-on-1. Are you free Thursday at 3pm?",
+        "isFromInstructor": true,
+        "instructorsOnly": false
+      },
+      {
+        "message": "Note for staff: flagging this for follow-up after our meeting.",
+        "isFromInstructor": true,
+        "instructorsOnly": true
+      }
+    ]
+  },
+  {
+    "isPrivate": false,
+    "resolved": false,
+    "durationMinutes": 2,
+    "request": "Eclipse keeps saying 'JRE System Library [JavaSE-21] (unbound)'.",
+    "replies": []
+  },
+  {
+    "isPrivate": false,
+    "resolved": true,
+    "durationMinutes": 9,
+    "request": "What's the difference between == and .equals() for Strings? I read about it but it's still confusing.",
+    "replies": [
+      {
+        "message": "== checks if two references point to the same object. .equals() checks content. For Strings you basically always want .equals().",
+        "isFromInstructor": true
+      },
+      { "message": "Why does `\"foo\" == \"foo\"` return true then?", "isFromInstructor": false },
+      {
+        "message": "String literals are interned in Java — both \"foo\"s point to the same pooled object. That's a special case, don't rely on it.",
+        "isFromInstructor": true
+      }
+    ]
+  }
+]

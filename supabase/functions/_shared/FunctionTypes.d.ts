@@ -350,6 +350,11 @@ export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_c
 export type AssignmentCreateHandoutRepoRequest = {
   assignment_id: number;
   class_id: number;
+  /** Optional override of the GitHub source template repository, in `owner/repo`
+   * form. When omitted, the edge function falls back to its built-in
+   * `pawtograder/template-assignment-handout`. Demo provisioning passes the
+   * canned per-assignment handout repo here. */
+  template_repo_override?: string;
 };
 
 export type AssignmentCreateHandoutRepoResponse = {

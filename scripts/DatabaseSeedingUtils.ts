@@ -21,6 +21,14 @@ import { Database, type Json } from "@/utils/supabase/SupabaseTypes";
 import { faker } from "@faker-js/faker";
 import { addDays } from "date-fns";
 import { webcrypto } from "crypto";
+import type {
+  CannedAssignment,
+  DiscussionThreadFixture,
+  FixtureBundle,
+  HandoutStrategy,
+  HelpRequestFixture,
+  PrivatePostFixture
+} from "./demo/fixtures.types";
 
 import {
   fetchDefaultGradeTargetStudentProfileIdsBatch,
@@ -119,6 +127,23 @@ export interface SeedingConfiguration {
   gradingScheme?: "current" | "specification";
   className?: string;
   recycleUsers?: boolean; // Whether to recycle existing users with @pawtograder.net emails
+  // -------- Demo-mode opt-ins (all optional; null/undef preserves test behavior) --------
+  /** LLM-authored fixture bundle. When set, takes precedence over the
+   * hardcoded HELP_REQUEST_TEMPLATES / topicSubjects / questionBodies arrays. */
+  demoFixtures?: FixtureBundle;
+  /** Per-assignment canned repo configuration. When set, overrides
+   * numAssignments and TEST_HANDOUT_REPO. */
+  perAssignmentRepos?: CannedAssignment[];
+  /** Controls whether handout/solution/student repos are created on GitHub. */
+  handoutStrategy?: HandoutStrategy;
+  /** When true, mark the resulting class as is_demo=true. */
+  isDemoClass?: boolean;
+  /** Pre-existing fleet of users to enroll instead of creating new ones. */
+  sharedFleet?: {
+    instructors: TestingUser[];
+    graders: Array<TestingUser & { hasRealGitHub?: boolean; fleetName?: string }>;
+    students: Array<TestingUser & { hasRealGitHub?: boolean; fleetName?: string }>;
+  };
 }
 
 // Type for submission data items used in grading
@@ -925,7 +950,10 @@ export async function findExistingPawtograderUsers(): Promise<{
 export async function enrollExistingUserInClass(
   user: TestingUser,
   class_id: number,
-  rateLimitManager: RateLimitManager
+  rateLimitManager: RateLimitManager,
+  /** Demo-mode personas use non-prefixed emails (e.g. ripley@ripley.cloud);
+   * pass the role explicitly in that case. */
+  explicitRole?: "student" | "instructor" | "grader"
 ): Promise<TestingUser> {
   const { data: privateProfile, error: privateProfileError } = await rateLimitManager.trackAndLimit("profiles", () =>
     supabase
@@ -958,12 +986,10 @@ export async function enrollExistingUserInClass(
     throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
   }
 
-  // Determine role based on email pattern
-  const role = user.email.startsWith("instructor-")
-    ? "instructor"
-    : user.email.startsWith("grader-")
-      ? "grader"
-      : "student";
+  // Determine role: caller-provided wins, otherwise infer from email prefix.
+  const role: "student" | "instructor" | "grader" =
+    explicitRole ??
+    (user.email.startsWith("instructor-") ? "instructor" : user.email.startsWith("grader-") ? "grader" : "student");
 
   // Insert user role with new profiles
   const { error: userRoleError } = await rateLimitManager.trackAndLimit("user_roles", () =>
@@ -1092,6 +1118,39 @@ export class DatabaseSeeder {
     return this;
   }
 
+  // -------- Demo-mode builders --------
+  withDemoFixtures(bundle: FixtureBundle): this {
+    this.config.demoFixtures = bundle;
+    return this;
+  }
+
+  withPerAssignmentRepos(repos: CannedAssignment[]): this {
+    this.config.perAssignmentRepos = repos;
+    // numAssignments mirrors the manifest length so downstream code that
+    // reads config.numAssignments stays consistent.
+    this.config.numAssignments = repos.length;
+    return this;
+  }
+
+  withHandoutStrategy(strategy: HandoutStrategy): this {
+    this.config.handoutStrategy = strategy;
+    return this;
+  }
+
+  withDemoFlag(isDemo: boolean): this {
+    this.config.isDemoClass = isDemo;
+    return this;
+  }
+
+  withSharedFleet(fleet: NonNullable<SeedingConfiguration["sharedFleet"]>): this {
+    this.config.sharedFleet = fleet;
+    // Mirror counts so getCompleteConfiguration validation passes.
+    this.config.numInstructors = fleet.instructors.length;
+    this.config.numGraders = fleet.graders.length;
+    this.config.numStudents = fleet.students.length;
+    return this;
+  }
+
   // Method to validate and get complete configuration
   protected getCompleteConfiguration(): SeedingConfiguration {
     // Validate required fields
@@ -1148,7 +1207,12 @@ export class DatabaseSeeder {
       surveyConfig: this.config.surveyConfig,
       gradingScheme: this.config.gradingScheme || "current",
       className: this.config.className || "Test Class",
-      recycleUsers: this.config.recycleUsers !== false // Default to true unless explicitly disabled
+      recycleUsers: this.config.recycleUsers !== false, // Default to true unless explicitly disabled
+      demoFixtures: this.config.demoFixtures,
+      perAssignmentRepos: this.config.perAssignmentRepos,
+      handoutStrategy: this.config.handoutStrategy,
+      isDemoClass: this.config.isDemoClass,
+      sharedFleet: this.config.sharedFleet
     };
   }
 
@@ -1167,6 +1231,16 @@ export class DatabaseSeeder {
       const testClass = await createClass({ name: config.className });
       const class_id = testClass.id;
       console.log(`✓ Created test class: ${testClass.name} (ID: ${class_id})`);
+
+      // Demo-mode: flip the is_demo flag so the user_register_create_demo_account
+      // trigger lands new signups in this class.
+      if (config.isDemoClass) {
+        const { error: demoFlagError } = await supabase.from("classes").update({ is_demo: true }).eq("id", class_id);
+        if (demoFlagError) {
+          throw new Error(`Failed to set is_demo flag: ${demoFlagError.message}`);
+        }
+        console.log(`✓ Marked class ${class_id} as is_demo=true`);
+      }
 
       // Create users
       const { instructors, graders, students } = await this.createUsers(config, class_id);
@@ -1193,8 +1267,11 @@ export class DatabaseSeeder {
       // Create grader conflicts
       await this.createGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
 
-      // Create discussion threads if configured
-      if (config.discussionConfig) {
+      // In demo mode the discussion fixtures need per-assignment topics to
+      // already exist, so we defer discussion creation until after assignments
+      // and additional topics are seeded.
+      const deferDiscussions = Boolean(config.demoFixtures);
+      if (config.discussionConfig && !deferDiscussions) {
         await this.createDiscussionThreads(config.discussionConfig, class_id, students, instructors, graders);
       }
 
@@ -1204,6 +1281,17 @@ export class DatabaseSeeder {
       // Create additional discussion topics if configured
       if (config.discussionConfig?.numAdditionalTopics) {
         await this.createAdditionalDiscussionTopics(config.discussionConfig.numAdditionalTopics, class_id, nextOrdinal);
+      }
+
+      if (deferDiscussions && config.demoFixtures) {
+        await this.createDiscussionsFromFixtures(
+          config.demoFixtures.discussions,
+          config.demoFixtures.privatePosts,
+          class_id,
+          students,
+          instructors,
+          graders
+        );
       }
 
       const submissionData = await this.createSubmissions(assignments, students, class_id);
@@ -1450,6 +1538,27 @@ export class DatabaseSeeder {
   // Create users with optional recycling optimization
   private async createUsers(config: SeedingConfiguration, class_id: number) {
     console.log("\n👥 Creating users...");
+
+    // Demo-mode short circuit: when the caller already has a fleet of users
+    // (looked up via DemoFleetManager), just enroll them — no auth-user
+    // creation, no recycling lookup, no faker names.
+    if (config.sharedFleet) {
+      console.log(
+        `🎬 Demo mode: enrolling shared fleet of ${config.sharedFleet.students.length} students, ${config.sharedFleet.graders.length} graders, ${config.sharedFleet.instructors.length} instructors`
+      );
+      const instructors = await Promise.all(
+        config.sharedFleet.instructors.map((u) =>
+          enrollExistingUserInClass(u, class_id, this.rateLimitManager, "instructor")
+        )
+      );
+      const graders = await Promise.all(
+        config.sharedFleet.graders.map((u) => enrollExistingUserInClass(u, class_id, this.rateLimitManager, "grader"))
+      );
+      const students = await Promise.all(
+        config.sharedFleet.students.map((u) => enrollExistingUserInClass(u, class_id, this.rateLimitManager, "student"))
+      );
+      return { instructors, graders, students };
+    }
 
     let existingUsers = {
       instructors: [] as TestingUser[],
@@ -2166,6 +2275,221 @@ export class DatabaseSeeder {
     console.log(`✓ Discussion threads seeding completed`);
   }
 
+  /**
+   * Demo-mode discussion seeding: drives from LLM-authored fixtures rather
+   * than the hardcoded topicSubjects / questionBodies arrays. Topics are
+   * matched by name (for general topics) or assignment slug (for
+   * per-assignment topics). Posts whose topic can't be matched fall back to
+   * the first general topic with a warning.
+   */
+  protected async createDiscussionsFromFixtures(
+    threads: DiscussionThreadFixture[],
+    privatePosts: PrivatePostFixture[],
+    class_id: number,
+    students: TestingUser[],
+    instructors: TestingUser[],
+    graders: TestingUser[]
+  ) {
+    console.log(
+      `\n💬 Demo: seeding ${threads.length} discussion threads + ${privatePosts.length} private posts from fixtures…`
+    );
+
+    const { data: discussionTopics, error: topicsError } = await supabase
+      .from("discussion_topics")
+      .select("id, topic, assignment_id, assignments(slug)")
+      .eq("class_id", class_id)
+      .order("ordinal");
+
+    if (topicsError) throw new Error(`Failed to load discussion topics: ${topicsError.message}`);
+    if (!discussionTopics || discussionTopics.length === 0) {
+      console.warn("⚠ No discussion topics exist for demo fixtures; skipping.");
+      return;
+    }
+
+    // Build name→topic_id lookup. Match by slug for per-assignment topics
+    // (so fixtures can use the canned assignment slug), and by topic name
+    // for general topics.
+    const topicByKey = new Map<string, number>();
+    for (const t of discussionTopics) {
+      topicByKey.set(t.topic.toLowerCase(), t.id);
+      // Per-assignment topics also indexed by their slug.
+      const linkedAssignment = (t as unknown as { assignments?: { slug?: string } | null }).assignments;
+      if (linkedAssignment?.slug) {
+        topicByKey.set(linkedAssignment.slug.toLowerCase(), t.id);
+      }
+    }
+
+    const fallbackTopicId = discussionTopics[0].id;
+    const resolveTopic = (key: string): number => topicByKey.get(key.toLowerCase()) ?? fallbackTopicId;
+
+    const studentInstructorPool = [...students, ...instructors, ...graders];
+    const staffPool = [...instructors, ...graders];
+
+    if (studentInstructorPool.length === 0) {
+      console.warn("⚠ No users to author discussion posts; skipping.");
+      return;
+    }
+
+    const pickAuthor = (pool: TestingUser[]) => pool[Math.floor(Math.random() * pool.length)];
+
+    type RootInsert = {
+      author: string;
+      subject: string;
+      body: string;
+      class_id: number;
+      topic_id: number;
+      is_question: boolean;
+      instructors_only: boolean;
+      draft: boolean;
+      root_class_id: number;
+    };
+    type ReplyInsert = Omit<RootInsert, "root_class_id"> & { parent: number; root: number };
+
+    const rootInserts: RootInsert[] = [];
+    type ThreadPlan = {
+      isPrivate: boolean;
+      replies: Array<{ body: string; authorId: string; isAnswer: boolean; instructorsOnly: boolean }>;
+    };
+    const plans: ThreadPlan[] = [];
+
+    // Public + private threads share a code path; private posts are flagged
+    // instructors_only=true at the root and on every reply. Both sides are
+    // normalized to DiscussionThreadFixture so the loop below can be typed.
+    const publicRoots: Array<{ isPrivate: false; thread: DiscussionThreadFixture }> = threads.map((t) => ({
+      isPrivate: false,
+      thread: t
+    }));
+    const privateRoots: Array<{ isPrivate: true; thread: DiscussionThreadFixture }> = privatePosts.map((p) => ({
+      isPrivate: true,
+      thread: {
+        topic: p.topic,
+        subject: p.subject,
+        body: p.body,
+        isQuestion: false,
+        anonymous: false,
+        replies: p.replies.map((r) => ({
+          body: r.body,
+          isInstructorReply: true,
+          anonymous: false
+        }))
+      }
+    }));
+    const allRoots: Array<{ isPrivate: boolean; thread: DiscussionThreadFixture }> = [...publicRoots, ...privateRoots];
+
+    for (const { isPrivate, thread } of allRoots) {
+      const topicId = resolveTopic(thread.topic);
+      const authorPool = isPrivate ? staffPool : studentInstructorPool;
+      if (authorPool.length === 0) continue;
+      const author = pickAuthor(authorPool);
+      const authorId = thread.anonymous ? author.public_profile_id : author.private_profile_id;
+
+      rootInserts.push({
+        author: authorId,
+        subject: thread.subject,
+        body: thread.body,
+        class_id,
+        topic_id: topicId,
+        is_question: thread.isQuestion,
+        instructors_only: isPrivate,
+        draft: false,
+        root_class_id: class_id
+      });
+
+      const replyPlan: ThreadPlan["replies"] = thread.replies.map((r) => {
+        const replyPool = r.isInstructorReply ? staffPool : studentInstructorPool;
+        const replyAuthor = pickAuthor(replyPool.length > 0 ? replyPool : studentInstructorPool);
+        const replyAuthorId = r.anonymous ? replyAuthor.public_profile_id : replyAuthor.private_profile_id;
+        return {
+          body: r.body,
+          authorId: replyAuthorId,
+          isAnswer: !!r.isAnswer && thread.isQuestion,
+          instructorsOnly: isPrivate
+        };
+      });
+
+      plans.push({ isPrivate, replies: replyPlan });
+    }
+
+    if (rootInserts.length === 0) {
+      console.log("   No fixture root threads to insert.");
+      return;
+    }
+
+    // Insert root threads in batches to respect the discussion_threads rate limit.
+    const batchSize = this.rateLimitManager.batchSizes.discussion_threads;
+    const rootIds: number[] = [];
+    for (let i = 0; i < rootInserts.length; i += batchSize) {
+      const slice = rootInserts.slice(i, i + batchSize);
+      const { data, error } = await this.rateLimitManager.trackAndLimit(
+        "discussion_threads",
+        () => supabase.from("discussion_threads").insert(slice).select("id"),
+        slice.length
+      );
+      if (error || !data) throw new Error(`Failed to insert demo discussion roots: ${error?.message}`);
+      rootIds.push(...data.map((d) => d.id));
+    }
+
+    console.log(`   ✓ Inserted ${rootIds.length} root threads from fixtures`);
+
+    // Build reply inserts now that we have root ids.
+    const replyInserts: Array<ReplyInsert & { _rootIndex: number; _isAnswer: boolean }> = [];
+    plans.forEach((plan, i) => {
+      const rootId = rootIds[i];
+      const topicId = rootInserts[i].topic_id;
+      for (const r of plan.replies) {
+        replyInserts.push({
+          _rootIndex: i,
+          _isAnswer: r.isAnswer,
+          author: r.authorId,
+          subject: "Re: " + rootInserts[i].subject,
+          body: r.body,
+          class_id,
+          topic_id: topicId,
+          parent: rootId,
+          root: rootId,
+          is_question: false,
+          instructors_only: r.instructorsOnly,
+          draft: false
+        });
+      }
+    });
+
+    if (replyInserts.length === 0) {
+      console.log("   No fixture replies to insert.");
+      return;
+    }
+
+    const insertedReplyIds: number[] = [];
+    const answerMap: Array<{ rootThreadId: number; replyId: number }> = [];
+    for (let i = 0; i < replyInserts.length; i += batchSize) {
+      const slice = replyInserts.slice(i, i + batchSize);
+      // strip the bookkeeping fields before inserting
+      const payload = slice.map(({ _rootIndex: _r, _isAnswer: _a, ...rest }) => rest);
+      const { data, error } = await this.rateLimitManager.trackAndLimit(
+        "discussion_threads",
+        () => supabase.from("discussion_threads").insert(payload).select("id"),
+        payload.length
+      );
+      if (error || !data) throw new Error(`Failed to insert demo discussion replies: ${error?.message}`);
+      data.forEach((row, idx) => {
+        const meta = slice[idx];
+        insertedReplyIds.push(row.id);
+        if (meta._isAnswer) {
+          answerMap.push({ rootThreadId: rootIds[meta._rootIndex], replyId: row.id });
+        }
+      });
+    }
+
+    console.log(
+      `   ✓ Inserted ${insertedReplyIds.length} replies from fixtures (${answerMap.length} accepted answers)`
+    );
+
+    // Mark accepted answers.
+    for (const { rootThreadId, replyId } of answerMap) {
+      await supabase.from("discussion_threads").update({ answer: replyId }).eq("id", rootThreadId);
+    }
+  }
+
   protected async createAdditionalDiscussionTopics(
     numTopics: number,
     class_id: number,
@@ -2302,32 +2626,53 @@ export class DatabaseSeeder {
       console.log(`   Formed ${sharedGroupMembership.length} shared groups (reused across assignments)`);
     }
 
+    // Demo mode: anchor demo dates to "now - 8 weeks" so weeksFromStart=1 lands
+    // recently in the past (i.e. the demo class looks alive without due dates
+    // far in the future for the visiting instructor).
+    const demoStartDate = config.perAssignmentRepos
+      ? addDays(new Date(), -7 * Math.max(...config.perAssignmentRepos.map((a) => a.weeksFromStart), 1))
+      : null;
+
     for (let i = 0; i < config.numAssignments; i++) {
-      const assignmentDate = new Date(config.firstAssignmentDate.getTime() + timeStep * i);
+      const canned = config.perAssignmentRepos?.[i];
 
-      // Determine assignment type
-      const shouldCreateLab = i % 2 === 0;
-      const canCreateLab = labsCreated < config.labAssignmentConfig!.numLabAssignments;
-      const canCreateRegularAssignment =
-        regularAssignmentsCreated < config.numAssignments - config.labAssignmentConfig!.numLabAssignments;
-
-      let isLabAssignment: boolean;
-      if (shouldCreateLab && canCreateLab) {
-        isLabAssignment = true;
-        labsCreated++;
-      } else if (!shouldCreateLab && canCreateRegularAssignment) {
-        isLabAssignment = false;
-        regularAssignmentsCreated++;
-      } else if (canCreateLab) {
-        isLabAssignment = true;
-        labsCreated++;
+      let assignmentDate: Date;
+      if (canned && demoStartDate) {
+        assignmentDate = addDays(demoStartDate, 7 * canned.weeksFromStart);
       } else {
-        isLabAssignment = false;
-        regularAssignmentsCreated++;
+        assignmentDate = new Date(config.firstAssignmentDate.getTime() + timeStep * i);
       }
 
-      const isGroupAssignment = i < config.groupAssignmentConfig!.numGroupAssignments;
-      const isLabGroupAssignment = isLabAssignment && i < config.groupAssignmentConfig!.numLabGroupAssignments;
+      // Determine assignment type
+      let isLabAssignment: boolean;
+      if (canned) {
+        isLabAssignment = canned.isLab;
+        if (isLabAssignment) labsCreated++;
+        else regularAssignmentsCreated++;
+      } else {
+        const shouldCreateLab = i % 2 === 0;
+        const canCreateLab = labsCreated < config.labAssignmentConfig!.numLabAssignments;
+        const canCreateRegularAssignment =
+          regularAssignmentsCreated < config.numAssignments - config.labAssignmentConfig!.numLabAssignments;
+
+        if (shouldCreateLab && canCreateLab) {
+          isLabAssignment = true;
+          labsCreated++;
+        } else if (!shouldCreateLab && canCreateRegularAssignment) {
+          isLabAssignment = false;
+          regularAssignmentsCreated++;
+        } else if (canCreateLab) {
+          isLabAssignment = true;
+          labsCreated++;
+        } else {
+          isLabAssignment = false;
+          regularAssignmentsCreated++;
+        }
+      }
+
+      const isGroupAssignment = !canned && i < config.groupAssignmentConfig!.numGroupAssignments;
+      const isLabGroupAssignment =
+        !canned && isLabAssignment && i < config.groupAssignmentConfig!.numLabGroupAssignments;
 
       // Determine group configuration
       let groupConfig: "individual" | "groups" | "both" = "individual";
@@ -2335,11 +2680,13 @@ export class DatabaseSeeder {
         groupConfig = "groups";
       }
 
-      const name = isLabAssignment ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`;
-      if (isLabAssignment) {
-        labAssignmentIdx++;
-      } else {
-        assignmentIdx++;
+      const name = canned ? canned.title : isLabAssignment ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`;
+      if (!canned) {
+        if (isLabAssignment) {
+          labAssignmentIdx++;
+        } else {
+          assignmentIdx++;
+        }
       }
 
       // Create self review setting first
@@ -2358,8 +2705,16 @@ export class DatabaseSeeder {
         throw new Error(`Failed to create self review setting: ${selfReviewSettingError.message}`);
       }
 
-      const title = name + (groupConfig !== "individual" ? " (Group)" : "");
+      const title = canned ? name : name + (groupConfig !== "individual" ? " (Group)" : "");
       const ourAssignmentIdx = isLabAssignment ? labAssignmentIdx - 1 : assignmentIdx - 1;
+      const slug = canned
+        ? canned.slug
+        : isLabAssignment
+          ? `lab-${ourAssignmentIdx}`
+          : `assignment-${ourAssignmentIdx}`;
+      const templateRepo = canned ? canned.handoutRepo : TEST_HANDOUT_REPO;
+      const totalPoints = canned ? canned.points : 100;
+      const autograderPoints = canned ? canned.autograderPoints : 20;
 
       // Create assignment
       const { data: insertedAssignmentData, error: assignmentError } = await this.rateLimitManager.trackAndLimit(
@@ -2369,16 +2724,18 @@ export class DatabaseSeeder {
             .from("assignments")
             .insert({
               title: title,
-              description: "This is an enhanced test assignment with diverse rubric structure",
+              description: canned
+                ? `Canned demo assignment: ${title}`
+                : "This is an enhanced test assignment with diverse rubric structure",
               due_date: assignmentDate.toISOString(),
               minutes_due_after_lab: isLabAssignment ? config.labAssignmentConfig!.minutesDueAfterLab : undefined,
-              template_repo: TEST_HANDOUT_REPO,
-              autograder_points: 20,
-              total_points: 100,
+              template_repo: templateRepo,
+              autograder_points: autograderPoints,
+              total_points: totalPoints,
               max_late_tokens: 10,
               release_date: addDays(new Date(), -1).toISOString(),
               class_id: class_id,
-              slug: isLabAssignment ? `lab-${ourAssignmentIdx}` : `assignment-${ourAssignmentIdx}`,
+              slug,
               group_config: groupConfig,
               allow_not_graded_submissions: false,
               self_review_setting_id: selfReviewSettingData.id,
@@ -2410,8 +2767,10 @@ export class DatabaseSeeder {
       await supabase
         .from("autograder")
         .update({
-          grader_repo: "pawtograder-playground/test-e2e-java-solution",
-          grader_commit_sha: "76ece6af6a251346596fcc71181a86599faf0fe3be0f85c532ff20c2f0939177",
+          grader_repo: canned ? canned.solutionRepo : "pawtograder-playground/test-e2e-java-solution",
+          grader_commit_sha: canned
+            ? canned.graderCommitSha
+            : "76ece6af6a251346596fcc71181a86599faf0fe3be0f85c532ff20c2f0939177",
           config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
         })
         .eq("id", assignmentData.id);
@@ -4085,6 +4444,11 @@ final;`,
     instructors: TestingUser[],
     graders: TestingUser[]
   ) {
+    const fixtures = this.config.demoFixtures?.helpRequests;
+    if (fixtures && fixtures.length > 0) {
+      await this.createHelpRequestsFromFixtures(fixtures, class_id, students, instructors, graders);
+      return;
+    }
     console.log(`\n🆘 Creating ${config.numHelpRequests} help requests...`);
 
     // First, create a help queue if it doesn't exist
@@ -4325,6 +4689,131 @@ final;`,
     console.log(
       `✓ Created ${totalCreated} help requests (${totalResolved} resolved/closed, ${totalCreated - totalResolved} open)`
     );
+  }
+
+  /**
+   * Demo-mode help-request seeding. Drives request bodies, replies,
+   * resolution status, and work-session duration directly from the LLM
+   * fixture entries. Always writes to a single demo office-hours queue.
+   */
+  protected async createHelpRequestsFromFixtures(
+    fixtures: HelpRequestFixture[],
+    class_id: number,
+    students: TestingUser[],
+    instructors: TestingUser[],
+    graders: TestingUser[]
+  ) {
+    console.log(`\n🆘 Demo: seeding ${fixtures.length} help requests from fixtures…`);
+    if (students.length === 0) {
+      console.warn("⚠ No students to author help requests; skipping.");
+      return;
+    }
+
+    // Reuse or create the OH queue (mirrors the non-fixture path).
+    const { data: existingQueue } = await supabase.from("help_queues").select("id").eq("class_id", class_id).single();
+    let queueId: number;
+    if (existingQueue) {
+      queueId = existingQueue.id;
+    } else {
+      const { data: queueData, error: queueError } = await supabase
+        .from("help_queues")
+        .insert({
+          class_id: class_id,
+          name: "Office Hours",
+          description: "Demo office hours queue",
+          depth: 1,
+          queue_type: "video"
+        })
+        .select("id")
+        .single();
+      if (queueError) throw new Error(`Failed to create help queue: ${queueError.message}`);
+      queueId = queueData.id;
+    }
+
+    const pickRandom = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+
+    let resolvedCount = 0;
+    for (const fixture of fixtures) {
+      const creator = pickRandom(students);
+      const resolver = fixture.resolved && graders.length > 0 ? pickRandom(graders) : null;
+      const resolvedAt = fixture.resolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000) : null;
+
+      const { data: helpRequestData, error: helpRequestError } = await this.rateLimitManager.trackAndLimit(
+        "help_requests",
+        () =>
+          supabase
+            .from("help_requests")
+            .insert({
+              class_id,
+              help_queue: queueId,
+              request: fixture.request,
+              is_private: fixture.isPrivate,
+              status: fixture.resolved ? "resolved" : "open",
+              created_by: creator.private_profile_id,
+              assignee: resolver?.private_profile_id ?? null,
+              resolved_by: resolver?.private_profile_id ?? null,
+              resolved_at: resolvedAt?.toISOString() ?? null
+            })
+            .select("id")
+      );
+      if (helpRequestError || !helpRequestData?.[0]) {
+        throw new Error(`Failed to create demo help request: ${helpRequestError?.message}`);
+      }
+      const helpRequestId = helpRequestData[0].id;
+
+      // Creator is always a member.
+      await this.rateLimitManager.trackAndLimit("help_request_students", () =>
+        supabase
+          .from("help_request_students")
+          .insert({ help_request_id: helpRequestId, profile_id: creator.private_profile_id, class_id })
+          .select("id")
+      );
+
+      // Replies — alternate between staff (instructor/grader) and the creator.
+      if (fixture.replies.length > 0) {
+        const messageInserts = fixture.replies.map((r) => {
+          const staffPool = [...instructors, ...graders];
+          const senderPool = r.isFromInstructor && staffPool.length > 0 ? staffPool : [creator];
+          const sender = pickRandom(senderPool);
+          return {
+            help_request_id: helpRequestId,
+            author: sender.private_profile_id,
+            message: r.message,
+            class_id,
+            instructors_only: r.instructorsOnly ?? false,
+            created_at: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString()
+          };
+        });
+        await this.rateLimitManager.trackAndLimit(
+          "help_request_messages",
+          () => supabase.from("help_request_messages").insert(messageInserts).select("id"),
+          messageInserts.length
+        );
+      }
+
+      // Work session — for resolved requests, attribute the time to the
+      // resolver grader using the fixture-specified duration.
+      if (fixture.resolved && resolver && resolvedAt) {
+        const durationMs = Math.max(1, fixture.durationMinutes) * 60 * 1000;
+        const endedAt = resolvedAt;
+        const startedAt = new Date(endedAt.getTime() - durationMs);
+        await this.rateLimitManager.trackAndLimit("help_request_work_sessions", () =>
+          supabase
+            .from("help_request_work_sessions")
+            .insert({
+              help_request_id: helpRequestId,
+              class_id,
+              ta_profile_id: resolver.private_profile_id,
+              started_at: startedAt.toISOString(),
+              ended_at: endedAt.toISOString()
+            })
+            .select("id")
+        );
+        resolvedCount++;
+      }
+    }
+
+    console.log(`✓ Demo: created ${fixtures.length} help requests (${resolvedCount} resolved)`);
   }
 
   // Helper method to create rubric structure for an assignment
@@ -5283,6 +5772,10 @@ public class Entrypoint {
   }
 
   private generateSurveyJSResponse(element: any): any {
+    const freeform = this.config.demoFixtures?.surveyFreeform;
+    const pickFreeform = () =>
+      freeform && freeform.length > 0 ? freeform[Math.floor(Math.random() * freeform.length)] : null;
+
     switch (element.type) {
       case "rating": {
         const min = element.rateMin || 1;
@@ -5317,11 +5810,11 @@ public class Entrypoint {
         return Math.random() < 0.5;
 
       case "text":
-        return faker.lorem.sentence();
+        return pickFreeform() ?? faker.lorem.sentence();
 
       case "comment": {
         const rows = element.rows || 3;
-        return faker.lorem.paragraphs(Math.min(rows, Math.floor(Math.random() * 2) + 1));
+        return pickFreeform() ?? faker.lorem.paragraphs(Math.min(rows, Math.floor(Math.random() * 2) + 1));
       }
 
       default:
