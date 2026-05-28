@@ -627,43 +627,10 @@ monitoring:
     edgeFunctions:    true
     appBusiness:      true
 
-  # Log pipeline. Two modes:
-  #   1. External / centralized (preferred for preview clusters):
-  #      Set monitoring.logs.loki.endpoint to an existing Loki's push
-  #      URL (e.g. http://loki.monitoring:3100/loki/api/v1/push). The
-  #      chart will deploy ONLY the Alloy shipper in this namespace; no
-  #      per-release Loki StatefulSet, no per-release storage.
-  #   2. In-chart Loki (production single-tenant):
-  #      Leave loki.endpoint empty and the chart deploys a single-binary
-  #      Loki StatefulSet alongside Alloy. Suited to deployments that
-  #      want isolated retention and don't have a central log store.
-  logs:
-    enabled: false
-    loki:
-      # When set, the chart skips the Loki StatefulSet and Alloy ships
-      # to this push URL. Leave empty to deploy Loki in this namespace.
-      endpoint: ""
-      replicas: 1
-      image:
-        repository: grafana/loki
-        tag: "3.5.0"
-        pullPolicy: IfNotPresent
-      persistence:
-        enabled: false
-        size: 20Gi
-        storageClass: ""
-      retentionHours: 168 # 7 days
-      resources:
-        requests: { cpu: "100m", memory: "256Mi" }
-        limits:   { cpu: "1",    memory: "1Gi" }
-    alloy:
-      image:
-        repository: grafana/alloy
-        tag: "v1.5.1"
-        pullPolicy: IfNotPresent
-      resources:
-        requests: { cpu: "50m",  memory: "128Mi" }
-        limits:   { cpu: "500m", memory: "512Mi" }
-      # Scrape these namespaces in addition to the chart's own. Leave
-      # empty to limit collection to .Release.Namespace.
-      extraNamespaces: []
+  # Logs are NOT deployed by this chart. Log collection (Alloy
+  # DaemonSet shipping into a central Loki) is a cluster-level concern
+  # and lives in /home/jon/work/k8s/apps/monitoring/. The chart's only
+  # responsibility for logs is emitting structured pino-style JSON from
+  # the web app's stdout; the cluster Alloy joins pod labels and ships
+  # to Loki for you. Querying: Grafana Explore → Loki datasource →
+  # {namespace="pawtograder-preview-pr-<id>"}.

@@ -148,24 +148,15 @@ backup:
 auditPartitions:
   enabled: false
 
-# ----- Monitoring & logs -----------------------------------------------------
+# ----- Monitoring ------------------------------------------------------------
 # Per-PR previews emit ServiceMonitors auto-discovered by the cluster's
 # kube-prometheus-stack Prometheus. Grafana dashboards are loaded by its
-# sidecar from any namespace. Logs ship to the central Loki in the
-# monitoring namespace; no per-preview Loki StatefulSet, no per-preview
-# storage. See charts/pawtograder/templates/monitoring.yaml +
-# charts/pawtograder/templates/alloy.yaml.
+# sidecar from any namespace. Logs flow through the cluster-wide Alloy
+# DaemonSet (deployed at /home/jon/work/k8s/apps/monitoring/alloy.yaml)
+# into the central Loki at loki.monitoring:3100 — no per-preview log
+# infra in the chart.
 monitoring:
   enabled: true
-  logs:
-    enabled: true
-    loki:
-      endpoint: http://loki.monitoring:3100/loki/api/v1/push
-    alloy:
-      # Limit log shipping to this preview's namespace. Other previews
-      # ship their own; one central Loki holds them all keyed by
-      # release/namespace labels.
-      extraNamespaces: []
 
 # Seed the demo class so previews come up with content to play with.
 # Idempotent — `seed.sh` skips if classes.id=1 already exists, so PR-sync

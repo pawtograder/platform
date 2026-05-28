@@ -238,23 +238,29 @@ platform team owns them out-of-band.
 
 ### Logs
 
-Two operating modes for `monitoring.logs.enabled=true`:
+Log collection is **cluster-level**, not chart-level — DaemonSets and
+their `pods/log` RBAC are inherently cluster-scoped, so a per-PR helm
+release can't install them. The pawtograder chart contributes nothing
+for log shipping; instead, the cluster runs:
 
-- **Central Loki (preferred for preview clusters)** — set
-  `monitoring.logs.loki.endpoint` to an existing Loki push URL. The chart
-  deploys only Alloy as a DaemonSet that ships this namespace's logs to
-  that endpoint. Logs carry an `external_labels.release` so the central
-  Loki can multiplex per-release queries cleanly.
-- **In-chart Loki** — leave `monitoring.logs.loki.endpoint` empty. The
-  chart deploys a single-binary Loki StatefulSet alongside Alloy. Use this
-  for production single-tenant installs that want isolated retention.
+- One **Loki** single-binary StatefulSet at `loki.monitoring:3100`
+- One **Alloy** DaemonSet across every node, scoped (by namespace regex)
+  to `pawtograder-.*|monitoring`. Onboard a new app by extending the
+  regex in `monitoring/alloy-config`.
 
-Alloy is run as a DaemonSet with `tolerations: Exists` so it collects logs
-from control-plane and tainted nodes too. RBAC: cluster-scoped read on
-nodes / namespaces / pods / endpoints / services. Pod logs are joined with
-their `app.kubernetes.io/component` and `app.kubernetes.io/instance`
-labels; pino-style JSON lines are parsed and the `level` field becomes a
-Loki label.
+Both live in `/home/jon/work/k8s/apps/monitoring/`. Querying:
+
+```
+{namespace="pawtograder-preview-pr-741"}
+{namespace=~"pawtograder-.*", component="realtime"} |= "error"
+{namespace="pawtograder-preview-pr-741", level="error"}
+```
+
+The Alloy pipeline best-effort parses pino-style JSON (level, msg) and
+promotes `level` as a Loki label. Pod labels — `component` and
+`instance` — are joined onto every line by the discovery relabel. To
+get the most out of log queries from the web app, structure your
+console output as JSON (e.g. pino).
 
 ### Secrets
 
