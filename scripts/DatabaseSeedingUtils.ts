@@ -668,7 +668,6 @@ const SURVEYJS_TEMPLATES = {
   teamCollaboration: TEAM_COLLABORATION_SURVEY
 };
 
-
 /**
  * Build a complete analytics_config for an arbitrary SurveyJS template by walking
  * its pages/elements and including every named question. We seed this on EVERY
@@ -1507,7 +1506,7 @@ export class DatabaseSeeder {
         students
       );
 
-      return { id: testClass.id, name: testClass.name || config.className };
+      return { id: testClass.id, name: testClass.name || config.className || "Demo Class" };
     } catch (error) {
       console.error("❌ Error seeding database:", error);
       throw error;
@@ -2808,7 +2807,10 @@ export class DatabaseSeeder {
               // the check_assignment_for_repo_creation trigger, write release_date in
               // the future. The orchestrator flips it back to the past once handout +
               // solution repos exist.
-              release_date: (config.futureReleaseDate ? addDays(new Date(), 30) : addDays(new Date(), -1)).toISOString(),
+              release_date: (config.futureReleaseDate
+                ? addDays(new Date(), 30)
+                : addDays(new Date(), -1)
+              ).toISOString(),
               class_id: class_id,
               slug,
               group_config: groupConfig,
@@ -2822,7 +2824,10 @@ export class DatabaseSeeder {
               ...(config.futureReleaseDate ? { permit_empty_submissions: false } : {}),
               // When futureReleaseDate, the group-formation deadline also has to land
               // before due_date (still future) so groups stay editable in the demo UI.
-              group_formation_deadline: (config.futureReleaseDate ? addDays(new Date(), 45) : addDays(new Date(), -1)).toISOString()
+              group_formation_deadline: (config.futureReleaseDate
+                ? addDays(new Date(), 45)
+                : addDays(new Date(), -1)
+              ).toISOString()
             })
             .select("id")
       );
@@ -3583,7 +3588,9 @@ export class DatabaseSeeder {
       .eq("class_id", class_id)
       .in("user_id", graderUserIds);
     if (graderRoleErr) throw new Error(`gradeRealSubmissionsForDemo fetch grader user_roles: ${graderRoleErr.message}`);
-    const graderProfileByUserId = new Map((graderRoleRows ?? []).map((r) => [r.user_id, r.private_profile_id] as const));
+    const graderProfileByUserId = new Map(
+      (graderRoleRows ?? []).map((r) => [r.user_id, r.private_profile_id] as const)
+    );
     const gradersWithProfiles: TestingUser[] = fleet.graders
       .map((g) => {
         const pid = graderProfileByUserId.get(g.user_id);
@@ -3612,7 +3619,8 @@ export class DatabaseSeeder {
         student
       });
     }
-    if (unmappedAssignments > 0) console.warn(`   ⚠ ${unmappedAssignments} submissions had no matching assignment row`);
+    if (unmappedAssignments > 0)
+      console.warn(`   ⚠ ${unmappedAssignments} submissions had no matching assignment row`);
     if (unmappedProfiles > 0)
       console.warn(`   ⚠ ${unmappedProfiles} submissions belonged to a profile_id not in the demo fleet`);
 

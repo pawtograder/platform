@@ -101,7 +101,8 @@ async function main() {
   if (repoErr) throw new Error(`load repositories: ${repoErr.message}`);
   console.log(`\n📦 Repositories (${repos?.length ?? 0}):`);
   for (const r of repos ?? []) {
-    const kind = r.assignment_group_id != null ? `group#${r.assignment_group_id}` : `indiv:${r.profile_id?.slice(0, 8)}`;
+    const kind =
+      r.assignment_group_id != null ? `group#${r.assignment_group_id}` : `indiv:${r.profile_id?.slice(0, 8)}`;
     console.log(
       `   a=${r.assignment_id} ${kind} ready=${r.is_github_ready} synced_sha=${r.synced_repo_sha ? "yes" : "no"} ${r.repository}`
     );
@@ -117,7 +118,9 @@ async function main() {
       if (!repo) {
         console.log(`   ✗ ${a.slug} group "${g.name}" — NO repositories row (platform never created it)`);
       } else if (!repo.is_github_ready) {
-        console.log(`   ⚠ ${a.slug} group "${g.name}" — repo row exists but is_github_ready=false (${repo.repository})`);
+        console.log(
+          `   ⚠ ${a.slug} group "${g.name}" — repo row exists but is_github_ready=false (${repo.repository})`
+        );
       } else {
         console.log(`   ✓ ${a.slug} group "${g.name}" — ready (${repo.repository})`);
       }

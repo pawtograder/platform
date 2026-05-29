@@ -343,19 +343,13 @@ async function phaseA_createAndPushHandoutsAndSolutions(
   console.log(`   • invoking assignment-create-handout-repo / -solution-repo for ${plans.length} assignments`);
   for (const { assignmentId, canned } of plans) {
     try {
-      const handout = await assignmentCreateHandoutRepo(
-        { assignment_id: assignmentId, class_id: classId },
-        supabase
-      );
+      const handout = await assignmentCreateHandoutRepo({ assignment_id: assignmentId, class_id: classId }, supabase);
       console.log(`     ✓ ${canned.slug} handout: ${handout.org_name}/${handout.repo_name}`);
     } catch (e) {
       console.warn(`     ⚠ ${canned.slug} handout edge-fn errored (repo may still exist): ${(e as Error).message}`);
     }
     try {
-      const solution = await assignmentCreateSolutionRepo(
-        { assignment_id: assignmentId, class_id: classId },
-        supabase
-      );
+      const solution = await assignmentCreateSolutionRepo({ assignment_id: assignmentId, class_id: classId }, supabase);
       console.log(`     ✓ ${canned.slug} solution: ${solution.org_name}/${solution.repo_name}`);
     } catch (e) {
       console.warn(`     ⚠ ${canned.slug} solution edge-fn errored (repo may still exist): ${(e as Error).message}`);
@@ -384,7 +378,9 @@ async function phaseA_createAndPushHandoutsAndSolutions(
           const { noChanges, headSha } = await pushSourceContent(source, target, {
             commitMessage: `Seed demo handout for ${canned.slug} from ${source}`
           });
-          console.log(`     ✓ ${canned.slug} handout content pushed → ${target} ${noChanges ? "(no-op)" : `@ ${headSha.slice(0, 7)}`}`);
+          console.log(
+            `     ✓ ${canned.slug} handout content pushed → ${target} ${noChanges ? "(no-op)" : `@ ${headSha.slice(0, 7)}`}`
+          );
         } catch (e) {
           console.warn(`     ⚠ ${canned.slug} handout push failed: ${(e as Error).message}`);
         }
@@ -399,7 +395,9 @@ async function phaseA_createAndPushHandoutsAndSolutions(
           const { noChanges, headSha } = await pushSourceContent(source, target, {
             commitMessage: `Seed demo solution for ${canned.slug} from ${source}`
           });
-          console.log(`     ✓ ${canned.slug} solution content pushed → ${target} ${noChanges ? "(no-op)" : `@ ${headSha.slice(0, 7)}`}`);
+          console.log(
+            `     ✓ ${canned.slug} solution content pushed → ${target} ${noChanges ? "(no-op)" : `@ ${headSha.slice(0, 7)}`}`
+          );
         } catch (e) {
           console.warn(`     ⚠ ${canned.slug} solution push failed: ${(e as Error).message}`);
         }
@@ -442,10 +440,7 @@ async function phaseBC_releaseAndPushStudentRepos(
 
   console.log(`   • flipping release_date to past on ${dbAssignments.length} assignments`);
   for (const a of dbAssignments) {
-    const { error: upErr } = await supabase
-      .from("assignments")
-      .update({ release_date: releaseDate })
-      .eq("id", a.id);
+    const { error: upErr } = await supabase.from("assignments").update({ release_date: releaseDate }).eq("id", a.id);
     if (upErr) console.warn(`     ⚠ ${a.slug}: update release_date failed: ${upErr.message}`);
   }
 
@@ -503,7 +498,11 @@ async function phaseBC_releaseAndPushStudentRepos(
   // the flag each poll iteration in case a trigger reset it to the enroll default.
   const reassertConfirmed = async () => {
     if (fleetUserIds.length === 0) return;
-    await supabase.from("user_roles").update({ github_org_confirmed: true }).eq("class_id", classId).in("user_id", fleetUserIds);
+    await supabase
+      .from("user_roles")
+      .update({ github_org_confirmed: true })
+      .eq("class_id", classId)
+      .in("user_id", fleetUserIds);
   };
 
   // Count targets whose repository row exists AND is_github_ready=true.
@@ -527,7 +526,9 @@ async function phaseBC_releaseAndPushStudentRepos(
       .eq("is_github_ready", true);
     if (countErr) throw new Error(`poll repositories count failed: ${countErr.message}`);
     const got = countReady(rows ?? []);
-    process.stdout.write(`     [${Math.floor((Date.now() - pollStart) / 1000)}s] ${got} / ${expected} (is_github_ready)\r`);
+    process.stdout.write(
+      `     [${Math.floor((Date.now() - pollStart) / 1000)}s] ${got} / ${expected} (is_github_ready)\r`
+    );
     if (got >= expected) {
       console.log(`\n   ✓ ${got} repo targets marked is_github_ready=true`);
       break;

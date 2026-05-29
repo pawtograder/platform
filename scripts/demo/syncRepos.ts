@@ -82,14 +82,7 @@ export async function mirrorRepoToOrgIfMissing(
   try {
     await run("git", ["clone", "--mirror", `https://github.com/${sourceFullName}.git`, mirrorDir]);
     const visibility = opts.private === false ? "--public" : "--private";
-    await run("gh", [
-      "repo",
-      "create",
-      target,
-      visibility,
-      "--description",
-      `Demo source mirror of ${sourceFullName}`
-    ]);
+    await run("gh", ["repo", "create", target, visibility, "--description", `Demo source mirror of ${sourceFullName}`]);
     // NOT `git push --mirror`: a --mirror clone also fetches GitHub's hidden
     // PR refs (refs/pull/*), which the remote rejects ("deny updating a hidden
     // ref") and which makes the whole mirror push fail even though branches
@@ -110,10 +103,7 @@ export async function mirrorRepoToOrgIfMissing(
  * Wait for the platform's async workflow to materialize a repo on GitHub.
  * Returns true once it's visible. Throws after timeoutMs.
  */
-export async function waitForRepo(
-  fullName: string,
-  opts: { timeoutMs?: number; pollMs?: number } = {}
-): Promise<void> {
+export async function waitForRepo(fullName: string, opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<void> {
   const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000; // 5 min
   const pollMs = opts.pollMs ?? 5_000;
   const start = Date.now();
@@ -318,7 +308,9 @@ export async function pushSourceContent(
         const msg = (e as Error).message;
         const isRejection = msg.includes("[rejected]") || msg.includes("fetch first");
         if (!isRejection || attempt === MAX_PUSH_ATTEMPTS) throw e;
-        console.warn(`  ⚠ push rejected on ${targetFullName} (attempt ${attempt}/${MAX_PUSH_ATTEMPTS}); pull-rebasing`);
+        console.warn(
+          `  ⚠ push rejected on ${targetFullName} (attempt ${attempt}/${MAX_PUSH_ATTEMPTS}); pull-rebasing`
+        );
         try {
           await run("git", ["pull", "--rebase", "-X", "theirs", "origin"], { cwd: targetDir });
         } catch (rebaseErr) {
@@ -328,9 +320,7 @@ export async function pushSourceContent(
           } catch {
             /* nothing to abort */
           }
-          throw new Error(
-            `pull-rebase failed on ${targetFullName}: ${(rebaseErr as Error).message}`
-          );
+          throw new Error(`pull-rebase failed on ${targetFullName}: ${(rebaseErr as Error).message}`);
         }
       }
     }

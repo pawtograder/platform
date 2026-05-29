@@ -548,7 +548,9 @@ async function main() {
     if (!effectiveSha)
       console.warn(`[warn] ${a.slug}: no grader commit sha (autograder + autograder_commits both empty); left blank`);
     if (subs.length === 0)
-      console.warn(`[warn] ${a.slug}: no ${args.githubUsername} submissions in source class; Phase C will fall back to HEAD`);
+      console.warn(
+        `[warn] ${a.slug}: no ${args.githubUsername} submissions in source class; Phase C will fall back to HEAD`
+      );
     canned.push(buildCannedAssignment({ ...a, grader_commit_sha: effectiveSha }, repos, subs, earliest));
   }
 

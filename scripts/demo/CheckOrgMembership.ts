@@ -46,9 +46,7 @@ function parseArgs(): Args {
       out.users.push(next);
       i++;
     } else if (a === "--help" || a === "-h") {
-      console.log(
-        "Usage: npx tsx scripts/demo/CheckOrgMembership.ts [--org <org>] [--user <login> ...]"
-      );
+      console.log("Usage: npx tsx scripts/demo/CheckOrgMembership.ts [--org <org>] [--user <login> ...]");
       process.exit(0);
     }
   }
@@ -142,7 +140,9 @@ async function main() {
     console.log(`\n📋 Org members visible to the App (${members.data.length}):`);
     console.log(`   ${members.data.map((m) => m.login).join(", ") || "(none — likely missing members:read)"}`);
   } catch (e) {
-    console.log(`\n📋 Could not list org members: HTTP ${(e as { status?: number }).status ?? "?"} ${(e as Error).message}`);
+    console.log(
+      `\n📋 Could not list org members: HTTP ${(e as { status?: number }).status ?? "?"} ${(e as Error).message}`
+    );
   }
 
   try {
@@ -150,7 +150,9 @@ async function main() {
     console.log(`\n✉️  Pending org invitations (${invites.data.length}):`);
     console.log(`   ${invites.data.map((iv) => iv.login ?? iv.email ?? "(unknown)").join(", ") || "(none)"}`);
   } catch (e) {
-    console.log(`\n✉️  Could not list invitations: HTTP ${(e as { status?: number }).status ?? "?"} ${(e as Error).message}`);
+    console.log(
+      `\n✉️  Could not list invitations: HTTP ${(e as { status?: number }).status ?? "?"} ${(e as Error).message}`
+    );
   }
 }
 
