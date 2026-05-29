@@ -79,6 +79,15 @@ spec:
                   key: METRICS_SCRAPE_TOKEN
                   optional: true
             {{- end }}
+            {{- if .Values.web.e2e.enabled }}
+            # E2E test bypass: utils/csp.ts flips CSP into report-only mode
+            # when this is set, which lets Playwright inject the test-runner
+            # frames and stubs that production CSP would block. NEVER set
+            # this in a real prod install — it weakens browser-level
+            # protections that depend on enforce mode.
+            - name: E2E_ENABLE
+              value: "true"
+            {{- end }}
             {{- with .Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

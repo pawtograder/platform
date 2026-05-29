@@ -498,6 +498,10 @@ kong:
 # -----------------------------------------------------------------------------
 web:
   enabled: true
+  # E2E test bypass: only set true on preview / test deploys. See web.yaml
+  # for what it controls (CSP report-only mode). NEVER in production.
+  e2e:
+    enabled: false
   replicas: 2
   image:
     repository: ghcr.io/pawtograder/web

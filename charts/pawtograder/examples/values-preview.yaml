@@ -135,6 +135,10 @@ web:
   resources:
     requests: { cpu: "100m", memory: "256Mi" }
     limits:   { cpu: "1",    memory: "1Gi" }
+  # E2E suite runs against per-PR previews; flip CSP into report-only
+  # mode so Playwright's injected frames don't get blocked.
+  e2e:
+    enabled: true
 
 # ----- Disable admin-side stuff that adds setup complexity -------------------
 studio:
