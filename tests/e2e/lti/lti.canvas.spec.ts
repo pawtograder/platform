@@ -155,6 +155,9 @@ test("NRPS roster sync enrolls the Canvas roster into the class", async ({ page,
 });
 
 test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async ({ browser, page, request }) => {
+  // Launch + re-sync + wait-for-gradebook-row + push + async-score poll is a lot;
+  // give this step a generous budget (the score poll alone can take ~2 min in CI).
+  test.setTimeout(300_000);
   const student = cfg.students[0];
 
   // Student launches from Canvas -> creates their Pawtograder account.
@@ -181,12 +184,29 @@ test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async 
     .single();
   expect(sRole?.private_profile_id).toBeTruthy();
 
-  await supabase
+  // Enrolling the student creates their gradebook_column_students row via a
+  // trigger, which isn't necessarily there the instant the sync RPC returns.
+  // Wait for it, then set the released grade (updating by id, so we can assert
+  // the row actually existed rather than silently no-op'ing).
+  let gradeRowId: number | undefined;
+  for (let i = 0; i < 30 && !gradeRowId; i++) {
+    const { data: row } = await supabase
+      .from("gradebook_column_students")
+      .select("id")
+      .eq("gradebook_column_id", gradebookColumnId)
+      .eq("student_id", sRole!.private_profile_id)
+      .eq("is_private", true)
+      .maybeSingle();
+    gradeRowId = row?.id;
+    if (!gradeRowId) await page.waitForTimeout(2000);
+  }
+  expect(gradeRowId, "student gradebook row should exist after enrollment").toBeTruthy();
+
+  const { error: gradeErr } = await supabase
     .from("gradebook_column_students")
     .update({ score: 88, released: true })
-    .eq("gradebook_column_id", gradebookColumnId)
-    .eq("student_id", sRole!.private_profile_id)
-    .eq("is_private", true);
+    .eq("id", gradeRowId!);
+  expect(gradeErr).toBeNull();
 
   // Push grades to Canvas via AGS.
   const pushRes = await request.post(`${cfg.toolBaseUrl}/api/lti/push-grades`, {
