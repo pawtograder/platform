@@ -56,10 +56,16 @@ export const LTI_ROLE = {
 
 export type AppRole = "instructor" | "grader" | "student";
 
-/** Map LTI membership roles to a Pawtograder app_role (highest wins). */
+/** Map LTI membership roles to a Pawtograder app_role (highest wins).
+ *
+ * Only CONTEXT-membership roles count — the `roles` claim can also carry
+ * institution/system roles (e.g. `.../institution/person#Instructor` for any
+ * faculty member), which must NOT grant instructor in a course where the user
+ * is merely a Learner. So we match the bare short form or the full
+ * context-membership URN exactly, never an arbitrary `#`-suffix. */
 export function ltiRolesToAppRole(roles: string[] | undefined): AppRole {
-  const has = (needle: string) =>
-    (roles ?? []).some((r) => r === needle || r.endsWith(`#${needle}`) || r.split("#").pop() === needle);
+  const MEMBERSHIP_NS = "http://purl.imsglobal.org/vocab/lis/v2/membership#";
+  const has = (needle: string) => (roles ?? []).some((r) => r === needle || r === `${MEMBERSHIP_NS}${needle}`);
   if (has("Instructor")) return "instructor";
   if (has("TeachingAssistant") || has("ContentDeveloper")) return "grader";
   return "student";

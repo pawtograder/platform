@@ -109,11 +109,21 @@ CREATE TABLE IF NOT EXISTS "public"."lti_context_links" (
     "last_roster_sync_at" timestamp with time zone,
     "last_roster_sync_status" text,
     "last_roster_sync_message" text,
-    CONSTRAINT "lti_context_links_unique" UNIQUE ("platform_id", "deployment_id", "context_id")
+    CONSTRAINT "lti_context_links_unique" UNIQUE ("platform_id", "deployment_id", "context_id"),
+    -- Tie each context link to a real deployment (launch upserts the deployment
+    -- first), preventing orphaned/mismatched (platform_id, deployment_id) pairs.
+    CONSTRAINT "lti_context_links_deployment_fkey"
+      FOREIGN KEY ("platform_id", "deployment_id")
+      REFERENCES "public"."lti_deployments" ("platform_id", "deployment_id") ON DELETE CASCADE
 );
 
 ALTER TABLE "public"."lti_context_links" ENABLE ROW LEVEL SECURITY;
-GRANT ALL ON TABLE "public"."lti_context_links" TO "authenticated";
+-- The server reads nrps_url / ags_lineitems_url from this table and uses them as
+-- outbound request targets with a bearer service token. Instructors must NOT be
+-- able to repoint those (SSRF / token exfiltration), so grant them only the two
+-- sync toggles; service_role (the launch/sync endpoints) manages the rest.
+GRANT SELECT ON TABLE "public"."lti_context_links" TO "authenticated";
+GRANT UPDATE ("roster_sync_enabled", "grade_sync_enabled") ON TABLE "public"."lti_context_links" TO "authenticated";
 GRANT ALL ON TABLE "public"."lti_context_links" TO "service_role";
 
 CREATE POLICY "Instructors read lti_context_links" ON "public"."lti_context_links"
@@ -218,14 +228,15 @@ RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO ''
 AS $$
 DECLARE
-    v_inserted boolean := false;
+    v_rows bigint := 0;
 BEGIN
     DELETE FROM public.lti_nonces WHERE expires_at < now();
     INSERT INTO public.lti_nonces (nonce, expires_at)
     VALUES (p_nonce, now() + make_interval(secs => p_ttl_seconds))
     ON CONFLICT (nonce) DO NOTHING;
-    GET DIAGNOSTICS v_inserted = ROW_COUNT;
-    RETURN v_inserted;
+    -- ROW_COUNT is bigint; capture it explicitly and derive the boolean.
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    RETURN v_rows > 0;
 END;
 $$;
 

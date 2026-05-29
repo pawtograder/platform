@@ -4,6 +4,7 @@
  *  - an instructor clicking "sync" in the management UI (cookie session).
  */
 import "server-only";
+import { timingSafeEqual } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
@@ -11,7 +12,12 @@ export function isCronAuthorized(request: Request): boolean {
   const expected = process.env.LTI_CRON_SHARED_SECRET;
   if (!expected) return false;
   const provided = request.headers.get("x-lti-cron-secret");
-  return !!provided && provided === expected;
+  if (!provided) return false;
+  // Constant-time compare so we don't leak the secret via response timing on
+  // this privileged full-roster-sync / grade-push path.
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /** Returns true if the current cookie-session user is an instructor of the class. */

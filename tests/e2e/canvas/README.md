@@ -145,7 +145,7 @@ and, because `CANVAS_LMS_ADMIN_EMAIL` / `CANVAS_LMS_ADMIN_PASSWORD` are set in
 the env, creates the site admin **non-interactively**), waits for
 `/health_check`, then mints an admin API token and prints:
 
-```
+```text
 CANVAS_ADMIN_TOKEN=<token>
 ```
 
@@ -207,7 +207,7 @@ docker compose -f tests/e2e/canvas/docker-compose.yml run --rm --no-deps -T \
 
 Output:
 
-```
+```text
 CLIENT_ID=10000000000xxx
 DEPLOYMENT_ID=<id>:<opaque>
 ISSUER=https://canvas.instructure.com
@@ -221,7 +221,7 @@ ISSUER=https://canvas.instructure.com
 
 Scopes granted (override `PG_*` env to change URLs/name):
 
-```
+```text
 https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly   (NRPS)
 https://purl.imsglobal.org/spec/lti-ags/scope/lineitem                      (AGS line items)
 https://purl.imsglobal.org/spec/lti-ags/scope/score                         (AGS scores)
@@ -310,6 +310,6 @@ docker push ghcr.io/pawtograder/canvas-lms-e2e:latest
 | `scripts/mint_admin_token.rb` | rails runner: create admin API token                                               |
 | `scripts/create_dev_key.rb`   | rails runner: create+enable LTI 1.3 dev key, deploy, print client_id/deployment_id |
 
-```
+```text
 
 ```

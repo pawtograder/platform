@@ -210,6 +210,7 @@ export default function CourseLtiPage() {
                     </Table.Cell>
                     <Table.Cell>
                       <Switch
+                        aria-label={`Roster sync for ${link.context_title ?? link.context_label ?? link.context_id}`}
                         checked={link.roster_sync_enabled}
                         disabled={!link.nrps_url}
                         onCheckedChange={(e) => toggle(link, "roster_sync_enabled", e.checked)}
@@ -217,6 +218,7 @@ export default function CourseLtiPage() {
                     </Table.Cell>
                     <Table.Cell>
                       <Switch
+                        aria-label={`Grade sync for ${link.context_title ?? link.context_label ?? link.context_id}`}
                         checked={link.grade_sync_enabled}
                         disabled={!link.ags_lineitems_url}
                         onCheckedChange={(e) => toggle(link, "grade_sync_enabled", e.checked)}

@@ -28,7 +28,11 @@ async function authedFetch(
     ...(init.contentType ? { "Content-Type": init.contentType } : {}),
     ...(init.accept ? { Accept: init.accept } : {})
   };
-  return fetch(url, { ...init, headers: { ...headers, ...(init.headers as Record<string, string>) } });
+  return fetch(url, {
+    signal: AbortSignal.timeout(15_000), // don't hang the request handler on a stuck platform
+    ...init,
+    headers: { ...headers, ...(init.headers as Record<string, string>) }
+  });
 }
 
 /**

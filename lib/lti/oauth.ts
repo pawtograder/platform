@@ -67,7 +67,8 @@ export async function getServiceAccessToken(
   const res = await fetch(platform.token_url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body
+    body,
+    signal: AbortSignal.timeout(15_000)
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");

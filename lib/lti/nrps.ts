@@ -31,7 +31,8 @@ export async function fetchMemberships(
     const token = await getServiceAccessToken(platformId, [NRPS_SCOPE], db);
     const res = await fetch(url, {
       method: "GET",
-      headers: { Authorization: `Bearer ${token}`, Accept: MEMBERSHIP_MEDIA }
+      headers: { Authorization: `Bearer ${token}`, Accept: MEMBERSHIP_MEDIA },
+      signal: AbortSignal.timeout(20_000)
     });
     if (!res.ok) {
       throw new Error(`NRPS membership fetch failed (${res.status}): ${await res.text().catch(() => "")}`);

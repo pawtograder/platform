@@ -145,15 +145,24 @@ BEGIN
   -- sis_user_id to an existing account matched by email that has no sis_user_id
   -- yet. This lets the sis_user_id-keyed logic below adopt users who already
   -- exist (e.g. signed in via an LTI launch) instead of creating duplicates.
-  -- No-op for SIS syncs (email is NULL there). Guarded against the unique
-  -- sis_user_id constraint and never overwrites an existing sis_user_id.
+  -- No-op for SIS syncs (email is NULL there). users.email is NOT unique, so a
+  -- given email may match several accounts; we stamp exactly ONE (the lowest
+  -- user_id) to avoid setting the same surrogate sis_user_id on multiple rows
+  -- (which would trip UNIQUE(users.sis_user_id) and abort the whole sync).
+  -- Never overwrites an existing sis_user_id; skips surrogates already in use.
   UPDATE public.users u
   SET sis_user_id = r.sis_user_id
   FROM tmp_sis_roster_resolved r
   WHERE r.email IS NOT NULL
     AND u.sis_user_id IS NULL
     AND lower(u.email) = r.email
-    AND NOT EXISTS (SELECT 1 FROM public.users u2 WHERE u2.sis_user_id = r.sis_user_id);
+    AND u.user_id = (
+      SELECT u2.user_id FROM public.users u2
+      WHERE u2.sis_user_id IS NULL AND lower(u2.email) = r.email
+      ORDER BY u2.user_id
+      LIMIT 1
+    )
+    AND NOT EXISTS (SELECT 1 FROM public.users u3 WHERE u3.sis_user_id = r.sis_user_id);
 
   CREATE TEMP TABLE tmp_change_counts (
     invitations_created integer NOT NULL DEFAULT 0,

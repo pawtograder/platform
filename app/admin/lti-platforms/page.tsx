@@ -123,6 +123,7 @@ export default function LtiPlatformsPage() {
       </Text>
       <Input
         size="sm"
+        aria-label={label}
         value={(edit?.[key] as string) ?? ""}
         placeholder={placeholder}
         onChange={(e) => setEdit((prev) => ({ ...(prev ?? {}), [key]: e.target.value }))}
@@ -263,7 +264,13 @@ export default function LtiPlatformsPage() {
                         <Button size="sm" variant="outline" onClick={() => setEdit({ ...p })}>
                           Edit
                         </Button>
-                        <Button size="sm" variant="outline" colorPalette="red" onClick={() => remove(p.id)}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          colorPalette="red"
+                          aria-label={`Delete platform ${p.name}`}
+                          onClick={() => remove(p.id)}
+                        >
                           <Trash2 size={14} />
                         </Button>
                       </HStack>
