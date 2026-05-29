@@ -131,6 +131,22 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: JWT_REALTIME_JWKS
+            {{- if .Values.monitoring.enabled }}
+            # METRICS_JWT_SECRET — separate from API_JWT_SECRET.
+            # /metrics goes through RealtimeWeb.Router.check_auth which
+            # calls JwtVerification.verify; that path does NOT use the
+            # JWKS-or-API_JWT_SECRET fallback the WS auth path uses. It
+            # expects a dedicated HS256 secret. Without it, every HS256
+            # bearer (including ANON_KEY / SERVICE_ROLE_KEY) trips the
+            # "Couldn't recognize the signer algorithm" Joken error. We
+            # reuse JWT_SECRET so the bearer minted by GenerateJwtKeys
+            # (REALTIME_METRICS_BEARER) and the scrape config still pair.
+            - name: METRICS_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.names.jwt }}
+                  key: JWT_SECRET
+            {{- end }}
             - name: APP_NAME
               value: realtime
             - name: FLY_ALLOC_ID

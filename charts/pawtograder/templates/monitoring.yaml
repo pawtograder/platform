@@ -222,8 +222,9 @@ spec:
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 ---
-# ServiceMonitor: GoTrue (auth). /metrics on the http port; requires
-# GOTRUE_METRICS_ENABLED=true, set in auth.yaml.
+# ServiceMonitor: GoTrue (auth). /metrics on the dedicated metrics
+# port (9100); requires GOTRUE_METRICS_EXPORTER=prometheus, set in
+# auth.yaml. The main API port (9999) has no /metrics path.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -236,7 +237,7 @@ spec:
     matchLabels:
       {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "auth") | nindent 6 }}
   endpoints:
-    - port: http
+    - port: metrics
       path: /metrics
       interval: {{ .Values.monitoring.scrapeInterval }}
       scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}

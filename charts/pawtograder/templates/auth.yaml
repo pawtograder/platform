@@ -12,6 +12,14 @@ spec:
     - name: http
       port: {{ .Values.auth.service.port }}
       targetPort: http
+    {{- if .Values.monitoring.enabled }}
+    # GoTrue's Prometheus exporter runs on a SEPARATE HTTP server (the
+    # main API on :9999 has no /metrics path). Port 9100 by convention,
+    # ClusterIP-only — never published.
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+    {{- end }}
   selector:
     {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "auth") | nindent 4 }}
 ---
@@ -41,18 +49,29 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.auth.service.port }}
+            {{- if .Values.monitoring.enabled }}
+            - name: metrics
+              containerPort: 9100
+            {{- end }}
           env:
             - name: GOTRUE_API_HOST
               value: "0.0.0.0"
             - name: GOTRUE_API_PORT
               value: {{ .Values.auth.service.port | quote }}
             {{- if .Values.monitoring.enabled }}
-            # GoTrue serves /metrics in Prometheus format when this is
-            # enabled — no authentication, so we rely on the Service's
-            # ClusterIP not being externally reachable + NetworkPolicy.
-            # Picked up by the ServiceMonitor in monitoring.yaml.
+            # GoTrue exposes /metrics on a SECOND HTTP server (see the
+            # Prometheus exporter — separate from the API on 9999).
+            # GOTRUE_METRICS_EXPORTER=prometheus is what flips it on;
+            # GOTRUE_METRICS_ENABLED kept for completeness in case future
+            # gotrue versions move the flag.
             - name: GOTRUE_METRICS_ENABLED
               value: "true"
+            - name: GOTRUE_METRICS_EXPORTER
+              value: prometheus
+            - name: GOTRUE_METRICS_HOST
+              value: "0.0.0.0"
+            - name: GOTRUE_METRICS_PORT
+              value: "9100"
             {{- end }}
             - name: API_EXTERNAL_URL
               value: {{ include "pawtograder.api.url" . }}
