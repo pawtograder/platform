@@ -134,6 +134,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "HTTP request rate by service",
+      "description": "Per-service request rate. web/auth/kong serve user-facing traffic; storage-api's HTTP pool is a proxy for upstream MinIO calls (it doesn't export a request-count histogram).",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -148,14 +149,14 @@
           "expr": "sum(rate(kong_http_requests_total[1m]))"
         },
         {
-          "refId": "storage",
-          "legendFormat": "storage-api",
-          "expr": "sum(rate(http_request_duration_seconds_count{job=~\".*-storage\"}[1m]))"
+          "refId": "auth",
+          "legendFormat": "auth (gotrue)",
+          "expr": "sum(rate(http_status_codes_total{job=\"pawtograder-auth\"}[1m]))"
         },
         {
-          "refId": "edge",
-          "legendFormat": "edge-functions",
-          "expr": "sum(rate(http_requests_total{job=~\".*-edge-functions\"}[1m]))"
+          "refId": "storage",
+          "legendFormat": "storage-api (http pool)",
+          "expr": "sum(rate(storage_api_http_pool_requests[1m]))"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "reqps" } }
@@ -164,6 +165,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "P95 latency by service",
+      "description": "P95 over 5 min. kong's bucket is per-request total latency; auth uses OTel http_server_duration_milliseconds.",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -175,7 +177,12 @@
         {
           "refId": "kong",
           "legendFormat": "kong (proxy)",
-          "expr": "histogram_quantile(0.95, sum by(le)(rate(kong_latency_bucket[5m])))"
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(kong_request_latency_ms_bucket[5m]))) / 1000"
+        },
+        {
+          "refId": "auth",
+          "legendFormat": "auth (gotrue)",
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(http_server_duration_milliseconds_bucket{job=\"pawtograder-auth\"}[5m]))) / 1000"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "s" } }

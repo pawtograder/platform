@@ -4,36 +4,39 @@
   "tags": ["pawtograder", "realtime"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": { "from": "now-1h", "to": "now" },
   "panels": [
     {
       "id": 1,
       "type": "stat",
-      "title": "Active connections",
+      "title": "Phoenix connections",
+      "description": "Aggregate Phoenix connection count across all realtime replicas. Tracks active WebSocket + HTTP keepalive sessions.",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "sum(realtime_connected)" }
+        { "refId": "A", "expr": "sum(phoenix_connections_total{job=\"pawtograder-realtime\"})" }
       ],
       "fieldConfig": { "defaults": { "unit": "none" } }
     },
     {
       "id": 2,
       "type": "stat",
-      "title": "Channels joined",
+      "title": "Tenants connected",
+      "description": "Distinct Supabase realtime tenants with at least one active client. Self-hosted pawtograder has one tenant per deploy.",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "sum(realtime_channels)" }
+        { "refId": "A", "expr": "sum(realtime_tenants_connected{job=\"pawtograder-realtime\"})" }
       ],
       "fieldConfig": { "defaults": { "unit": "none" } }
     },
     {
       "id": 3,
       "type": "stat",
-      "title": "Server broadcast rate (1m)",
+      "title": "Server broadcasts / s (1m)",
+      "description": "realtime.send() calls emitted from the Next.js web app, derived from web_realtime_broadcast_total.",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -44,46 +47,36 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "WS messages out / s",
+      "title": "Erlang reductions / s",
+      "description": "Reduction-count delta across all realtime replicas — a coarse proxy for VM workload (every function call increments reductions).",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(realtime_channel_events[1m]))" }
+        { "refId": "A", "expr": "sum(rate(beam_stats_reduction_count{job=\"pawtograder-realtime\"}[1m]))" }
       ],
       "fieldConfig": { "defaults": { "unit": "ops" } }
     },
     {
       "id": 10,
       "type": "timeseries",
-      "title": "WebSocket connection churn",
+      "title": "Phoenix connections by replica",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "legendFormat": "joined / s", "expr": "sum(rate(realtime_joined_total[1m]))" },
-        { "refId": "B", "legendFormat": "left / s", "expr": "sum(rate(realtime_left_total[1m]))" },
-        { "refId": "C", "legendFormat": "errored / s", "expr": "sum(rate(realtime_disconnected_total[1m]))" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-    {
-      "id": 11,
-      "type": "timeseries",
-      "title": "Connections per replica",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
           "legendFormat": "{{pod}}",
-          "expr": "realtime_connected"
+          "expr": "phoenix_connections_total{job=\"pawtograder-realtime\"}"
         }
-      ]
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
     },
     {
-      "id": 20,
+      "id": 11,
       "type": "timeseries",
       "title": "Server-initiated broadcasts by channel class",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "description": "Per-channel broadcast rate from web_realtime_broadcast_total. channel_class is set at the call site (e.g. submission_comments, office_hours).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -95,16 +88,69 @@
       "fieldConfig": { "defaults": { "unit": "ops" } }
     },
     {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Realtime memory by kind",
+      "description": "beam_memory_*_total_bytes — processes is the dominant share under load; binary signals large message buffers; ets is the in-memory state.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "proc",
+          "legendFormat": "{{pod}} processes",
+          "expr": "beam_memory_processes_total_bytes{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "bin",
+          "legendFormat": "{{pod}} binary",
+          "expr": "beam_memory_binary_total_bytes{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "ets",
+          "legendFormat": "{{pod}} ets",
+          "expr": "beam_memory_ets_total_bytes{job=\"pawtograder-realtime\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Erlang VM activity",
+      "description": "Process and port counts indicate concurrency level. Run-queue depth > 0 sustained means a scheduler is backlogged.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "proc",
+          "legendFormat": "{{pod}} processes",
+          "expr": "beam_stats_process_count{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "port",
+          "legendFormat": "{{pod}} ports",
+          "expr": "beam_stats_port_count{job=\"pawtograder-realtime\"}"
+        },
+        {
+          "refId": "rq",
+          "legendFormat": "{{pod}} run queue",
+          "expr": "beam_stats_run_queue_count{job=\"pawtograder-realtime\"}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 } }
+    },
+    {
       "id": 30,
       "type": "timeseries",
-      "title": "Realtime Erlang VM scheduler load",
+      "title": "Realtime pod CPU & RAM (host view)",
+      "description": "osmon reads /proc; osmon_cpu_util is the per-replica utilization fraction. osmon_ram_usage is what the host sees this pod consuming.",
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "refId": "A",
-          "legendFormat": "{{pod}} sched {{scheduler_id}}",
-          "expr": "erlang_vm_scheduler_utilization"
+          "refId": "cpu",
+          "legendFormat": "{{pod}} cpu",
+          "expr": "osmon_cpu_util{job=\"pawtograder-realtime\"}"
         }
       ],
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
@@ -112,22 +158,18 @@
     {
       "id": 31,
       "type": "timeseries",
-      "title": "Realtime memory",
+      "title": "GC reclaimed bytes / s",
+      "description": "Rate of bytes reclaimed by the BEAM garbage collector — proxy for GC pressure.",
       "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "refId": "A",
-          "legendFormat": "{{pod}} processes",
-          "expr": "erlang_vm_memory_bytes_total{kind=\"processes\"}"
-        },
-        {
-          "refId": "B",
-          "legendFormat": "{{pod}} binary",
-          "expr": "erlang_vm_memory_bytes_total{kind=\"binary\"}"
+          "refId": "gc",
+          "legendFormat": "{{pod}}",
+          "expr": "rate(beam_stats_gc_reclaimed_bytes{job=\"pawtograder-realtime\"}[1m])"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "bytes" } }
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
     }
   ]
 }
