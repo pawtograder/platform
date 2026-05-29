@@ -12,20 +12,20 @@
         "isLab": false,
         "points": 5,
         "autograderPoints": 2,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab1",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab1",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab1",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab1",
         "graderCommitSha": "4d6352aba84db886184bb5a5fc78223bdf166eb4",
         "sourceAssignmentId": 539,
-        "genericStudentSubmission": "neu-cs3100/sp26-lab1-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-lab1-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-lab1-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-lab1-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "98c18f7a7af0ddf52f52e7997392f4e49154f35a",
             "ordinal": 1,
             "createdAt": "2025-12-30T18:49:26.618696+00:00",
-            "repository": "neu-cs3100/sp26-lab1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 2,
@@ -60,7 +60,7 @@
             "sha": "4f718291b1f05910902b8048818c1114267479a8",
             "ordinal": 2,
             "createdAt": "2025-12-30T20:36:38.119842+00:00",
-            "repository": "neu-cs3100/sp26-lab1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 2,
@@ -108,7 +108,7 @@
             "sha": "4f718291b1f05910902b8048818c1114267479a8",
             "ordinal": 3,
             "createdAt": "2025-12-31T01:31:59.322402+00:00",
-            "repository": "neu-cs3100/sp26-lab1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab1-jon-bell",
             "graderResult": {
               "score": 2,
               "max_score": 2,
@@ -161,20 +161,20 @@
         "isLab": false,
         "points": 100,
         "autograderPoints": 88,
-        "handoutRepo": "neu-cs3100/sp26-handout-cyb1",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-cyb1",
         "solutionRepo": "neu-cs3100/sp26-solution-cyb1",
         "graderCommitSha": "99286e1e180c00e60a468b6a2a29c9fa123adbe4",
         "sourceAssignmentId": 538,
-        "genericStudentSubmission": "neu-cs3100/sp26-cyb1-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-cyb1-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "beefe6bea1be04e3d20c666d82bbabe23d423f1b",
             "ordinal": 1,
             "createdAt": "2025-12-29T15:25:39.324724+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": null,
             "graderResultTests": []
           },
@@ -182,7 +182,7 @@
             "sha": "beefe6bea1be04e3d20c666d82bbabe23d423f1b",
             "ordinal": 2,
             "createdAt": "2025-12-29T15:46:14.822345+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 88,
@@ -307,7 +307,7 @@
             "sha": "beefe6bea1be04e3d20c666d82bbabe23d423f1b",
             "ordinal": 3,
             "createdAt": "2025-12-29T15:52:52.786283+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 88,
@@ -432,7 +432,7 @@
             "sha": "beefe6bea1be04e3d20c666d82bbabe23d423f1b",
             "ordinal": 4,
             "createdAt": "2025-12-29T16:07:37.334886+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 88,
@@ -557,7 +557,7 @@
             "sha": "beefe6bea1be04e3d20c666d82bbabe23d423f1b",
             "ordinal": 5,
             "createdAt": "2025-12-29T16:11:23.274292+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 88,
@@ -682,7 +682,7 @@
             "sha": "f57c14fb3ab292eb3aaebf44af2a7d7405674a1d",
             "ordinal": 6,
             "createdAt": "2025-12-29T20:41:34.672534+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 88,
@@ -777,7 +777,7 @@
             "sha": "6a11cc7baee278718c48da53b826395701a07902",
             "ordinal": 7,
             "createdAt": "2025-12-29T20:51:07.509644+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 88,
@@ -902,7 +902,7 @@
             "sha": "741af750f7ca38d93e044aa27a60915b4af7fe5d",
             "ordinal": 8,
             "createdAt": "2025-12-29T21:54:33.80856+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 88,
@@ -1027,7 +1027,7 @@
             "sha": "f7bc33a12e621abefd1196e0a47812bcf14147c7",
             "ordinal": 9,
             "createdAt": "2025-12-29T21:58:16.152325+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 6,
               "max_score": 88,
@@ -1152,7 +1152,7 @@
             "sha": "4eaa663097de4124836737632b96eaf1545a3b1d",
             "ordinal": 10,
             "createdAt": "2025-12-29T22:10:21.713738+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 6,
               "max_score": 88,
@@ -1277,7 +1277,7 @@
             "sha": "26ef95d8629d7a9e6fbdfec7678a5f561c3a92ff",
             "ordinal": 11,
             "createdAt": "2026-01-12T13:45:05.401908+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 88,
               "max_score": 88,
@@ -1402,7 +1402,7 @@
             "sha": "26ef95d8629d7a9e6fbdfec7678a5f561c3a92ff",
             "ordinal": 12,
             "createdAt": "2026-01-18T20:46:57.666581+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 88,
               "max_score": 88,
@@ -1527,7 +1527,7 @@
             "sha": "b4855ccab560cd2184da751589023d714a4623ac",
             "ordinal": 13,
             "createdAt": "2026-01-18T20:48:45.571882+00:00",
-            "repository": "neu-cs3100/sp26-cyb1-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-cyb1-jon-bell",
             "graderResult": {
               "score": 88,
               "max_score": 88,
@@ -1657,20 +1657,20 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 1,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab2",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab2",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab2",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab2",
         "graderCommitSha": "4c7b91dbca5505ee1aa7d502866c6bbfa0745c8c",
         "sourceAssignmentId": 563,
-        "genericStudentSubmission": "neu-cs3100/sp26-lab-lab2-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-lab-lab2-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-lab-lab2-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-lab-lab2-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "cddc38676319df454415e0cb4c06ce032c88a9dc",
             "ordinal": 1,
             "createdAt": "2026-01-11T17:34:56.388027+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab2-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 1,
@@ -1695,7 +1695,7 @@
             "sha": "89b8fb04aa67373accc82bee48611ea5bd3ba159",
             "ordinal": 2,
             "createdAt": "2026-01-11T17:46:55.021512+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab2-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 1,
@@ -1738,20 +1738,20 @@
         "isLab": false,
         "points": 5,
         "autograderPoints": 1,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab3",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab3",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab3",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab3",
         "graderCommitSha": "c13f7db29477fe40209d282719d39128bd8b22c4",
         "sourceAssignmentId": 564,
-        "genericStudentSubmission": "neu-cs3100/sp26-lab-lab3-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-lab-lab3-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-lab-lab3-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-lab-lab3-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "1ce50473c53d6892ba7f44db49bb5c1d502d62b5",
             "ordinal": 1,
             "createdAt": "2026-01-19T18:55:56.880267+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 1,
@@ -1776,7 +1776,7 @@
             "sha": "1ce50473c53d6892ba7f44db49bb5c1d502d62b5",
             "ordinal": 2,
             "createdAt": "2026-01-19T19:12:54.40389+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 1,
@@ -1801,7 +1801,7 @@
             "sha": "59f99e262cf60a124ce6fd5efe6052496fafee26",
             "ordinal": 3,
             "createdAt": "2026-01-19T19:19:39.857261+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab3-jon-bell",
             "graderResult": {
               "score": 1,
               "max_score": 1,
@@ -1832,19 +1832,19 @@
         "points": 100,
         "autograderPoints": 50,
         "handoutRepo": "neu-cs3100/sp26-handout-hw-cyb2",
-        "solutionRepo": "neu-cs3100/sp26-solution-hw-cyb2",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-hw-cyb2",
         "graderCommitSha": "53b06f17d37e014409f5017d77ff260563402812",
         "sourceAssignmentId": 565,
-        "genericStudentSubmission": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-hw-cyb2-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "3ac41c29523a4784baa079d8eefb5d1ae4ffae72",
             "ordinal": 1,
             "createdAt": "2026-01-10T15:36:39.24668+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 0,
@@ -1858,7 +1858,7 @@
             "sha": "d9658cf0dc014453ce0b8e16912de5c7ac3e6566",
             "ordinal": 2,
             "createdAt": "2026-01-14T02:09:24.930902+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 115,
               "max_score": 100,
@@ -2023,7 +2023,7 @@
             "sha": "d9658cf0dc014453ce0b8e16912de5c7ac3e6566",
             "ordinal": 3,
             "createdAt": "2026-01-19T13:06:04.159223+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 83.6,
               "max_score": 100,
@@ -2188,7 +2188,7 @@
             "sha": "d9658cf0dc014453ce0b8e16912de5c7ac3e6566",
             "ordinal": 4,
             "createdAt": "2026-01-19T13:17:20.36182+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 32,
               "max_score": 100,
@@ -2303,7 +2303,7 @@
             "sha": "d9658cf0dc014453ce0b8e16912de5c7ac3e6566",
             "ordinal": 5,
             "createdAt": "2026-01-19T13:26:28.501192+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 73.6,
               "max_score": 100,
@@ -2468,7 +2468,7 @@
             "sha": "d9658cf0dc014453ce0b8e16912de5c7ac3e6566",
             "ordinal": 6,
             "createdAt": "2026-01-19T15:13:18.73191+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 83.6,
               "max_score": 100,
@@ -2623,7 +2623,7 @@
             "sha": "ba053020bbb06cd1b84490946fc7d6c800d916ef",
             "ordinal": 7,
             "createdAt": "2026-01-19T17:19:58.570324+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 100,
@@ -2778,7 +2778,7 @@
             "sha": "66d28c5cf7253d577bf8d40949f22f7a81193d63",
             "ordinal": 8,
             "createdAt": "2026-01-19T17:40:06.086396+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 100,
@@ -2933,7 +2933,7 @@
             "sha": "66d28c5cf7253d577bf8d40949f22f7a81193d63",
             "ordinal": 9,
             "createdAt": "2026-01-19T17:57:45.027145+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 100,
@@ -3088,7 +3088,7 @@
             "sha": "66d28c5cf7253d577bf8d40949f22f7a81193d63",
             "ordinal": 10,
             "createdAt": "2026-01-19T18:02:28.495389+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 19.6,
               "max_score": 100,
@@ -3223,7 +3223,7 @@
             "sha": "9761b94981922ae949beb23eed84050af222f251",
             "ordinal": 11,
             "createdAt": "2026-01-19T18:30:37.354711+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 18,
               "max_score": 100,
@@ -3358,7 +3358,7 @@
             "sha": "88755c186029b788f4b2a39457887c08a6cc78f4",
             "ordinal": 12,
             "createdAt": "2026-01-19T18:59:44.66962+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 16,
               "max_score": 100,
@@ -3493,7 +3493,7 @@
             "sha": "547479ae2323246bc63d63daac9dfe1f99b37d59",
             "ordinal": 13,
             "createdAt": "2026-01-19T19:03:59.539576+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 16,
               "max_score": 100,
@@ -3628,7 +3628,7 @@
             "sha": "f325dc4d3cf20dcb1fb186f021a5a655d377415c",
             "ordinal": 14,
             "createdAt": "2026-01-19T19:12:04.153841+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 16,
               "max_score": 100,
@@ -3773,7 +3773,7 @@
             "sha": "2d32ee6ec7c0c4f6cfa1ce0ea8b35a79efa7e4aa",
             "ordinal": 15,
             "createdAt": "2026-01-19T19:16:03.938419+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 69.63333333333333,
               "max_score": 100,
@@ -3928,7 +3928,7 @@
             "sha": "05593a49558cd2aa8516d868d89752ad36c236cc",
             "ordinal": 16,
             "createdAt": "2026-01-19T19:28:16.208759+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb2-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb2-jon-bell",
             "graderResult": {
               "score": 88.63,
               "max_score": 100,
@@ -4088,20 +4088,20 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 1,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab4",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab4",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab4",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab4",
         "graderCommitSha": "9544814bfeb0a12ca5baa2a21d540e87a7d0c0ab",
         "sourceAssignmentId": 566,
-        "genericStudentSubmission": "neu-cs3100/sp26-lab-lab4-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-lab-lab4-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-lab-lab4-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-lab-lab4-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "a520f346e9deaa53c35c13a2bb05fa6d5ae015b6",
             "ordinal": 1,
             "createdAt": "2026-01-24T02:38:37.807228+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab4-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 0,
@@ -4115,7 +4115,7 @@
             "sha": "a520f346e9deaa53c35c13a2bb05fa6d5ae015b6",
             "ordinal": 2,
             "createdAt": "2026-01-24T23:44:40.038491+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab4-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 100,
@@ -4129,7 +4129,7 @@
             "sha": "a520f346e9deaa53c35c13a2bb05fa6d5ae015b6",
             "ordinal": 3,
             "createdAt": "2026-01-25T00:19:14.507186+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab4-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 1,
@@ -4159,20 +4159,20 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab5",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab5",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab5",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab5",
         "graderCommitSha": "baf041d6cda3b8f5fb3df5bd778b90466488cace",
         "sourceAssignmentId": 567,
-        "genericStudentSubmission": "neu-cs3100/sp26-lab-lab5-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-lab-lab5-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-lab-lab5-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-lab-lab5-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "231e032274bde46413ac5a4c54ee64ff39136716",
             "ordinal": 1,
             "createdAt": "2026-02-01T18:58:00.108416+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab5-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab5-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 0,
@@ -4191,20 +4191,20 @@
         "isLab": false,
         "points": 100,
         "autograderPoints": 40,
-        "handoutRepo": "neu-cs3100/sp26-handout-hw-cyb3",
-        "solutionRepo": "neu-cs3100/sp26-solution-hw-cyb3",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-hw-cyb3",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-hw-cyb3",
         "graderCommitSha": "ebeffc388106c7870189ff259b5305473f3dce49",
         "sourceAssignmentId": 568,
-        "genericStudentSubmission": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-hw-cyb3-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "d37cefa115f4e50f46753831e36caa1d225cce91",
             "ordinal": 1,
             "createdAt": "2026-02-03T21:15:29.50661+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 96,
@@ -4369,7 +4369,7 @@
             "sha": "d37cefa115f4e50f46753831e36caa1d225cce91",
             "ordinal": 2,
             "createdAt": "2026-02-04T14:37:10.414009+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 76,
@@ -4534,7 +4534,7 @@
             "sha": "6057069b5c42ffac2fd365c8fb4eea3327df4d25",
             "ordinal": 3,
             "createdAt": "2026-02-04T15:10:12.92893+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 76,
@@ -4699,7 +4699,7 @@
             "sha": "6057069b5c42ffac2fd365c8fb4eea3327df4d25",
             "ordinal": 4,
             "createdAt": "2026-02-04T17:09:06.213039+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 76,
@@ -4872,7 +4872,7 @@
             "sha": "6057069b5c42ffac2fd365c8fb4eea3327df4d25",
             "ordinal": 5,
             "createdAt": "2026-02-04T18:17:42.297286+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 24,
               "max_score": 76,
@@ -5045,7 +5045,7 @@
             "sha": "0dd4c9f7fb3dbfbccd97e9b5a1a046c7389f9ffe",
             "ordinal": 6,
             "createdAt": "2026-02-04T18:25:50.568822+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 34,
               "max_score": 76,
@@ -5218,7 +5218,7 @@
             "sha": "2b207d51327debae9f15892d1e1eddceb1defd48",
             "ordinal": 7,
             "createdAt": "2026-02-04T18:30:50.592243+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 34,
               "max_score": 76,
@@ -5391,7 +5391,7 @@
             "sha": "2b207d51327debae9f15892d1e1eddceb1defd48",
             "ordinal": 8,
             "createdAt": "2026-02-04T18:50:37.334625+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 76,
@@ -5556,7 +5556,7 @@
             "sha": "eaac4c9f1728bf19329c3f5d01cf9d160cfe9712",
             "ordinal": 9,
             "createdAt": "2026-02-04T19:11:51.847816+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 76,
@@ -5721,7 +5721,7 @@
             "sha": "5d1ac8c97dc779c7a68a238d63fdff1a5923beb6",
             "ordinal": 10,
             "createdAt": "2026-02-04T19:20:00.768517+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 76,
@@ -5886,7 +5886,7 @@
             "sha": "5d1ac8c97dc779c7a68a238d63fdff1a5923beb6",
             "ordinal": 11,
             "createdAt": "2026-02-04T19:30:53.335313+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 34,
               "max_score": 76,
@@ -6059,7 +6059,7 @@
             "sha": "2b207d51327debae9f15892d1e1eddceb1defd48",
             "ordinal": 12,
             "createdAt": "2026-02-04T19:42:04.13609+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 38,
               "max_score": 76,
@@ -6232,7 +6232,7 @@
             "sha": "5293e7db462ab9c5a26b394e4d5744d4412ac9ea",
             "ordinal": 13,
             "createdAt": "2026-02-05T00:26:01.109474+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 38,
               "max_score": 76,
@@ -6405,7 +6405,7 @@
             "sha": "5293e7db462ab9c5a26b394e4d5744d4412ac9ea",
             "ordinal": 14,
             "createdAt": "2026-02-05T00:36:55.606379+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 57.42,
               "max_score": 76,
@@ -6570,7 +6570,7 @@
             "sha": "872015fe8e1017031a7cf0fece9739148af325dc",
             "ordinal": 15,
             "createdAt": "2026-02-05T00:50:38.988795+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 57.42,
               "max_score": 76,
@@ -6735,7 +6735,7 @@
             "sha": "ab58f95fb4ae72deba35a70f54fb146f820588f6",
             "ordinal": 16,
             "createdAt": "2026-02-05T01:12:22.347156+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 57.42,
               "max_score": 76,
@@ -6900,7 +6900,7 @@
             "sha": "ab58f95fb4ae72deba35a70f54fb146f820588f6",
             "ordinal": 17,
             "createdAt": "2026-02-05T02:02:32.798538+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 70.17,
               "max_score": 76,
@@ -7065,7 +7065,7 @@
             "sha": "e7c62f8cc1e06a47792b64da6160b8575b477a93",
             "ordinal": 18,
             "createdAt": "2026-02-05T02:24:23.652991+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb3-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb3-jon-bell",
             "graderResult": {
               "score": 73,
               "max_score": 76,
@@ -7236,7 +7236,7 @@
         "points": 5,
         "autograderPoints": 0,
         "handoutRepo": "neu-cs3100/sp26-handout-lab-lab6",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab6",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab6",
         "graderCommitSha": "a8f62bb549a46e1d6a9f900fbaea1a82cfa0ab30",
         "sourceAssignmentId": 569
       },
@@ -7247,8 +7247,8 @@
         "isLab": false,
         "points": 5,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab7",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab7",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab7",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab7",
         "graderCommitSha": "82f7c9524e3f0f4c599a48af9aaa9ff2b51154c7",
         "sourceAssignmentId": 570
       },
@@ -7259,20 +7259,20 @@
         "isLab": false,
         "points": 100,
         "autograderPoints": 40,
-        "handoutRepo": "neu-cs3100/sp26-handout-hw-cyb4",
-        "solutionRepo": "neu-cs3100/sp26-solution-hw-cyb4",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-hw-cyb4",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-hw-cyb4",
         "graderCommitSha": "1ae62d61e34adfaa3304211bd13216b9b4306f88",
         "sourceAssignmentId": 572,
-        "genericStudentSubmission": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-hw-cyb4-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "ac571a3afeecb7d35c5dabe986e832feacee6ab7",
             "ordinal": 1,
             "createdAt": "2026-02-16T02:33:06.510044+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 76,
@@ -7497,7 +7497,7 @@
             "sha": "399a2e4a5bb40ca387675041bb080b78155abc8b",
             "ordinal": 2,
             "createdAt": "2026-02-16T03:05:41.550979+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 2,
               "max_score": 76,
@@ -7734,7 +7734,7 @@
             "sha": "399a2e4a5bb40ca387675041bb080b78155abc8b",
             "ordinal": 3,
             "createdAt": "2026-02-16T13:53:44.748472+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 4,
               "max_score": 76,
@@ -7971,7 +7971,7 @@
             "sha": "ee16a5b85cf116a262521801d62d2aab209089ea",
             "ordinal": 4,
             "createdAt": "2026-02-16T14:10:32.617802+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 5,
               "max_score": 76,
@@ -8208,7 +8208,7 @@
             "sha": "4fbf52ba084ab23593ee8fd1253f2328585afcd0",
             "ordinal": 5,
             "createdAt": "2026-02-16T14:15:07.972015+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 5,
               "max_score": 76,
@@ -8445,7 +8445,7 @@
             "sha": "a51302108dd49d282a29d87187215eb960f5020b",
             "ordinal": 6,
             "createdAt": "2026-02-16T14:27:02.003422+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 9,
               "max_score": 76,
@@ -8682,7 +8682,7 @@
             "sha": "2979e0ec73d91240a3a76f87206149e52e4b455d",
             "ordinal": 7,
             "createdAt": "2026-02-16T18:27:26.447094+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 76,
               "max_score": 76,
@@ -8907,7 +8907,7 @@
             "sha": "2979e0ec73d91240a3a76f87206149e52e4b455d",
             "ordinal": 8,
             "createdAt": "2026-02-24T20:46:18.563146+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb4-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb4-jon-bell",
             "graderResult": {
               "score": 67.93,
               "max_score": 76,
@@ -9137,20 +9137,20 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab8",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab8",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab8",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab8",
         "graderCommitSha": "8a6515423e14170b83262b4812cecd00072ab8a2",
         "sourceAssignmentId": 573,
-        "genericStudentSubmission": "neu-cs3100/sp26-lab-lab8-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-lab-lab8-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-lab-lab8-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-lab-lab8-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "84e8d8e5f1eff3c9b35214288c0704ae8486d5e3",
             "ordinal": 1,
             "createdAt": "2026-02-22T01:53:25.169666+00:00",
-            "repository": "neu-cs3100/sp26-lab-lab8-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-lab-lab8-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 0,
@@ -9169,8 +9169,8 @@
         "isLab": false,
         "points": 20,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-team-charter",
-        "solutionRepo": "neu-cs3100/sp26-solution-team-charter",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-team-charter",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-team-charter",
         "graderCommitSha": "9551386bedf0d180c1db81f9fca0d68cc205b854",
         "sourceAssignmentId": 699,
         "groupConfig": "groups",
@@ -9184,8 +9184,8 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab9",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab9",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab9",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab9",
         "graderCommitSha": "98b7bc16cb6d2ca9865a49f10877e955d741ebac",
         "sourceAssignmentId": 574
       },
@@ -9196,20 +9196,20 @@
         "isLab": false,
         "points": 100,
         "autograderPoints": 38,
-        "handoutRepo": "neu-cs3100/sp26-handout-hw-cyb5",
-        "solutionRepo": "neu-cs3100/sp26-solution-hw-cyb5",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-hw-cyb5",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-hw-cyb5",
         "graderCommitSha": "ebd1ae3ba60b165153eb5732b2ab4f0f0a233083",
         "sourceAssignmentId": 575,
-        "genericStudentSubmission": "neu-cs3100/sp26-hw-cyb5-jon-bell",
+        "genericStudentSubmission": "pawtograder-playground/neu-cs3100-sp26-hw-cyb5-jon-bell",
         "studentSubmissions": {
-          "ripley": "neu-cs3100/sp26-hw-cyb5-jon-bell"
+          "ripley": "pawtograder-playground/neu-cs3100-sp26-hw-cyb5-jon-bell"
         },
         "sourceSubmissions": [
           {
             "sha": "f9d74f07ce1d7fd13ce2569358d874d5c627ba8e",
             "ordinal": 1,
             "createdAt": "2026-03-07T13:27:05.983136+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb5-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb5-jon-bell",
             "graderResult": {
               "score": 0,
               "max_score": 44,
@@ -9404,7 +9404,7 @@
             "sha": "ac2ac46a4a77ba476f434e8a8d2e8f1b6430adee",
             "ordinal": 2,
             "createdAt": "2026-03-07T13:41:27.624926+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb5-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb5-jon-bell",
             "graderResult": {
               "score": 38,
               "max_score": 44,
@@ -9599,7 +9599,7 @@
             "sha": "ccf0e5fc9cc3b492697f5aba46447077a902b65b",
             "ordinal": 3,
             "createdAt": "2026-03-07T15:08:51.767637+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb5-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb5-jon-bell",
             "graderResult": {
               "score": 44,
               "max_score": 44,
@@ -9774,7 +9774,7 @@
             "sha": "40723fc080c649fdff93b6522cec41638888cfff",
             "ordinal": 4,
             "createdAt": "2026-03-07T17:16:19.271884+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb5-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb5-jon-bell",
             "graderResult": {
               "score": 44,
               "max_score": 44,
@@ -9949,7 +9949,7 @@
             "sha": "2056637be32c8ab9c67e8d5fae81a93ca590ce15",
             "ordinal": 5,
             "createdAt": "2026-03-09T00:32:48.631818+00:00",
-            "repository": "neu-cs3100/sp26-hw-cyb5-jon-bell",
+            "repository": "pawtograder-playground/neu-cs3100-sp26-hw-cyb5-jon-bell",
             "graderResult": {
               "score": 44,
               "max_score": 44,
@@ -10129,8 +10129,8 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab10",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab10",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab10",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab10",
         "graderCommitSha": "4f55de6b5ce39689abbaaa333751c1ab0b08d857",
         "sourceAssignmentId": 576
       },
@@ -10141,8 +10141,8 @@
         "isLab": false,
         "points": 30,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-hw-cyb10",
-        "solutionRepo": "neu-cs3100/sp26-solution-hw-cyb10",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-hw-cyb10",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-hw-cyb10",
         "graderCommitSha": "5d87b73fb1df1521a1e65bc6571e24a79a366c9b",
         "sourceAssignmentId": 578,
         "groupConfig": "groups",
@@ -10156,8 +10156,8 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab11",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab11",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab11",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab11",
         "graderCommitSha": "f3c36c3afd0fb3cc097f042104fec3c767f0e42b",
         "sourceAssignmentId": 709
       },
@@ -10168,8 +10168,8 @@
         "isLab": true,
         "points": 5,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-lab-lab12",
-        "solutionRepo": "neu-cs3100/sp26-solution-lab-lab12",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-lab-lab12",
+        "solutionRepo": "pawtograder-playground/neu-cs3100-sp26-solution-lab-lab12",
         "graderCommitSha": "d01c2a017ec5d7e7bfb61217e4113788b4ab9f03",
         "sourceAssignmentId": 579
       },
@@ -10180,7 +10180,7 @@
         "isLab": false,
         "points": 50,
         "autograderPoints": 0,
-        "handoutRepo": "neu-cs3100/sp26-handout-hw-cyb11",
+        "handoutRepo": "pawtograder-playground/neu-cs3100-sp26-handout-hw-cyb11",
         "solutionRepo": "neu-cs3100/sp26-solution-hw-cyb11",
         "graderCommitSha": "84d4f95dcf8bf65095a5c76dafffd576102d6cb3",
         "sourceAssignmentId": 580,
