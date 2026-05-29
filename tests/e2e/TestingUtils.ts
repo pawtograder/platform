@@ -1507,6 +1507,7 @@ export async function insertAssignment({
   name,
   regrade_deadline,
   release_date,
+  suggested_due_date,
   grader_pseudonymous_mode,
   show_leaderboard,
   group_config,
@@ -1524,6 +1525,7 @@ export async function insertAssignment({
   name?: string;
   regrade_deadline?: string | null;
   release_date?: string;
+  suggested_due_date?: string | null;
   grader_pseudonymous_mode?: boolean;
   show_leaderboard?: boolean;
   group_config?: "individual" | "groups" | "both";
@@ -1567,6 +1569,7 @@ export async function insertAssignment({
       total_points: 100,
       max_late_tokens: 10,
       release_date: release_date ?? addDays(new Date(), -1).toUTCString(),
+      suggested_due_date: suggested_due_date ?? null,
       class_id: class_id,
       slug,
       group_config: group_config ?? "individual",

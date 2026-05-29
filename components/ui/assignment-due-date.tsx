@@ -210,8 +210,19 @@ export function AssignmentDueDate({
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
+  const suggestedDueDate = assignment.suggested_due_date;
   return (
     <Flex gap={1} wrap="wrap" maxWidth="100%">
+      {suggestedDueDate && (
+        <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0} flexBasis="100%">
+          <Text flexShrink={0} color="fg.muted">
+            Suggested due:{" "}
+          </Text>
+          <Text minWidth={0} color="fg.muted">
+            <TimeZoneAwareDate date={suggestedDueDate} format="MMM d, h:mm a" />
+          </Text>
+        </Flex>
+      )}
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
         <Text minWidth={0} data-visual-test="transparent" data-visual-placeholder="date">
