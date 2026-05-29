@@ -9,6 +9,11 @@ name: Canvas LTI E2E
 #   - a PR is labeled `e2e-canvas` (add the label to opt a PR in).
 on:
   workflow_dispatch:
+  # TEMP(canvas-e2e-prelaunch): exercise this lane from the feature branch before
+  # it lands on the default branch (pull_request_target/workflow_dispatch only run
+  # from the default branch). REMOVE this `push:` block before merge.
+  push:
+    branches: [feature/lti-1.3-integration]
   pull_request_target:
     types: [labeled, synchronize, reopened]
 
@@ -23,8 +28,10 @@ permissions:
 jobs:
   canvas-e2e:
     # Dispatch always runs; on PRs require the explicit opt-in label.
+    # TEMP(canvas-e2e-prelaunch): `push` allowed too — remove with the push: block.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       contains(github.event.pull_request.labels.*.name, 'e2e-canvas')
     runs-on: pawtograder-e2e
     timeout-minutes: 90
