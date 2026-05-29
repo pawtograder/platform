@@ -198,11 +198,7 @@ const DiscussionThreadContent = memo(
     // the OP's reply because that comparison is between the reply's author and the
     // thread's OP — both populated for every row, regardless of viewer.
     const canEdit = useMemo(() => {
-      return (
-        thread.author === private_profile_id ||
-        thread.author === public_profile_id ||
-        isGraderOrInstructor
-      );
+      return thread.author === private_profile_id || thread.author === public_profile_id || isGraderOrInstructor;
     }, [thread.author, private_profile_id, public_profile_id, isGraderOrInstructor]);
 
     // Like functionality

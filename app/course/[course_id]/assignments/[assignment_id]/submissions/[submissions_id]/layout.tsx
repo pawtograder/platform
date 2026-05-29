@@ -2257,12 +2257,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                       .sort((a, b) => a.id - b.id)
                       .map((member) => (
                         <HStack key={member.id} gap={1}>
-                          <StudentSummaryTrigger
-                            student_id={member.profile_id}
-                            course_id={parseInt(course_id as string, 10)}
-                          >
+                          {isGraderOrInstructor ? (
+                            <StudentSummaryTrigger
+                              student_id={member.profile_id}
+                              course_id={parseInt(course_id as string, 10)}
+                            >
+                              <PersonName uid={member.profile_id} showAvatar={false} />
+                            </StudentSummaryTrigger>
+                          ) : (
                             <PersonName uid={member.profile_id} showAvatar={false} />
-                          </StudentSummaryTrigger>
+                          )}
                         </HStack>
                       ))}
                     )

@@ -5,7 +5,7 @@ import { useIndexedTableControllerValue, useTableControllerTableValues } from "@
 import type { DiscussionTopicFollower } from "@/utils/supabase/DatabaseTypes";
 import { useCallback, useMemo } from "react";
 import useAuthState from "./useAuthState";
-import { useIsReadOnly } from "./useClassProfiles";
+import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionTopics } from "./useCourseController";
 
 export function useDiscussionTopicFollowStatus(topicId: number) {
@@ -80,7 +80,9 @@ export function useDiscussionTopicFollowStatus(topicId: number) {
     [controller.courseId, controller.discussionTopicFollowers, cur, topic, topicId, user?.id, isReadOnly]
   );
 
-  return { topic, status, setTopicFollowStatus, override: cur ?? null };
+  // In view-as mode `cur` is the masquerading instructor's override row; don't expose it to
+  // consumers (mirrors `status`/`useFollowedDiscussionTopicIds` ignoring overrides here).
+  return { topic, status, setTopicFollowStatus, override: isReadOnly ? null : (cur ?? null) };
 }
 
 /**

@@ -792,8 +792,8 @@ function UserSettingsMenu() {
                 )}
                 {isViewingAsStudent && (
                   <Text fontSize="xs" color="fg.muted" px={2} pt={2}>
-                    Account, notification, and MCP settings are hidden while previewing as
-                    a student. Exit view-as from the banner above to access them.
+                    Account, notification, and MCP settings are hidden while previewing as a student. Exit view-as from
+                    the banner above to access them.
                   </Text>
                 )}
               </VStack>

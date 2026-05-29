@@ -29,7 +29,7 @@ import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useClassProfiles, useIsReadOnly } from "./useClassProfiles";
+import { useClassProfiles, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController } from "./useCourseController";
 
 export function useSubmission(submission_id: number | null | undefined) {

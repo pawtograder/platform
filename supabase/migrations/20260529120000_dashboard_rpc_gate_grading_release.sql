@@ -266,6 +266,10 @@ BEGIN
         LEFT JOIN public.submission_reviews sr ON sr.id = ra.submission_review_id
         WHERE ra.assignment_id = a.id
           AND ra.assignee_profile_id = ur.student_profile_id
+          -- Release gate: mirror the review_assignments RLS the prior security_invoker view
+          -- relied on, so an unreleased self/peer review's ids don't surface on the dashboard
+          -- (the frontend renders a clickable "Self Review for X" row off review_assignment_id).
+          AND (ra.release_date IS NULL OR ra.release_date <= now())
         ORDER BY ra.created_at DESC
         LIMIT 1
     ) ri ON TRUE

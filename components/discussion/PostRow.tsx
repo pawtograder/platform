@@ -181,34 +181,39 @@ function PostRowComponent({
                       {thread.subject}
                     </Text>
                   </Box>
-                  <HStack gap="1" flexShrink={0}>
-                    <Button
-                      aria-label={likeStatus ? "Unlike" : "Like"}
-                      variant="ghost"
-                      size="sm"
-                      loading={likeLoading}
-                      onClick={toggleLike}
-                    >
-                      <Icon as={likeStatus ? FaHeart : FaRegHeart} />
-                    </Button>
-                    <Tooltip
-                      content={
-                        isFollowing
-                          ? "Unfollow post - You'll stop receiving notifications for replies to this post and it will be removed from My Feed"
-                          : "Follow post - You'll receive email notifications for all replies to this post and it will appear in My Feed"
-                      }
-                      showArrow
-                    >
+                  {/* View-as student: hide the like/follow controls (the handlers no-op in
+                      read-only, so leaving them rendered would be dead, misleading affordances —
+                      the thread page suppresses them the same way). */}
+                  {!isReadOnly && (
+                    <HStack gap="1" flexShrink={0}>
                       <Button
-                        aria-label={isFollowing ? "Unfollow" : "Follow"}
+                        aria-label={likeStatus ? "Unlike" : "Like"}
                         variant="ghost"
                         size="sm"
-                        onClick={toggleFollow}
+                        loading={likeLoading}
+                        onClick={toggleLike}
                       >
-                        <Icon as={isFollowing ? FaStar : FaRegStar} />
+                        <Icon as={likeStatus ? FaHeart : FaRegHeart} />
                       </Button>
-                    </Tooltip>
-                  </HStack>
+                      <Tooltip
+                        content={
+                          isFollowing
+                            ? "Unfollow post - You'll stop receiving notifications for replies to this post and it will be removed from My Feed"
+                            : "Follow post - You'll receive email notifications for all replies to this post and it will appear in My Feed"
+                        }
+                        showArrow
+                      >
+                        <Button
+                          aria-label={isFollowing ? "Unfollow" : "Follow"}
+                          variant="ghost"
+                          size="sm"
+                          onClick={toggleFollow}
+                        >
+                          <Icon as={isFollowing ? FaStar : FaRegStar} />
+                        </Button>
+                      </Tooltip>
+                    </HStack>
+                  )}
                   <HStack gap="1.5" minW={0} wrap="wrap">
                     {thread.pinned && <Icon as={FaThumbtack} color="fg.info" boxSize="2.5" />}
                     {showTopicBadge && topic && (
@@ -319,29 +324,37 @@ function PostRowComponent({
             </HStack>
           </Stack>
 
-          <HStack gap="1" flexShrink={0}>
-            <Button
-              aria-label={likeStatus ? "Unlike" : "Like"}
-              variant="ghost"
-              size="sm"
-              loading={likeLoading}
-              onClick={toggleLike}
-            >
-              <Icon as={likeStatus ? FaHeart : FaRegHeart} />
-            </Button>
-            <Tooltip
-              content={
-                isFollowing
-                  ? "Unfollow post - You'll stop receiving notifications for replies to this post and it will be removed from My Feed"
-                  : "Follow post - You'll receive email notifications for all replies to this post and it will appear in My Feed"
-              }
-              showArrow
-            >
-              <Button aria-label={isFollowing ? "Unfollow" : "Follow"} variant="ghost" size="sm" onClick={toggleFollow}>
-                <Icon as={isFollowing ? FaStar : FaRegStar} />
+          {/* View-as student: hide the like/follow controls (handlers no-op in read-only). */}
+          {!isReadOnly && (
+            <HStack gap="1" flexShrink={0}>
+              <Button
+                aria-label={likeStatus ? "Unlike" : "Like"}
+                variant="ghost"
+                size="sm"
+                loading={likeLoading}
+                onClick={toggleLike}
+              >
+                <Icon as={likeStatus ? FaHeart : FaRegHeart} />
               </Button>
-            </Tooltip>
-          </HStack>
+              <Tooltip
+                content={
+                  isFollowing
+                    ? "Unfollow post - You'll stop receiving notifications for replies to this post and it will be removed from My Feed"
+                    : "Follow post - You'll receive email notifications for all replies to this post and it will appear in My Feed"
+                }
+                showArrow
+              >
+                <Button
+                  aria-label={isFollowing ? "Unfollow" : "Follow"}
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleFollow}
+                >
+                  <Icon as={isFollowing ? FaStar : FaRegStar} />
+                </Button>
+              </Tooltip>
+            </HStack>
+          )}
         </HStack>
       </Link>
     </Box>

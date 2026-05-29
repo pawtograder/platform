@@ -957,8 +957,11 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
   const params = useParams();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const readOnly = request?.status === "resolved" || request?.status === "closed";
   const { isMasking: isViewingAsStudent, filterHelpRequest } = useViewAsStudentDataMask();
+  // View-as student: a masquerading instructor must never mutate the request. `readOnly`
+  // already gates every mutation surface (start helping, resolve/close, video, edit,
+  // message input), so fold the masking flag in here rather than re-checking it at each site.
+  const readOnly = request?.status === "resolved" || request?.status === "closed" || isViewingAsStudent;
 
   // Check if we're in popout mode
   const isPopOut = searchParams.get("popout") === "true";
@@ -1300,13 +1303,18 @@ export default function HelpRequestChat({ request_id }: { request_id: number }) 
                 />
               )}
 
-            {/* Feedback for resolved */}
-            {readOnly && !hasExistingFeedback && canAccessRequestControls && !isInstructorOrGrader && (
-              <Button size="xs" colorPalette="blue" onClick={provideFeedback}>
-                <Icon as={BsStar} />
-                Feedback
-              </Button>
-            )}
+            {/* Feedback for resolved — the one affordance keyed on readOnly being true, so it
+                needs an explicit masking guard now that view-as also sets readOnly. */}
+            {readOnly &&
+              !isViewingAsStudent &&
+              !hasExistingFeedback &&
+              canAccessRequestControls &&
+              !isInstructorOrGrader && (
+                <Button size="xs" colorPalette="blue" onClick={provideFeedback}>
+                  <Icon as={BsStar} />
+                  Feedback
+                </Button>
+              )}
 
             {/* Video Call */}
             {!readOnly && canAccessVideoControls && request && (

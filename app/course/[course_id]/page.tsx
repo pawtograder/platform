@@ -44,7 +44,11 @@ export default async function CourseLanding({ params }: { params: Promise<{ cour
   return (
     <Box>
       <Suspense fallback={<CourseHomeDashboardFallback />}>
-        <StudentDashboard course_id={course_id} private_profile_id={private_profile_id} />
+        <StudentDashboard
+          course_id={course_id}
+          private_profile_id={private_profile_id}
+          isViewingAsStudent={role.isViewingAs}
+        />
       </Suspense>
     </Box>
   );

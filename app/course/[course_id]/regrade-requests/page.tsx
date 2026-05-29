@@ -14,7 +14,7 @@ import * as Sentry from "@sentry/nextjs";
 
 export default function StudentRegradeRequestsPage() {
   const { course_id } = useParams();
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isViewingAsStudent } = useClassProfiles();
   const [regradeRequests, setRegradeRequests] = useState<RegradeRequestWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,10 +24,13 @@ export default function StudentRegradeRequestsPage() {
     async function fetchRegradeRequests() {
       const supabase = createClient();
       try {
-        // Scope to the effective student. Filtering by class_id alone relied on RLS,
-        // which works for a real student but lets an instructor in view-as see every
-        // class regrade request as if it were the masqueraded student's.
-        const { data, error } = await supabase
+        // For a real student we rely on the table's SELECT RLS, which scopes to their own
+        // AND their group submissions — so we must NOT add a created_by filter, or we'd hide
+        // regrade requests group-mates filed on a shared submission (the creation dialog
+        // promises "all group members will be able to see this request"). In view-as, RLS
+        // runs under the real instructor and would return every class request, so there we
+        // scope to ones the masqueraded student created.
+        let query = supabase
           .from("submission_regrade_requests")
           .select(
             `
@@ -39,9 +42,11 @@ export default function StudentRegradeRequestsPage() {
             submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id, rubric_checks!submission_comments_rubric_check_id_fkey(name))
           `
           )
-          .eq("class_id", Number(course_id))
-          .eq("created_by", private_profile_id)
-          .order("created_at", { ascending: false });
+          .eq("class_id", Number(course_id));
+        if (isViewingAsStudent) {
+          query = query.eq("created_by", private_profile_id);
+        }
+        const { data, error } = await query.order("created_at", { ascending: false });
 
         if (error) {
           throw error;
@@ -75,7 +80,7 @@ export default function StudentRegradeRequestsPage() {
     }
 
     fetchRegradeRequests();
-  }, [course_id, private_profile_id]);
+  }, [course_id, private_profile_id, isViewingAsStudent]);
 
   return (
     <PageContainer>

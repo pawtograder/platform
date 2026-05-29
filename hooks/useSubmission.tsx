@@ -218,52 +218,32 @@ export function useSubmissionFileComments({
       setComments([]);
       return;
     }
+    // View-as-student: PostgREST still returns unreleased comments because auth runs as
+    // the real instructor. A real student's RLS would have hidden them, so mirror that —
+    // here, not just on the return value, so onEnter/onLeave never leak unreleased rows.
+    const visible = (comment: SubmissionFileComment) =>
+      (comment.deleted_at === null || comment.deleted_at === undefined) &&
+      (file_id === undefined || comment.submission_file_id === file_id) &&
+      (!isReadOnly || comment.released);
     const { unsubscribe, data } = submissionController.submission_file_comments.list((data, { entered, left }) => {
-      setComments(
-        data.filter(
-          (comment) =>
-            (comment.deleted_at === null || comment.deleted_at === undefined) &&
-            (file_id === undefined || comment.submission_file_id === file_id)
-        )
-      );
+      setComments(data.filter(visible));
       if (onEnter) {
-        onEnter(
-          entered.filter(
-            (comment) =>
-              (comment.deleted_at === null || comment.deleted_at === undefined) &&
-              (file_id === undefined || comment.submission_file_id === file_id)
-          )
-        );
+        onEnter(entered.filter(visible));
       }
       if (onLeave) {
-        onLeave(
-          left.filter(
-            (comment) =>
-              (comment.deleted_at === null || comment.deleted_at === undefined) &&
-              (file_id === undefined || comment.submission_file_id === file_id)
-          )
-        );
+        onLeave(left.filter(visible));
       }
     });
-    const filteredData = data.filter(
-      (comment) =>
-        (comment.deleted_at === null || comment.deleted_at === undefined) &&
-        (file_id === undefined || comment.submission_file_id === file_id)
-    );
+    const filteredData = data.filter(visible);
     setComments(filteredData);
     if (onEnter) {
       onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, file_id, onEnter, onLeave]);
+  }, [submissionController, file_id, onEnter, onLeave, isReadOnly]);
 
   if (!submissionController) {
     return [];
-  }
-  // View-as-student: PostgREST still returns unreleased comments because auth runs as
-  // the real instructor. A real student's RLS would have hidden them, so mirror that.
-  if (isReadOnly) {
-    return comments.filter((c) => c.released);
   }
   return comments;
 }
@@ -285,30 +265,29 @@ export function useSubmissionComments({
       setComments([]);
       return;
     }
+    // View-as-student: hide unreleased submission-level comments the real student wouldn't
+    // see. Filter here (not just on the return value) so onEnter/onLeave never leak them.
+    const visible = (comment: SubmissionComments) =>
+      (comment.deleted_at === null || comment.deleted_at === undefined) && (!isReadOnly || comment.released);
     const { unsubscribe, data } = submissionController.submission_comments.list((data, { entered, left }) => {
-      const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
-      setComments(filteredData);
+      setComments(data.filter(visible));
       if (onEnter) {
-        onEnter(entered.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
+        onEnter(entered.filter(visible));
       }
       if (onLeave) {
-        onLeave(left.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
+        onLeave(left.filter(visible));
       }
     });
-    const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
+    const filteredData = data.filter(visible);
     setComments(filteredData);
     if (onEnter) {
       onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave]);
+  }, [submissionController, onEnter, onLeave, isReadOnly]);
 
   if (!submissionController) {
     return [];
-  }
-  // View-as-student: hide unreleased submission-level comments the real student wouldn't see.
-  if (isReadOnly) {
-    return comments.filter((c) => c.released);
   }
   return comments;
 }
@@ -339,29 +318,29 @@ export function useSubmissionArtifactComments({
       setComments([]);
       return;
     }
+    // View-as-student: hide unreleased artifact comments the real student wouldn't see.
+    // Filter here (not just on the return value) so onEnter/onLeave never leak them.
+    const visible = (comment: SubmissionArtifactComment) =>
+      comment.deleted_at === null && (!isReadOnly || comment.released);
     const { unsubscribe, data } = submissionController.submission_artifact_comments.list((data, { entered, left }) => {
-      setComments(data.filter((comment) => comment.deleted_at === null));
+      setComments(data.filter(visible));
       if (onEnter) {
-        onEnter(entered.filter((comment) => comment.deleted_at === null));
+        onEnter(entered.filter(visible));
       }
       if (onLeave) {
-        onLeave(left.filter((comment) => comment.deleted_at === null));
+        onLeave(left.filter(visible));
       }
     });
-    const filteredData = data.filter((comment) => comment.deleted_at === null);
+    const filteredData = data.filter(visible);
     setComments(filteredData);
     if (onEnter) {
       onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave]);
+  }, [submissionController, onEnter, onLeave, isReadOnly]);
 
   if (!submissionController) {
     return [];
-  }
-  // View-as-student: hide unreleased artifact comments the real student wouldn't see.
-  if (isReadOnly) {
-    return comments.filter((c) => c.released);
   }
   return comments;
 }

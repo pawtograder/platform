@@ -529,6 +529,12 @@ function DiscussionThreadAnswer({ answer_id }: { answer_id: number }) {
 function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   const thread = useDiscussionThreadChildren(root_id);
   const courseController = useCourseController();
+  // View-as-student: the replies come from the (unmasked) children controller, so they must
+  // be gated by the same mask DiscussionPost applies to the root. Otherwise a masked
+  // instructors_only thread shows "not visible" for the root but still leaks its reply tree.
+  const rawRootThread = useTableControllerValueById(courseController.discussionThreadTeasers, root_id);
+  const { filterDiscussionTeaser } = useViewAsStudentDataMask();
+  const maskedOut = rawRootThread != null && !filterDiscussionTeaser(rawRootThread);
   useEffect(() => {
     document.title = `${courseController.course.name} - Discussion - ${thread?.subject}`;
   }, [courseController.course.name, thread?.subject]);
@@ -536,7 +542,8 @@ function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   return (
     <>
       <DiscussionPost root_id={root_id} />
-      {thread &&
+      {!maskedOut &&
+        thread &&
         thread.children.map((child, index) => (
           <DiscussionThread
             key={child.id}

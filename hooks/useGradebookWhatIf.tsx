@@ -88,6 +88,12 @@ class GradebookWhatIfController {
         if (error) {
           // eslint-disable-next-line no-console
           console.error("Failed to load assignments for what-if dashboard:", error);
+          // Don't leave subscribers stuck silently on the initial [] fallback: rerun the
+          // dependency pass and notify so any assignments(...) formulas resolve against the
+          // (empty) known state rather than appearing to still be loading.
+          this._assignments = [];
+          this.recalculateDependentColumns();
+          this.notify();
           return;
         }
         this._assignments = data ?? [];

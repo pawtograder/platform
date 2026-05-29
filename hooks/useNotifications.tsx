@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
-import { useIsReadOnly } from "./useClassProfiles";
+import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
@@ -164,11 +164,7 @@ export function useNotifications(resource?: string, id?: number) {
   // Return the appropriate notifications based on whether resource/id are provided. Hide
   // the rows entirely in view-as mode so badges and lists don't render the instructor's
   // inbox as if it were the student's. The mutation no-ops above are defense in depth.
-  const notifications = isReadOnly
-    ? EMPTY_NOTIFICATIONS
-    : resource && id
-      ? resourceNotifications
-      : allNotifications;
+  const notifications = isReadOnly ? EMPTY_NOTIFICATIONS : resource && id ? resourceNotifications : allNotifications;
 
   return { notifications, set_read, dismiss, mark_all_read, delete_all };
 }
