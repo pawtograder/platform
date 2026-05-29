@@ -47,6 +47,13 @@ import type {
   RealFleetName,
   SourceSubmissionSnapshot
 } from "./fixtures.types";
+import { mirrorRepoToOrgIfMissing, runWithConcurrency } from "./syncRepos";
+
+/** Demo org that the provisioning CLI has write access to. Source repos from the
+ * source class (which live in the class's own org) are mirrored here so demo
+ * provisioning never depends on access to the source org. */
+const DEMO_ORG = "pawtograder-playground";
+const MIRROR_CONCURRENCY = 5;
 
 dotenv.config({ path: ".env.local", quiet: true });
 
@@ -60,11 +67,19 @@ interface CliArgs {
   classId: number;
   githubUsername: string;
   archetype: string;
+  /** When false, don't mirror source repos into the demo org — just record the
+   * source-org names in the manifest. */
+  copyRepos: boolean;
 }
 
 function parseArgs(): CliArgs {
   const argv = process.argv.slice(2);
-  const out: CliArgs = { classId: 500, githubUsername: "jon-bell", archetype: "program-design-and-implementation-ii" };
+  const out: CliArgs = {
+    classId: 500,
+    githubUsername: "jon-bell",
+    archetype: "program-design-and-implementation-ii",
+    copyRepos: true
+  };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const val = argv[i + 1];
@@ -81,10 +96,14 @@ function parseArgs(): CliArgs {
         out.archetype = val;
         i++;
         break;
+      case "--skip-repo-copy":
+        out.copyRepos = false;
+        break;
       case "--help":
       case "-h":
         console.log(
-          "Usage: npx tsx scripts/demo/InitDemoManifest.ts [--class-id 500] [--github-username jon-bell] [--archetype program-design-and-implementation-ii]"
+          "Usage: npx tsx scripts/demo/InitDemoManifest.ts [--class-id 500] [--github-username jon-bell] " +
+            "[--archetype program-design-and-implementation-ii] [--skip-repo-copy]"
         );
         process.exit(0);
         break;
@@ -413,6 +432,73 @@ function buildCannedAssignment(
   return entry;
 }
 
+/** Every owner/repo a canned assignment points at (handout, solution, generic +
+ * per-fleet student submissions, and each captured source submission's repo). */
+function collectRepoRefs(entry: CannedAssignment): string[] {
+  const refs: string[] = [];
+  if (entry.handoutRepo) refs.push(entry.handoutRepo);
+  if (entry.solutionRepo) refs.push(entry.solutionRepo);
+  if (entry.genericStudentSubmission) refs.push(entry.genericStudentSubmission);
+  for (const v of Object.values(entry.studentSubmissions ?? {})) if (v) refs.push(v);
+  for (const s of entry.sourceSubmissions ?? []) if (s.repository) refs.push(s.repository);
+  return refs;
+}
+
+/** Rewrite every repo reference on the entry through `remap` (source → demo-org copy). */
+function remapRepoRefs(entry: CannedAssignment, remap: Map<string, string>): void {
+  const map = (r: string | undefined | null) => (r && remap.get(r)) || r || undefined;
+  if (entry.handoutRepo) entry.handoutRepo = map(entry.handoutRepo) ?? entry.handoutRepo;
+  if (entry.solutionRepo) entry.solutionRepo = map(entry.solutionRepo) ?? entry.solutionRepo;
+  if (entry.genericStudentSubmission) entry.genericStudentSubmission = map(entry.genericStudentSubmission);
+  if (entry.studentSubmissions) {
+    for (const k of Object.keys(entry.studentSubmissions) as RealFleetName[]) {
+      const cur = entry.studentSubmissions[k];
+      if (cur) entry.studentSubmissions[k] = map(cur) ?? cur;
+    }
+  }
+  for (const s of entry.sourceSubmissions ?? []) {
+    if (s.repository) s.repository = map(s.repository) ?? s.repository;
+  }
+}
+
+/**
+ * Mirror every source repo referenced by the canned entries into the demo org
+ * (private), skipping any that already exist, then return a source→copy remap so
+ * the manifest can be rewritten to point exclusively at demo-org repos. This is
+ * what lets demo provisioning run without access to the source class's org.
+ */
+async function mirrorSourceReposToDemoOrg(canned: CannedAssignment[]): Promise<Map<string, string>> {
+  const unique = [...new Set(canned.flatMap(collectRepoRefs))]
+    // Only mirror repos that aren't already in the demo org.
+    .filter((r) => r && !r.startsWith(`${DEMO_ORG}/`));
+  const remap = new Map<string, string>();
+  if (unique.length === 0) {
+    console.log(`✓ No source repos to mirror (all already in ${DEMO_ORG})`);
+    return remap;
+  }
+  console.log(`📦 Mirroring ${unique.length} source repos into ${DEMO_ORG} (private, skip-if-exists)…`);
+  let created = 0;
+  let reused = 0;
+  const failures: string[] = [];
+  await runWithConcurrency(
+    unique.map((source) => async () => {
+      try {
+        const { target, created: didCreate } = await mirrorRepoToOrgIfMissing(source, DEMO_ORG, { private: true });
+        remap.set(source, target);
+        if (didCreate) created++;
+        else reused++;
+        console.log(`  ✓ ${source} → ${target} ${didCreate ? "(mirrored)" : "(exists)"}`);
+      } catch (e) {
+        failures.push(`${source}: ${(e as Error).message}`);
+        console.warn(`  ⚠ ${source}: mirror failed — ${(e as Error).message}`);
+      }
+    }),
+    MIRROR_CONCURRENCY
+  );
+  console.log(`📦 Mirror pass: ${created} created, ${reused} reused, ${failures.length} failed`);
+  return remap;
+}
+
 async function main() {
   const args = parseArgs();
   const supabase = createAdminClient<Database>();
@@ -464,6 +550,17 @@ async function main() {
     if (subs.length === 0)
       console.warn(`[warn] ${a.slug}: no ${args.githubUsername} submissions in source class; Phase C will fall back to HEAD`);
     canned.push(buildCannedAssignment({ ...a, grader_commit_sha: effectiveSha }, repos, subs, earliest));
+  }
+
+  // Copy every referenced source repo into the demo org (private) so the manifest
+  // points exclusively at repos the provisioning CLI can reach, then rewrite the
+  // entries to the demo-org copies. Full `--mirror` preserves the submission SHAs
+  // the manifest records. `--skip-repo-copy` keeps the raw source-org names.
+  if (args.copyRepos) {
+    const remap = await mirrorSourceReposToDemoOrg(canned);
+    for (const entry of canned) remapRepoRefs(entry, remap);
+  } else {
+    console.log("⏭  --skip-repo-copy: leaving source-org repo names in the manifest");
   }
 
   // Load and surgically patch the manifest.

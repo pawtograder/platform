@@ -49,6 +49,63 @@ async function repoExists(fullName: string): Promise<boolean> {
   }
 }
 
+export interface MirrorToOrgResult {
+  /** `owner/repo` of the copy in the target org. */
+  target: string;
+  /** True if we created+mirrored it this run; false if it already existed. */
+  created: boolean;
+}
+
+/**
+ * Init-time helper: ensure a full mirror of `sourceFullName` exists in `targetOrg`,
+ * creating it private if missing. Idempotent — if the deterministic target name
+ * already exists, returns it untouched. Uses `git clone --mirror` + `git push
+ * --mirror` so ALL refs and commit SHAs are preserved (the manifest references
+ * specific submission SHAs, so a shallow/HEAD-only copy wouldn't resolve them).
+ *
+ * The target is created `--private`; within a locked-down org (base permission
+ * "no access") that makes it visible to org admins + the creator only, which is
+ * the "private to admins" requirement. The name is the source `owner/repo`
+ * flattened to `owner-repo` so copies from different source orgs never collide.
+ */
+export async function mirrorRepoToOrgIfMissing(
+  sourceFullName: string,
+  targetOrg: string,
+  opts: { private?: boolean } = {}
+): Promise<MirrorToOrgResult> {
+  const flattened = sourceFullName.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/-{2,}/g, "-");
+  const target = `${targetOrg}/${flattened}`;
+  if (await repoExists(target)) return { target, created: false };
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pawtograder-demo-srcmirror-"));
+  const mirrorDir = path.join(tempRoot, "mirror.git");
+  try {
+    await run("git", ["clone", "--mirror", `https://github.com/${sourceFullName}.git`, mirrorDir]);
+    const visibility = opts.private === false ? "--public" : "--private";
+    await run("gh", [
+      "repo",
+      "create",
+      target,
+      visibility,
+      "--description",
+      `Demo source mirror of ${sourceFullName}`
+    ]);
+    // NOT `git push --mirror`: a --mirror clone also fetches GitHub's hidden
+    // PR refs (refs/pull/*), which the remote rejects ("deny updating a hidden
+    // ref") and which makes the whole mirror push fail even though branches
+    // pushed fine. Push only branches + tags explicitly, which is all a content
+    // mirror needs (commit SHAs are preserved via the branch tips).
+    await run(
+      "git",
+      ["push", `https://github.com/${target}.git`, "refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*"],
+      { cwd: mirrorDir }
+    );
+    return { target, created: true };
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 /**
  * Wait for the platform's async workflow to materialize a repo on GitHub.
  * Returns true once it's visible. Throws after timeoutMs.
