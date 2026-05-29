@@ -153,32 +153,16 @@ data:
             usage: "GAUGE"
             description: "Heap size only (no indexes)"
 ---
-# ServiceMonitor: postgres (via the in-pod exporter sidecar). The sidecar
-# listens on 9187 inside the postgres pod; reach it via the existing
-# pawtograder-postgres headless Service.
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres") }}
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
-spec:
-  selector:
-    matchLabels:
-      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
-  endpoints:
-    - port: metrics
-      path: /metrics
-      interval: {{ .Values.monitoring.scrapeInterval }}
-      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
----
-# Add a "metrics" port to the existing postgres Service so the ServiceMonitor
-# can target it by name. (postgres.yaml only exposes :5432.)
+# Headless Service that fronts the postgres_exporter sidecar's :9187
+# inside the postgres pod. We can't add the metrics port to the existing
+# pawtograder-postgres Service because that Service is consumed as the
+# StatefulSet's serviceName and its port list is what realtime/storage/
+# auth/etc. dial. Carry component=postgres-exporter so the ServiceMonitor
+# below can match exclusively on this Service.
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-metrics") }}
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres-exporter") }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
@@ -191,6 +175,26 @@ spec:
     - name: metrics
       port: 9187
       targetPort: metrics
+---
+# ServiceMonitor: postgres_exporter. Matches the metrics Service above
+# (selector by component=postgres-exporter) so it doesn't also catch the
+# main pawtograder-postgres Service — that one has no /metrics port.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pawtograder.componentName" (dict "ctx" . "component" "postgres") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pawtograder.componentLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pawtograder.componentSelectorLabels" (dict "ctx" . "component" "postgres-exporter") | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
 ---
 # ServiceMonitor: storage-api. /metrics on the http port.
 apiVersion: monitoring.coreos.com/v1
