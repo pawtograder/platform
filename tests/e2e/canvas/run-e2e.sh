@@ -54,7 +54,11 @@ if [ "${SKIP_CANVAS_UP:-}" != "1" ]; then
   docker image inspect "$CANVAS_IMAGE" >/dev/null 2>&1 || {
     echo "Canvas image $CANVAS_IMAGE not found locally."
     echo "Build it first:  tests/e2e/canvas/build.sh   (or pull from GHCR)"; exit 1; }
-  $COMPOSE up -d
+  # Only bring up the datastores here. web/jobs must NOT start before the DB is
+  # created+migrated, or web's /health_check never passes on a fresh DB (and
+  # `up` blocks on it via jobs' depends_on). bootstrap.sh sets up the DB and
+  # then brings up web+jobs.
+  $COMPOSE up -d postgres redis
   log "Bootstrapping Canvas (DB + admin + token)"
   CANVAS_ADMIN_TOKEN="$("$HERE/bootstrap.sh" | grep -E '^CANVAS_ADMIN_TOKEN=' | cut -d= -f2-)"
 else
