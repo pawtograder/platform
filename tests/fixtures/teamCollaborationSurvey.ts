@@ -224,38 +224,41 @@ export const TEAM_COLLABORATION_ANALYTICS_CONFIG: SurveyAnalyticsConfig = {
       includeInAnalytics: true,
       displayLabel: "Interacted with team by..."
     },
+    // q3–q7 are 1–5 Likert scales where a LOW score is the concerning signal, so
+    // they alert "below" the threshold (mean ≤ threshold). q6 flags if ANY single
+    // response is low (possible unequal contribution from a teammate).
     q3: {
       includeInAnalytics: true,
-      alertThreshold: 5,
-      alertDirection: "above",
+      alertThreshold: 2.5,
+      alertDirection: "below",
       alertMessage: "Student unclear on weekly goals",
       displayLabel: "Knew what to do"
     },
     q4: {
       includeInAnalytics: true,
-      alertThreshold: 3.5,
-      alertDirection: "above",
+      alertThreshold: 2.5,
+      alertDirection: "below",
       alertMessage: "Individual reports lower than expected progress",
       displayLabel: "Personal progress"
     },
     q5: {
       includeInAnalytics: true,
-      alertThreshold: 3.5,
-      alertDirection: "above",
+      alertThreshold: 2.5,
+      alertDirection: "below",
       alertMessage: "Team reports lower than expected progress",
       displayLabel: "Team progress"
     },
     q6: {
       includeInAnalytics: true,
-      alertThreshold: 6,
-      alertDirection: "any_above",
+      alertThreshold: 2,
+      alertDirection: "any_below",
       alertMessage: "Possible unequal contribution reported",
       displayLabel: "Equal contribution"
     },
     q7: {
       includeInAnalytics: true,
-      alertThreshold: 4,
-      alertDirection: "above",
+      alertThreshold: 2.5,
+      alertDirection: "below",
       alertMessage: "Student planning to do less next week",
       displayLabel: "Next week plans"
     },

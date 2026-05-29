@@ -120,20 +120,26 @@ export async function waitForRepo(fullName: string, opts: { timeoutMs?: number; 
  * Recursively copy every entry from `srcDir` into `destDir`, overwriting on
  * collision. Skips `.git` so the destination's git metadata is preserved.
  */
-function overlayDirectory(srcDir: string, destDir: string): void {
+function overlayDirectory(srcDir: string, destDir: string, rootDir: string = srcDir): void {
+  const rootPrefix = path.resolve(rootDir) + path.sep;
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
     if (entry.name === ".git") continue;
     const srcPath = path.join(srcDir, entry.name);
     const destPath = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
       fs.mkdirSync(destPath, { recursive: true });
-      overlayDirectory(srcPath, destPath);
+      overlayDirectory(srcPath, destPath, rootDir);
     } else if (entry.isSymbolicLink()) {
       // Resolve and copy as a regular file — symlinks don't make sense in the demo target.
       const real = fs.readlinkSync(srcPath);
       const resolved = path.resolve(path.dirname(srcPath), real);
-      if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+      // Only follow links that stay inside the source repo; a link escaping
+      // rootDir (e.g. ../../etc/passwd) would otherwise copy an arbitrary host
+      // file into the demo repo. Skip (don't copy) anything that points outside.
+      if (resolved.startsWith(rootPrefix) && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
         fs.copyFileSync(resolved, destPath);
+      } else if (!resolved.startsWith(rootPrefix)) {
+        console.warn(`Skipping symlink escaping source repo: ${srcPath} -> ${resolved}`);
       }
     } else {
       fs.copyFileSync(srcPath, destPath);

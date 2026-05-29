@@ -91,6 +91,12 @@ async function copyOneRubric(
 
   let targetRubricId: number;
 
+  // NOTE: supabase-js can't wrap these wipe+insert steps in a single client-side
+  // transaction, so a mid-copy failure can leave a partially-populated rubric.
+  // That's acceptable here because this is offline demo provisioning and the
+  // operation is idempotent: re-running with the same existingRubricId wipes the
+  // partial state and repopulates from scratch. (A fully transactional version
+  // would require a dedicated Postgres RPC taking the whole hierarchy as JSON.)
   if (existingRubricId) {
     // Wipe the empty rubric the assignment-insert trigger created so we can repopulate it.
     for (const tbl of ["rubric_check_references", "rubric_checks", "rubric_criteria", "rubric_parts"] as const) {

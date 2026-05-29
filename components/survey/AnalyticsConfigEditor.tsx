@@ -54,10 +54,14 @@ export function AnalyticsConfigEditor({ surveyJson, analyticsConfig, onChange }:
   };
 
   const updateGlobalSettings = (updates: Partial<SurveyAnalyticsConfig["globalSettings"]>) => {
+    // Same guard as updateQuestionConfig: analyticsConfig (and its globalSettings)
+    // may be null/undefined, so coalesce before spreading to avoid dereferencing
+    // undefined when editing the global thresholds.
+    const existingGlobalSettings = analyticsConfig?.globalSettings ?? {};
     onChange({
       ...analyticsConfig,
       globalSettings: {
-        ...analyticsConfig.globalSettings,
+        ...existingGlobalSettings,
         ...updates
       }
     });

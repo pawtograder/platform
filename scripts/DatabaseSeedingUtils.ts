@@ -28,7 +28,7 @@ import type {
   HandoutStrategy,
   HelpRequestFixture,
   PrivatePostFixture
-} from "./demo/fixtures.types";
+} from "@/scripts/demo/fixtures.types";
 
 import {
   fetchDefaultGradeTargetStudentProfileIdsBatch,
@@ -2737,6 +2737,15 @@ export class DatabaseSeeder {
       // Canned assignments carry their own group_config (mirrored from the source
       // class). Test-mode (non-canned) assignments fall back to the numeric
       // group/lab-group quotas in groupAssignmentConfig.
+      //
+      // We treat "both" like "groups" here only for the purpose of *creating
+      // assignment groups* (a "both" assignment still needs groups to exist). The
+      // stored group_config below is preserved as "both" via `canned?.groupConfig`.
+      // NOTE: createSubmissions does not yet generate mixed individual+group
+      // submissions for "both"; this is unreachable today (no canned assignment
+      // uses "both", and the demo path skips submission generation entirely via
+      // withSkipSubmissions). Revisit createSubmissions if a "both" canned
+      // assignment is ever added.
       const cannedIsGroup = canned?.groupConfig === "groups" || canned?.groupConfig === "both";
       const isGroupAssignment = canned ? cannedIsGroup : i < config.groupAssignmentConfig!.numGroupAssignments;
       const isLabGroupAssignment = canned
@@ -2867,7 +2876,7 @@ export class DatabaseSeeder {
       // instead of generating a random one. The seeder later grades against the
       // copied rubric, so this must happen before gradeSubmissions.
       if (this.config.sourceClassId && canned?.sourceAssignmentId) {
-        const { copyAllRubricsForAssignment } = await import("./demo/copyRubrics");
+        const { copyAllRubricsForAssignment } = await import("@/scripts/demo/copyRubrics");
         await copyAllRubricsForAssignment(supabase, this.config.sourceClassId, canned.sourceAssignmentId, {
           id: assignmentData.id,
           class_id: assignmentData.class_id,
@@ -3540,7 +3549,7 @@ export class DatabaseSeeder {
 
     const { data: rawSubs, error: sErr } = await supabase
       .from("submissions")
-      .select("id, profile_id, assignment_id, created_at, is_empty_submission")
+      .select("id, profile_id, assignment_group_id, assignment_id, created_at, is_empty_submission")
       .eq("class_id", class_id);
     if (sErr) throw new Error(`gradeRealSubmissionsForDemo fetch submissions: ${sErr.message}`);
     const subs = (rawSubs ?? []).filter((s) => !s.is_empty_submission);
@@ -3598,16 +3607,62 @@ export class DatabaseSeeder {
       })
       .filter((g): g is TestingUser => g !== null);
 
+    // Group assignments produce submissions with assignment_group_id set and
+    // profile_id null. Without this lookup they'd all fall into the
+    // "unmapped profile" bucket and never get hand-graded. Map each group to its
+    // name + member profile_ids so we can emit a group-backed SubmissionDataItem.
+    const groupIds = [
+      ...new Set((subs ?? []).map((s) => s.assignment_group_id).filter((id): id is number => id != null))
+    ];
+    const groupInfoById = new Map<number, { id: number; name: string; members: string[] }>();
+    if (groupIds.length > 0) {
+      const { data: groupRows, error: groupErr } = await supabase
+        .from("assignment_groups")
+        .select("id, name")
+        .in("id", groupIds);
+      if (groupErr) throw new Error(`gradeRealSubmissionsForDemo fetch assignment_groups: ${groupErr.message}`);
+      const { data: memberRows, error: memberErr } = await supabase
+        .from("assignment_groups_members")
+        .select("assignment_group_id, profile_id")
+        .in("assignment_group_id", groupIds);
+      if (memberErr)
+        throw new Error(`gradeRealSubmissionsForDemo fetch assignment_groups_members: ${memberErr.message}`);
+      const membersByGroup = new Map<number, string[]>();
+      for (const m of memberRows ?? []) {
+        if (!membersByGroup.has(m.assignment_group_id)) membersByGroup.set(m.assignment_group_id, []);
+        membersByGroup.get(m.assignment_group_id)!.push(m.profile_id);
+      }
+      for (const g of groupRows ?? []) {
+        groupInfoById.set(g.id, { id: g.id, name: g.name, members: membersByGroup.get(g.id) ?? [] });
+      }
+    }
+
     const submissionData: SubmissionDataItem[] = [];
     let unmappedProfiles = 0;
     let unmappedAssignments = 0;
+    let unmappedGroups = 0;
     for (const s of subs) {
-      if (!s.assignment_id || !s.profile_id) continue;
+      if (!s.assignment_id) continue;
       const assignment = assignmentById.get(s.assignment_id);
       if (!assignment) {
         unmappedAssignments++;
         continue;
       }
+      if (s.assignment_group_id != null) {
+        // Group-backed submission.
+        const group = groupInfoById.get(s.assignment_group_id);
+        if (!group || group.members.length === 0) {
+          unmappedGroups++;
+          continue;
+        }
+        submissionData.push({
+          submission_id: s.id,
+          assignment: { id: assignment.id, due_date: assignment.due_date },
+          group: { id: group.id, name: group.name, memberCount: group.members.length, members: group.members }
+        });
+        continue;
+      }
+      if (!s.profile_id) continue;
       const student = studentByProfileId.get(s.profile_id);
       if (!student) {
         unmappedProfiles++;
@@ -3623,6 +3678,8 @@ export class DatabaseSeeder {
       console.warn(`   ⚠ ${unmappedAssignments} submissions had no matching assignment row`);
     if (unmappedProfiles > 0)
       console.warn(`   ⚠ ${unmappedProfiles} submissions belonged to a profile_id not in the demo fleet`);
+    if (unmappedGroups > 0)
+      console.warn(`   ⚠ ${unmappedGroups} group submissions had no resolvable group membership`);
 
     if (submissionData.length === 0) {
       console.warn("⏭  gradeRealSubmissionsForDemo: nothing to grade after mapping");

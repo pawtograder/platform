@@ -80,20 +80,29 @@ function parseArgs(): CliArgs {
     archetype: "program-design-and-implementation-ii",
     copyRepos: true
   };
+  // Consume the value for a flag, erroring if it's missing or is actually the
+  // next flag (e.g. `--class-id --archetype foo` would otherwise swallow
+  // `--archetype` as the class id).
+  const takeValue = (flag: string, val: string | undefined): string => {
+    if (val === undefined || val.startsWith("--")) {
+      throw new Error(`Missing value for ${flag}`);
+    }
+    return val;
+  };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const val = argv[i + 1];
     switch (flag) {
       case "--class-id":
-        out.classId = parseInt(val, 10);
+        out.classId = parseInt(takeValue(flag, val), 10);
         i++;
         break;
       case "--github-username":
-        out.githubUsername = val;
+        out.githubUsername = takeValue(flag, val);
         i++;
         break;
       case "--archetype":
-        out.archetype = val;
+        out.archetype = takeValue(flag, val);
         i++;
         break;
       case "--skip-repo-copy":

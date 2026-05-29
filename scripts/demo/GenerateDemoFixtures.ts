@@ -128,6 +128,24 @@ Distribution:
 
 const SURVEY_FREEFORM_PROMPT = `Produce a JSON array of 40 short open-ended survey responses (1-3 sentences each) suitable to plug into "What did you find most valuable about this course?" / "What concept was confusing?" / "Suggestions for improvement?" style questions. Vary tone (positive, frustrated, neutral). Reference specific course concepts. Return as a flat JSON array of strings.`;
 
+// Minimal per-item shape guards so a malformed LLM generation fails fast here
+// rather than partway through seeding. We only check the fields seeding relies
+// on, not every optional property.
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function requireStringFields(item: unknown, fields: string[], label: string): void {
+  if (!isRecord(item)) throw new Error(`${label}: expected object`);
+  for (const f of fields) {
+    if (typeof item[f] !== "string") throw new Error(`${label}: missing/invalid string field "${f}"`);
+  }
+}
+
+function requireArrayField(item: Record<string, unknown>, field: string, label: string): void {
+  if (!Array.isArray(item[field])) throw new Error(`${label}: missing/invalid array field "${field}"`);
+}
+
 function buildSpecs(): ContentTypeSpec<unknown>[] {
   return [
     {
@@ -135,6 +153,10 @@ function buildSpecs(): ContentTypeSpec<unknown>[] {
       prompt: DISCUSSION_PROMPT,
       validate: (parsed) => {
         if (!Array.isArray(parsed)) throw new Error("discussions: expected array");
+        parsed.forEach((item, i) => {
+          requireStringFields(item, ["topic", "subject", "body"], `discussions[${i}]`);
+          requireArrayField(item as Record<string, unknown>, "replies", `discussions[${i}]`);
+        });
         return parsed as DiscussionThreadFixture[];
       }
     },
@@ -143,6 +165,10 @@ function buildSpecs(): ContentTypeSpec<unknown>[] {
       prompt: PRIVATE_POSTS_PROMPT,
       validate: (parsed) => {
         if (!Array.isArray(parsed)) throw new Error("privatePosts: expected array");
+        parsed.forEach((item, i) => {
+          requireStringFields(item, ["topic", "subject", "body"], `privatePosts[${i}]`);
+          requireArrayField(item as Record<string, unknown>, "replies", `privatePosts[${i}]`);
+        });
         return parsed as PrivatePostFixture[];
       }
     },
@@ -151,6 +177,10 @@ function buildSpecs(): ContentTypeSpec<unknown>[] {
       prompt: HELP_REQUESTS_PROMPT,
       validate: (parsed) => {
         if (!Array.isArray(parsed)) throw new Error("helpRequests: expected array");
+        parsed.forEach((item, i) => {
+          requireStringFields(item, ["request"], `helpRequests[${i}]`);
+          requireArrayField(item as Record<string, unknown>, "replies", `helpRequests[${i}]`);
+        });
         return parsed as HelpRequestFixture[];
       }
     },
@@ -159,6 +189,9 @@ function buildSpecs(): ContentTypeSpec<unknown>[] {
       prompt: SURVEY_FREEFORM_PROMPT,
       validate: (parsed) => {
         if (!Array.isArray(parsed)) throw new Error("surveyFreeform: expected array");
+        parsed.forEach((item, i) => {
+          if (typeof item !== "string") throw new Error(`surveyFreeform[${i}]: expected string`);
+        });
         return parsed as string[];
       }
     }

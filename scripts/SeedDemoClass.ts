@@ -25,7 +25,10 @@
  *   • The three real fleet users (ripley@ripley.cloud, orion@ripley.cloud,
  *     paws@ripley.cloud) must already exist — see DemoFleetManager.ts.
  */
-import { ChatAnthropic } from "@langchain/anthropic"; // ensures @langchain/anthropic stays installed
+// GenerateDemoFixtures (the LLM fixture author) imports @langchain/anthropic
+// transitively; importing it here keeps the package in the dependency graph so
+// `npm prune`/dead-import tooling can't drop it out from under that script.
+import { ChatAnthropic } from "@langchain/anthropic";
 import dotenv from "dotenv";
 import * as fs from "fs";
 import * as path from "path";
@@ -43,7 +46,8 @@ import { DEFAULT_RATE_LIMITS, RateLimitManager } from "@/tests/generator/Generat
 
 dotenv.config({ path: ".env.local", quiet: true });
 
-// Silence unused-import lint while keeping the dependency edge documented.
+// Reference the otherwise-unused import so lint doesn't strip it; see the note
+// at the import for why this transitive dependency edge must stay.
 void ChatAnthropic;
 
 const ROOT = path.resolve(__dirname, "..");
@@ -252,8 +256,11 @@ async function ensureInstructorUsers(emails: string[]): Promise<TestingUser[]> {
       }
       userId = data.user.id;
       name = email;
-      // Mirror to public.users so RPCs that read it pick the row up.
-      await supabase.from("users").insert({ user_id: userId, email, name }).single();
+      // Mirror to public.users so RPCs that read it pick the row up. Upsert
+      // rather than insert: a DB trigger on auth.users may already have created
+      // the public.users row, which would make a plain insert fail on the
+      // user_id unique constraint.
+      await supabase.from("users").upsert({ user_id: userId, email, name }, { onConflict: "user_id" });
     }
     out.push({
       email,
