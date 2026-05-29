@@ -209,15 +209,17 @@ test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async 
   const canvasAssignment = canvasAssignments.find((a) => a.name === pawAssignmentTitle) ?? canvasAssignments[0];
   expect(canvasAssignment, "AGS line item should appear as a Canvas assignment").toBeTruthy();
 
+  // Canvas processes the AGS score asynchronously (delayed_jobs worker), which is
+  // noticeably slower on a CI runner than locally — poll up to ~2 min.
   let landed = false;
-  for (let i = 0; i < 15 && !landed; i++) {
+  for (let i = 0; i < 40 && !landed; i++) {
     const subRes = await request.get(
       `${cfg.canvasBaseUrl}/api/v1/courses/${cfg.canvasCourseId}/assignments/${canvasAssignment.id}/submissions?per_page=100`,
       { headers: auth }
     );
     const subs = (await subRes.json()) as Array<{ score: number | null }>;
     landed = subs.some((s) => Number(s.score) === 88);
-    if (!landed) await page.waitForTimeout(2000);
+    if (!landed) await page.waitForTimeout(3000);
   }
   expect(landed, "a Canvas submission should carry the pushed score (88)").toBeTruthy();
 
