@@ -729,7 +729,8 @@ export default function AssignmentForm({
                     const suggested = new TZDate(value, timezone).getTime();
                     const due = new TZDate(dueDate, timezone).getTime();
                     return suggested <= due || "Suggested due date must be on or before the due date";
-                  }
+                  },
+                  deps: ["due_date"]
                 }}
                 render={({ field }) => {
                   const hasATimezoneOffset =
