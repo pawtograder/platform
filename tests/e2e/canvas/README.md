@@ -125,8 +125,8 @@ Key env (all overridable; defaults in `docker-compose.yml`):
 
 | Var                         | Default                      | Purpose                               |
 | --------------------------- | ---------------------------- | ------------------------------------- |
-| `CANVAS_HOST_PORT`          | `80` | host port for Canvas                  |
-| `CANVAS_DOMAIN`             | `localhost`             | domain Canvas builds URLs/cookies for |
+| `CANVAS_HOST_PORT`          | `80`                         | host port for Canvas                  |
+| `CANVAS_DOMAIN`             | `localhost`                  | domain Canvas builds URLs/cookies for |
 | `CANVAS_ENCRYPTION_KEY`     | (dev placeholder, ≥20 chars) | `security.yml` encryption key         |
 | `POSTGRES_PASSWORD`         | `sekret`                     | pg password                           |
 | `CANVAS_LMS_ADMIN_EMAIL`    | `canvas@example.com`         | admin login                           |
