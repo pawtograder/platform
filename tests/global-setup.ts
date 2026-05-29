@@ -284,8 +284,14 @@ type E2EFixtures = {
   _autoCoverage: void;
 };
 
-// Extend the base test to include visual test setup
-export const test = base.extend<E2EFixtures>({
+// Shared fixtures that do NOT touch page rendering: failure diagnostics +
+// (coverage-gated) client-coverage capture. Kept separate from the visual
+// `page` fixture below so functional specs can opt into coverage without
+// inheriting the visual-test CSS — that CSS sets `data-visual-tests`, which
+// `display:none`s transient UI marked `data-visual-test="removed"`
+// (e.g. the toaster in components/ui/toaster.tsx). Functional specs that
+// assert toast visibility would otherwise time out on a hidden element.
+const baseWithCoverage = base.extend<E2EFixtures>({
   logMagicLinksOnFailure: async ({}, use, testInfo) => {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     await use(async (users) => {
@@ -367,7 +373,17 @@ export const test = base.extend<E2EFixtures>({
       await flushServerCoverage(baseURL, context);
     },
     { auto: true }
-  ],
+  ]
+});
+
+// Coverage-flavored test for functional specs (RPC flows, realtime, error
+// paths) that need client-coverage instrumentation but must run WITHOUT the
+// visual-test CSS — they assert live UI like toasts that the CSS hides.
+export const testFunctional = baseWithCoverage;
+
+// Default export: the coverage fixtures PLUS the visual-test page setup.
+// Use this for specs that take visualScreenshot()s.
+export const test = baseWithCoverage.extend({
   page: async ({ page }, use) => {
     // Set up initial script for new page loads
     await page.addInitScript((visualTestCss) => {

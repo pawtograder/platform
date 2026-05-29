@@ -1,4 +1,4 @@
-import { expect, test } from "../global-setup";
+import { expect, testFunctional as test } from "../global-setup";
 import { type Response } from "@playwright/test";
 
 // Regression guard for the CSP middleware. Logging in / walking pages requires

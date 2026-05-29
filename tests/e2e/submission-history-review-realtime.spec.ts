@@ -19,7 +19,7 @@
  * Chromium only (default project). Requires: local Supabase + `npm run dev` on
  * port 3000 (or BASE_URL for deployed E2E).
  */
-import { expect, test } from "../global-setup";
+import { expect, testFunctional as test } from "../global-setup";
 import { addDays } from "date-fns";
 import {
   createClass,

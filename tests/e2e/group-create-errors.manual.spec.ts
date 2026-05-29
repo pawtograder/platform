@@ -8,7 +8,7 @@
  * DB setup: assignment 2 has allow_student_formed_groups=true,
  * group_formation_deadline in the future, demo student not in a Lab 1 group.
  */
-import { expect, test } from "../global-setup";
+import { expect, testFunctional as test } from "../global-setup";
 
 test.skip(!process.env.LOCAL_GROUP_ERROR_DEMO, "Set LOCAL_GROUP_ERROR_DEMO=1 to run this local Supabase + seed demo");
 
