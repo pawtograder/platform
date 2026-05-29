@@ -202,9 +202,13 @@ test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async 
   }
   expect(gradeRowId, "student gradebook row should exist after enrollment").toBeTruthy();
 
+  // Use score_override (not score): the assignment column's `score` is derived
+  // from submissions and gets reset to null by the gradebook recalc trigger
+  // (active via the jobs worker), whereas score_override is a manual value that
+  // survives recalc — and pushAssignmentGrades reads `score_override ?? score`.
   const { error: gradeErr } = await supabase
     .from("gradebook_column_students")
-    .update({ score: 88, released: true })
+    .update({ score_override: 88, released: true })
     .eq("id", gradeRowId!);
   expect(gradeErr).toBeNull();
 
@@ -215,7 +219,7 @@ test("student launch is adopted, then a grade is pushed to Canvas (AGS)", async 
   });
   const pushBody = await pushRes.json();
   expect(pushRes.ok(), JSON.stringify(pushBody)).toBeTruthy();
-  expect(pushBody.pushed).toBeGreaterThanOrEqual(1);
+  expect(pushBody.pushed, `push result: ${JSON.stringify(pushBody)}`).toBeGreaterThanOrEqual(1);
 
   // Verify in Canvas via the regular API. The AGS line item shows up as a course
   // assignment named after the Pawtograder assignment; Canvas processes the
