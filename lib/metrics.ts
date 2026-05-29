@@ -25,6 +25,17 @@ type MetricsBundle = {
   officeHoursEvents: Counter<string>;
   realtimeBroadcasts: Counter<string>;
   edgeFunctionInvocations: Counter<string>;
+
+  // Workflow business gauges. Refreshed from the DB at scrape time —
+  // see refreshWorkflowMetrics() below. These are the user-facing
+  // success/failure + queue/run duration signals for the autograder
+  // pipeline, derived from public.workflow_runs + public.workflow_run_error.
+  workflowRunsRecent: Gauge<string>; // labels: class_id, conclusion, window
+  workflowQueueSeconds: Gauge<string>; // labels: class_id, quantile
+  workflowRunSeconds: Gauge<string>; // labels: class_id, quantile
+  workflowErrorsRecent: Gauge<string>; // labels: class_id, name
+  workflowRefreshDuration: Histogram<string>; // observed when refresh runs
+  workflowRefreshErrors: Counter<string>;
 };
 
 // We attach state to globalThis so it survives Next.js's per-request
@@ -128,6 +139,51 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     registers: [registry]
   });
 
+  // ----- Workflow business gauges -----
+  // These are refreshed on every /api/metrics scrape via
+  // refreshWorkflowMetrics(); see that function for the SQL.
+  const workflowRunsRecent = new promClient.Gauge({
+    name: "web_workflow_runs_recent",
+    help: "Autograder workflow runs that completed in the recent window, by class + conclusion.",
+    labelNames: ["class_id", "conclusion", "window"],
+    registers: [registry]
+  });
+
+  const workflowQueueSeconds = new promClient.Gauge({
+    name: "web_workflow_queue_seconds",
+    help: "Time from workflow_runs.requested_at to in_progress_at, percentile gauges over a 1h window.",
+    labelNames: ["class_id", "quantile"],
+    registers: [registry]
+  });
+
+  const workflowRunSeconds = new promClient.Gauge({
+    name: "web_workflow_run_seconds",
+    help: "Time from workflow_runs.in_progress_at to completed_at, percentile gauges over a 1h window.",
+    labelNames: ["class_id", "quantile"],
+    registers: [registry]
+  });
+
+  const workflowErrorsRecent = new promClient.Gauge({
+    name: "web_workflow_errors_recent",
+    help: "workflow_run_error rows logged in the recent window, by class + error name.",
+    labelNames: ["class_id", "name", "window"],
+    registers: [registry]
+  });
+
+  const workflowRefreshDuration = new promClient.Histogram({
+    name: "web_workflow_metrics_refresh_seconds",
+    help: "Time spent refreshing workflow gauges from the DB.",
+    buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+    registers: [registry]
+  });
+
+  const workflowRefreshErrors = new promClient.Counter({
+    name: "web_workflow_metrics_refresh_errors_total",
+    help: "Refresh failures by SQL step (workflow_runs / queue_seconds / run_seconds / workflow_run_error).",
+    labelNames: ["step"],
+    registers: [registry]
+  });
+
   g.__pawtograderMetrics = {
     registry,
     httpDuration,
@@ -140,7 +196,13 @@ async function initIfNeeded(): Promise<MetricsBundle | null> {
     rubricCheckActions,
     officeHoursEvents,
     realtimeBroadcasts,
-    edgeFunctionInvocations
+    edgeFunctionInvocations,
+    workflowRunsRecent,
+    workflowQueueSeconds,
+    workflowRunSeconds,
+    workflowErrorsRecent,
+    workflowRefreshDuration,
+    workflowRefreshErrors
   };
 
   return g.__pawtograderMetrics;
@@ -202,5 +264,129 @@ export async function timeRpc<T>(
     end({ status: "error" });
     m.rpcErrors.inc({ rpc, code: "throw" });
     throw e;
+  }
+}
+
+// Refresh the workflow gauges from public.workflow_runs and
+// public.workflow_run_error. Called at the start of the /api/metrics
+// scrape so values reflect the last 1h / 24h aggregates.
+//
+// All queries pre-filter to rows newer than NOW() - 24h to bound
+// cardinality; the older "1h" gauge is a strict subset of that window.
+// Both DB calls run in parallel; an error in one doesn't kill the other.
+//
+// Cardinality budget per class:
+//   web_workflow_runs_recent  : 2 windows × ~6 conclusions = ~12 series
+//   web_workflow_queue_seconds: 3 quantiles                = 3 series
+//   web_workflow_run_seconds  : 2 quantiles                = 2 series
+//   web_workflow_errors_recent: capped at 30 distinct names per class
+//
+// For a deployment with 100 active classes that's ~5k series — well under
+// kube-prometheus-stack defaults.
+export async function refreshWorkflowMetrics(): Promise<void> {
+  const m = await initIfNeeded();
+  if (!m) return;
+  const end = m.workflowRefreshDuration.startTimer();
+  try {
+    const { createAdminClient } = await import("@/utils/supabase/client");
+    // Type-erase: the metrics_* RPCs land via supabase/migrations and are
+    // regenerated into SupabaseTypes.d.ts on the next `npm run client-local`.
+    // Until that lands the typed client throws on unknown RPC names, so this
+    // helper opts out of the generic guard. The runtime behaviour is
+    // identical to a strongly-typed call.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = createAdminClient() as any;
+
+    // Run all four aggregate queries concurrently. Each returns its own
+    // count → label dimension; the gauges are reset before each scrape
+    // so stale class_ids don't linger when no rows match.
+    const [runs1h, runs24h, queue, run, errors1h] = await Promise.allSettled([
+      // Conclusions over the last hour.
+      client.rpc("metrics_workflow_runs_by_conclusion", { window_hours: 1 }),
+      // Conclusions over the last day (wider trend signal).
+      client.rpc("metrics_workflow_runs_by_conclusion", { window_hours: 24 }),
+      // Queue duration percentiles over the last hour.
+      client.rpc("metrics_workflow_queue_percentiles", { window_hours: 1 }),
+      // Run duration percentiles over the last hour.
+      client.rpc("metrics_workflow_run_percentiles", { window_hours: 1 }),
+      // Errors over the last hour.
+      client.rpc("metrics_workflow_errors_by_name", { window_hours: 1 })
+    ]);
+
+    m.workflowRunsRecent.reset();
+    if (runs1h.status === "fulfilled" && !runs1h.value.error) {
+      for (const row of runs1h.value.data ?? []) {
+        m.workflowRunsRecent.set(
+          {
+            class_id: String((row as { class_id: number | string }).class_id),
+            conclusion: String((row as { conclusion: string }).conclusion ?? "unknown"),
+            window: "1h"
+          },
+          Number((row as { count: number }).count)
+        );
+      }
+    } else {
+      m.workflowRefreshErrors.inc({ step: "workflow_runs_1h" });
+    }
+
+    if (runs24h.status === "fulfilled" && !runs24h.value.error) {
+      for (const row of runs24h.value.data ?? []) {
+        m.workflowRunsRecent.set(
+          {
+            class_id: String((row as { class_id: number | string }).class_id),
+            conclusion: String((row as { conclusion: string }).conclusion ?? "unknown"),
+            window: "24h"
+          },
+          Number((row as { count: number }).count)
+        );
+      }
+    } else {
+      m.workflowRefreshErrors.inc({ step: "workflow_runs_24h" });
+    }
+
+    m.workflowQueueSeconds.reset();
+    if (queue.status === "fulfilled" && !queue.value.error) {
+      for (const row of queue.value.data ?? []) {
+        const cid = String((row as { class_id: number | string }).class_id);
+        m.workflowQueueSeconds.set({ class_id: cid, quantile: "0.5" }, Number((row as { p50: number }).p50));
+        m.workflowQueueSeconds.set({ class_id: cid, quantile: "0.95" }, Number((row as { p95: number }).p95));
+        m.workflowQueueSeconds.set({ class_id: cid, quantile: "0.99" }, Number((row as { p99: number }).p99));
+      }
+    } else {
+      m.workflowRefreshErrors.inc({ step: "queue_seconds" });
+    }
+
+    m.workflowRunSeconds.reset();
+    if (run.status === "fulfilled" && !run.value.error) {
+      for (const row of run.value.data ?? []) {
+        const cid = String((row as { class_id: number | string }).class_id);
+        m.workflowRunSeconds.set({ class_id: cid, quantile: "0.5" }, Number((row as { p50: number }).p50));
+        m.workflowRunSeconds.set({ class_id: cid, quantile: "0.95" }, Number((row as { p95: number }).p95));
+      }
+    } else {
+      m.workflowRefreshErrors.inc({ step: "run_seconds" });
+    }
+
+    m.workflowErrorsRecent.reset();
+    if (errors1h.status === "fulfilled" && !errors1h.value.error) {
+      for (const row of errors1h.value.data ?? []) {
+        m.workflowErrorsRecent.set(
+          {
+            class_id: String((row as { class_id: number | string }).class_id),
+            name: String((row as { name: string }).name),
+            window: "1h"
+          },
+          Number((row as { count: number }).count)
+        );
+      }
+    } else {
+      m.workflowRefreshErrors.inc({ step: "errors_1h" });
+    }
+  } catch {
+    // Don't let metric collection failures bubble up — the scrape should
+    // still return whatever is currently in the registry.
+    m.workflowRefreshErrors.inc({ step: "refresh" });
+  } finally {
+    end();
   }
 }

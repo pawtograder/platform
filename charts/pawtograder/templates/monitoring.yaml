@@ -124,6 +124,12 @@ data:
             usage: "GAUGE"
             description: "Help requests being actively handled in the last 24h"
 
+    # Note: autograder workflow business metrics (run counts by
+    # conclusion, queue/run duration percentiles, error tallies) are
+    # NOT surfaced here. They live in the web app's /api/metrics route
+    # (lib/metrics.ts → refreshWorkflowMetrics) so they can carry the
+    # same labels and naming conventions as other app-level signals.
+
     pawtograder_table_sizes:
       query: |
         SELECT n.nspname || '.' || c.relname AS relation,

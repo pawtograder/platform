@@ -6,7 +6,7 @@
 // returns 503 so we don't leak metrics on hostile networks.
 
 import { timingSafeEqual } from "node:crypto";
-import { getMetrics } from "@/lib/metrics";
+import { getMetrics, refreshWorkflowMetrics } from "@/lib/metrics";
 
 // prom-client uses Node-only APIs (process.cpuUsage, V8 GC hooks).
 export const runtime = "nodejs";
@@ -50,6 +50,12 @@ export async function GET(req: Request): Promise<Response> {
       headers: { "content-type": "text/plain" }
     });
   }
+  // Refresh DB-backed business gauges (workflow runs, queue/run duration
+  // percentiles, recent errors) at scrape time. Failures are swallowed
+  // inside the helper and surfaced as web_workflow_metrics_refresh_errors_total
+  // so the scrape itself never fails just because the DB is slow.
+  await refreshWorkflowMetrics();
+
   const body = await m.registry.metrics();
   return new Response(body, {
     status: 200,
