@@ -31,6 +31,7 @@ bypass the CLI and run our functions under stock Deno.
 mkdir -p coverage/edge
 deno run \
   --allow-env --allow-net --allow-read --allow-write --allow-sys \
+  --allow-import \
   --coverage=coverage/edge \
   --env-file=.env.local \
   --import-map=supabase/functions/_coverage/deno.json \

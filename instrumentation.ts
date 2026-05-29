@@ -4,14 +4,22 @@ export const onRequestError = Sentry.captureRequestError;
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    await import("./sentry.server.config");
+    await import("@/sentry.server.config");
     if (process.env.COVERAGE === "1") {
-      await registerServerCoverageCollector();
+      // Best-effort: coverage collection must never block app boot. If the
+      // Inspector session fails to start, log and continue rather than
+      // letting register() reject.
+      try {
+        await registerServerCoverageCollector();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[coverage] failed to initialize server collector:", err);
+      }
     }
   }
 
   if (process.env.NEXT_RUNTIME === "edge") {
-    await import("./sentry.edge.config");
+    await import("@/sentry.edge.config");
   }
 }
 

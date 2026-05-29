@@ -48,8 +48,18 @@ fi
 # plpgsql_check.profiler is PGC_SUSET in some versions; ALTER SYSTEM fails
 # for non-superusers. Detect that and write the auto.conf file directly.
 echo "[setup-pg] setting plpgsql_check.profiler = on"
-if ! docker exec -i "$CONTAINER" psql -U postgres -d postgres \
+if docker exec -i "$CONTAINER" psql -U postgres -d postgres \
   -c "ALTER SYSTEM SET plpgsql_check.profiler = on;" >/dev/null 2>&1; then
+  # ALTER SYSTEM only writes postgresql.auto.conf — the GUC does not take
+  # effect for new sessions until the config is reloaded (or the server
+  # restarts). plpgsql_check is already preloaded in current Supabase
+  # images, so the shared_preload_libraries block above leaves
+  # needs_restart=false; without an explicit reload here the profiler would
+  # stay off and we'd silently collect zero Postgres coverage. SIGHUP is
+  # enough for this GUC, so reload rather than force a full restart.
+  docker exec -i "$CONTAINER" psql -U postgres -d postgres \
+    -c "SELECT pg_reload_conf();" >/dev/null 2>&1 || true
+else
   echo "[setup-pg] ALTER SYSTEM denied — appending to postgresql.auto.conf directly"
   # Remove any pre-existing entry to keep idempotency clean, then append.
   docker exec -i "$CONTAINER" bash -c "

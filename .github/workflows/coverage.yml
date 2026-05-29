@@ -267,10 +267,17 @@ jobs:
         # E2E flakes to block coverage uploads — the failures still
         # show in the step output (yellow ⚠️). Once the E2E suite is
         # de-flaked we can flip this back on.
+        #
+        # ARGOS_TOKEN is intentionally NOT passed here. The Argos reporter
+        # in playwright.config.ts uploads screenshots whenever the token is
+        # set. This coverage run is COVERAGE=1 (minification disabled,
+        # different rendering), chromium-only, and a subset of the suite —
+        # uploading it to Argos under the same commit SHA clobbers the real
+        # visual baseline produced by the deploy.yml E2E run (shows up as
+        # mass "removed"/"changed" screenshots). Visual diffing is owned by
+        # deploy.yml; this workflow only collects coverage.
         run: npx playwright test --project=chromium
         continue-on-error: true
-        env:
-          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
 
       - name: Free disk space (pre-stop)
         if: always()
