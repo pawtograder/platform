@@ -144,7 +144,13 @@ export function DiscussionPostSummary({
               <Skeleton width="100px" />
             )}
             <Flex wrap={{ base: "wrap", sm: "nowrap" }}>
-              <Text textStyle="sm" color="fg.muted" ms="3">
+              <Text
+                textStyle="sm"
+                color="fg.muted"
+                ms="3"
+                data-visual-test="transparent"
+                data-visual-placeholder="relative-time"
+              >
                 {formatRelative(thread.created_at, new Date())}
               </Text>
               <Spacer />

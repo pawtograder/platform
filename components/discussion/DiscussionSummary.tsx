@@ -323,7 +323,9 @@ export async function DiscussionSummary({ courseId, privateProfileId }: Discussi
                             )}
                           </HStack>
                           <HStack gap="3" fontSize="xs" color="fg.muted" wrap="wrap">
-                            <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
+                            <Text data-visual-test="transparent" data-visual-placeholder="relative-time">
+                              {formatRelative(new Date(thread.created_at), new Date())}
+                            </Text>
                             <Text>•</Text>
                             <Text>{thread.children_count ?? 0} replies</Text>
                             {isUnread && (
@@ -406,7 +408,9 @@ export async function DiscussionSummary({ courseId, privateProfileId }: Discussi
                             )}
                           </HStack>
                           <HStack gap="3" fontSize="xs" color="fg.muted" wrap="wrap">
-                            <Text>{formatRelative(new Date(thread.created_at), new Date())}</Text>
+                            <Text data-visual-test="transparent" data-visual-placeholder="relative-time">
+                              {formatRelative(new Date(thread.created_at), new Date())}
+                            </Text>
                             <Text>•</Text>
                             <Text>{thread.children_count ?? 0} replies</Text>
                             {isUnread && (

@@ -48,6 +48,7 @@ export function DiscussionThreadReply({
     }
   }, [visible]);
   const { tableController } = useDiscussionThreadsController();
+  const courseController = useCourseController();
 
   const sendMessage = useCallback(
     async (message: string, profile_id: string, close = true) => {
@@ -65,16 +66,27 @@ export function DiscussionThreadReply({
         body: message
       });
 
-      // invalidate({
-      //     resource: "discussion_threads",
-      //     invalidates: ['detail'],
-      //     id: thread.parent!
-      // });
       if (close) {
         setVisible(false);
       }
+
+      // Replying auto-follows the thread via a server-side trigger that
+      // INSERTs into discussion_thread_watchers. The Follow→Unfollow
+      // button transition reads that row through a realtime-backed
+      // TableController, and on slow CI runs realtime delivery of the
+      // new watcher row lags the reply create by several seconds, during
+      // which the button keeps saying "Follow". Warm the watcher cache
+      // directly so the UI flips without waiting on the broadcast. Run
+      // this after the composer close because it's best-effort —
+      // realtime is the authoritative path — and we don't want a slow
+      // REST round-trip stalling the close transition.
+      void courseController.discussionThreadWatchers
+        .getOneByFilters([{ column: "discussion_thread_root_id", operator: "eq", value: thread.root || thread.id }])
+        .catch(() => {
+          // Realtime will catch up.
+        });
     },
-    [tableController, setVisible, thread]
+    [tableController, courseController, setVisible, thread]
   );
   if (!visible || isReadOnly) {
     return <></>;

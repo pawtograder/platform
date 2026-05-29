@@ -245,11 +245,11 @@ export type SimulatedSISRosterEntry = {
 export type SISSyncEnrollmentResult = {
   success: boolean;
   class_id: number;
-  expire_missing: boolean;
+  drop_missing: boolean;
   counts: {
     invitations_created: number;
     invitations_updated: number;
-    invitations_expired: number;
+    invitations_dropped: number;
     invitations_reactivated: number;
     enrollments_created: number;
     enrollments_updated: number;
@@ -262,12 +262,12 @@ export type SISSyncEnrollmentResult = {
 export async function simulateSISSync({
   class_id,
   roster,
-  expire_missing = true,
+  drop_missing = true,
   section_updates
 }: {
   class_id: number;
   roster: SimulatedSISRosterEntry[];
-  expire_missing?: boolean;
+  drop_missing?: boolean;
   section_updates?: Array<{
     section_type: "class" | "lab";
     sis_crn: number;
@@ -283,7 +283,7 @@ export async function simulateSISSync({
     p_class_id: class_id,
     p_roster_data: roster,
     p_sync_options: {
-      expire_missing,
+      drop_missing,
       section_updates: section_updates ?? []
     }
   });
@@ -341,6 +341,48 @@ export async function getEnrollmentState(
   }
 
   return { user: user ?? undefined, user_role, invitation: invitation ?? null };
+}
+
+/**
+ * Returns ALL user_roles for the account with this sis_user_id in a class (not
+ * just one). Used to assert there are no duplicate enrollments/profiles (#390).
+ */
+export async function getEnrollmentRowsForSisUser(
+  class_id: number,
+  sis_user_id: number
+): Promise<
+  Array<{
+    id: number;
+    role: string;
+    disabled: boolean;
+    private_profile_id: string;
+    public_profile_id: string;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  }>
+> {
+  const { data: user, error: userError } = await supabase
+    .from("users")
+    .select("user_id")
+    .eq("sis_user_id", sis_user_id)
+    .maybeSingle();
+  if (userError) throw new Error(`getEnrollmentRowsForSisUser: failed to fetch user: ${userError.message}`);
+  if (!user?.user_id) return [];
+  const { data: rows, error: rowsError } = await supabase
+    .from("user_roles")
+    .select("id, role, disabled, private_profile_id, public_profile_id, class_section_id, lab_section_id")
+    .eq("class_id", class_id)
+    .eq("user_id", user.user_id);
+  if (rowsError) throw new Error(`getEnrollmentRowsForSisUser: failed to fetch user_roles: ${rowsError.message}`);
+  return (rows ?? []) as Array<{
+    id: number;
+    role: string;
+    disabled: boolean;
+    private_profile_id: string;
+    public_profile_id: string;
+    class_section_id: number | null;
+    lab_section_id: number | null;
+  }>;
 }
 
 export async function setUserSisId(user_id: string, sis_user_id: number) {
@@ -405,6 +447,36 @@ async function generateMagicLinkWithRetry(email: string): ReturnType<typeof supa
   throw new Error(`generateMagicLinkWithRetry: exhausted retries (${lastErrMsg})`);
 }
 
+// Verify an admin-generated magic link with bounded retries. Both steps —
+// generateLink AND verifyOtp — fail transiently under CI parallelism (rate
+// limits, occasional 5xx from gotrue), so each call must own its retry
+// loop. Without this, the non-browser helpers (getAuthTokenForUser /
+// createAuthenticatedClient) had only generateMagicLinkWithRetry covering
+// the first hop; the second hop (verifyOtp) was a single-shot point of
+// flake.
+async function verifyOtpWithRetry<T>(
+  email: string,
+  doVerify: () => Promise<{ data: T; error: Error | null | { message?: string } | null }>
+): Promise<T> {
+  const delaysMs = [400, 1200, 3500];
+  let lastErrMsg = "";
+  for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
+    try {
+      const { data, error } = await doVerify();
+      if (!error) return data;
+      lastErrMsg = (error as { message?: string })?.message || JSON.stringify(error) || "unknown";
+      if (attempt === delaysMs.length) {
+        throw new Error(`Failed to verify magic link for ${email}: ${lastErrMsg}`);
+      }
+    } catch (err) {
+      lastErrMsg = err instanceof Error ? err.message : String(err);
+      if (attempt === delaysMs.length) throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt] + Math.floor(Math.random() * 250)));
+  }
+  throw new Error(`verifyOtpWithRetry: exhausted retries (${lastErrMsg})`);
+}
+
 // Helper function to get auth token for a user
 export async function getAuthTokenForUser(testingUser: TestingUser): Promise<string> {
   // Create a separate Supabase client for the user (using anon key)
@@ -413,21 +485,22 @@ export async function getAuthTokenForUser(testingUser: TestingUser): Promise<str
     (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
   );
 
-  // Generate magic link using admin client (same as TestingUtils.ts does)
-  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-
-  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
-    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
-  }
-
-  // Verify the OTP to get a session
-  const { data, error } = await userSupabase.auth.verifyOtp({
-    token_hash: magicLinkData.properties.hashed_token,
-    type: "magiclink"
+  // Each attempt regenerates the magic link (single-use, expires quickly) and
+  // re-verifies — keeps generation and verification as a single retried unit
+  // so a stale/used token from a prior partial attempt can't poison the next.
+  const data = await verifyOtpWithRetry(testingUser.email, async () => {
+    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+    if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+      return { data: null as never, error: magicLinkError ?? new Error("missing hashed_token") };
+    }
+    return userSupabase.auth.verifyOtp({
+      token_hash: magicLinkData.properties.hashed_token,
+      type: "magiclink"
+    });
   });
 
-  if (error || !data.session) {
-    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  if (!data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: no session returned`);
   }
 
   return data.session.access_token;
@@ -443,21 +516,19 @@ export async function createAuthenticatedClient(testingUser: TestingUser): Promi
     (process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!
   );
 
-  // Generate magic link using admin client
-  const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
-
-  if (magicLinkError || !magicLinkData.properties?.hashed_token) {
-    throw new Error(`Failed to generate magic link for ${testingUser.email}: ${magicLinkError?.message}`);
-  }
-
-  // Verify the OTP to get a session
-  const { data, error } = await userSupabase.auth.verifyOtp({
-    token_hash: magicLinkData.properties.hashed_token,
-    type: "magiclink"
+  const data = await verifyOtpWithRetry(testingUser.email, async () => {
+    const { data: magicLinkData, error: magicLinkError } = await generateMagicLinkWithRetry(testingUser.email);
+    if (magicLinkError || !magicLinkData.properties?.hashed_token) {
+      return { data: null as never, error: magicLinkError ?? new Error("missing hashed_token") };
+    }
+    return userSupabase.auth.verifyOtp({
+      token_hash: magicLinkData.properties.hashed_token,
+      type: "magiclink"
+    });
   });
 
-  if (error || !data.session) {
-    throw new Error(`Failed to verify magic link for ${testingUser.email}: ${error?.message}`);
+  if (!data.session) {
+    throw new Error(`Failed to verify magic link for ${testingUser.email}: no session returned`);
   }
 
   await userSupabase.auth.setSession(data.session);

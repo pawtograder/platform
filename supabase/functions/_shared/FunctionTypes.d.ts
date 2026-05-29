@@ -490,7 +490,6 @@ export type CreateInvitationResponse = {
     name?: string;
     status: string;
     created_at: string;
-    expires_at: string;
     class_section_id?: number;
     lab_section_id?: number;
   }>;
