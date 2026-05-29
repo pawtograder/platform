@@ -1094,7 +1094,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
 }
 
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly } = useClassProfiles();
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -1250,15 +1250,26 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={link}>
-                      {historical_submission.submission_reviews?.completed_at &&
-                        (getDisplayedGradingTotalForStudent(
-                          historical_submission.submission_reviews,
-                          private_profile_id
-                        ) ??
-                          historical_submission.submission_reviews.total_score ??
-                          "—") +
-                          "/" +
-                          (assignment?.total_points ?? <Skeleton height="20px" />)}
+                      {(() => {
+                        // View-as-student: a real student's RLS hides unreleased reviews, so
+                        // the embedded review is null and no total shows. An instructor
+                        // masquerading reads it via the staff RLS path, so mirror RLS here and
+                        // withhold the unreleased grade. Real staff still see it.
+                        const review =
+                          isReadOnly &&
+                          historical_submission.submission_reviews &&
+                          !historical_submission.submission_reviews.released
+                            ? null
+                            : historical_submission.submission_reviews;
+                        return (
+                          review?.completed_at &&
+                          (getDisplayedGradingTotalForStudent(review, private_profile_id) ??
+                            review.total_score ??
+                            "—") +
+                            "/" +
+                            (assignment?.total_points ?? <Skeleton height="20px" />)
+                        );
+                      })()}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
