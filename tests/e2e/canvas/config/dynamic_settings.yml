@@ -1,0 +1,69 @@
+# this config file is useful if you don't want to run a consul
+# cluster with canvas.  Just provide the config data you would
+# like for the DynamicSettings class to find, and it will use
+# it whenever a call for consul data is issued. Data should be
+# shaped like the example below, one key for the related set of data,
+# and a hash of key/value pairs (no nesting)
+development:
+  # tree
+  config:
+    # service
+    canvas:
+      # prefix
+      address-book:
+        app-host: "http://address-book.docker"
+        secret: "opensesame"
+      live_events.yml: |-
+        aws_endpoint: http://kinesis.canvaslms.docker
+        kinesis_stream_name: live-events
+        aws_access_key_id: key
+        aws_secret_access_key_dec: secret
+        # stub_credentials: true # can be used in dev to print creds to stdout
+      live-events-subscription-service:
+        app-host: "http://les.docker"
+        sad-panda: null
+      math-man:
+        base_url: "http://mathman.docker"
+        use_for_svg: "false"
+        use_for_mml: "false"
+      rich-content-service:
+        app-host: "http://rce.canvas.docker:3000"
+      onetrust-cookie-consent:
+        domain_id: "stub-key-please-see-MRA-plugin"
+        vanity_domain_id: "stub-key-please-see-MRA-plugin"
+    # another service
+    pandata:
+      ios-pandata-key: IOS_pandata_key
+      ios-pandata-secret: teamrocketblastoffatthespeedoflight
+      android-pandata-key: ANDROID_pandata_key
+      android-pandata-secret: surrendernoworpreparetofight
+  # Key/value pairs in the store tree can have overrides
+  # persisted in Settings. They are included by default but
+  # can be ignored by passing 'ignore_fallback_overrides: true'
+  # to your DynamicSettings.find call.
+  store:
+    canvas:
+      lti-keys:
+        # these are all the same JWK but with different kid
+        # to generate a new key, run the following in a Canvas console:
+        #
+        # key = OpenSSL::PKey::RSA.generate(2048)
+        # key.public_key.to_jwk(kid: Time.now.utc.iso8601).to_json
+        jwk-past.json: '{"kty":"RSA","e":"AQAB","n":"uAOff4Yygsj8MqqDYXn61ufzAJ4oqsWQAxO_t-Vr9W1CF-UDdyd8tId1fjdHdXLIiWmQF2_brJM74Kf0cZ81gAGa6fc3gM59ulmwmcWnM_FZCaIGtZhsSP3HQr10cdx7J8YBRCDaEuKPF8hRr6uwx_zOmCSSqjAo2aOgQqoz4aB16KFfyjGoNp71pEjTdZSw7T4fdCl4BiHi77Pl2bWgZ6V9Jkq-rxzHldhWrgotINxPjg2G7fGCC01TXj3YFd9kcQ85fyh6YQaOpqlBmauyML1ShZqLjhZHRRMBdEB8uo7jSpw38SOkfK5g_omGwgrLYJAC1SDaX6ysfEbmuHxqpw","kid":"2018-05-18T22:33:20Z","d":"FEd97-ljrqsktBa7lOYDAWUdkC9d7vgH13b5NXSIscsBMi3wdFS7NxAIoEjKTMTCGfayxQp0TLALNMZ9t3nixQEoR-mRSdY33-4bes7gDublt5yOHbw3DtI8__tuFlBEmE0HfbEbJ2Klf2r5qaEDwf537Cd3rF7TWazhMAee4RoEbZYTfhb_WRTlMFEVP0LveVKFvhjJ3GkT3H7S-epHM0moRh7c_PvW6p7y05ndUQsB7c7CHPEPA_a2eeiaoZnm7E1A1wmNF7mKQ00utVemWtl1S8oVg3aNldSHUtfn-P2-O_PWDRV8Ndsw_q-Wdvc7gqurBT2dbVsJ-jqWRzzFSQ","p":"7SgE1yBYiAijQc62RiGB-z_fK2q-UslRqVvZ3J1W5ZHibaKD0ne59boplfYNXKciHAtlqZ4b3h764wAut_V_EOhv8uFzmGxc1afs8aUFs6khitPYT3YgsE6esqaBJhIlO3OcDNPxcgwqUMgBJ0DfP8pwaB5JaKAYmG5ULJBMrZk","q":"xqKkiqR6hpgz33WUDmNukwDKVLnYCIm2iRhonR7oCfIIwra5XHm1lj3McI79J2zCwxqQwd7ZIhaL4RztKwAw9BdjNanC_CzSDyq-A2lomM2eXMQxu7qGRgvgbTzSwETt5GPtORmPy9mmCt1-Ei4Lihnmnr2NtpVLQ0-Ey37mgj8","dp":"jXUIZhU6GXIlhxQ4rt4_vNDdWfVirti8Z-uMqMYE1gxNZh3AyWJ2vnabZYKNd82NT_MQYbsYXkZWWd56_2lksH4kgFgv7iP8v8hZUc2f-AkTI862wLbySpeqm18ru7ypDqwn0ZL9-ov9FZAm9_X-8_rZT5F5MfoEka-Fb8tmoUk","dq":"Su005ftPIJAvGP6QH7FQF3F34OfNXsMbsLEdXQ84de_vcAte9kwOvCKJiHfXdFSpTtEpg4fdHeelUgAIUm0bCif8S1TC8T6y6fe0fzL2upTtRI7ZN7gPSELYoDwOP2qA1eL_q8dBn6J06KpOEOt_fNNyU7SqzRGZt0U6kUxIBR8","qi":"NAvVTL8i2N5fXyRf4FuwIvLat3bC8W7YPyz-rw4OfFnK4iHGk-X9_GbffmNHdkODsaJTIfs3EudJMYTQ9WMF3oy1ZvBZWtRpsi-8ZAM9pvSB4kIJX4xwzjn_OVv9r2yHFU1pbMAjfNBT3cYYe69TC3px40QlAgRm910OIlr0emk"}'
+        jwk-present.json: '{"kty":"RSA","e":"AQAB","n":"uAOff4Yygsj8MqqDYXn61ufzAJ4oqsWQAxO_t-Vr9W1CF-UDdyd8tId1fjdHdXLIiWmQF2_brJM74Kf0cZ81gAGa6fc3gM59ulmwmcWnM_FZCaIGtZhsSP3HQr10cdx7J8YBRCDaEuKPF8hRr6uwx_zOmCSSqjAo2aOgQqoz4aB16KFfyjGoNp71pEjTdZSw7T4fdCl4BiHi77Pl2bWgZ6V9Jkq-rxzHldhWrgotINxPjg2G7fGCC01TXj3YFd9kcQ85fyh6YQaOpqlBmauyML1ShZqLjhZHRRMBdEB8uo7jSpw38SOkfK5g_omGwgrLYJAC1SDaX6ysfEbmuHxqpw","kid":"2018-06-18T22:33:20Z","d":"FEd97-ljrqsktBa7lOYDAWUdkC9d7vgH13b5NXSIscsBMi3wdFS7NxAIoEjKTMTCGfayxQp0TLALNMZ9t3nixQEoR-mRSdY33-4bes7gDublt5yOHbw3DtI8__tuFlBEmE0HfbEbJ2Klf2r5qaEDwf537Cd3rF7TWazhMAee4RoEbZYTfhb_WRTlMFEVP0LveVKFvhjJ3GkT3H7S-epHM0moRh7c_PvW6p7y05ndUQsB7c7CHPEPA_a2eeiaoZnm7E1A1wmNF7mKQ00utVemWtl1S8oVg3aNldSHUtfn-P2-O_PWDRV8Ndsw_q-Wdvc7gqurBT2dbVsJ-jqWRzzFSQ","p":"7SgE1yBYiAijQc62RiGB-z_fK2q-UslRqVvZ3J1W5ZHibaKD0ne59boplfYNXKciHAtlqZ4b3h764wAut_V_EOhv8uFzmGxc1afs8aUFs6khitPYT3YgsE6esqaBJhIlO3OcDNPxcgwqUMgBJ0DfP8pwaB5JaKAYmG5ULJBMrZk","q":"xqKkiqR6hpgz33WUDmNukwDKVLnYCIm2iRhonR7oCfIIwra5XHm1lj3McI79J2zCwxqQwd7ZIhaL4RztKwAw9BdjNanC_CzSDyq-A2lomM2eXMQxu7qGRgvgbTzSwETt5GPtORmPy9mmCt1-Ei4Lihnmnr2NtpVLQ0-Ey37mgj8","dp":"jXUIZhU6GXIlhxQ4rt4_vNDdWfVirti8Z-uMqMYE1gxNZh3AyWJ2vnabZYKNd82NT_MQYbsYXkZWWd56_2lksH4kgFgv7iP8v8hZUc2f-AkTI862wLbySpeqm18ru7ypDqwn0ZL9-ov9FZAm9_X-8_rZT5F5MfoEka-Fb8tmoUk","dq":"Su005ftPIJAvGP6QH7FQF3F34OfNXsMbsLEdXQ84de_vcAte9kwOvCKJiHfXdFSpTtEpg4fdHeelUgAIUm0bCif8S1TC8T6y6fe0fzL2upTtRI7ZN7gPSELYoDwOP2qA1eL_q8dBn6J06KpOEOt_fNNyU7SqzRGZt0U6kUxIBR8","qi":"NAvVTL8i2N5fXyRf4FuwIvLat3bC8W7YPyz-rw4OfFnK4iHGk-X9_GbffmNHdkODsaJTIfs3EudJMYTQ9WMF3oy1ZvBZWtRpsi-8ZAM9pvSB4kIJX4xwzjn_OVv9r2yHFU1pbMAjfNBT3cYYe69TC3px40QlAgRm910OIlr0emk"}'
+        jwk-future.json: '{"kty":"RSA","e":"AQAB","n":"uAOff4Yygsj8MqqDYXn61ufzAJ4oqsWQAxO_t-Vr9W1CF-UDdyd8tId1fjdHdXLIiWmQF2_brJM74Kf0cZ81gAGa6fc3gM59ulmwmcWnM_FZCaIGtZhsSP3HQr10cdx7J8YBRCDaEuKPF8hRr6uwx_zOmCSSqjAo2aOgQqoz4aB16KFfyjGoNp71pEjTdZSw7T4fdCl4BiHi77Pl2bWgZ6V9Jkq-rxzHldhWrgotINxPjg2G7fGCC01TXj3YFd9kcQ85fyh6YQaOpqlBmauyML1ShZqLjhZHRRMBdEB8uo7jSpw38SOkfK5g_omGwgrLYJAC1SDaX6ysfEbmuHxqpw","kid":"2018-07-18T22:33:20Z","d":"FEd97-ljrqsktBa7lOYDAWUdkC9d7vgH13b5NXSIscsBMi3wdFS7NxAIoEjKTMTCGfayxQp0TLALNMZ9t3nixQEoR-mRSdY33-4bes7gDublt5yOHbw3DtI8__tuFlBEmE0HfbEbJ2Klf2r5qaEDwf537Cd3rF7TWazhMAee4RoEbZYTfhb_WRTlMFEVP0LveVKFvhjJ3GkT3H7S-epHM0moRh7c_PvW6p7y05ndUQsB7c7CHPEPA_a2eeiaoZnm7E1A1wmNF7mKQ00utVemWtl1S8oVg3aNldSHUtfn-P2-O_PWDRV8Ndsw_q-Wdvc7gqurBT2dbVsJ-jqWRzzFSQ","p":"7SgE1yBYiAijQc62RiGB-z_fK2q-UslRqVvZ3J1W5ZHibaKD0ne59boplfYNXKciHAtlqZ4b3h764wAut_V_EOhv8uFzmGxc1afs8aUFs6khitPYT3YgsE6esqaBJhIlO3OcDNPxcgwqUMgBJ0DfP8pwaB5JaKAYmG5ULJBMrZk","q":"xqKkiqR6hpgz33WUDmNukwDKVLnYCIm2iRhonR7oCfIIwra5XHm1lj3McI79J2zCwxqQwd7ZIhaL4RztKwAw9BdjNanC_CzSDyq-A2lomM2eXMQxu7qGRgvgbTzSwETt5GPtORmPy9mmCt1-Ei4Lihnmnr2NtpVLQ0-Ey37mgj8","dp":"jXUIZhU6GXIlhxQ4rt4_vNDdWfVirti8Z-uMqMYE1gxNZh3AyWJ2vnabZYKNd82NT_MQYbsYXkZWWd56_2lksH4kgFgv7iP8v8hZUc2f-AkTI862wLbySpeqm18ru7ypDqwn0ZL9-ov9FZAm9_X-8_rZT5F5MfoEka-Fb8tmoUk","dq":"Su005ftPIJAvGP6QH7FQF3F34OfNXsMbsLEdXQ84de_vcAte9kwOvCKJiHfXdFSpTtEpg4fdHeelUgAIUm0bCif8S1TC8T6y6fe0fzL2upTtRI7ZN7gPSELYoDwOP2qA1eL_q8dBn6J06KpOEOt_fNNyU7SqzRGZt0U6kUxIBR8","qi":"NAvVTL8i2N5fXyRf4FuwIvLat3bC8W7YPyz-rw4OfFnK4iHGk-X9_GbffmNHdkODsaJTIfs3EudJMYTQ9WMF3oy1ZvBZWtRpsi-8ZAM9pvSB4kIJX4xwzjn_OVv9r2yHFU1pbMAjfNBT3cYYe69TC3px40QlAgRm910OIlr0emk"}'
+  private:
+    canvas:
+      pendo_app_id: "stub-key-please-see-MRA-plugin"
+      pendo_regional_app_id: "stub-key-please-see-MRA-plugin"
+      pendo_regional_app_env: "io"
+      pendo_mobile_api_key_teacher: "stub-teacher-key-see-MRA-plugin"
+      pendo_mobile_api_key_parent: "stub-parent-key-see-MRA-plugin"
+      pendo_mobile_api_key_student: "stub-student-key-see-MRA-plugin"
+      auditors.yml: |
+        write_paths:
+          - active_record
+        read_path: active_record
+      datadog_apm.yml: |
+        sample_rate: 0.0
+        host_sample_rate: 0.0

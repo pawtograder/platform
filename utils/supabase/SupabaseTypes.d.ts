@@ -10187,6 +10187,350 @@ export type Database = {
           }
         ];
       };
+      lti_platforms: {
+        Row: {
+          auth_login_url: string
+          client_id: string
+          created_at: string
+          enabled: boolean
+          id: number
+          issuer: string
+          jwks_url: string
+          name: string
+          token_url: string
+          updated_at: string
+        }
+        Insert: {
+          auth_login_url: string
+          client_id: string
+          created_at?: string
+          enabled?: boolean
+          id?: number
+          issuer: string
+          jwks_url: string
+          name: string
+          token_url: string
+          updated_at?: string
+        }
+        Update: {
+          auth_login_url?: string
+          client_id?: string
+          created_at?: string
+          enabled?: boolean
+          id?: number
+          issuer?: string
+          jwks_url?: string
+          name?: string
+          token_url?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      lti_deployments: {
+        Row: {
+          created_at: string
+          deployment_id: string
+          id: number
+          name: string | null
+          platform_id: number
+        }
+        Insert: {
+          created_at?: string
+          deployment_id: string
+          id?: number
+          name?: string | null
+          platform_id: number
+        }
+        Update: {
+          created_at?: string
+          deployment_id?: string
+          id?: number
+          name?: string | null
+          platform_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lti_deployments_platform_id_fkey"
+            columns: ["platform_id"]
+            isOneToOne: false
+            referencedRelation: "lti_platforms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lti_tool_keys: {
+        Row: {
+          alg: string
+          created_at: string
+          id: number
+          kid: string
+          private_key_pem_encrypted: string
+          public_jwk: Json
+          retired_at: string | null
+        }
+        Insert: {
+          alg?: string
+          created_at?: string
+          id?: number
+          kid: string
+          private_key_pem_encrypted: string
+          public_jwk: Json
+          retired_at?: string | null
+        }
+        Update: {
+          alg?: string
+          created_at?: string
+          id?: number
+          kid?: string
+          private_key_pem_encrypted?: string
+          public_jwk?: Json
+          retired_at?: string | null
+        }
+        Relationships: []
+      }
+      lti_context_links: {
+        Row: {
+          ags_lineitems_url: string | null
+          ags_scopes: string[] | null
+          class_id: number | null
+          context_id: string
+          context_label: string | null
+          context_title: string | null
+          created_at: string
+          deployment_id: string
+          grade_sync_enabled: boolean
+          id: number
+          last_roster_sync_at: string | null
+          last_roster_sync_message: string | null
+          last_roster_sync_status: string | null
+          nrps_url: string | null
+          platform_id: number
+          roster_sync_enabled: boolean
+          updated_at: string
+        }
+        Insert: {
+          ags_lineitems_url?: string | null
+          ags_scopes?: string[] | null
+          class_id?: number | null
+          context_id: string
+          context_label?: string | null
+          context_title?: string | null
+          created_at?: string
+          deployment_id: string
+          grade_sync_enabled?: boolean
+          id?: number
+          last_roster_sync_at?: string | null
+          last_roster_sync_message?: string | null
+          last_roster_sync_status?: string | null
+          nrps_url?: string | null
+          platform_id: number
+          roster_sync_enabled?: boolean
+          updated_at?: string
+        }
+        Update: {
+          ags_lineitems_url?: string | null
+          ags_scopes?: string[] | null
+          class_id?: number | null
+          context_id?: string
+          context_label?: string | null
+          context_title?: string | null
+          created_at?: string
+          deployment_id?: string
+          grade_sync_enabled?: boolean
+          id?: number
+          last_roster_sync_at?: string | null
+          last_roster_sync_message?: string | null
+          last_roster_sync_status?: string | null
+          nrps_url?: string | null
+          platform_id?: number
+          roster_sync_enabled?: boolean
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lti_context_links_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_context_links_platform_id_fkey"
+            columns: ["platform_id"]
+            isOneToOne: false
+            referencedRelation: "lti_platforms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lti_line_items: {
+        Row: {
+          assignment_id: number | null
+          class_id: number
+          context_link_id: number
+          created_at: string
+          gradebook_column_id: number | null
+          id: number
+          label: string | null
+          last_pushed_at: string | null
+          line_item_url: string
+          score_maximum: number | null
+          updated_at: string
+        }
+        Insert: {
+          assignment_id?: number | null
+          class_id: number
+          context_link_id: number
+          created_at?: string
+          gradebook_column_id?: number | null
+          id?: number
+          label?: string | null
+          last_pushed_at?: string | null
+          line_item_url: string
+          score_maximum?: number | null
+          updated_at?: string
+        }
+        Update: {
+          assignment_id?: number | null
+          class_id?: number
+          context_link_id?: number
+          created_at?: string
+          gradebook_column_id?: number | null
+          id?: number
+          label?: string | null
+          last_pushed_at?: string | null
+          line_item_url?: string
+          score_maximum?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_overview"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments_for_student_dashboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments_with_effective_due_dates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_line_items_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test"
+            referencedColumns: ["assignment_id"]
+          },
+          {
+            foreignKeyName: "lti_line_items_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_line_items_context_link_id_fkey"
+            columns: ["context_link_id"]
+            isOneToOne: false
+            referencedRelation: "lti_context_links"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_line_items_gradebook_column_id_fkey"
+            columns: ["gradebook_column_id"]
+            isOneToOne: false
+            referencedRelation: "gradebook_columns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lti_users: {
+        Row: {
+          created_at: string
+          email: string | null
+          id: number
+          lis_person_sourcedid: string | null
+          name: string | null
+          platform_id: number
+          sub: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          email?: string | null
+          id?: number
+          lis_person_sourcedid?: string | null
+          name?: string | null
+          platform_id: number
+          sub: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          email?: string | null
+          id?: number
+          lis_person_sourcedid?: string | null
+          name?: string | null
+          platform_id?: number
+          sub?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lti_users_platform_id_fkey"
+            columns: ["platform_id"]
+            isOneToOne: false
+            referencedRelation: "lti_platforms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lti_users_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
+      lti_nonces: {
+        Row: {
+          created_at: string
+          expires_at: string
+          nonce: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          nonce: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          nonce?: string
+        }
+        Relationships: []
+      }
     };
     Views: {
       active_submissions_for_class: {
@@ -12770,6 +13114,41 @@ export type Database = {
           severity: string;
         }[];
       };
+      admin_upsert_lti_platform: {
+        Args: {
+          p_auth_login_url: string
+          p_client_id: string
+          p_enabled?: boolean
+          p_id?: number | null
+          p_issuer: string
+          p_jwks_url: string
+          p_name: string
+          p_token_url: string
+        }
+        Returns: {
+          auth_login_url: string
+          client_id: string
+          created_at: string
+          enabled: boolean
+          id: number
+          issuer: string
+          jwks_url: string
+          name: string
+          token_url: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "lti_platforms"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      admin_delete_lti_platform: { Args: { p_id: number }; Returns: undefined }
+      lti_consume_nonce: {
+        Args: { p_nonce: string; p_ttl_seconds?: number }
+        Returns: boolean
+      }
     };
     Enums: {
       allowed_modes: "private" | "public" | "question" | "note";

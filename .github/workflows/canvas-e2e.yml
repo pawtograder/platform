@@ -1,0 +1,76 @@
+name: Canvas LTI E2E
+
+# Heavy, opt-in lane: stands up a full Canvas LMS to verify the LTI 1.3
+# integration end-to-end (OIDC launch, NRPS roster sync, AGS grade passback).
+# It is intentionally NOT part of the per-PR E2E run.
+#
+# Runs only when:
+#   - manually dispatched, or
+#   - a PR is labeled `e2e-canvas` (add the label to opt a PR in).
+on:
+  workflow_dispatch:
+  pull_request_target:
+    types: [labeled, synchronize, reopened]
+
+concurrency:
+  group: canvas-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read # pull ghcr.io/pawtograder/canvas-lms-e2e
+
+jobs:
+  canvas-e2e:
+    # Dispatch always runs; on PRs require the explicit opt-in label.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'e2e-canvas')
+    runs-on: pawtograder-e2e
+    timeout-minutes: 90
+    env:
+      CI: "true"
+      # Prebuilt Canvas image (pushed to GHCR from tests/e2e/canvas/build.sh).
+      CANVAS_IMAGE: ${{ vars.CANVAS_E2E_IMAGE || 'ghcr.io/pawtograder/canvas-lms-e2e:latest' }}
+      ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.92.1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull prebuilt Canvas image
+        run: docker pull "$CANVAS_IMAGE"
+
+      - name: Install Playwright (chromium)
+        run: npx playwright install --with-deps chromium
+
+      # run-e2e.sh boots Canvas + Supabase + the tool, seeds Canvas, registers the
+      # LTI platform, then runs playwright.canvas.config.ts. Single source of
+      # truth shared with local runs (`npm run test:e2e:canvas`).
+      - name: Run Canvas LTI E2E suite
+        run: npm run test:e2e:canvas
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-canvas
+          path: playwright-report-canvas/
+          retention-days: 30
+
+      - name: Tear down Canvas stack
+        if: always()
+        run: docker compose -f tests/e2e/canvas/docker-compose.yml down -v || true
