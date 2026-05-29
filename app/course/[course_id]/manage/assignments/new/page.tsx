@@ -87,6 +87,9 @@ export default function NewAssignmentPage() {
               ? new TZDate(getValues("release_date"), timezone).toISOString()
               : "",
             due_date: getValues("due_date") ? new TZDate(getValues("due_date"), timezone).toISOString() : "",
+            suggested_due_date: getValues("suggested_due_date")
+              ? new TZDate(getValues("suggested_due_date"), timezone).toISOString()
+              : null,
             allow_late: getValues("allow_late"),
             description: getValues("description"),
             max_late_tokens: getValues("max_late_tokens") || null,

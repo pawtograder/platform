@@ -1499,6 +1499,7 @@ const assignmentIdx = {
 };
 export async function insertAssignment({
   due_date,
+  suggested_due_date,
   lab_due_date_offset,
   allow_not_graded_submissions,
   permit_empty_submissions,
@@ -1516,6 +1517,7 @@ export async function insertAssignment({
   assignment_slug
 }: {
   due_date: string;
+  suggested_due_date?: string;
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
   permit_empty_submissions?: boolean;
@@ -1561,6 +1563,7 @@ export async function insertAssignment({
       title: title,
       description: "This is a test assignment for E2E testing",
       due_date: due_date,
+      suggested_due_date: suggested_due_date ?? null,
       minutes_due_after_lab: lab_due_date_offset,
       template_repo: TEST_HANDOUT_REPO,
       autograder_points: 100,
