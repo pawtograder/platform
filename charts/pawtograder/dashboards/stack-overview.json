@@ -12,7 +12,7 @@
       {
         "name": "namespace",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
         "query": "label_values(kube_pod_info{pod=~\"pawtograder-.*\"}, namespace)",
         "refresh": 1,
         "current": { "selected": false, "text": "All", "value": "$__all" },
@@ -27,7 +27,7 @@
       "type": "stat",
       "title": "Pods ready",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -57,7 +57,7 @@
       "type": "stat",
       "title": "Pods restarting (1h)",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -88,7 +88,7 @@
       "type": "stat",
       "title": "Web error rate (5xx, 5m)",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -119,7 +119,7 @@
       "type": "stat",
       "title": "Active submissions",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum(pawtograder_active_submissions_active_count)" }
       ],
@@ -135,7 +135,7 @@
       "type": "timeseries",
       "title": "HTTP request rate by service",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "web",
@@ -165,7 +165,7 @@
       "type": "timeseries",
       "title": "P95 latency by service",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "web",
@@ -185,7 +185,7 @@
       "type": "timeseries",
       "title": "Memory by pod (RSS)",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -200,7 +200,7 @@
       "type": "timeseries",
       "title": "CPU by pod",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -215,7 +215,7 @@
       "type": "table",
       "title": "Recent restarts (24h)",
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",

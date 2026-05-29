@@ -13,7 +13,7 @@
       "type": "stat",
       "title": "Active connections",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum(realtime_connected)" }
       ],
@@ -24,7 +24,7 @@
       "type": "stat",
       "title": "Channels joined",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum(realtime_channels)" }
       ],
@@ -35,7 +35,7 @@
       "type": "stat",
       "title": "Server broadcast rate (1m)",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum(rate(web_realtime_broadcast_total[1m]))" }
       ],
@@ -46,7 +46,7 @@
       "type": "stat",
       "title": "WS messages out / s",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum(rate(realtime_channel_events[1m]))" }
       ],
@@ -57,7 +57,7 @@
       "type": "timeseries",
       "title": "WebSocket connection churn",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "legendFormat": "joined / s", "expr": "sum(rate(realtime_joined_total[1m]))" },
         { "refId": "B", "legendFormat": "left / s", "expr": "sum(rate(realtime_left_total[1m]))" },
@@ -70,7 +70,7 @@
       "type": "timeseries",
       "title": "Connections per replica",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -84,7 +84,7 @@
       "type": "timeseries",
       "title": "Server-initiated broadcasts by channel class",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -99,7 +99,7 @@
       "type": "timeseries",
       "title": "Realtime Erlang VM scheduler load",
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -114,7 +114,7 @@
       "type": "timeseries",
       "title": "Realtime memory",
       "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",

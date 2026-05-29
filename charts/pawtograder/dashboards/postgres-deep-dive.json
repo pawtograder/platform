@@ -12,7 +12,7 @@
       {
         "name": "datname",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
         "query": "label_values(pg_database_size_bytes, datname)",
         "refresh": 1,
         "current": { "selected": false, "text": "postgres", "value": "postgres" },
@@ -26,7 +26,7 @@
       "type": "stat",
       "title": "Cache hit ratio",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -52,7 +52,7 @@
       "type": "stat",
       "title": "Active connections",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum(pg_stat_activity_count{datname=\"$datname\"})" }
       ],
@@ -63,7 +63,7 @@
       "type": "stat",
       "title": "Replication lag (max slot)",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "max(pg_replication_slots_lag_bytes)" }
       ],
@@ -86,7 +86,7 @@
       "type": "stat",
       "title": "DB size",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "pg_database_size_bytes{datname=\"$datname\"}" }
       ],
@@ -97,7 +97,7 @@
       "type": "timeseries",
       "title": "Transactions / s (commit vs rollback)",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "legendFormat": "commit", "expr": "rate(pg_stat_database_xact_commit{datname=\"$datname\"}[1m])" },
         { "refId": "B", "legendFormat": "rollback", "expr": "rate(pg_stat_database_xact_rollback{datname=\"$datname\"}[1m])" }
@@ -109,7 +109,7 @@
       "type": "timeseries",
       "title": "Rows touched / s",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "legendFormat": "returned", "expr": "rate(pg_stat_database_tup_returned{datname=\"$datname\"}[1m])" },
         { "refId": "B", "legendFormat": "fetched", "expr": "rate(pg_stat_database_tup_fetched{datname=\"$datname\"}[1m])" },
@@ -124,7 +124,7 @@
       "type": "table",
       "title": "Top 20 statements by total exec time",
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -139,7 +139,7 @@
       "type": "table",
       "title": "Top 30 tables by total size",
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -154,7 +154,7 @@
       "type": "timeseries",
       "title": "Replication slot lag (bytes)",
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 32 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -169,7 +169,7 @@
       "type": "timeseries",
       "title": "Locks held by mode",
       "gridPos": { "h": 6, "w": 12, "x": 12, "y": 32 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",

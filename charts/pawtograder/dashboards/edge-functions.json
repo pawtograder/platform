@@ -12,7 +12,7 @@
       {
         "name": "fn",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
         "query": "label_values(deno_http_requests_total, function)",
         "refresh": 1,
         "current": { "selected": false, "text": "All", "value": "$__all" },
@@ -27,7 +27,7 @@
       "type": "stat",
       "title": "Invocations / s",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -41,7 +41,7 @@
       "type": "stat",
       "title": "Error rate (5m)",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -67,7 +67,7 @@
       "type": "stat",
       "title": "P95 latency",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -81,7 +81,7 @@
       "type": "stat",
       "title": "Workers active",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         { "refId": "A", "expr": "sum(edge_runtime_workers_active)" }
       ],
@@ -92,7 +92,7 @@
       "type": "timeseries",
       "title": "Invocations per function (RPS)",
       "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -107,7 +107,7 @@
       "type": "timeseries",
       "title": "P50/P95/P99 latency by function",
       "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "p50",
@@ -132,7 +132,7 @@
       "type": "table",
       "title": "Top errors by function",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
@@ -147,7 +147,7 @@
       "type": "timeseries",
       "title": "Web app's calls to edge functions",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
