@@ -53,6 +53,18 @@ jobs:
         with:
           version: 2.92.1
 
+      # The runner may lack the Docker Compose v2 plugin (`docker compose`); the
+      # scripts use it. Install it root-free into the CLI-plugins dir if missing.
+      - name: Ensure docker compose v2
+        run: |
+          if ! docker compose version >/dev/null 2>&1; then
+            mkdir -p "$HOME/.docker/cli-plugins"
+            curl -fsSL "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-$(uname -m)" \
+              -o "$HOME/.docker/cli-plugins/docker-compose"
+            chmod +x "$HOME/.docker/cli-plugins/docker-compose"
+          fi
+          docker compose version
+
       - name: Install dependencies
         run: npm ci
 
