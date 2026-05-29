@@ -67,11 +67,17 @@ spec:
             {{- if .Values.monitoring.enabled }}
             # Static bearer token gating the app's /api/metrics endpoint.
             # ServiceMonitor injects it as Authorization: Bearer <token>.
+            # Marked optional: pre-existing pawtograder-jwt Secrets (from
+            # before METRICS_SCRAPE_TOKEN was added to the bundle) may not
+            # carry this key. When absent, /api/metrics returns 503 — the
+            # /api/metrics route handler also checks for the env var so
+            # there's no scrape leak.
             - name: METRICS_SCRAPE_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.names.jwt }}
                   key: METRICS_SCRAPE_TOKEN
+                  optional: true
             {{- end }}
             {{- with .Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
