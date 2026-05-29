@@ -6,10 +6,19 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "pawtograder.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
+    # Next.js Server Action responses always carry the large CSP header
+    # set by middleware.ts (~1.7 KB). With nginx-ingress's defaults
+    # (proxy_buffer_size 4k / proxy_buffers 4 4k) the response header
+    # block — CSP + Vary + Cache-Control + Link + set-cookie — overflows
+    # the single buffer on redirects, the upstream gets reset, and nginx
+    # returns 502 with "upstream sent too big header". Make it 16k so we
+    # have headroom for cookie-stacked redirects too.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}
