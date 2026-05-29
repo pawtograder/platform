@@ -1114,7 +1114,7 @@ function ExportSubmissionMetadataButton({ submission }: { submission: Submission
 }
 
 function SubmissionHistoryContents({ submission }: { submission: SubmissionWithGraderResultsAndFiles }) {
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, isReadOnly } = useClassProfiles();
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
         field: "assignment_group_id",
@@ -1270,15 +1270,26 @@ function SubmissionHistoryContents({ submission }: { submission: SubmissionWithG
                   </Table.Cell>
                   <Table.Cell>
                     <Link href={link}>
-                      {historical_submission.submission_reviews?.completed_at &&
-                        (getDisplayedGradingTotalForStudent(
-                          historical_submission.submission_reviews,
-                          private_profile_id
-                        ) ??
-                          historical_submission.submission_reviews.total_score ??
-                          "—") +
-                          "/" +
-                          (assignment?.total_points ?? <Skeleton height="20px" />)}
+                      {(() => {
+                        // View-as-student: a real student's RLS hides unreleased reviews, so
+                        // the embedded review is null and no total shows. An instructor
+                        // masquerading reads it via the staff RLS path, so mirror RLS here and
+                        // withhold the unreleased grade. Real staff still see it.
+                        const review =
+                          isReadOnly &&
+                          historical_submission.submission_reviews &&
+                          !historical_submission.submission_reviews.released
+                            ? null
+                            : historical_submission.submission_reviews;
+                        return (
+                          review?.completed_at &&
+                          (getDisplayedGradingTotalForStudent(review, private_profile_id) ??
+                            review.total_score ??
+                            "—") +
+                            "/" +
+                            (assignment?.total_points ?? <Skeleton height="20px" />)
+                        );
+                      })()}
                     </Link>
                   </Table.Cell>
                   <Table.Cell>
@@ -1468,7 +1479,21 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithGraderRes
 function TestResults() {
   const submission = useSubmission();
   const pathname = usePathname();
-  const testResults = submission.grader_results?.grader_result_tests;
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const rawTestResults = submission.grader_results?.grader_result_tests;
+  // Student view (including view-as) must hide tests that are flagged not-released or
+  // hide_score — these are present in the row because RLS doesn't strip them, but
+  // AutograderSection (the Grade tab) already applies the same filter. Use the same rule
+  // here so the submission sidebar's "Automated Check Results" matches.
+  const testResults = useMemo(() => {
+    if (!rawTestResults) return rawTestResults;
+    if (isGraderOrInstructor) return rawTestResults;
+    return rawTestResults.filter((t) => {
+      const extra = t.extra_data as GraderResultTestExtraData | null;
+      return extra?.hide_score !== "true" && t.is_released;
+    });
+  }, [rawTestResults, isGraderOrInstructor]);
+  const hiddenTestCount = (rawTestResults?.length ?? 0) - (testResults?.length ?? 0);
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   const { matches } = useErrorPinMatches(submission.id);
@@ -1576,6 +1601,11 @@ function TestResults() {
           </Box>
         );
       })}
+      {hiddenTestCount > 0 && (
+        <Text fontSize="xs" color="text.muted" mt={2}>
+          {hiddenTestCount} hidden test{hiddenTestCount === 1 ? "" : "s"} not yet released.
+        </Text>
+      )}
       {/* Show matches for submission-level (no specific test) */}
       {matches.has(null) && matches.get(null)!.length > 0 && (
         <Box mt={2}>
@@ -2227,11 +2257,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                       .sort((a, b) => a.id - b.id)
                       .map((member) => (
                         <HStack key={member.id} gap={1}>
-                          <PersonName uid={member.profile_id} showAvatar={false} />
-                          <StudentSummaryTrigger
-                            student_id={member.profile_id}
-                            course_id={parseInt(course_id as string, 10)}
-                          />
+                          {isGraderOrInstructor ? (
+                            <StudentSummaryTrigger
+                              student_id={member.profile_id}
+                              course_id={parseInt(course_id as string, 10)}
+                            >
+                              <PersonName uid={member.profile_id} showAvatar={false} />
+                            </StudentSummaryTrigger>
+                          ) : (
+                            <PersonName uid={member.profile_id} showAvatar={false} />
+                          )}
                         </HStack>
                       ))}
                     )
@@ -2244,13 +2279,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                 </HStack>
               ) : (
                 <>
-                  <Text>{submitter?.name}</Text>{" "}
-                  {isGraderOrInstructor && submission.profile_id && (
+                  {isGraderOrInstructor && submission.profile_id ? (
                     <StudentSummaryTrigger
                       student_id={submission.profile_id}
                       course_id={parseInt(course_id as string, 10)}
-                    />
-                  )}
+                    >
+                      <Text>{submitter?.name}</Text>
+                    </StudentSummaryTrigger>
+                  ) : (
+                    <Text>{submitter?.name}</Text>
+                  )}{" "}
                 </>
               )}
               - Submission #{submission.ordinal}
