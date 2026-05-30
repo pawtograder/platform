@@ -14,11 +14,12 @@ import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import StudentSummaryTrigger from "@/components/ui/student-summary";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsReadOnly } from "@/hooks/useClassProfiles";
 import { useCourseController, useDiscussionThreadReadStatus, useDiscussionTopics } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
 } from "@/hooks/useDiscussionThreadRootController";
+import { useViewAsStudentDataMask } from "@/hooks/useViewAsStudentDataMask";
 import { useDiscussionThreadFollowStatus } from "@/hooks/useDiscussionThreadWatches";
 import useModalManager from "@/hooks/useModalManager";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -63,17 +64,23 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
             <Flex wrap="wrap" gap="1" align="center">
               {userProfile ? (
                 <HStack gap="1">
-                  <Heading size="sm">
-                    {userProfile?.name}
-                    {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
-                  </Heading>
+                  {isGraderOrInstructor && userProfile?.private_profile_id ? (
+                    <StudentSummaryTrigger student_id={userProfile.private_profile_id} course_id={Number(course_id)}>
+                      <Heading size="sm">
+                        {userProfile?.name}
+                        {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
+                      </Heading>
+                    </StudentSummaryTrigger>
+                  ) : (
+                    <Heading size="sm">
+                      {userProfile?.name}
+                      {userProfile?.real_name && " (" + userProfile?.real_name + " to self and instructors)"}
+                    </Heading>
+                  )}
                   {userProfile && <KarmaBadge karma={userProfile.discussion_karma ?? 0} />}
                 </HStack>
               ) : (
                 <Skeleton width="100px" />
-              )}
-              {isGraderOrInstructor && userProfile?.private_profile_id && (
-                <StudentSummaryTrigger student_id={userProfile.private_profile_id} course_id={Number(course_id)} />
               )}
               <Text fontSize="sm" color="text.muted" px="1">
                 {thread.is_question ? "Asked question" : "Posted note"} #{thread.ordinal} to{" "}
@@ -128,14 +135,17 @@ function ThreadActions({
   const [replyVisible, setReplyVisible] = useState(false);
   const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
   const errorPinModal = useModalManager<number>();
-  const { public_profile_id, private_profile_id, role } = useClassProfiles();
+  const { public_profile_id, private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const isReadOnly = useIsReadOnly();
   const { discussionThreadTeasers } = useCourseController();
+  // In view-as the underlying hooks already neuter follow/like/reply, but the affordances
+  // were still drawn in the action row. Roll the read-only state into the can-* flags so
+  // the row collapses to a non-interactive set in the masquerade.
   const canEdit =
-    thread.author === public_profile_id ||
-    thread.author === private_profile_id ||
-    role.role === "instructor" ||
-    role.role === "grader";
-  const canPin = role.role === "instructor" || role.role === "grader";
+    !isReadOnly &&
+    (thread.author === public_profile_id || thread.author === private_profile_id || isGraderOrInstructor);
+  const canPin = !isReadOnly && isGraderOrInstructor;
   const isRootThread = thread.root != null && thread.id === thread.root;
   const canMarkDuplicate = canPin && isRootThread && !thread.duplicate_original_subject;
 
@@ -149,12 +159,16 @@ function ThreadActions({
 
   return (
     <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">
-      <Tooltip content="Follow">
-        <ThreadFollowButton thread={thread} />
-      </Tooltip>
-      <Tooltip content="Like">
-        <DiscussionThreadLikeButton thread={thread} />
-      </Tooltip>
+      {!isReadOnly && (
+        <>
+          <Tooltip content="Follow">
+            <ThreadFollowButton thread={thread} />
+          </Tooltip>
+          <Tooltip content="Like">
+            <DiscussionThreadLikeButton thread={thread} />
+          </Tooltip>
+        </>
+      )}
       {canEdit && (
         <Tooltip content="Edit">
           <Button aria-label="Edit" onClick={() => setEditing(!editing)} variant="ghost" size="sm">
@@ -194,11 +208,13 @@ function ThreadActions({
           </Button>
         </Tooltip>
       )}
-      <Tooltip content="Reply">
-        <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm">
-          <FaReply />
-        </Button>
-      </Tooltip>
+      {!isReadOnly && (
+        <Tooltip content="Reply">
+          <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm">
+            <FaReply />
+          </Button>
+        </Tooltip>
+      )}
       {/* Discord link - shown if thread has a Discord message (staff only see it) */}
       <DiscordDiscussionMessageLink threadId={thread.id} />
       {/* AI Help button for staff - component has internal tooltip */}
@@ -260,7 +276,15 @@ function ThreadFollowButton({ thread }: { thread: DiscussionThreadType }) {
 function DiscussionPost({ root_id }: { root_id: number }) {
   const discussion_topics = useDiscussionTopics();
   const { discussionThreadTeasers } = useCourseController();
-  const rootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
+  const rawRootThread = useTableControllerValueById(discussionThreadTeasers, root_id);
+  const { filterDiscussionTeaser } = useViewAsStudentDataMask();
+  // View-as-student deep-links to an instructors_only thread must hit the same wall the
+  // student would: PostgREST returns the row to the real instructor, so the mask must
+  // also apply here, not just in the feed list.
+  const rootThread = useMemo(() => {
+    if (!rawRootThread) return rawRootThread;
+    return filterDiscussionTeaser(rawRootThread) ? rawRootThread : undefined;
+  }, [rawRootThread, filterDiscussionTeaser]);
   // Force a single-row fetch on mount / root_id change so the heading paints
   // reliably on first navigation. The course-wide teasers controller is
   // populated by an initial-load query plus realtime broadcasts; if neither
@@ -402,6 +426,17 @@ function DiscussionPost({ root_id }: { root_id: number }) {
     [discussionThreadTeasers, root_id]
   );
 
+  // Distinguish "still loading" from "loaded but masked out by view-as": when the raw row
+  // came back and we hid it ourselves, render a not-found state instead of spinning forever.
+  if (rawRootThread && !rootThread) {
+    return (
+      <Box py="4">
+        <Text fontSize="sm" color="fg.muted">
+          This thread isn&apos;t visible from the student view.
+        </Text>
+      </Box>
+    );
+  }
   if (!discussion_topics || !rootThread) {
     return <Skeleton height="100px" />;
   }
@@ -494,6 +529,12 @@ function DiscussionThreadAnswer({ answer_id }: { answer_id: number }) {
 function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   const thread = useDiscussionThreadChildren(root_id);
   const courseController = useCourseController();
+  // View-as-student: the replies come from the (unmasked) children controller, so they must
+  // be gated by the same mask DiscussionPost applies to the root. Otherwise a masked
+  // instructors_only thread shows "not visible" for the root but still leaks its reply tree.
+  const rawRootThread = useTableControllerValueById(courseController.discussionThreadTeasers, root_id);
+  const { filterDiscussionTeaser } = useViewAsStudentDataMask();
+  const maskedOut = rawRootThread != null && !filterDiscussionTeaser(rawRootThread);
   useEffect(() => {
     document.title = `${courseController.course.name} - Discussion - ${thread?.subject}`;
   }, [courseController.course.name, thread?.subject]);
@@ -501,7 +542,8 @@ function DiscussionPostWithChildren({ root_id }: { root_id: number }) {
   return (
     <>
       <DiscussionPost root_id={root_id} />
-      {thread &&
+      {!maskedOut &&
+        thread &&
         thread.children.map((child, index) => (
           <DiscussionThread
             key={child.id}

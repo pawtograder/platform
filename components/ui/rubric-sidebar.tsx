@@ -74,7 +74,13 @@ import {
   useSubmissionReviewForRubric,
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
-import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
+import {
+  useActiveReviewAssignment,
+  useActiveReviewAssignmentId,
+  useActiveRubricId,
+  useActiveSubmissionReviewId,
+  useIgnoreAssignedReview
+} from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   getStudentFacingErrorMessage,
@@ -100,6 +106,7 @@ import { Switch } from "@/components/ui/switch";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaChartLine, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import { CompleteReviewAssignmentButton, CompleteReviewButton } from "./submission-review-toolbar";
 import { GroupMemberSelectOption } from "./group-member-select-option";
 import PersonName from "./person-name";
 import RegradeRequestWrapper from "./regrade-request-wrapper";
@@ -1449,8 +1456,51 @@ function RubricMenu() {
     </Box>
   );
 }
+/**
+ * Renders a completion button after the rubric being worked on. Mirrors the top toolbar gating:
+ *   - active review assignment (partial or full) → CompleteReviewAssignmentButton
+ *   - grader/instructor on full submission review (no assignment, or ignoring assignment)
+ *     → CompleteReviewButton
+ */
+function RubricSidebarConfirmButton() {
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const activeReviewAssignment = useActiveReviewAssignment();
+  const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const ignoreAssignedReview = useIgnoreAssignedReview();
+  const isInstructorOrGrader = useIsGraderOrInstructor();
+  const activeSubmissionReviewId = useActiveSubmissionReviewId();
+  const review = useSubmissionReviewOrGradingReview(activeSubmissionReviewId ?? -1);
+
+  if (activeReviewAssignment && !ignoreAssignedReview && !activeReviewAssignment.completed_at) {
+    return (
+      <Box pt={4} pb={2} w="100%">
+        <CompleteReviewAssignmentButton />
+      </Box>
+    );
+  }
+
+  if (!isInstructorOrGrader || assignedRubricParts.length > 0 || !review || review.completed_at) {
+    return null;
+  }
+  return (
+    <Box pt={4} pb={2} w="100%">
+      <CompleteReviewButton />
+    </Box>
+  );
+}
+
 export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
   const unsortedRubrics = useRubrics();
+  const assignmentController = useAssignmentController();
+  const activeSubmissionReviewId = useActiveSubmissionReviewId();
+  const activeSubmissionReview = useSubmissionReviewOrGradingReview(activeSubmissionReviewId ?? -1);
+  const activeReviewAssignment = useActiveReviewAssignment();
+  const ignoreAssignedReview = useIgnoreAssignedReview();
+  /** Rubric block after which we show the completion button (assigned rubric, or active review rubric). */
+  const completeReviewAfterRubricId =
+    !ignoreAssignedReview && activeReviewAssignment?.rubric_id
+      ? activeReviewAssignment.rubric_id
+      : (activeSubmissionReview?.rubric_id ?? assignmentController.assignment.grading_rubric_id ?? undefined);
   // Descriptions are collapsed by default for students (keeps the sidebar scannable) but shown for
   // graders/instructors, who rely on them while grading. Derive the default from the role each
   // render (so it picks up role state that hydrates after mount) and let a manual toggle override.
@@ -1458,7 +1508,6 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
   const [descriptionsOverride, setDescriptionsOverride] = useState<boolean | null>(null);
   const showDescriptions = descriptionsOverride ?? isGraderOrInstructorForDescriptions;
   const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
-  const activeReviewAssignment = useActiveReviewAssignment();
   const rubrics = useMemo(() => {
     return unsortedRubrics.sort((a, b) => {
       if (a.id === activeReviewAssignment?.rubric_id) {
@@ -1584,6 +1633,9 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
     []
   );
 
+  const showCompleteReviewAtListEnd =
+    completeReviewAfterRubricId !== undefined && !rubrics.some((r) => r.id === completeReviewAfterRubricId);
+
   return (
     <RubricDescriptionsContext.Provider value={showDescriptions}>
       <VStack w="100%">
@@ -1608,6 +1660,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
             aria-label={`Rubric: ${rubric.name}`}
           >
             <RubricSidebar key={rubric.id} rubricId={rubric.id} />
+            {completeReviewAfterRubricId === rubric.id && <RubricSidebarConfirmButton />}
             {index < rubrics.length - 1 && (
               <Separator
                 orientation="horizontal"
@@ -1619,6 +1672,7 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
             )}
           </Box>
         ))}
+        {showCompleteReviewAtListEnd && <RubricSidebarConfirmButton />}
       </VStack>
     </RubricDescriptionsContext.Provider>
   );
