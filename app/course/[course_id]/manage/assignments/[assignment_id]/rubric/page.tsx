@@ -16,6 +16,7 @@ import {
 import { useListTableControllerValues } from "@/lib/TableController";
 import type { RubricCheckReference } from "@/utils/supabase/DatabaseTypes";
 import {
+  Assignment,
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -124,6 +125,55 @@ function hydrateRubricForReviewRoundFromController(
     controller.rubricChecksController.rows as HydratedRubricCheck[],
     controller.rubricCheckReferencesController.rows
   );
+}
+
+type AssignmentRubricFkColumn = "grading_rubric_id" | "self_review_rubric_id" | "meta_grading_rubric_id";
+
+function assignmentRubricFkForRound(
+  reviewRound: NonNullable<HydratedRubric["review_round"]>
+): AssignmentRubricFkColumn | null {
+  switch (reviewRound) {
+    case "grading-review":
+      return "grading_rubric_id";
+    case "self-review":
+      return "self_review_rubric_id";
+    case "meta-grading-review":
+      return "meta_grading_rubric_id";
+    default:
+      return null;
+  }
+}
+
+/** Prefer the loaded rubric row, then the assignment FK column for this review round. */
+function resolveExistingRubricIdForRound(
+  assignment: Assignment | undefined,
+  reviewRound: NonNullable<HydratedRubric["review_round"]>,
+  hydratedRubrics: HydratedRubric[]
+): number | undefined {
+  const fromList = hydratedRubrics.find((r) => r.review_round === reviewRound && r.id > 0)?.id;
+  if (fromList) return fromList;
+  const fkColumn = assignment ? assignmentRubricFkForRound(reviewRound) : null;
+  if (!fkColumn || !assignment) return undefined;
+  const fkId = assignment[fkColumn];
+  return fkId && fkId > 0 ? fkId : undefined;
+}
+
+async function syncAssignmentRubricFkIfNeeded(
+  assignment: Assignment,
+  reviewRound: NonNullable<HydratedRubric["review_round"]>,
+  savedRubricId: number
+) {
+  const fkColumn = assignmentRubricFkForRound(reviewRound);
+  if (!fkColumn || assignment[fkColumn] === savedRubricId) return;
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("assignments")
+    .update({ [fkColumn]: savedRubricId })
+    .eq("id", assignment.id);
+  if (error) {
+    throw new Error(`Rubric saved but failed to link it to the assignment: ${error.message}`);
+  }
 }
 
 /**
@@ -486,7 +536,19 @@ function InnerRubricPage() {
     (
       currentAssignmentId: string,
       currentClassId: number,
-      reviewRound: HydratedRubric["review_round"]
+      reviewRound: HydratedRubric["review_round"],
+      existingRubric?: Partial<
+        Pick<
+          HydratedRubric,
+          | "id"
+          | "name"
+          | "description"
+          | "is_private"
+          | "cap_score_to_assignment_points"
+          | "hide_unless_assigned"
+          | "created_at"
+        >
+      >
     ): HydratedRubric => {
       const roundNameProper = reviewRound
         ? reviewRound
@@ -494,20 +556,20 @@ function InnerRubricPage() {
             .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
             .join(" ")
         : "New";
-      const name = `${roundNameProper} Rubric for ${assignmentDetails?.title || "Assignment"}`;
+      const defaultName = `${roundNameProper} Rubric for ${assignmentDetails?.title || "Assignment"}`;
 
       return {
-        id: 0, // Indicates it's a new, unsaved rubric template
-        name: name,
-        description: null,
+        id: existingRubric?.id ?? 0,
+        name: existingRubric?.name ?? defaultName,
+        description: existingRubric?.description ?? null,
         assignment_id: Number(currentAssignmentId),
         class_id: currentClassId,
-        is_private: false,
+        is_private: existingRubric?.is_private ?? false,
         review_round: reviewRound,
         rubric_parts: [],
-        created_at: "", // Will be set by DB
-        cap_score_to_assignment_points: false,
-        hide_unless_assigned: false
+        created_at: existingRubric?.created_at ?? "",
+        cap_score_to_assignment_points: existingRubric?.cap_score_to_assignment_points ?? false,
+        hide_unless_assigned: existingRubric?.hide_unless_assigned ?? false
       };
     },
     [assignmentDetails?.title]
@@ -517,7 +579,8 @@ function InnerRubricPage() {
     (
       currentAssignmentId: string,
       currentClassId: number,
-      reviewRound: NonNullable<HydratedRubric["review_round"]>
+      reviewRound: NonNullable<HydratedRubric["review_round"]>,
+      existingRubricId = 0
     ): HydratedRubric => {
       const newRubricBase = YAML.parse(defaultRubric) as YmlRubricType;
       if (assignmentDetails?.title) {
@@ -532,7 +595,7 @@ function InnerRubricPage() {
         is_private: false,
         review_round: reviewRound
       });
-      hydrated.id = 0; // New template, not saved yet
+      hydrated.id = existingRubricId;
       hydrated.class_id = currentClassId;
       hydrated.assignment_id = Number(currentAssignmentId);
       hydrated.review_round = reviewRound;
@@ -540,11 +603,11 @@ function InnerRubricPage() {
       hydrated.rubric_parts.forEach((part, pIdx) => {
         part.id = -(pIdx + 1); // Negative IDs for new items not yet in DB
         part.class_id = currentClassId;
-        part.rubric_id = 0; // Will be set upon saving the main rubric
+        part.rubric_id = hydrated.id;
         part.rubric_criteria.forEach((criteria, cIdx) => {
           criteria.id = -(cIdx + 1 + pIdx * 100);
           criteria.class_id = currentClassId;
-          criteria.rubric_id = 0;
+          criteria.rubric_id = hydrated.id;
           criteria.rubric_part_id = part.id;
           criteria.rubric_checks.forEach((check, chIdx) => {
             check.id = -(chIdx + 1 + cIdx * 1000 + pIdx * 100000);
@@ -557,6 +620,27 @@ function InnerRubricPage() {
     },
     [assignmentDetails?.title]
   );
+
+  const handleCreateNewRubric = useCallback(() => {
+    if (!assignmentDetails || !activeReviewRound) return;
+    const existingId = resolveExistingRubricIdForRound(assignmentDetails, activeReviewRound, allHydratedRubrics);
+    const existingRubric = existingId ? allHydratedRubrics.find((r) => r.id === existingId) : undefined;
+    const minimal = createMinimalNewHydratedRubric(
+      assignment_id as string,
+      assignmentDetails.class_id,
+      activeReviewRound,
+      existingRubric ?? (existingId ? { id: existingId } : undefined)
+    );
+    setActiveRubric(minimal);
+    setGuiEditorEpoch((e) => e + 1);
+    setHasUnsavedChanges(true);
+    setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
+    setStashedEditorStates((prev) => {
+      const newState = { ...prev };
+      delete newState[activeReviewRound];
+      return newState;
+    });
+  }, [assignmentDetails, activeReviewRound, assignment_id, allHydratedRubrics, createMinimalNewHydratedRubric]);
 
   const handleReviewRoundChange = useCallback(
     (newReviewRound: NonNullable<HydratedRubric["review_round"]>) => {
@@ -1117,7 +1201,16 @@ function InnerRubricPage() {
       // Identify the existing rubric (if any) for this review round; the RPC
       // distinguishes update-vs-create from the `id` field in the payload.
       const existingRubricForRound = allHydratedRubrics.find((r) => r.review_round === activeReviewRound && r.id > 0);
-      const rubricId = existingRubricForRound?.id ?? 0;
+      const resolvedExistingId = resolveExistingRubricIdForRound(
+        assignmentDetails,
+        activeReviewRound,
+        allHydratedRubrics
+      );
+      const rubricId =
+        (activeRubric && activeRubric.id > 0 ? activeRubric.id : 0) ||
+        existingRubricForRound?.id ||
+        resolvedExistingId ||
+        0;
 
       // Resolve cross-rubric YAML references against the live set of sibling
       // rubrics. We pass the resolved (referencing, referenced) pairs in the
@@ -1288,6 +1381,7 @@ function InnerRubricPage() {
 
       const freshRubric = hydrateRubricForReviewRoundFromController(assignmentController, activeReviewRound);
       if (freshRubric) {
+        await syncAssignmentRubricFkIfNeeded(assignmentDetails, activeReviewRound, freshRubric.id);
         syncEditorFromSavedRubric(freshRubric);
       }
 
@@ -1302,7 +1396,8 @@ function InnerRubricPage() {
       syncEditorFromSavedRubric,
       invalidate,
       allHydratedRubrics,
-      unsavedStatusPerTab
+      unsavedStatusPerTab,
+      activeRubric
     ]
   );
 
@@ -1339,10 +1434,13 @@ function InnerRubricPage() {
             size="xs"
             onClick={() => {
               if (assignmentDetails && activeReviewRound) {
+                const existingId =
+                  resolveExistingRubricIdForRound(assignmentDetails, activeReviewRound, allHydratedRubrics) ?? 0;
                 const demoTemplate = createNewRubricTemplate(
                   assignment_id as string,
                   assignmentDetails.class_id,
-                  activeReviewRound
+                  activeReviewRound,
+                  existingId
                 );
                 setActiveRubric(demoTemplate);
                 setGuiEditorEpoch((e) => e + 1);
@@ -1548,13 +1646,11 @@ function InnerRubricPage() {
                   />
                 </Box>
               )}
-              {viewMode === "gui" && !activeRubric && (
+              {viewMode === "gui" && !activeRubric && !isLoadingCurrentRubric && (
                 <Center h="calc(100vh - 150px)" w="100%">
-                  <VStack>
+                  <VStack gap={3}>
                     <Text>No rubric configured for this review round.</Text>
-                    <Text fontSize="sm" color="fg.muted">
-                      Load a demo template or switch to YAML to paste one in.
-                    </Text>
+                    <Button onClick={handleCreateNewRubric}>Create New Rubric</Button>
                   </VStack>
                 </Center>
               )}

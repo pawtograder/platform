@@ -552,9 +552,7 @@ function SelfEvaluationSubform({ form, timezone }: { form: UseFormReturnType<Ass
                       raw.length >= 6 &&
                       (raw.charAt(raw.length - 6) === "+" || raw.charAt(raw.length - 6) === "-");
                     const localValue =
-                      raw && hasATimezoneOffset
-                        ? formatInTimeZone(raw, timezone, "yyyy-MM-dd'T'HH:mm")
-                        : (raw ?? "");
+                      raw && hasATimezoneOffset ? formatInTimeZone(raw, timezone, "yyyy-MM-dd'T'HH:mm") : (raw ?? "");
                     return (
                       <Input
                         type="datetime-local"
