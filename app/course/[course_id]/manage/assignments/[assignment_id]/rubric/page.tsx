@@ -769,6 +769,7 @@ function InnerRubricPage() {
             review_round: activeReviewRound, // Always force to current tab's review round
             rubric_parts: hydratedFromYaml.rubric_parts,
             cap_score_to_assignment_points: hydratedFromYaml.cap_score_to_assignment_points ?? false,
+            hide_unless_assigned: hydratedFromYaml.hide_unless_assigned ?? false,
             // Preserve ID if editing an existing rubric, otherwise it's 0 or negative from template
             id: activeRubric && activeRubric.id > 0 ? activeRubric.id : 0,
             assignment_id: Number(assignment_id),
