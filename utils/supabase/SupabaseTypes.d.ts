@@ -1137,13 +1137,6 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
-            foreignKeyName: "assignments_self_review_setting_fkey";
-            columns: ["self_review_setting_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
-            referencedColumns: ["assignment_self_review_setting_id"];
-          },
-          {
             foreignKeyName: "assignments_source_assignment_id_fkey";
             columns: ["source_assignment_id"];
             isOneToOne: false;
@@ -1155,13 +1148,6 @@ export type Database = {
             columns: ["source_assignment_id"];
             isOneToOne: false;
             referencedRelation: "assignments";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "assignments_source_assignment_id_fkey";
-            columns: ["source_assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments_for_student_dashboard";
             referencedColumns: ["id"];
           },
           {
@@ -10900,10 +10886,6 @@ export type Database = {
         | { Args: { poll__id: number }; Returns: boolean }
         | { Args: { class__id: number; poll__id: number }; Returns: boolean };
       authorizeforprofile: { Args: { profile_id: string }; Returns: boolean };
-      auto_assign_self_reviews: {
-        Args: { this_assignment_id: number; this_profile_id: string };
-        Returns: undefined;
-      };
       bulk_assign_reviews: {
         Args: {
           p_assignment_id: number;
