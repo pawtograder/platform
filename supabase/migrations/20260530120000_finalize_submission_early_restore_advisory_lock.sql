@@ -117,11 +117,16 @@ BEGIN
         RETURN json_build_object('success', false, 'error', 'No active submission found');
     END IF;
 
-    -- Check if there's already a review assignment for this student for this assignment
+    -- Check if there's already a self-review assignment for this student for this
+    -- submission. Scope to the active submission + self-review rubric so an
+    -- unrelated review task assigned to this student (e.g. a peer review) on the
+    -- same assignment does not falsely report the self review as already assigned.
     IF EXISTS (
         SELECT 1 FROM review_assignments
         WHERE assignment_id = this_assignment.id
         AND assignee_profile_id = this_profile_id
+        AND submission_id = this_active_submission_id
+        AND rubric_id = this_assignment.self_review_rubric_id
     ) THEN
         RETURN json_build_object('success', false, 'error', 'Self review already assigned');
     END IF;
