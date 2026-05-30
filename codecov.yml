@@ -1,0 +1,104 @@
+# Coverage configuration for Pawtograder.
+# Public repo → Codecov is free with full PR comment integration.
+#
+# v1 rollout: informational only. The status checks are configured with
+# `informational: true` so they post to the PR but never block a merge.
+# Once we've calibrated the patch threshold against real PRs (~2 weeks),
+# flip `informational` to false to convert these into required checks
+# (also add them to GitHub branch protection at that time).
+
+coverage:
+  range: 50..90 # color scale on the PR comment
+  precision: 2
+  round: down
+
+  status:
+    project:
+      default:
+        target: auto # compare against base commit
+        threshold: 0.5% # tolerate small noise
+        informational: true # v1: don't block merges
+        if_ci_failed: error
+      jest:
+        flags: [jest]
+        target: auto
+        threshold: 1%
+        informational: true
+      e2e:
+        flags: [next-server, next-client]
+        target: auto
+        threshold: 1%
+        informational: true
+      edge:
+        flags: [edge-functions]
+        target: auto
+        threshold: 1%
+        informational: true
+      postgres:
+        flags: [postgres]
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: 80%
+        threshold: 0%
+        informational: true # v1: don't block merges
+
+flag_management:
+  default_rules:
+    carryforward: true # if a flag is missing on a commit, reuse the last value
+    statuses:
+      - type: project
+        target: auto
+        threshold: 1%
+      - type: patch
+        target: auto
+        threshold: 0%
+  individual_flags:
+    - name: jest
+      paths:
+        - app/
+        - components/
+        - hooks/
+        - lib/
+        - utils/
+    - name: next-server
+      paths:
+        - app/
+        - lib/
+        - utils/
+    - name: next-client
+      paths:
+        - app/
+        - components/
+        - hooks/
+        - lib/
+    - name: edge-functions
+      paths:
+        - supabase/functions/
+    - name: postgres
+      paths:
+        - supabase/migrations/
+
+# Files we never want counted (vendored, generated, or untested infra).
+ignore:
+  - "**/*.d.ts"
+  - "**/node_modules/**"
+  - ".next/**"
+  - "cli/**" # CLI has its own test path; not part of the web gate
+  - "scripts/coverage/**" # the coverage tooling itself
+  - "supabase/functions/_coverage/**"
+  - "supabase/functions/_shared/SupabaseTypes.d.ts"
+  - "tests/**" # test code shouldn't show up as application coverage
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+
+comment:
+  layout: "header, diff, flags, files, footer"
+  behavior: default
+  require_changes: false
+  require_base: no
+  require_head: yes
+  show_carryforward_flags: true
