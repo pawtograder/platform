@@ -1,25 +1,30 @@
 // Build-time V8 coverage capture for Next.js Server Components.
 //
-// Preloaded via NODE_OPTIONS="--require ./scripts/coverage/build-cdp-hook.cjs"
-// during the coverage `next build`. Why this exists:
+// Preloaded via NODE_OPTIONS in the `build:coverage` npm script. Why:
 //
-//   Server Components on routes whose server shell is fully static (e.g. a
-//   passthrough layout over a "use client" page) are PRERENDERED at
-//   `next build`. At request time their RSC output is served from the
-//   prerender cache, so the component function never executes again and the
-//   runtime Inspector path in instrumentation.ts records it as 0% covered —
-//   even though the code genuinely ran (at build). This hook attaches a
+//   `next build` runs a render pass ("Collecting page data" / "Generating
+//   static pages") that EXECUTES every route's Server Components — to
+//   classify them static/dynamic and to prerender the static ones. That
+//   build-time execution is the only place a fully-static server shell (e.g.
+//   a passthrough layout over a "use client" page) ever runs; at request time
+//   its output is served from cache, so the runtime Inspector in
+//   instrumentation.ts records it 0% covered. This hook attaches a
 //   `node:inspector` Profiler to every build process (the main process and
-//   the static-generation workers, which inherit NODE_OPTIONS) and dumps
-//   precise coverage to coverage/build-cdp-<pid>.json. v8-server-to-lcov.ts
-//   then merges those dumps with the runtime server-cdp dumps.
+//   any static-generation child workers, which inherit NODE_OPTIONS) and
+//   dumps coverage/build-cdp-<pid>.json. v8-server-to-lcov.ts merges those
+//   with the runtime server-cdp dumps.
 //
-// Robustness: Next's static-generation workers are jest-worker children that
-// can terminate via process.exit() (no clean SIGTERM/beforeExit). V8 precise
-// coverage counters are cumulative and takePreciseCoverage does NOT reset
-// them, so we periodically overwrite the dump with a full snapshot; the last
-// snapshot before a worker dies is always complete-to-that-point. We also
-// flush on beforeExit / SIGTERM / SIGINT to capture the tail.
+// Capture must survive every exit mode:
+//   - normal return / process.exit() → process.on("exit") does a SYNCHRONOUS
+//     takePreciseCoverage (the inspector callback fires synchronously for a
+//     connected in-process Session) + writeFileSync. This is the guaranteed
+//     path and the one that matters for fast jest-worker children that
+//     process.exit() before any timer fires.
+//   - SIGTERM/SIGINT (jest-worker graceful shutdown) → converted to a clean
+//     process.exit(0) so the "exit" handler runs.
+//   - SIGKILL / hang → an unref'd periodic snapshot leaves the last complete
+//     dump on disk (precise-coverage counts are cumulative; takePreciseCoverage
+//     does not reset them, so the latest snapshot is complete-to-that-point).
 
 "use strict";
 
@@ -32,69 +37,69 @@ if (process.env.COVERAGE === "1") {
     const session = new inspector.Session();
     session.connect();
 
-    const post = (method, params) =>
-      new Promise((resolve, reject) => {
-        session.post(method, params || {}, (err, result) => (err ? reject(err) : resolve(result)));
-      });
-
     const outDir = path.resolve(process.cwd(), "coverage");
     const outPath = path.join(outDir, `build-cdp-${process.pid}.json`);
 
     let started = false;
-    let inFlight = null;
 
-    const flush = () => {
-      if (!started) return Promise.resolve();
-      if (inFlight) return inFlight;
-      inFlight = (async () => {
-        try {
-          const { result } = await post("Profiler.takePreciseCoverage");
-          // Match instrumentation.ts: keep app code, drop node internals
-          // and node_modules. Empty-url entries are anonymous evals.
-          const filtered = result.filter((r) => {
-            const u = (r && r.url) || "";
-            if (!u) return false;
-            if (u.startsWith("node:")) return false;
-            if (u.includes("/node_modules/")) return false;
-            return true;
-          });
-          fs.mkdirSync(outDir, { recursive: true });
-          // Atomic overwrite so a snapshot is never observed half-written.
-          const tmp = `${outPath}.tmp`;
-          fs.writeFileSync(tmp, JSON.stringify({ result: filtered }));
-          fs.renameSync(tmp, outPath);
-        } catch {
-          // Best-effort — coverage capture must never break the build.
-        } finally {
-          inFlight = null;
-        }
-      })();
-      return inFlight;
+    const keep = (r) => {
+      const u = (r && r.url) || "";
+      if (!u) return false;
+      if (u.startsWith("node:")) return false;
+      if (u.includes("/node_modules/")) return false;
+      return true;
     };
 
-    (async () => {
+    const write = (result) => {
+      fs.mkdirSync(outDir, { recursive: true });
+      const tmp = `${outPath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ result: result.filter(keep) }));
+      fs.renameSync(tmp, outPath);
+    };
+
+    // Synchronous capture — safe to call from process.on("exit"). Relies on
+    // the connected Session dispatching the Profiler callback synchronously.
+    const captureSync = () => {
+      if (!started) return;
       try {
-        await post("Profiler.enable");
-        await post("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
-        started = true;
+        let result = null;
+        session.post("Profiler.takePreciseCoverage", (err, res) => {
+          if (!err && res) result = res.result;
+        });
+        if (result) write(result);
       } catch {
-        return;
+        /* best-effort */
       }
-      // Periodic snapshot: the safety net for workers that exit via
-      // process.exit() (no beforeExit/signal). unref() so it never keeps a
-      // process alive on its own.
-      const timer = setInterval(() => {
-        void flush();
-      }, 4000);
-      if (typeof timer.unref === "function") timer.unref();
-    })();
-
-    process.on("beforeExit", () => {
-      void flush();
-    });
-    const onSignal = () => {
-      flush().finally(() => process.exit(0));
     };
+
+    // Async snapshot — periodic safety net for SIGKILL/hung processes.
+    let inFlight = false;
+    const snapshot = () => {
+      if (!started || inFlight) return;
+      inFlight = true;
+      session.post("Profiler.takePreciseCoverage", (err, res) => {
+        inFlight = false;
+        if (!err && res) {
+          try {
+            write(res.result);
+          } catch {
+            /* best-effort */
+          }
+        }
+      });
+    };
+
+    session.post("Profiler.enable", () => {
+      session.post("Profiler.startPreciseCoverage", { callCount: true, detailed: true }, (err) => {
+        if (!err) started = true;
+      });
+    });
+
+    const timer = setInterval(snapshot, 4000);
+    if (typeof timer.unref === "function") timer.unref();
+
+    process.on("exit", captureSync);
+    const onSignal = () => process.exit(0); // run the "exit" handler, then exit
     process.on("SIGTERM", onSignal);
     process.on("SIGINT", onSignal);
   } catch {

@@ -39,6 +39,15 @@ const nextConfig: NextConfig = {
   experimental: {
     optimizePackageImports,
     ...(useWebpackBuildWorker ? { webpackBuildWorker: true } : {}),
+    // Coverage builds: drop the client Router Cache TTL to 0 so EVERY
+    // client-side navigation re-fetches its RSC segment from the server.
+    // Server Components only execute server-side when their segment is
+    // fetched fresh; with the production `dynamic: 30` cache, a session of
+    // intra-course navigations reuses cached segments and the server
+    // component never re-renders, so it shows 0% server coverage (and which
+    // routes happen to render at all becomes run-to-run luck). Forcing 0
+    // makes runtime server-component coverage track exactly what the E2E
+    // navigates to, completely and deterministically. Prod keeps 30/300.
     // Re-enable client-side Router Cache for dynamic layouts.
     //
     // Next 15 dropped `staleTimes.dynamic` from the Next-14 default of 30s
@@ -60,10 +69,15 @@ const nextConfig: NextConfig = {
     // governs how quickly data writes propagate; staleTimes only
     // controls how often the client re-asks the server for the same
     // logical segment.
-    staleTimes: {
-      dynamic: 30,
-      static: 300
-    }
+    staleTimes: coverageBuild
+      ? {
+          dynamic: 0,
+          static: 0
+        }
+      : {
+          dynamic: 30,
+          static: 300
+        }
   },
   // Coverage-build webpack tweaks:
   // - Client: disable SWC minification so V8 byte ranges → source-map

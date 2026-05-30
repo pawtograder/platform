@@ -213,15 +213,15 @@ jobs:
           # We don't disable Sentry sourcemaps — V8 client coverage needs
           # them to resolve compiled chunks back to .ts/.tsx files.
           NEXT_DISABLE_SENTRY: "1"
-          # Capture build-time V8 coverage. Server Components on routes with a
-          # static server shell (e.g. a layout over a "use client" page) are
-          # prerendered here at build time and served from cache at runtime,
-          # so they never execute under the runtime Inspector and would show
-          # 0% covered. The preload hook attaches a Profiler to the build
-          # process + its static-gen workers (which inherit NODE_OPTIONS) and
-          # dumps coverage/build-cdp-*.json, merged by v8-server-to-lcov.ts.
-          NODE_OPTIONS: --require ./scripts/coverage/build-cdp-hook.cjs
-        run: npm run build
+        # build:coverage bakes the build-cdp Profiler hook into NODE_OPTIONS
+        # *inside* the npm script. (Setting NODE_OPTIONS as step env here does
+        # NOT work: `npm run build` runs `cross-env NODE_OPTIONS=...`, which
+        # overwrites the inherited value and drops the --require.) The hook
+        # captures genuinely-static routes that Next prerenders at build time
+        # and serves from cache at runtime — those never execute under the
+        # runtime Inspector. Dynamic routes (most of the app) render at request
+        # time and are covered by the runtime path instead.
+        run: npm run build:coverage
 
       - name: Start Next.js
         run: |
