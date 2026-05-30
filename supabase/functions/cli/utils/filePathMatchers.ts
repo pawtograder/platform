@@ -33,8 +33,20 @@ function globPatternToRegExp(pattern: string): RegExp {
   return new RegExp(re);
 }
 
+/** Cache compiled glob regexes — the same patterns are tested against every file row. */
+const globRegExpCache = new Map<string, RegExp>();
+
+function compileGlob(pattern: string): RegExp {
+  let re = globRegExpCache.get(pattern);
+  if (!re) {
+    re = globPatternToRegExp(pattern);
+    globRegExpCache.set(pattern, re);
+  }
+  return re;
+}
+
 function matchesGlob(pattern: string, path: string): boolean {
-  const re = globPatternToRegExp(pattern);
+  const re = compileGlob(pattern);
   if (re.test(path)) return true;
   // Patterns without / also match the basename (e.g. *.java matches src/Main.java).
   if (!pattern.includes("/")) {

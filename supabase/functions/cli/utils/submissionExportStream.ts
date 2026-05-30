@@ -27,6 +27,15 @@ export async function streamSubmissions(
   writer: { write: (record: Record<string, unknown>) => Promise<void> },
   options: StreamSubmissionsOptions = {}
 ): Promise<{ submissionCount: number; submissionIds: number[]; activeSubmissionIds: number[] }> {
+  // Fail fast on a mode/tokenizer mismatch: in hash/opaque mode a missing
+  // tokenizer would silently emit raw ids (and raw repo/sha) for every row.
+  if (mode === "raw" && tokenizer !== null) {
+    throw new CLICommandError("identity_mode=raw must not be given a tokenizer", 500);
+  }
+  if ((mode === "hash" || mode === "opaque") && tokenizer === null) {
+    throw new CLICommandError(`identity_mode=${mode} requires a tokenizer`, 500);
+  }
+
   const includeOrdinal = options.includeOrdinal === true;
   const selectFields = includeOrdinal
     ? "id, profile_id, assignment_group_id, sha, run_number, run_attempt, created_at, grading_review_id, repository, is_active, ordinal"
@@ -69,20 +78,31 @@ export async function streamSubmissions(
             ? { id: row.assignment_group_id }
             : { token: await tokenizer.token("group", row.assignment_group_id) };
 
+      // The repository name and commit SHA are deanonymizing — a repo name
+      // typically embeds the student's GitHub handle, and a SHA can be looked
+      // up on GitHub to recover the repo. In hash/opaque mode we emit stable
+      // tokens (joinable across rows/dumps) instead of the raw values.
+      const repository =
+        row.repository === null
+          ? null
+          : tokenizer === null
+            ? row.repository
+            : await tokenizer.token("repository", row.repository);
+      const sha =
+        row.sha === null ? null : tokenizer === null ? row.sha : await tokenizer.token("commit", row.sha);
+
       const record: Record<string, unknown> = {
         kind: "submission",
         ...submissionRef,
         subject: subjectRef,
         group: groupRef,
-        sha: row.sha,
+        sha,
         run_number: row.run_number,
         run_attempt: row.run_attempt,
         created_at: row.created_at,
         is_active: row.is_active,
         has_final_review: row.grading_review_id !== null,
-        // Repository url is course design metadata, not student PII — same
-        // posture as autograder.grader_repo above.
-        repository: row.repository
+        repository
       };
       if (includeOrdinal) {
         record.ordinal = row.ordinal;

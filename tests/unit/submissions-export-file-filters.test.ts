@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 
-import { matchesSubmissionFilePath } from "../../supabase/functions/cli/utils/filePathMatchers";
+import { matchesSubmissionFilePath } from "@/supabase/functions/cli/utils/filePathMatchers";
 
 describe("submissions export file path filters", () => {
   it("includes all files when no filters are set", () => {

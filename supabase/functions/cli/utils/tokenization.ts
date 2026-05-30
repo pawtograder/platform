@@ -32,7 +32,12 @@ export type TokenKind =
   | "gradebook_column"
   | "rubric_check"
   | "grader_test"
-  | "hint";
+  | "hint"
+  // Student GitHub repository name and commit SHA. These are not numeric ids but
+  // are deanonymizing (a repo name embeds the student handle; a SHA can be looked
+  // up on GitHub), so in hash/opaque mode they are tokenized like any other id.
+  | "repository"
+  | "commit";
 
 export interface Tokenizer {
   /** Returns the token for (kind, rawId). Stable for the lifetime of the tokenizer. */

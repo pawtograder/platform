@@ -34,6 +34,8 @@ const SUBMISSIONS_EXPORT_PRIVACY_NOTES = [
 
 type SubmissionsExportSection = "catalog" | "meta" | "files";
 
+const SUBMISSIONS_EXPORT_SECTIONS = new Set<SubmissionsExportSection>(["catalog", "meta", "files"]);
+
 interface SubmissionsExportParams {
   class?: string | number;
   /** Single assignment for meta/files sections. */
@@ -606,6 +608,12 @@ async function handleArtifactsImport(ctx: MCPAuthContext, params: Record<string,
 async function handleSubmissionsExport(ctx: MCPAuthContext, rawParams: Record<string, unknown>): Promise<Response> {
   const params = rawParams as unknown as SubmissionsExportParams;
   const section: SubmissionsExportSection = params.section ?? "meta";
+  if (!SUBMISSIONS_EXPORT_SECTIONS.has(section)) {
+    throw new CLICommandError(
+      `Invalid section: ${String(params.section)}. Must be one of: ${[...SUBMISSIONS_EXPORT_SECTIONS].join(", ")}`,
+      400
+    );
+  }
   const mode = validateExportIdentityParams(params);
 
   if (!params.class) throw new CLICommandError("class is required");

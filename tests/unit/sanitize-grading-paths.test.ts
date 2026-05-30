@@ -6,7 +6,7 @@ import {
   prepareInstructorBuildOutput,
   sanitizeGradingPaths,
   sliceOutputFromSentinel
-} from "../../supabase/functions/cli/utils/sanitizeGradingPaths";
+} from "@/supabase/functions/cli/utils/sanitizeGradingPaths";
 
 describe("sanitizeGradingPaths", () => {
   it("replaces GitHub Actions runner path prefix before pawtograder-grading", () => {

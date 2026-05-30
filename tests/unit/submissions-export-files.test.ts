@@ -2,8 +2,8 @@
  * @jest-environment node
  */
 
-import { createTokenizer } from "../../supabase/functions/cli/utils/tokenization";
-import { buildFileExportRecord } from "../../supabase/functions/cli/utils/submissionFilesExportStream";
+import { createTokenizer } from "@/supabase/functions/cli/utils/tokenization";
+import { buildFileExportRecord } from "@/supabase/functions/cli/utils/submissionFilesExportStream";
 
 describe("submissions export file records", () => {
   const SALT = "test-salt-at-least-16-chars-long-aaaa";

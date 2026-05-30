@@ -81,7 +81,7 @@ export async function streamSubmissionFiles(
               kind: "warning",
               scope: "files",
               message: "binary_file_missing_storage_key",
-              submission_id: row.submission_id,
+              submission: submissionRef,
               name: row.name
             });
             record.binary_omitted = true;
@@ -95,7 +95,7 @@ export async function streamSubmissionFiles(
                 kind: "warning",
                 scope: "files",
                 message: dlErr?.message ?? "binary_file_download_failed",
-                submission_id: row.submission_id,
+                submission: submissionRef,
                 name: row.name
               });
               record.binary_omitted = true;
@@ -155,7 +155,8 @@ export function buildFileExportRecord(input: {
   };
 
   if (input.is_binary) {
-    if (input.withBinary && input.content_base64) {
+    // Treat "" (valid base64 for a zero-byte file) as present, not omitted.
+    if (input.withBinary && input.content_base64 !== undefined && input.content_base64 !== null) {
       record.content_base64 = input.content_base64;
       record.binary_omitted = false;
     } else {

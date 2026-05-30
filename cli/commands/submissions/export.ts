@@ -10,6 +10,7 @@ import type { Argv, ArgumentsCamelCase } from "yargs";
 import { streamApiCall } from "@/cli/utils/streamApi";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
 import { withTransientRetry } from "@/cli/utils/transientRetry";
+import { runWithConcurrency } from "@/cli/utils/concurrency";
 import {
   addExportIdentityOptions,
   assertExpectedCount,
@@ -280,6 +281,13 @@ async function consumeFilesBatches(
 
     const next = endRecord.next_files_batch_index;
     if (typeof next !== "number") break;
+    if (next <= filesBatchIndex) {
+      // Server returned a non-advancing cursor; stop to avoid an infinite loop
+      // of repeated edge calls.
+      throw new CLIError(
+        `files pagination did not advance: next_files_batch_index (${next}) <= current (${filesBatchIndex})`
+      );
+    }
     filesBatchIndex = next;
   }
 
@@ -346,20 +354,6 @@ async function exportOneAssignment(
     files: files.length,
     manifest: assignmentManifest
   };
-}
-
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  let nextIdx = 0;
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
-    while (true) {
-      const idx = nextIdx++;
-      if (idx >= tasks.length) return;
-      results[idx] = await tasks[idx]!();
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promise<void> {

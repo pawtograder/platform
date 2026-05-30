@@ -18,6 +18,15 @@ import type { Argv, ArgumentsCamelCase } from "yargs";
 import { streamApiCall } from "@/cli/utils/streamApi";
 import { logger, handleError, CLIError } from "@/cli/utils/logger";
 import { withTransientRetry } from "@/cli/utils/transientRetry";
+import { runWithConcurrency } from "@/cli/utils/concurrency";
+import {
+  assertExpectedCount,
+  generateRandomSalt,
+  sanitizeForFilename,
+  timestamp,
+  writeJson,
+  writeJsonArray
+} from "@/cli/utils/exportFiles";
 
 type IdentityMode = "raw" | "hash" | "opaque";
 
@@ -333,108 +342,6 @@ export async function exportHandler(args: ArgumentsCamelCase<ExportArgs>): Promi
   } catch (error) {
     handleError(error);
   }
-}
-
-function writeJson(filePath: string, data: unknown): void {
-  // 0o600 so PII files match the 0o700 directory's posture. writeFileSync's
-  // mode option only applies on file creation; chmod afterwards covers the
-  // overwrite case where the file already existed with looser perms.
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // Best-effort on platforms where chmod is a no-op (e.g. Windows).
-  }
-}
-
-/**
- * Write a top-level JSON array without building one giant string. Node's
- * JSON.stringify on arrays with hundreds of thousands of multi-kB rows hits
- * V8's max string length (~512 MiB) and throws "Invalid string length".
- */
-function writeJsonArray(filePath: string, rows: unknown[]): void {
-  if (rows.length === 0) {
-    writeJson(filePath, []);
-    return;
-  }
-
-  const fd = fs.openSync(filePath, "w", 0o600);
-  try {
-    fs.writeSync(fd, "[\n");
-    for (let i = 0; i < rows.length; i++) {
-      if (i > 0) fs.writeSync(fd, ",\n");
-      const indented = JSON.stringify(rows[i], null, 2)
-        .split("\n")
-        .map((line) => `  ${line}`)
-        .join("\n");
-      fs.writeSync(fd, indented);
-    }
-    fs.writeSync(fd, "\n]\n");
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // Best-effort on platforms where chmod is a no-op (e.g. Windows).
-  }
-}
-
-/**
- * Confirm the server-reported count for a section matches what we actually
- * received. Stops a partially-flushed stream from being silently accepted
- * just because it happened to include the trailing {end} line.
- */
-function assertExpectedCount(endRecord: Record<string, unknown>, field: string, actual: number): void {
-  const counts = endRecord.counts as Record<string, unknown> | undefined;
-  const expected = counts?.[field];
-  if (typeof expected !== "number") return; // server didn't report this count; nothing to verify
-  if (expected !== actual) {
-    throw new CLIError(
-      `Stream count mismatch for ${field}: server reported ${expected} but received ${actual}. ` +
-        "The dump is incomplete; do not use it for analysis."
-    );
-  }
-}
-
-function sanitizeForFilename(s: string): string {
-  return s.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
-}
-
-function timestamp(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-
-/**
- * 32 bytes of OS entropy, base32-encoded. Mirrors the server-side
- * generateRandomSalt() so opaque-mode tokens have the same security
- * properties; the CLI is the source of truth since the salt never leaves it.
- */
-function generateRandomSalt(): string {
-  const bytes = crypto.randomBytes(32);
-  return base32Encode(bytes);
-}
-
-const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
-
-function base32Encode(bytes: Buffer): string {
-  let bits = 0;
-  let value = 0;
-  let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    value = (value << 8) | bytes[i]!;
-    bits += 8;
-    while (bits >= 5) {
-      out += BASE32_ALPHABET[(value >>> (bits - 5)) & 0x1f];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) {
-    out += BASE32_ALPHABET[(value << (5 - bits)) & 0x1f];
-  }
-  return out;
 }
 
 interface AssignmentTotals {
@@ -760,25 +667,6 @@ async function streamGradebookToDir(
   writeJsonArray(path.join(dir, "scores.json"), cells);
 
   return { gradebook_scores: cells.length };
-}
-
-/**
- * Run a list of async tasks with bounded parallelism. Promise.all + chunking
- * would force lockstep batches; this runs N workers each picking the next
- * task off the queue so a slow assignment doesn't stall the whole pool.
- */
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  let nextIdx = 0;
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
-    while (true) {
-      const idx = nextIdx++;
-      if (idx >= tasks.length) return;
-      results[idx] = await tasks[idx]!();
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function aggregateTotals(
