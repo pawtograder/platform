@@ -1,6 +1,6 @@
 "use client";
 
-import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useStudentVisibleHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { useStudentRoster } from "@/hooks/useCourseController";
 import { PopoverRoot, PopoverContent } from "@/components/ui/popover";
 import { Badge, Box, HStack, Input, Popover, Spinner, Stack, Text, Avatar, Icon } from "@chakra-ui/react";
@@ -78,8 +78,9 @@ export function HelpRequestSearch({ isManageMode = false }: HelpRequestSearchPro
   const resultsRef = useRef<HTMLDivElement>(null);
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Get data from hooks
-  const allHelpRequests = useHelpRequests();
+  // Get data from hooks. Student-visible variant masks private peer requests while in
+  // view-as so search can't surface their bodies/names; a no-op when not masquerading.
+  const allHelpRequests = useStudentVisibleHelpRequests();
   const helpQueues = useHelpQueues();
   const helpRequestStudents = useHelpRequestStudents();
   const studentRoster = useStudentRoster();

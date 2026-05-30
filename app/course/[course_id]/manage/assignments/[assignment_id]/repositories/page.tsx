@@ -698,6 +698,14 @@ export default function RepositoriesPage() {
                 <Icon as={CheckIcon} color="green.500" />
                 <Text color="green.600">Ready</Text>
               </>
+            ) : row.original.assignment_group_id != null ? (
+              // Group repo: there is no single student's org membership to read
+              // (user_roles is joined via profile_id, which is null for group
+              // repos), so the per-student "has not joined" copy doesn't apply.
+              <>
+                <Icon as={FaTimes} color="red.500" />
+                <Text color="fg.muted">Not Ready, pending creation (group)</Text>
+              </>
             ) : (
               <>
                 <Icon as={FaTimes} color="red.500" />

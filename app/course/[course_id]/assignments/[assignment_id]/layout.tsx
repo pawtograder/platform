@@ -1,5 +1,5 @@
 import { AssignmentProvider } from "@/hooks/useAssignment";
-import { createClientWithCaching, fetchAssignmentControllerData, getUserRolesForCourse } from "@/lib/ssrUtils";
+import { createClientWithCaching, fetchAssignmentControllerData, getEffectiveCourseIdentity } from "@/lib/ssrUtils";
 import { TZDate } from "@date-fns/tz";
 import { isAfter } from "date-fns";
 import { headers } from "next/headers";
@@ -20,8 +20,9 @@ export default async function AssignmentLayout({
   if (!user_id) {
     redirect("/");
   }
-  // Validate access: if not released and not grader or instructor, redirect to course page
-  const role = await getUserRolesForCourse(Number(course_id), user_id);
+  // Validate access: if not released and not grader or instructor, redirect to course page.
+  // Honor view-as so an instructor masquerading as a student gets the student release-date gate.
+  const role = await getEffectiveCourseIdentity(Number(course_id), user_id);
   if (!role) {
     redirect("/");
   }

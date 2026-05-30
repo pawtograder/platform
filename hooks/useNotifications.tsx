@@ -3,11 +3,14 @@ import { useState, useCallback, useEffect } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
+import { useIsReadOnly } from "@/hooks/useClassProfiles";
 import {
   DiscussionThreadNotification,
   HelpRequestNotification,
   HelpRequestMessageNotification
 } from "@/components/notifications/notification-teaser";
+
+const EMPTY_NOTIFICATIONS: Notification[] = [];
 
 export function useNotification(notification_id: number) {
   const controller = useCourseController();
@@ -28,6 +31,7 @@ export function useNotification(notification_id: number) {
 
 export function useNotifications(resource?: string, id?: number) {
   const controller = useCourseController();
+  const isReadOnly = useIsReadOnly();
   const { mutateAsync: update_notification } = useUpdate<Notification>({
     resource: "notifications"
   });
@@ -37,8 +41,13 @@ export function useNotifications(resource?: string, id?: number) {
   const [resourceNotifications, setResourceNotifications] = useState<Notification[]>([]);
   const [allNotifications, setAllNotifications] = useState<Notification[]>([]);
 
+  // In view-as mode the underlying rows are the *real instructor's* notifications (the
+  // controller's query filters by their auth user_id). Writes here would silently dismiss
+  // the masquerader's own inbox — and IntersectionObserver auto-effects in the discussion
+  // thread reader call set_read as you scroll. Make every mutation a no-op while masking.
   const set_read = useCallback(
     async (notification: Notification, read: boolean) => {
+      if (isReadOnly) return;
       notification.viewed_at = read ? new Date().toISOString() : null;
       try {
         await update_notification({
@@ -52,11 +61,12 @@ export function useNotifications(resource?: string, id?: number) {
         console.error("error setting notification read", error);
       }
     },
-    [update_notification]
+    [update_notification, isReadOnly]
   );
 
   const dismiss = useCallback(
     async (notification: Notification) => {
+      if (isReadOnly) return;
       controller.handleGenericDataEvent("notifications", {
         type: "deleted",
         payload: {
@@ -67,7 +77,7 @@ export function useNotifications(resource?: string, id?: number) {
       });
       await delete_notification({ id: notification.id, resource: "notifications" });
     },
-    [delete_notification, controller]
+    [delete_notification, controller, isReadOnly]
   );
 
   const mark_all_read = useCallback(
@@ -151,8 +161,10 @@ export function useNotifications(resource?: string, id?: number) {
     }
   }, [controller, resource, id]);
 
-  // Return the appropriate notifications based on whether resource/id are provided
-  const notifications = resource && id ? resourceNotifications : allNotifications;
+  // Return the appropriate notifications based on whether resource/id are provided. Hide
+  // the rows entirely in view-as mode so badges and lists don't render the instructor's
+  // inbox as if it were the student's. The mutation no-ops above are defense in depth.
+  const notifications = isReadOnly ? EMPTY_NOTIFICATIONS : resource && id ? resourceNotifications : allNotifications;
 
   return { notifications, set_read, dismiss, mark_all_read, delete_all };
 }
