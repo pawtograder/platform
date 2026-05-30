@@ -849,6 +849,17 @@ function InnerRubricPage() {
           setGuiEditorEpoch((e) => e + 1);
           setRubricForSidebar(hydrated);
           setError(undefined);
+          // Record the YAML we just validated so the source buffer and dirty-state
+          // bookkeeping reflect what the GUI now shows. We read `liveValue` straight off
+          // the editor, which can be ahead of the debounced `value` state; without syncing
+          // here, pasting valid YAML and immediately switching to GUI would leave
+          // `value`/`hasUnsavedChanges` stale (the source-mode dirty effect is skipped in
+          // GUI mode), so Save would stay disabled even though the rubric changed. Normalize
+          // through HydratedRubricToYamlRubric so it matches the snapshot form that
+          // applyGuiUnsavedStatus diffs against.
+          const consumedYaml = YAML.stringify(HydratedRubricToYamlRubric(hydrated, { allRubrics: allHydratedRubrics }));
+          setValue(consumedYaml);
+          applyGuiUnsavedStatus(hydrated, consumedYaml);
           persistViewMode("gui");
         } catch (e) {
           toaster.error({
@@ -870,7 +881,9 @@ function InnerRubricPage() {
       activeReviewRound,
       assignmentDetails,
       activeRubric,
-      flushPendingGuiSync
+      flushPendingGuiSync,
+      applyGuiUnsavedStatus,
+      allHydratedRubrics
     ]
   );
 

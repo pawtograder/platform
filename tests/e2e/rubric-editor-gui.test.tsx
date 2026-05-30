@@ -439,9 +439,17 @@ test.describe("Rubric editor GUI", () => {
     // to deterministically prove the toggle is refused.
     await rubricEditor(page).getByRole("button", { name: "GUI" }).click();
 
-    // Toggle refused: the YAML source region stays mounted and no GUI Part region appears.
-    // (If the stale-value regression returned, the click would switch to GUI and hide the
-    // source region, failing toBeVisible.)
+    // Assert a *post-click* effect, not just the pre-click source state (which would hold
+    // even if the click were dropped/no-op). The refusal raises a "Cannot switch to GUI"
+    // toast (handleViewModeChange's catch block), proving the toggle was attempted AND
+    // actively rejected. Assert the toast node was created (toBeAttached) rather than
+    // visible — Chakra toasts auto-dismiss to hidden within seconds but the node lingers,
+    // so a visibility check races the dismiss animation. .first() because the responsive
+    // mobile+desktop layout copies render the toast in more than one portal.
+    await expect(page.getByText("Cannot switch to GUI").first()).toBeAttached();
+    // And the toggle had no effect: the YAML source region stays mounted and no GUI Part
+    // region appears. (If the stale-value regression returned, the click would switch to
+    // GUI and hide the source region, failing toBeVisible.)
     await expect(rubricEditor(page).getByRole("region", { name: "Rubric YAML Source" })).toBeVisible();
     await expect(rubricEditor(page).getByRole("region", { name: /^Part 1:/ })).toHaveCount(0);
   });

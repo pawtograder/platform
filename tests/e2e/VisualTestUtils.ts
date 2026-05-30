@@ -62,24 +62,46 @@ export async function waitForVisualIdle(page: Page) {
   });
   await waitForFonts(page);
 
-  // position:sticky elements (notably the "Grading for <student>" / "Applies to" scope
-  // banner in the rubric sidebar, components/ui/rubric-sidebar.tsx) get "stuck" at a
-  // scroll-dependent offset while Playwright scrolls to tile a full-page screenshot, so
-  // they overlay different content on each run (a moving "assigned to student" overlay).
-  // Sticky is in normal flow, so pinning it to static keeps the same layout/height but
-  // removes the scroll-dependent float, making full-page captures deterministic. Scoped
-  // to sticky only — fixed overlays (modals, the floating help widget) are handled by
-  // their own data-visual-test="removed" masking and are left intact.
+  // Wait for images to finish loading. Avatars (PersonName -> dicebear <img>) in comment
+  // threads load asynchronously; when an avatar's intrinsic size lands it nudges the
+  // surrounding layout by ~1px, shifting e.g. the regrade comment box between runs. Bounded
+  // (5s) and non-fatal so a slow/broken image source can't hang the scan.
   await page
-    .evaluate(() => {
-      document.querySelectorAll<HTMLElement>("*").forEach((el) => {
-        if (getComputedStyle(el).position === "sticky") {
-          el.style.setProperty("position", "static", "important");
-        }
-      });
-    })
+    .waitForFunction(() => Array.from(document.images).every((img) => img.complete), undefined, { timeout: 5_000 })
     .catch(() => {
-      /* navigation/context race — proceed without the sticky neutralization */
+      /* a slow/broken image — proceed rather than block the capture */
+    });
+
+  // Async content (rubric checks, regrade status lines, comment threads — all loaded via
+  // realtime/TableControllers) can keep growing the page after networkidle resolves. That
+  // shifts the full-page screenshot height AND the vertical position of everything below
+  // the still-growing region, so the same screenshot differs run-to-run (observed: ±292px
+  // page-height swings and ~1px shifts of the regrade comment box). Wait for the document
+  // height to stop changing — three consecutive equal samples — before capturing, with an
+  // ~8s cap so a genuinely live page can't hang the scan.
+  await page
+    .evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          let last = -1;
+          let stable = 0;
+          let iterations = 0;
+          const check = () => {
+            const h = document.documentElement.scrollHeight;
+            if (h === last) {
+              if (++stable >= 3) return resolve();
+            } else {
+              stable = 0;
+              last = h;
+            }
+            if (++iterations > 40) return resolve();
+            setTimeout(check, 200);
+          };
+          check();
+        })
+    )
+    .catch(() => {
+      /* navigation/context race — proceed without the height-settle wait */
     });
 
   // Code files (components/ui/code-file.tsx) render plain text first, then re-render
@@ -148,6 +170,44 @@ export async function stabilizeRubricSidebar(page: Page, rubricName: string | Re
   await waitForStableLocator(rubricRegion);
 }
 
+/**
+ * Pin every position:sticky element to static. Sticky banners (e.g. the "Grading for
+ * <student>" rubric scope banner) get "stuck" at a scroll-dependent offset while Playwright
+ * scrolls to tile a full-page screenshot, overlaying different content each run. Sticky is
+ * in normal flow, so this keeps layout/height identical and only removes the scroll-float.
+ * The original inline value is stashed so {@link restoreStickyPositions} can revert it after
+ * capture — the override must not leak into post-screenshot interactions in the same test.
+ */
+async function freezeStickyPositions(page: Page) {
+  await page
+    .evaluate(() => {
+      document.querySelectorAll<HTMLElement>("*").forEach((el) => {
+        if (getComputedStyle(el).position === "sticky") {
+          el.setAttribute("data-vt-prev-position", el.style.position || "");
+          el.style.setProperty("position", "static", "important");
+        }
+      });
+    })
+    .catch(() => {
+      /* navigation/context race — nothing to freeze */
+    });
+}
+
+async function restoreStickyPositions(page: Page) {
+  await page
+    .evaluate(() => {
+      document.querySelectorAll<HTMLElement>("[data-vt-prev-position]").forEach((el) => {
+        const prev = el.getAttribute("data-vt-prev-position") || "";
+        el.removeAttribute("data-vt-prev-position");
+        if (prev) el.style.position = prev;
+        else el.style.removeProperty("position");
+      });
+    })
+    .catch(() => {
+      /* page may be gone (end of test) — nothing to restore */
+    });
+}
+
 export async function visualScreenshot(page: Page, name: string, options: VisualScreenshotOptions = {}) {
   const { stabilizeRubric, beforeScreenshot, ...argosOptions } = options;
 
@@ -156,14 +216,21 @@ export async function visualScreenshot(page: Page, name: string, options: Visual
     await stabilizeRubricSidebar(page, stabilizeRubric);
   }
 
-  return argosScreenshot(page, name, {
-    ...argosOptions,
-    beforeScreenshot: async (api) => {
-      await waitForVisualIdle(page);
-      if (stabilizeRubric) {
-        await stabilizeRubricSidebar(page, stabilizeRubric);
+  try {
+    return await argosScreenshot(page, name, {
+      ...argosOptions,
+      beforeScreenshot: async (api) => {
+        await waitForVisualIdle(page);
+        if (stabilizeRubric) {
+          await stabilizeRubricSidebar(page, stabilizeRubric);
+        }
+        // Neutralize sticky positioning immediately before the capture; reverted in the
+        // finally below so it can't affect later interactions/assertions in the same test.
+        await freezeStickyPositions(page);
+        await beforeScreenshot?.(api);
       }
-      await beforeScreenshot?.(api);
-    }
-  });
+    });
+  } finally {
+    await restoreStickyPositions(page);
+  }
 }
